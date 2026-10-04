@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import * as Cesium from 'cesium'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
 import { cssVar } from '../design-system/theme'
@@ -13,6 +13,7 @@ const TRAIL_EVERY = 2
 
 export default function MapView() {
   const containerRef = useRef<HTMLDivElement>(null)
+  const [initError, setInitError] = useState<string | null>(null)
   const viewerRef = useRef<Cesium.Viewer | null>(null)
   const droneRef = useRef<Cesium.Entity | null>(null)
   const trailRef = useRef<Cesium.Entity | null>(null)
@@ -27,6 +28,7 @@ export default function MapView() {
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
+    try {
 
     const canvas = document.createElement('canvas')
     canvas.width = 1024
@@ -148,6 +150,9 @@ export default function MapView() {
       homeRef.current = null
       trailPos.current = []
     }
+    } catch (e) {
+      setInitError(e instanceof Error ? e.message : String(e))
+    }
   }, [])
 
   // Follow mode / 2D-3D mode.
@@ -202,6 +207,17 @@ export default function MapView() {
     viewer.camera.flyTo({
       destination: Cesium.Cartesian3.fromDegrees(HOME_LON, HOME_LAT, 12000),
     })
+  }
+
+  if (initError) {
+    return (
+      <div className="flex h-full w-full flex-col items-center justify-center gap-2 p-6 text-center">
+        <div className="text-sm font-medium text-error">Map failed to initialize</div>
+        <pre className="mono max-w-full overflow-auto rounded border border-line bg-canvas p-3 text-xs text-ink">
+          {initError}
+        </pre>
+      </div>
+    )
   }
 
   return (

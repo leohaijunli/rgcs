@@ -16,5 +16,5 @@ tauri-build = { version = "2", features = [] }
 maggcs-core = { path = "../core" }
 parking_lot = "0.12"
 serde.workspace = true
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["devtools"] }
 tokio.workspace = true
