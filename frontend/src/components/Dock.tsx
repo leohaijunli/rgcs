@@ -2,7 +2,7 @@ import { useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useUiStore, type DockTab } from '../stores/ui'
 
-const TABS: DockTab[] = ['profile', 'qc', 'log']
+const TABS: DockTab[] = ['profile', 'log']
 
 export default function Dock() {
   const { t } = useTranslation()
@@ -86,7 +86,6 @@ export default function Dock() {
       </div>
       <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-3 text-sm text-muted">
         {activeTab === 'profile' && <span>{t('views.profilePlaceholder')}</span>}
-        {activeTab === 'qc' && <span>{t('dock.qcPlaceholder')}</span>}
         {activeTab === 'log' && <span>{t('dock.logPlaceholder')}</span>}
       </div>
     </footer>

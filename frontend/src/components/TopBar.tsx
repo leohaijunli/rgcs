@@ -1,11 +1,12 @@
-import * as Popover from '@radix-ui/react-popover'
 import { Settings } from 'lucide-react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useDevicesStore } from '../stores/devices'
 import { useLinkStore } from '../stores/link'
 import { useTelemetryStore } from '../stores/telemetry'
 import { useUiStore, type View } from '../stores/ui'
 import { px4Mode } from '../util/px4mode'
+import SettingsDialog from './dialogs/SettingsDialog'
 
 const VIEWS: View[] = ['planning', 'flight', 'data']
 
@@ -54,10 +55,9 @@ function Pill({
 
 export default function TopBar() {
   const { t } = useTranslation()
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const view = useUiStore((s) => s.view)
   const setView = useUiStore((s) => s.setView)
-  const theme = useUiStore((s) => s.theme)
-  const setTheme = useUiStore((s) => s.setTheme)
   const link = useLinkStore((s) => s.link)
   const devices = useDevicesStore((s) => s.devices)
   const heartbeat = useTelemetryStore((s) => s.snapshot?.heartbeat ?? null)
@@ -129,39 +129,15 @@ export default function TopBar() {
           tone={devices.length ? 'ok' : 'off'}
         />
 
-        <Popover.Root>
-          <Popover.Trigger asChild>
-            <button
-              aria-label={t('settings.menu')}
-              className="flex h-8 w-8 items-center justify-center rounded border border-line bg-canvas text-muted hover:text-ink"
-            >
-              <Settings size={16} />
-            </button>
-          </Popover.Trigger>
-          <Popover.Portal>
-            <Popover.Content
-              align="end"
-              className="z-50 w-48 rounded border border-line bg-panel p-2 text-sm shadow-xl"
-            >
-              <div className="mb-1 px-1 text-xs text-muted">{t('settings.theme')}</div>
-              <div className="flex gap-1">
-                {(['dark', 'light'] as const).map((th) => (
-                  <button
-                    key={th}
-                    onClick={() => setTheme(th)}
-                    className={`flex-1 rounded px-2 py-1 text-xs ${
-                      theme === th ? 'bg-accent text-accent-ink' : 'bg-canvas text-muted hover:text-ink'
-                    }`}
-                  >
-                    {t(`theme.${th}`)}
-                  </button>
-                ))}
-              </div>
-              <Popover.Arrow className="fill-panel" />
-            </Popover.Content>
-          </Popover.Portal>
-        </Popover.Root>
+        <button
+          aria-label={t('settings.menu')}
+          onClick={() => setSettingsOpen(true)}
+          className="flex h-11 w-11 items-center justify-center rounded border border-line bg-canvas text-muted hover:text-ink"
+        >
+          <Settings size={16} />
+        </button>
       </div>
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
     </header>
   )
 }

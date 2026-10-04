@@ -1,4 +1,4 @@
-import { Compass, Crosshair, Gauge, House, Move3d, Ruler } from 'lucide-react'
+import { Compass, Crosshair, Gauge, House, LineChart, Move3d, Ruler } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useTelemetryStore } from '../stores/telemetry'
 import { useUiStore } from '../stores/ui'
@@ -15,6 +15,7 @@ export default function MapToolbar({ onGoHome, onToggleMeasure }: Props) {
   const follow = useUiStore((s) => s.follow)
   const toggleFollow = useUiStore((s) => s.toggleFollow)
   const setDashboardOpen = useUiStore((s) => s.setDashboardOpen)
+  const setQcOpen = useUiStore((s) => s.setQcOpen)
   const pos = useTelemetryStore((s) => s.snapshot?.global_position ?? null)
 
   return (
@@ -24,6 +25,12 @@ export default function MapToolbar({ onGoHome, onToggleMeasure }: Props) {
         active={false}
         onClick={() => setDashboardOpen(true)}
         icon={Gauge}
+      />
+      <ToolButton
+        title={t('dock.qc')}
+        active={false}
+        onClick={() => setQcOpen(true)}
+        icon={LineChart}
       />
       <ToolButton
         title={t('map.mode3d')}

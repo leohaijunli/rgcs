@@ -9,6 +9,7 @@ import Hud from './components/Hud'
 import MapView from './components/MapView'
 import ErrorBanner from './components/ErrorBanner'
 import ConnectDialog from './components/dialogs/ConnectDialog'
+import QcDialog from './components/dialogs/QcDialog'
 
 export default function App() {
   const drawer = useUiStore((s) => s.drawer)
@@ -29,6 +30,7 @@ export default function App() {
       </div>
       <Dock />
       <ConnectDialog />
+      <QcDialog />
     </div>
   )
 }

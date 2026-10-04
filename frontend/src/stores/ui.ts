@@ -29,6 +29,7 @@ interface UiState {
   follow: boolean
   map3d: boolean
   dashboardOpen: boolean
+  qcOpen: boolean
   setView: (v: View) => void
   setTheme: (t: Theme) => void
   toggleDrawer: (id: NonNullable<DrawerId>) => void
@@ -40,6 +41,7 @@ interface UiState {
   toggleFollow: () => void
   toggleMap3d: () => void
   setDashboardOpen: (open: boolean) => void
+  setQcOpen: (open: boolean) => void
 }
 
 const DOCK_MIN = 96
@@ -75,6 +77,7 @@ export const useUiStore = create<UiState>((set) => ({
   follow: true,
   map3d: true,
   dashboardOpen: false,
+  qcOpen: false,
   setView: (view) =>
     set(() => ({
       view,
@@ -94,6 +97,7 @@ export const useUiStore = create<UiState>((set) => ({
   toggleFollow: () => set((s) => ({ follow: !s.follow })),
   toggleMap3d: () => set((s) => ({ map3d: !s.map3d })),
   setDashboardOpen: (dashboardOpen) => set({ dashboardOpen }),
+  setQcOpen: (qcOpen) => set({ qcOpen }),
 }))
 
 applyTheme(initialTheme)

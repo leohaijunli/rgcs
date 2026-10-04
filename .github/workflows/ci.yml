@@ -54,6 +54,8 @@ jobs:
     name: Build Windows installer (NSIS/MSI)
     runs-on: windows-latest
     if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -68,12 +70,12 @@ jobs:
       - run: npm run build
         working-directory: frontend
       - name: Bundle Windows installer
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: crates/app-tauri
-          args: --target x86_64-pc-windows-msvc
+          args: ''
           releaseDraft: true
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
