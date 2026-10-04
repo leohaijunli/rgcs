@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["MagGCS Contributors"]
+repository = "https://github.com/maggcs/maggcs"
+# License TBD — see docs/adr/007-license.md (Apache-2.0 or GPL-3.0).
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+tokio = { version = "1", features = ["sync", "time", "net", "rt-multi-thread", "macros", "io-util"] }
+mavlink = { version = "0.17", features = ["std", "udp", "tcp", "direct-serial", "common", "signing", "serde"] }
+serialport = "4"
+ts-rs = { version = "11", features = ["serde-compat"] }

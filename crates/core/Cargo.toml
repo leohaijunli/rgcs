@@ -1,0 +1,14 @@
+[package]
+name = "maggcs-core"
+description = "Core library for MagGCS ground control station: MAVLink, telemetry, mission, terrain, survey, RTK, devices"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+mavlink.workspace = true
+serialport.workspace = true
+ts-rs.workspace = true

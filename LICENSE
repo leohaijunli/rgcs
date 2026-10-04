@@ -1,0 +1,8 @@
+MagGCS
+======
+
+License: TBD during Phase 0.
+
+Decision recorded in docs/adr/007-license.md (Apache-2.0 vs GPLv3).
+Until resolved, no license text is attached; the pending decision is noted
+in the workspace `Cargo.toml` as well.

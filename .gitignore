@@ -1,0 +1,7 @@
+target/
+*.swp
+.idea/
+.vscode/
+node_modules/
+frontend/dist/
+frontend/.vite/
