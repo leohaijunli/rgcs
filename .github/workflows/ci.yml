@@ -76,12 +76,15 @@ jobs:
         with:
           projectPath: crates/app-tauri
           args: ''
+          tagName: v0.1.0
+          releaseName: 'MagGCS v0.1.0'
+          releaseBody: 'Windows installer (NSIS/MSI). See assets to download.'
           releaseDraft: true
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: maggcs-windows
-          path: crates/app-tauri/target/release/*.msi
+          path: target/release/bundle/**
           if-no-files-found: warn
 
   sitl:
