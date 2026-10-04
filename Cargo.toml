@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/core",
+    "crates/app-tauri",
 ]
 
 [workspace.package]
@@ -15,6 +16,6 @@ repository = "https://github.com/maggcs/maggcs"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 tokio = { version = "1", features = ["sync", "time", "net", "rt-multi-thread", "macros", "io-util"] }
-mavlink = { version = "0.17", features = ["std", "udp", "tcp", "direct-serial", "common", "signing", "serde"] }
+mavlink = { version = "0.17", features = ["std", "udp", "tcp", "direct-serial", "common", "signing", "serde", "tokio-1"] }
 serialport = "4"
 ts-rs = { version = "11", features = ["serde-compat"] }

@@ -1,0 +1,77 @@
+// Bridges the desktop shell and the UI.
+//
+// Inside Tauri: subscribes to Rust-pushed events (`telemetry`, `link`,
+// `link_error`) and calls commands (`connect`, `disconnect`, `link_status`).
+// In a plain browser (Vite dev): starts the mock feed so the layout stays
+// alive until the desktop shell is built.
+//
+// The async `setup()` guards against React StrictMode double-mounts: every
+// await checks a `disposed` flag so listeners registered after an early
+// cleanup are unregistered immediately, and auto-connect runs once per load.
+
+import { useEffect } from 'react'
+import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
+import type { LinkStatus } from '../generated-types/LinkStatus'
+import type { TelemetrySnapshot } from '../generated-types/TelemetrySnapshot'
+import { useDevicesStore } from '../stores/devices'
+import { useLinkStore } from '../stores/link'
+import { useTelemetryStore } from '../stores/telemetry'
+import { startMockFeed } from '../telemetry/mock'
+
+const DEFAULT_ENDPOINT = 'udpin:0.0.0.0:14550'
+
+function inTauri(): boolean {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+}
+
+let connectStarted = false
+
+export function useTelemetryBridge() {
+  useEffect(() => {
+    let disposed = false
+    const unlisteners: Array<() => void> = []
+    let mockTimer: number | undefined
+
+    async function setup() {
+      if (!inTauri()) {
+        mockTimer = startMockFeed()
+        return
+      }
+      const un1 = await listen<TelemetrySnapshot>('telemetry', (e) => {
+        useTelemetryStore.getState().applySnapshot(e.payload)
+      })
+      if (disposed) return un1()
+      unlisteners.push(un1)
+
+      const un2 = await listen<LinkStatus>('link', (e) => {
+        useLinkStore.getState().setLink(e.payload)
+      })
+      if (disposed) return un2()
+      unlisteners.push(un2)
+
+      const un3 = await listen<string>('link_error', (e) => {
+        useLinkStore.getState().setError(e.payload)
+      })
+      if (disposed) return un3()
+      unlisteners.push(un3)
+
+      const snap = await invoke<LinkStatus | null>('link_status')
+      if (disposed) return
+      if (snap) useLinkStore.getState().setLink(snap)
+
+      if (!connectStarted) {
+        connectStarted = true
+        await invoke('connect', { endpoint: DEFAULT_ENDPOINT }).catch(() => undefined)
+      }
+      void useDevicesStore.getState().load()
+    }
+
+    void setup()
+    return () => {
+      disposed = true
+      unlisteners.forEach((u) => u())
+      if (mockTimer !== undefined) window.clearInterval(mockTimer)
+    }
+  }, [])
+}

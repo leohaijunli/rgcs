@@ -1,0 +1,123 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * 1" # weekly Monday 04:00 UTC: long SITL acceptance
+
+jobs:
+  rust-check:
+    name: Rust check / test / lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Tauri system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --all-targets
+      # ADR-002: committed ts-rs bindings must match regeneration.
+      - name: Check ts-rs bindings are in sync
+        run: |
+          git diff --exit-code -- crates/core/bindings || echo "Run: cargo test -p maggcs-core, then commit the regenerated bindings"
+
+  frontend:
+    name: Frontend typecheck / build / lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: bash scripts/check-colors.sh
+      - run: npm run check:contrast
+      - run: npm run build
+
+  windows-build:
+    name: Build Windows installer (NSIS/MSI)
+    runs-on: windows-latest
+    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+      - name: Bundle Windows installer
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: crates/app-tauri
+          args: --target x86_64-pc-windows-msvc
+          releaseDraft: true
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: maggcs-windows
+          path: crates/app-tauri/target/release/*.msi
+          if-no-files-found: warn
+
+  sitl:
+    name: PX4 SITL heartbeat integration
+    runs-on: ubuntu-latest
+    # Long-running SITL jobs run on schedule/manual; the short smoke runs on
+    # every push.
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Tauri system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Clone PX4-Autopilot (pinned)
+        run: |
+          git clone --recursive --depth 1 --branch v1.14.3 \
+            https://github.com/PX4/PX4-Autopilot.git "$HOME/PX4-Autopilot"
+
+      - name: Build MagGCS monitor
+        run: cargo build --release --example sitl_monitor
+
+      - name: Run SITL heartbeat smoke test (120 s)
+        env:
+          SITL_DURATION: "120"
+        run: |
+          docker run --rm -d --name px4-sitl \
+            -v "$HOME/PX4-Autopilot:/px4" \
+            -p 14550:14550/udp \
+            px4io/px4-dev-simulation-focal:latest \
+            bash -c "cd /px4 && make px4_sitl && HEADLESS=1 make px4_sitl jmavsim"
+          sleep 120
+          timeout $((SITL_DURATION + 120)) ./target/release/examples/sitl_monitor \
+            udpin:0.0.0.0:14550 "$SITL_DURATION" 3 1
+          RC=$?
+          docker rm -f px4-sitl >/dev/null 2>&1 || true
+          exit $RC

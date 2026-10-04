@@ -102,6 +102,8 @@ maggcs/
 4. 前端 UI 壳：设计令牌、两套主题、布局框架（顶栏/左右面板/底栏）、i18n 骨架；Cesium 基础场景 + 实时位置。
 5. GitHub Actions 跑 PX4 SITL 集成测试。
 
+**补充（Phase 0 收尾）**：设置菜单合并为单一 tab 弹窗（连接 / 主题·语言 / 日志 / 设备·udev / 关于），替换原主题 Popover，为后续阶段设置预留 tab 位（RTK、QC）。
+
 **验收**：SITL 连续 30 分钟心跳丢失 0 次；位置延迟 < 200 ms（本地测）；与 QGC 同时连接同一 SITL 正常；UI 验收见第六节。
 
 ### Phase 1：Mission Protocol + 规划视图
@@ -129,6 +131,8 @@ maggcs/
 ### Phase 5：按需补齐通用功能
 
 只读参数、必要参数修改、Guided Goto、Set Mode、多机基础、日志回放；评估固定翼。
+
+**补充：PX4 日志拉取/保存**。core 实现 MAVLink LOG 协议（`LOG_REQUEST_LIST`、`LOG_REQUEST_DATA`、`LOG_ERASE`），从飞控拉取 ULog；写入本地日志目录；设置页日志 tab 提供"刷新列表 / 拉取 / 保存为 / 擦除"操作。与日志回放共用 MAVLink 端与存储层。
 
 ### Phase 6：发布
 

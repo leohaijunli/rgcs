@@ -1,0 +1,20 @@
+[package]
+name = "maggcs-app"
+description = "MagGCS desktop ground control station (Tauri 2)"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[lib]
+name = "maggcs_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+maggcs-core = { path = "../core" }
+parking_lot = "0.12"
+serde.workspace = true
+tauri = { version = "2", features = [] }
+tokio.workspace = true

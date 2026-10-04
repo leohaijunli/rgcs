@@ -92,6 +92,11 @@ impl HeartbeatMonitor {
         !self.is_alive(now)
     }
 
+    /// When the last heartbeat frame was observed, if ever.
+    pub fn last_seen(&self) -> Option<Instant> {
+        self.last_seen
+    }
+
     /// Snapshot of the current status.
     pub fn status(&self, now: Instant) -> HeartbeatStatus {
         match self.last_seen {

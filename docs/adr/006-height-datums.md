@@ -7,6 +7,11 @@
 
 - `core` never represents an absolute height as a bare `f64`.
 - All heights carry a datum tag via `core::height::Height { datum, meters }`.
+- **Working datum: AMSL** (`h − N_EGM96`), matching PX4 (`MAV_FRAME_GLOBAL`)
+  and QGroundControl. Telemetry altitudes are tagged AMSL at ingest; the
+  UI displays AMSL. Ellipsoid height (`h`) is used only inside the Cesium
+  scene and in conversions; CGVD2013 orthometric (`H`) is used for BC LiDAR
+  survey data.
 - Datums in use: WGS84 ellipsoid (`h`), AMSL EGM96 (`h − N_EGM96`),
   CGVD2013 orthometric (`H`), with `H + N(CGG2013) = h`.
 - All conversions live in `core::height` (geoid models CGG2013, EGM96).

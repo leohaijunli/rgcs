@@ -1,0 +1,143 @@
+@import "tailwindcss";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/jetbrains-mono";
+
+/* ============================================================
+   MagGCS design tokens (ADR-010).
+   Components MUST reference tokens only; no hardcoded colors
+   (enforced by `npm run check:colors`).
+   Dark tech is the default; `[data-theme="light"]` overrides.
+   ============================================================ */
+
+:root {
+  /* palette */
+  --mg-bg: #0b1220;
+  --mg-bg-raised: #111b2e;
+  --mg-bg-glass: rgba(17, 27, 46, 0.72);
+  --mg-border: #22314d;
+  --mg-ink: #dbe4f5;
+  --mg-muted: #8aa0c4;
+  --mg-accent: #22d3ee;
+  --mg-accent-ink: #04242e;
+  --mg-ok: #22c55e;
+  --mg-ok-ink: #04210f;
+  --mg-warn: #eab308;
+  --mg-error: #ef4444;
+  --mg-mag: #c084fc;
+
+  /* instrument cluster */
+  --mg-sky: #1d5f9e;
+  --mg-ground: #7a4a21;
+  --mg-instrument: #0e1830;
+  --mg-tape-track: rgba(34, 211, 238, 0.55);
+
+  /* offline grid imagery */
+  --mg-grid-bg: #0d1a2e;
+  --mg-grid-line: #1e3a5f;
+  --mg-grid-glow: #22d3ee;
+
+  /* glass panels */
+  --mg-glass-blur: 12px;
+  --mg-glass-sat: 160%;
+
+  /* layout metrics */
+  --mg-topbar-h: 48px;
+  --mg-panel-w: 288px;
+  --mg-bottombar-h: 200px;
+
+  /* spacing */
+  --mg-space-1: 4px;
+  --mg-space-2: 8px;
+  --mg-space-3: 12px;
+  --mg-space-4: 16px;
+  --mg-space-6: 24px;
+
+  /* typography */
+  --mg-font-sans: "Inter Variable", system-ui, sans-serif;
+  --mg-font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+  --mg-text-xs: 11px;
+  --mg-text-sm: 12px;
+  --mg-text-base: 14px;
+  --mg-text-lg: 18px;
+}
+
+/* High-contrast light theme for outdoor field use. */
+[data-theme="light"] {
+  --mg-bg: #eef2f8;
+  --mg-bg-raised: #ffffff;
+  --mg-bg-glass: rgba(255, 255, 255, 0.9);
+  --mg-border: #c3cfe1;
+  --mg-ink: #12203a;
+  --mg-muted: #5a6f92;
+  --mg-accent: #0e7490;
+  --mg-accent-ink: #ffffff;
+  --mg-ok: #15803d;
+  --mg-ok-ink: #ffffff;
+  --mg-warn: #a16207;
+  --mg-error: #b91c1c;
+  --mg-mag: #7c3aed;
+
+  /* instrument cluster */
+  --mg-sky: #7fc4ff;
+  --mg-ground: #c98d4b;
+  --mg-instrument: #ffffff;
+  --mg-tape-track: rgba(14, 118, 148, 0.55);
+}
+
+/* Tailwind theme mapping — single source of truth for utilities. */
+@theme {
+  --color-canvas: var(--mg-bg);
+  --color-panel: var(--mg-bg-raised);
+  --color-line: var(--mg-border);
+  --color-ink: var(--mg-ink);
+  --color-muted: var(--mg-muted);
+  --color-accent: var(--mg-accent);
+  --color-accent-ink: var(--mg-accent-ink);
+  --color-ok: var(--mg-ok);
+  --color-ok-ink: var(--mg-ok-ink);
+  --color-warn: var(--mg-warn);
+  --color-error: var(--mg-error);
+  --color-mag: var(--mg-mag);
+  --font-sans: var(--mg-font-sans);
+  --font-mono: var(--mg-font-mono);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--mg-font-sans);
+  font-size: var(--mg-text-base);
+  color: var(--mg-ink);
+  background: var(--mg-bg);
+}
+
+.mono {
+  font-family: var(--mg-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.glass {
+  background: var(--mg-bg-glass);
+  backdrop-filter: blur(var(--mg-glass-blur)) saturate(var(--mg-glass-sat));
+}
+
+.panel {
+  background: var(--mg-bg-raised);
+  border: 1px solid var(--mg-border);
+}
+
+.touch-target {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--mg-accent);
+  outline-offset: 2px;
+}

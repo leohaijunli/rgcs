@@ -4,17 +4,23 @@
 //! heartbeat monitor, and emits typed events to subscribers. Sends are
 //! queued through a channel so callers never block on the wire.
 //!
-//! **Status:** type surface is fixed; the worker loop is implemented after
-//! signature confirmation (see AGENTS.md rule 2 and plan §12).
+//! The worker:
+//! 1. connects to the [`Endpoint`] via `mavlink::connect_async`,
+//! 2. emits [`ConnectionEvent::Connected`],
+//! 3. loops on `recv` / outbound sends / heartbeat timeout / reconnect
+//!    requests, and
+//! 4. on a link failure or explicit [`ConnectionHandle::reconnect`],
+//!    tears down and retries after `reconnect_delay`.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::{broadcast, mpsc, Mutex};
+use tokio::sync::{broadcast, mpsc, watch, Mutex};
 
 use super::endpoint::Endpoint;
 use super::error::MavlinkError;
+use super::heartbeat::HeartbeatMonitor;
 use super::message::{MavHeader, MavMessage, MessageEnvelope};
 use crate::mavlink::MavVersion;
 
@@ -76,12 +82,64 @@ impl Default for ConnectionConfig {
     }
 }
 
+impl From<MavVersion> for ::mavlink::MavlinkVersion {
+    fn from(v: MavVersion) -> Self {
+        match v {
+            MavVersion::V1 => ::mavlink::MavlinkVersion::V1,
+            MavVersion::V2 => ::mavlink::MavlinkVersion::V2,
+        }
+    }
+}
+
 /// Link state reported by the worker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
 pub enum LinkState {
     Connecting,
     Connected,
     Reconnecting,
+    Disconnected,
+}
+
+/// Desktop/headless bridge: a snapshot of the MAVLink link status emitted
+/// to the frontend alongside telemetry.
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct LinkStatus {
+    pub link_state: LinkState,
+    pub endpoint: String,
+    /// True when a target-FC heartbeat was seen recently.
+    pub fc_alive: bool,
+}
+
+impl LinkStatus {
+    /// Status representing a torn-down link.
+    pub fn disconnected() -> Self {
+        Self {
+            link_state: LinkState::Disconnected,
+            endpoint: String::new(),
+            fc_alive: false,
+        }
+    }
+
+    /// FC heartbeat alive.
+    pub fn alive() -> Self {
+        Self {
+            link_state: LinkState::Connected,
+            endpoint: String::new(),
+            fc_alive: true,
+        }
+    }
+
+    /// FC heartbeat lost.
+    pub fn lost() -> Self {
+        Self {
+            link_state: LinkState::Connected,
+            endpoint: String::new(),
+            fc_alive: false,
+        }
+    }
 }
 
 /// Clone-friendly classification of a link failure (the underlying
@@ -141,7 +199,6 @@ pub enum ConnectionEvent {
 
 /// Outbound frame queued to the worker.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // fields read by the worker loop (implemented after signature confirmation)
 struct OutboundFrame {
     header: MavHeader,
     message: MavMessage,
@@ -151,6 +208,8 @@ struct OutboundFrame {
 struct ConnectionInner {
     config: ConnectionConfig,
     outbound: mpsc::Sender<OutboundFrame>,
+    reconnect: watch::Sender<u64>,
+    shutdown: watch::Sender<bool>,
     state: Mutex<LinkState>,
 }
 
@@ -191,7 +250,8 @@ impl ConnectionHandle {
         .await
     }
 
-    /// Send a message with an explicit header.
+    /// Send a message with an explicit header (the worker assigns the
+    /// sequence number).
     pub async fn send_to(
         &self,
         header: MavHeader,
@@ -207,8 +267,13 @@ impl ConnectionHandle {
 
     /// Ask the worker to drop the link and reconnect.
     pub async fn reconnect(&self) -> Result<(), MavlinkError> {
-        // Worker listens on a command channel; implemented with the worker.
+        self.inner.reconnect.send_modify(|n| *n = n.wrapping_add(1));
         Ok(())
+    }
+
+    /// Ask the worker to stop permanently (app shutdown / disconnect).
+    pub async fn shutdown(&self) {
+        self.inner.shutdown.send_modify(|s| *s = true);
     }
 }
 
@@ -219,10 +284,14 @@ pub async fn spawn_connection(
     config: ConnectionConfig,
 ) -> Result<(ConnectionHandle, broadcast::Receiver<ConnectionEvent>), MavlinkError> {
     let (events_tx, events_rx) = broadcast::channel(EVENT_CAPACITY);
-    let (outbound_tx, mut outbound_rx) = mpsc::channel(OUTBOUND_CAPACITY);
+    let (outbound_tx, outbound_rx) = mpsc::channel(OUTBOUND_CAPACITY);
+    let (reconnect_tx, reconnect_rx) = watch::channel(0u64);
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let inner = Arc::new(ConnectionInner {
         config,
         outbound: outbound_tx,
+        reconnect: reconnect_tx,
+        shutdown: shutdown_tx,
         state: Mutex::new(LinkState::Connecting),
     });
     let handle = ConnectionHandle {
@@ -230,11 +299,126 @@ pub async fn spawn_connection(
         events: events_tx.clone(),
     };
 
-    tokio::spawn(async move {
-        let _ = (&mut outbound_rx, inner, events_tx);
-        // Worker loop (recv / heartbeat / reconnect / send) is implemented
-        // after signature confirmation.
-    });
+    tokio::spawn(run_worker(inner, events_tx, outbound_rx, reconnect_rx, shutdown_rx));
 
     Ok((handle, events_rx))
+}
+
+type Conn = Box<dyn ::mavlink::AsyncMavConnection<MavMessage> + Sync + Send>;
+
+/// Connection worker task.
+async fn run_worker(
+    inner: Arc<ConnectionInner>,
+    events: broadcast::Sender<ConnectionEvent>,
+    mut outbound_rx: mpsc::Receiver<OutboundFrame>,
+    mut reconnect_rx: watch::Receiver<u64>,
+    mut shutdown_rx: watch::Receiver<bool>,
+) {
+    let config = &inner.config;
+    let address = config.endpoint.to_address_string();
+    let mut heartbeat = HeartbeatMonitor::new(
+        config.target_system_id,
+        config.target_component_id,
+        config.heartbeat_timeout,
+    );
+    let mut fc_alive = false;
+    let mut seq: u8 = 0;
+
+    loop {
+        if *shutdown_rx.borrow() {
+            return;
+        }
+        *inner.state.lock().await = LinkState::Connecting;
+        let mut conn: Conn = match ::mavlink::connect_async::<MavMessage>(&address).await {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = events.send(ConnectionEvent::LinkError(LinkFailure::from(
+                    &MavlinkError::Io(e),
+                )));
+                tokio::select! {
+                    _ = tokio::time::sleep(config.reconnect_delay) => {}
+                    _ = reconnect_rx.changed() => {}
+                }
+                continue;
+            }
+        };
+        conn.set_protocol_version(config.mavlink_version.into());
+        *inner.state.lock().await = LinkState::Connected;
+        let _ = events.send(ConnectionEvent::Connected {
+            endpoint: config.endpoint.clone(),
+        });
+
+        'connected: loop {
+            let reconnect = reconnect_rx.changed();
+            tokio::select! {
+                res = conn.recv() => match res {
+                    Ok((header, message)) => {
+                        let now = Instant::now();
+                        let is_target_heartbeat = header.system_id == config.target_system_id
+                            && header.component_id == config.target_component_id
+                            && matches!(message, MavMessage::HEARTBEAT(_));
+                        let env = MessageEnvelope { header, message, received_at: now };
+                        let _ = events.send(ConnectionEvent::Message(Box::new(env)));
+                        if is_target_heartbeat {
+                            let was_alive = fc_alive;
+                            heartbeat.observe(header.system_id, header.component_id, now);
+                            fc_alive = true;
+                            if !was_alive {
+                                let _ = events.send(ConnectionEvent::HeartbeatRestored);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let _ = events.send(ConnectionEvent::LinkError(LinkFailure::from(
+                            &MavlinkError::Protocol(e.to_string()),
+                        )));
+                        break 'connected;
+                    }
+                },
+                cmd = outbound_rx.recv() => match cmd {
+                    Some(mut frame) => {
+                        frame.header.sequence = seq;
+                        seq = seq.wrapping_add(1);
+                        if let Err(e) = conn.send(&frame.header, &frame.message).await {
+                            let _ = events.send(ConnectionEvent::LinkError(LinkFailure::from(
+                                &MavlinkError::Protocol(e.to_string()),
+                            )));
+                            break 'connected;
+                        }
+                    }
+                    None => return,
+                },
+                _ = tokio::time::sleep(config.heartbeat_timeout) => {
+                    let now = Instant::now();
+                    if fc_alive && !heartbeat.is_alive(now) {
+                        fc_alive = false;
+                        let age = heartbeat
+                            .last_seen()
+                            .map(|t| now.duration_since(t))
+                            .unwrap_or_default();
+                        let _ = events.send(ConnectionEvent::HeartbeatLost { last_seen_age: age });
+                    }
+                }
+                _ = reconnect => {
+                    break 'connected;
+                }
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        return;
+                    }
+                    break 'connected;
+                }
+            }
+        }
+
+        if *shutdown_rx.borrow() {
+            return;
+        }
+
+        *inner.state.lock().await = LinkState::Reconnecting;
+        tokio::select! {
+            _ = tokio::time::sleep(config.reconnect_delay) => {}
+            _ = reconnect_rx.changed() => {}
+        }
+    }
 }
