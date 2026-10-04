@@ -44,7 +44,9 @@ pub async fn connect(
         old.shutdown().await;
     }
 
-    let (handle, _rx) = spawn_connection(config.clone()).await.map_err(|e| e.to_string())?;
+    let (handle, _rx) = spawn_connection(config.clone())
+        .await
+        .map_err(|e| e.to_string())?;
     let hub = TelemetryHub::spawn(handle.clone(), DEFAULT_PUSH_HZ);
     state.set_connection(handle);
     state.set_hub(hub.clone());

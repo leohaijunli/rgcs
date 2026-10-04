@@ -12,23 +12,20 @@ const DEFAULT_ENDPOINT = 'udpin:0.0.0.0:14550'
 const APP_VERSION = '0.1.0'
 
 /** Single settings surface: every preference grouped under tabs. */
-export default function SettingsDialog() {
+export default function SettingsDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean
+  onOpenChange: (o: boolean) => void
+}) {
   const { t } = useTranslation()
-  const [open, setOpen] = useState(false)
   const theme = useUiStore((s) => s.theme)
   const setTheme = useUiStore((s) => s.setTheme)
   const link = useLinkStore((s) => s.link)
 
   return (
-    <Dialog.Root open={open} onOpenChange={setOpen}>
-      <Dialog.Trigger asChild>
-        <button
-          aria-label={t('settings.menu')}
-          className="flex h-11 w-11 items-center justify-center rounded border border-line bg-canvas text-muted hover:text-ink"
-        >
-          <Settings size={16} />
-        </button>
-      </Dialog.Trigger>
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/50" />
         <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[85vh] w-[min(94vw,680px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-line bg-panel shadow-2xl">

@@ -35,7 +35,12 @@ impl TelemetryHub {
 
         tokio::spawn(pump(conn, hz, snapshot_tx, link_tx, error_tx, shutdown_rx));
 
-        Self { snapshot_rx, link_rx, error_rx, shutdown_tx }
+        Self {
+            snapshot_rx,
+            link_rx,
+            error_rx,
+            shutdown_tx,
+        }
     }
 
     /// Latest snapshot.

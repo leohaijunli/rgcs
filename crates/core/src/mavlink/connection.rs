@@ -299,7 +299,13 @@ pub async fn spawn_connection(
         events: events_tx.clone(),
     };
 
-    tokio::spawn(run_worker(inner, events_tx, outbound_rx, reconnect_rx, shutdown_rx));
+    tokio::spawn(run_worker(
+        inner,
+        events_tx,
+        outbound_rx,
+        reconnect_rx,
+        shutdown_rx,
+    ));
 
     Ok((handle, events_rx))
 }
