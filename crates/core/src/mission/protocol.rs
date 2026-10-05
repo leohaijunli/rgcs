@@ -79,6 +79,9 @@ enum State {
 /// MAVLink mission protocol state machine (one instance per FC).
 #[derive(Debug)]
 pub struct MissionProtocol {
+    /// Our own MAVLink system/component id (inbound messages are addressed to us).
+    self_sys: u8,
+    self_comp: u8,
     target_sys: u8,
     target_comp: u8,
     state: State,
@@ -86,9 +89,13 @@ pub struct MissionProtocol {
 }
 
 impl MissionProtocol {
-    /// New idle protocol targeting the given FC system/component.
-    pub fn new(target_sys: u8, target_comp: u8) -> Self {
+    /// New idle protocol: `self_sys`/`self_comp` are our own MAVLink ids
+    /// (inbound mission messages are addressed to them), `target_sys`/`target_comp`
+    /// identify the FC.
+    pub fn new(self_sys: u8, self_comp: u8, target_sys: u8, target_comp: u8) -> Self {
         Self {
+            self_sys,
+            self_comp,
             target_sys,
             target_comp,
             state: State::Idle,
@@ -158,7 +165,9 @@ impl MissionProtocol {
     #[allow(deprecated)]
     pub fn handle(&mut self, header: &MavHeader, msg: &MavMessage) -> (Vec<MissionEvent>, Vec<MavMessage>) {
         if let Some((sys, comp)) = target_of(msg) {
-            if sys != self.target_sys || comp != self.target_comp {
+            let to_us = (sys == self.self_sys && comp == self.self_comp)
+                || (sys == 0 && comp == 0);
+            if !to_us {
                 return (Vec::new(), Vec::new());
             }
         }
@@ -427,8 +436,10 @@ mod tests {
     use super::*;
     use ::mavlink::common::MavMessage as M;
 
-    const SYS: u8 = 1;
-    const COMP: u8 = 1;
+    const FC_SYS: u8 = 1;
+    const FC_COMP: u8 = 1;
+    const SELF_SYS: u8 = 250;
+    const SELF_COMP: u8 = 250;
 
     fn mk_item(seq: u16, lat_deg: f64, lon_deg: f64, alt_m: f32) -> MissionItem {
         let mut i = MissionItem::waypoint(lat_deg, lon_deg, alt_m, MissionFrame::GlobalRelativeAlt);
@@ -438,28 +449,28 @@ mod tests {
 
     fn req_int(seq: u16) -> M {
         M::MISSION_REQUEST_INT(MISSION_REQUEST_INT_DATA {
-            target_system: SYS,
-            target_component: COMP,
+            target_system: SELF_SYS,
+            target_component: SELF_COMP,
             seq,
         })
     }
 
     fn item_msg(seq: u16) -> M {
-        M::MISSION_ITEM_INT(mission_item_to_mav(SYS, COMP, &mk_item(seq, 48.0, -123.0, 50.0)))
+        M::MISSION_ITEM_INT(mission_item_to_mav(FC_SYS, FC_COMP, &mk_item(seq, 48.0, -123.0, 50.0)))
     }
 
     fn ack_msg(accepted: bool) -> M {
         let ty = if accepted { MavMissionResult::MAV_MISSION_ACCEPTED } else { MavMissionResult::MAV_MISSION_ERROR };
         M::MISSION_ACK(MISSION_ACK_DATA {
-            target_system: SYS,
-            target_component: COMP,
+            target_system: SELF_SYS,
+            target_component: SELF_COMP,
             mavtype: ty,
         })
     }
 
     #[test]
     fn upload_round_trip() {
-        let mut p = MissionProtocol::new(SYS, COMP);
+        let mut p = MissionProtocol::new(SELF_SYS, SELF_COMP, FC_SYS, FC_COMP);
         let frames = p.begin_upload(vec![mk_item(0, 48.0, -123.0, 50.0), mk_item(1, 48.1, -123.1, 60.0)]).unwrap();
         assert_eq!(frames.len(), 1);
         let M::MISSION_COUNT(c) = &frames[0] else { panic!("expected MISSION_COUNT") };
@@ -480,7 +491,7 @@ mod tests {
 
     #[test]
     fn upload_seq_mismatch_fails() {
-        let mut p = MissionProtocol::new(SYS, COMP);
+        let mut p = MissionProtocol::new(SELF_SYS, SELF_COMP, FC_SYS, FC_COMP);
         p.begin_upload(vec![mk_item(0, 48.0, -123.0, 50.0)]).unwrap();
         let (events, _) = p.handle(&MavHeader::default(), &req_int(1));
         assert!(matches!(&events[0], MissionEvent::Failed(MissionError::SeqMismatch { expected: 0, got: 1 })));
@@ -488,12 +499,12 @@ mod tests {
 
     #[test]
     fn download_round_trip() {
-        let mut p = MissionProtocol::new(SYS, COMP);
+        let mut p = MissionProtocol::new(SELF_SYS, SELF_COMP, FC_SYS, FC_COMP);
         let frames = p.begin_download();
         assert!(matches!(&frames[0], M::MISSION_REQUEST_LIST(_)));
 
         let (events, frames) = p.handle(&MavHeader::default(), &M::MISSION_COUNT(MISSION_COUNT_DATA {
-            target_system: SYS, target_component: COMP, count: 2,
+            target_system: SELF_SYS, target_component: SELF_COMP, count: 2,
         }));
         assert!(events.is_empty());
         assert!(matches!(&frames[0], M::MISSION_REQUEST_INT(m) if m.seq == 0));
@@ -514,7 +525,7 @@ mod tests {
 
     #[test]
     fn clear_all_round_trip() {
-        let mut p = MissionProtocol::new(SYS, COMP);
+        let mut p = MissionProtocol::new(SELF_SYS, SELF_COMP, FC_SYS, FC_COMP);
         let frames = p.begin_clear();
         assert!(matches!(&frames[0], M::MISSION_CLEAR_ALL(_)));
         let (events, frames) = p.handle(&MavHeader::default(), &ack_msg(true));
@@ -525,7 +536,7 @@ mod tests {
 
     #[test]
     fn clear_all_denied() {
-        let mut p = MissionProtocol::new(SYS, COMP);
+        let mut p = MissionProtocol::new(SELF_SYS, SELF_COMP, FC_SYS, FC_COMP);
         p.begin_clear();
         let (events, _) = p.handle(&MavHeader::default(), &ack_msg(false));
         assert!(matches!(&events[0], MissionEvent::Failed(MissionError::AckDenied(_))));
@@ -533,10 +544,12 @@ mod tests {
 
     #[test]
     fn set_current_round_trip() {
-        let mut p = MissionProtocol::new(SYS, COMP);
+        let mut p = MissionProtocol::new(SELF_SYS, SELF_COMP, FC_SYS, FC_COMP);
         let frames = p.begin_set_current(3);
         assert!(matches!(&frames[0], M::MISSION_SET_CURRENT(_)));
-        let (events, _) = p.handle(&MavHeader::default(), &M::MISSION_CURRENT(MISSION_CURRENT_DATA { seq: 3 }));
+        let (events, _) = p.handle(&MavHeader::default(), &M::MISSION_CURRENT(MISSION_CURRENT_DATA {
+            seq: 3,
+        }));
         assert!(events.contains(&MissionEvent::CurrentChanged { seq: 3 }));
         assert!(events.contains(&MissionEvent::Completed(MissionOperation::SetCurrent(3))));
         assert!(p.is_idle());
@@ -544,7 +557,7 @@ mod tests {
 
     #[test]
     fn foreign_target_ignored() {
-        let mut p = MissionProtocol::new(SYS, COMP);
+        let mut p = MissionProtocol::new(SELF_SYS, SELF_COMP, FC_SYS, FC_COMP);
         p.begin_upload(vec![mk_item(0, 48.0, -123.0, 50.0)]).unwrap();
         let (events, frames) = p.handle(&MavHeader::default(), &M::MISSION_REQUEST_INT(MISSION_REQUEST_INT_DATA {
             target_system: 99, target_component: 99, seq: 0,
@@ -554,7 +567,7 @@ mod tests {
 
     #[test]
     fn retransmit_then_exhaust() {
-        let mut p = MissionProtocol::new(SYS, COMP);
+        let mut p = MissionProtocol::new(SELF_SYS, SELF_COMP, FC_SYS, FC_COMP);
         p.begin_upload(vec![mk_item(0, 48.0, -123.0, 50.0)]).unwrap();
         p.handle(&MavHeader::default(), &req_int(0));
 
@@ -573,7 +586,7 @@ mod tests {
     #[test]
     fn encode_decode_round_trip() {
         let item = mk_item(7, 48.64, -123.4, 55.5);
-        let msg = mission_item_to_mav(SYS, COMP, &item);
+        let msg = mission_item_to_mav(FC_SYS, FC_COMP, &item);
         let back = mission_item_from_mav(&msg);
         assert_eq!(back.seq, item.seq);
         assert_eq!(back.x, item.x);
@@ -590,7 +603,7 @@ mod tests {
 
     #[test]
     fn empty_upload_rejected() {
-        let mut p = MissionProtocol::new(SYS, COMP);
+        let mut p = MissionProtocol::new(SELF_SYS, SELF_COMP, FC_SYS, FC_COMP);
         assert_eq!(p.begin_upload(Vec::new()), Err(MissionError::NoItems));
     }
 }
