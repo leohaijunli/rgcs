@@ -1,4 +1,4 @@
-import { Layers, Map as MapIcon, Plane, Settings } from 'lucide-react'
+import { Layers, Map as MapIcon, Plane } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useUiStore, type DrawerId } from '../stores/ui'
 
@@ -31,13 +31,6 @@ export default function IconRail() {
           </button>
         )
       })}
-      <button
-        title={t('settings.menu')}
-        aria-label={t('settings.menu')}
-        className="touch-target mt-auto flex h-12 w-12 items-center justify-center rounded text-muted hover:bg-canvas hover:text-ink"
-      >
-        <Settings size={20} strokeWidth={1.75} />
-      </button>
     </nav>
   )
 }

@@ -37,11 +37,20 @@ Requires Windows 11 22H2+ and WSL 2.0+.
 
 ## 2. Run PX4 SITL in WSL
 
+### Quick start (Docker, recommended)
+
 ```bash
 # clone if needed
 git clone --recursive https://github.com/PX4/PX4-Autopilot.git
+# build (first run) or restart (later runs) SITL in Docker (jmavsim headless)
+bash <repo>/scripts/sitl/run_sitl_docker.sh ~/PX4-Autopilot
+tail -f ~/PX4-Autopilot/build.log   # wait for the "pxh>" prompt
+```
+
+### Direct build
+
+```bash
 cd PX4-Autopilot
-# build + run headless
 make px4_sitl jmavsim          # or: HEADLESS=1 make px4_sitl jmavsim
 ```
 
