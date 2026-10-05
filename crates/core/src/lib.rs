@@ -10,6 +10,7 @@
 
 pub mod devices;
 pub mod height;
+pub mod mission;
 pub mod mavlink;
 pub mod telemetry;
 
