@@ -150,17 +150,18 @@ export default function MapView() {
   // Telemetry updates: drone position, trail, camera follow.
   const snapshot = useTelemetryStore((s) => s.snapshot)
 
-  // Follow: Cesium's built-in smooth tracking.
+  // Follow: Cesium's built-in smooth tracking. Re-evaluates when telemetry
+  // arrives so the camera follows the real GPS position, not the home default.
+  const hasPos = useTelemetryStore((s) => s.snapshot?.global_position != null)
   useEffect(() => {
     const viewer = viewerRef.current
     if (!viewer) return
-    const hasPos = useTelemetryStore.getState().snapshot?.global_position != null
     if (follow && hasPos && droneRef.current) {
       viewer.trackedEntity = droneRef.current
     } else {
       viewer.trackedEntity = undefined
     }
-  }, [follow])
+  }, [follow, hasPos])
 
   useEffect(() => {
     const viewer = viewerRef.current

@@ -9,10 +9,12 @@
 //!
 //! Defaults: `udpin:0.0.0.0:14550` 60 3 1
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use maggcs_core::mavlink::{
-    connection::spawn_connection, ConnectionConfig, ConnectionEvent, Endpoint,
+    connection::spawn_connection, message::MavMessage, ConnectionConfig, ConnectionEvent,
+    Endpoint,
 };
 
 fn arg(args: &[String], i: usize) -> Option<&str> {
@@ -47,6 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut heartbeats: u64 = 0;
     let mut losses: u64 = 0;
     let mut first_frame_at: Option<Instant> = None;
+    let printed_pos = AtomicBool::new(false);
 
     println!(
         "sitl_monitor: endpoint={address} duration={duration_s}s heartbeat_timeout={timeout_s}s target_sys={target_sys} system_id={our_sys}"
@@ -76,6 +79,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 if m.is_heartbeat_from(target_sys, 1) {
                     heartbeats += 1;
+                }
+                if let MavMessage::GLOBAL_POSITION_INT(p) = &m.message {
+                    if printed_pos.swap(true, Ordering::SeqCst) {
+                        continue;
+                    }
+                    println!(
+                        "[pos] lat={:.6} lon={:.6} alt_msl_mm={} rel_alt_mm={}",
+                        p.lat as f64 / 1e7,
+                        p.lon as f64 / 1e7,
+                        p.alt,
+                        p.relative_alt
+                    );
                 }
             }
             ConnectionEvent::HeartbeatLost { last_seen_age } => {

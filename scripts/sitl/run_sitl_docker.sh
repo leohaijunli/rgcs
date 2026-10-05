@@ -10,6 +10,8 @@
 #   PX4_IMAGE   docker image (default px4io/px4-dev-simulation-jammy:latest)
 #   PX4_SIM     simulator target (default jmavsim)
 #   PX4_CONTAINER container name (default px4-sitl)
+#   PX4_HOME_LAT/PX4_HOME_LON/PX4_HOME_ALT
+#               SITL world origin (default: Sidney BC, Canada, ~5 m MSL)
 #
 # The GCS (MagGCS on Windows, or scripts/sitl/run_heartbeat_test.sh) connects
 # to udpin:0.0.0.0:14550. WSL2: use mirrored networking or the WSL IP
@@ -21,6 +23,10 @@ PX4_DIR="${1:-${PX4_DIR:-$HOME/PX4-Autopilot}}"
 PX4_IMAGE="${PX4_IMAGE:-px4io/px4-dev-simulation-jammy:latest}"
 PX4_SIM="${PX4_SIM:-jmavsim}"
 PX4_CONTAINER="${PX4_CONTAINER:-px4-sitl}"
+# SITL world origin — default Sidney BC, Canada (survey site), ~5 m MSL.
+export PX4_HOME_LAT="${PX4_HOME_LAT:-48.6493}"
+export PX4_HOME_LON="${PX4_HOME_LON:--123.3982}"
+export PX4_HOME_ALT="${PX4_HOME_ALT:-5}"
 
 if [ ! -d "$PX4_DIR" ]; then
   echo "PX4 source not found at $PX4_DIR (clone PX4-Autopilot first)" >&2
