@@ -5,6 +5,7 @@
 //! Tauri events, and commands let the UI control the link.
 
 mod commands;
+mod mission_service;
 mod state;
 mod telemetry_pump;
 
@@ -19,7 +20,11 @@ pub fn run() {
             commands::disconnect,
             commands::link_status,
             commands::get_snapshot,
-            commands::enumerate_devices
+            commands::enumerate_devices,
+            commands::mission_upload,
+            commands::mission_download,
+            commands::mission_clear,
+            commands::mission_set_current
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

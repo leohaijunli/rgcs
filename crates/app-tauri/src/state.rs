@@ -6,10 +6,13 @@ use maggcs_core::mavlink::ConnectionHandle;
 use maggcs_core::telemetry::hub::TelemetryHub;
 use parking_lot::Mutex;
 
+use crate::mission_service::MissionService;
+
 #[derive(Default)]
 struct AppInner {
     connection: Option<ConnectionHandle>,
     hub: Option<TelemetryHub>,
+    mission: Option<MissionService>,
     link: Option<LinkStatus>,
 }
 
@@ -47,6 +50,21 @@ impl AppState {
             h.shutdown();
         }
         hub
+    }
+
+    /// Store the mission service (replaces any previous one).
+    pub fn set_mission(&self, service: MissionService) {
+        self.inner.lock().mission = Some(service);
+    }
+
+    /// Take the mission service.
+    pub fn take_mission(&self) -> Option<MissionService> {
+        self.inner.lock().mission.take()
+    }
+
+    /// Clone of the current mission service, if any.
+    pub fn mission(&self) -> Option<MissionService> {
+        self.inner.lock().mission.clone()
     }
 
     /// Latest link status published by the pump.
