@@ -30,32 +30,12 @@ export default function MapView() {
     if (!container) return
     try {
 
-    const canvas = document.createElement('canvas')
-    canvas.width = 1024
-    canvas.height = 512
-    const g = canvas.getContext('2d')
-    if (g) {
-      g.fillStyle = cssVar('--mg-grid-bg')
-      g.fillRect(0, 0, 1024, 512)
-      g.strokeStyle = cssVar('--mg-grid-line')
-      g.lineWidth = 1
-      for (let x = 0; x <= 1024; x += 64) {
-        g.beginPath()
-        g.moveTo(x, 0)
-        g.lineTo(x, 512)
-        g.stroke()
-      }
-      for (let y = 0; y <= 512; y += 64) {
-        g.beginPath()
-        g.moveTo(0, y)
-        g.lineTo(1024, y)
-        g.stroke()
-      }
-    }
-    const grid = new Cesium.SingleTileImageryProvider({
-      url: canvas.toDataURL('image/png'),
-      tileWidth: 1024,
-      tileHeight: 512,
+    const grid = new Cesium.GridImageryProvider({
+      cells: 16,
+      color: Cesium.Color.fromCssColorString(cssVar('--mg-grid-line')),
+      glowColor: Cesium.Color.fromCssColorString(cssVar('--mg-grid-glow')),
+      backgroundColor: Cesium.Color.fromCssColorString(cssVar('--mg-grid-bg')),
+      canvasSize: 256,
     })
     const viewer = new Cesium.Viewer(container, {
       baseLayer: new Cesium.ImageryLayer(grid),
@@ -170,7 +150,8 @@ export default function MapView() {
   useEffect(() => {
     const viewer = viewerRef.current
     if (!viewer) return
-    if (follow && droneRef.current) {
+    const hasPos = useTelemetryStore.getState().snapshot?.global_position != null
+    if (follow && hasPos && droneRef.current) {
       viewer.trackedEntity = droneRef.current
     } else {
       viewer.trackedEntity = undefined
