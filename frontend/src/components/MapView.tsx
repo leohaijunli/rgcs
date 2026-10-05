@@ -6,8 +6,8 @@ import { useTelemetryStore } from '../stores/telemetry'
 import { useUiStore } from '../stores/ui'
 import MapToolbar from './MapToolbar'
 
-const HOME_LAT = 49.25
-const HOME_LON = -123.1
+const HOME_LAT = 48.6493
+const HOME_LON = -123.3982
 const TRAIL_MAX = 512
 const TRAIL_EVERY = 2
 
@@ -37,6 +37,9 @@ export default function MapView() {
       backgroundColor: Cesium.Color.fromCssColorString(cssVar('--mg-grid-bg')),
       canvasSize: 256,
     })
+    // OSM imagery (no Ion token) on top of the offline grid: real map when
+    // online, grid fallback when offline.
+    const osm = new Cesium.OpenStreetMapImageryProvider({ url: 'https://tile.openstreetmap.org/' })
     const viewer = new Cesium.Viewer(container, {
       baseLayer: new Cesium.ImageryLayer(grid),
       animation: false,
@@ -50,6 +53,7 @@ export default function MapView() {
       infoBox: false,
       selectionIndicator: false,
     })
+    viewer.imageryLayers.addImageryProvider(osm, 1)
     viewer.camera.setView({
       destination: Cesium.Cartesian3.fromDegrees(HOME_LON, HOME_LAT, 12000),
     })

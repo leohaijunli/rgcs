@@ -5,8 +5,8 @@
 import type { TelemetrySnapshot } from '../generated-types/TelemetrySnapshot'
 import { useTelemetryStore } from '../stores/telemetry'
 
-const HOME_LAT = 49.25
-const HOME_LON = -123.1
+const HOME_LAT = 48.6493
+const HOME_LON = -123.3982
 
 /** Start a sine-wave flight loop; returns the interval id. */
 export function startMockFeed(): number {
