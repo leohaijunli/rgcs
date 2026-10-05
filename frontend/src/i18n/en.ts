@@ -89,6 +89,8 @@ export default {
     pause: 'Pause',
     resume: 'Resume',
     rtl: 'RTL',
+    import: 'Import',
+    export: 'Export',
   },
   terrain: {
     dtm: 'DTM terrain',

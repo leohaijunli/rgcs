@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { importPlanFile, exportPlanFile } from '../../mission/planfile'
 import { useLinkStore } from '../../stores/link'
 import { useMissionStore, degFromMavInt, type AltitudeMode } from '../../stores/mission'
 import type { MissionItem } from '../../generated-types/MissionItem'
@@ -32,6 +33,17 @@ export default function PlanningPanel() {
     if (dragSeq === null || dragSeq === targetSeq) return
     moveWaypoint(dragSeq, targetSeq)
     setDragSeq(null)
+  }
+
+  const onImport = async () => {
+    const result = await importPlanFile()
+    if (!result) return
+    useMissionStore.getState().setItems(result.items)
+    useMissionStore.getState().setAltitudeMode(result.mode)
+  }
+
+  const onExport = async () => {
+    await exportPlanFile(items, altitudeMode)
   }
 
   return (
@@ -135,6 +147,22 @@ export default function PlanningPanel() {
           className="rounded-md border border-line bg-panel px-2 py-1.5 text-sm hover:bg-canvas disabled:opacity-40"
         >
           {t('plan.clear')}
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-1.5">
+        <button
+          onClick={() => void onImport()}
+          className="rounded-md border border-line bg-panel px-2 py-1.5 text-sm hover:bg-canvas"
+        >
+          {t('plan.import')}
+        </button>
+        <button
+          disabled={items.length === 0}
+          onClick={() => void onExport()}
+          className="rounded-md border border-line bg-panel px-2 py-1.5 text-sm hover:bg-canvas disabled:opacity-40"
+        >
+          {t('plan.export')}
         </button>
       </div>
 

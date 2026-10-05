@@ -18,4 +18,6 @@ mavlink.workspace = true
 parking_lot = "0.12"
 serde.workspace = true
 tauri = { version = "2", features = ["devtools"] }
+tauri-plugin-dialog = "2.8.1"
+tauri-plugin-fs = "2.6.0"
 tokio.workspace = true

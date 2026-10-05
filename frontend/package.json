@@ -20,6 +20,8 @@
     "@radix-ui/react-tabs": "^1.1.2",
     "@radix-ui/react-tooltip": "^1.1.8",
     "@tauri-apps/api": "^2.4.0",
+    "@tauri-apps/plugin-dialog": "^2.8.1",
+    "@tauri-apps/plugin-fs": "^2.6.0",
     "cesium": "^1.120.1",
     "i18next": "^23.16.8",
     "lucide-react": "^0.474.0",
