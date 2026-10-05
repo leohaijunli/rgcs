@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next'
+import PlanningPanel from './panels/PlanningPanel'
 import { useLinkStore } from '../stores/link'
 import { useTelemetryStore } from '../stores/telemetry'
 import { useUiStore, VIEW_CONFIG } from '../stores/ui'
@@ -25,7 +26,13 @@ export default function RightInspector() {
         </button>
       </div>
       <div className="flex-1 overflow-y-auto p-3">
-        {view === 'flight' ? <FlightInspector /> : <GenericInspector view={view} />}
+        {view === 'planning' ? (
+          <PlanningPanel />
+        ) : view === 'flight' ? (
+          <FlightInspector />
+        ) : (
+          <GenericInspector view={view} />
+        )}
       </div>
     </aside>
   )

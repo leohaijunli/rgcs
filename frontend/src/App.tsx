@@ -6,6 +6,7 @@ import Drawer from './components/Drawer'
 import RightInspector from './components/RightInspector'
 import Dock from './components/Dock'
 import Hud from './components/Hud'
+import FlightCommands from './components/FlightCommands'
 import MapView from './components/MapView'
 import ErrorBanner from './components/ErrorBanner'
 import ConnectDialog from './components/dialogs/ConnectDialog'
@@ -24,6 +25,7 @@ export default function App() {
         <main className="relative min-w-0 flex-1">
           <MapView />
           <Hud />
+          <FlightCommands />
           <ErrorBanner />
         </main>
         <RightInspector />

@@ -14,8 +14,11 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import type { LinkStatus } from '../generated-types/LinkStatus'
 import type { TelemetrySnapshot } from '../generated-types/TelemetrySnapshot'
+import type { MissionItem } from '../generated-types/MissionItem'
+import type { MissionEventPayload } from '../stores/mission'
 import { useDevicesStore } from '../stores/devices'
 import { useLinkStore } from '../stores/link'
+import { useMissionStore } from '../stores/mission'
 import { useTelemetryStore } from '../stores/telemetry'
 import { startMockFeed } from '../telemetry/mock'
 
@@ -55,6 +58,18 @@ export function useTelemetryBridge() {
       })
       if (disposed) return un3()
       unlisteners.push(un3)
+
+      const un4 = await listen<MissionEventPayload>('mission', (e) => {
+        useMissionStore.getState().handleEvent(e.payload)
+      })
+      if (disposed) return un4()
+      unlisteners.push(un4)
+
+      const un5 = await listen<MissionItem[]>('mission_plan', (e) => {
+        useMissionStore.getState().handlePlan(e.payload)
+      })
+      if (disposed) return un5()
+      unlisteners.push(un5)
 
       const snap = await invoke<LinkStatus | null>('link_status')
       if (disposed) return

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import * as Cesium from 'cesium'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
 import { cssVar } from '../design-system/theme'
+import { degFromMavInt, useMissionStore } from '../stores/mission'
 import { useTelemetryStore } from '../stores/telemetry'
 import { useUiStore } from '../stores/ui'
 import MapToolbar from './MapToolbar'
@@ -20,6 +21,9 @@ export default function MapView() {
   const homeRef = useRef<Cesium.Entity | null>(null)
   const trailPos = useRef<Cesium.Cartesian3[]>([])
   const tickRef = useRef(0)
+  const wpLineRef = useRef<Cesium.Entity | null>(null)
+  const wpPointRefs = useRef<Map<number, Cesium.Entity>>(new Map())
+  const wpHandlerRef = useRef<Cesium.ScreenSpaceEventHandler | null>(null)
 
   const follow = useUiStore((s) => s.follow)
   const map3d = useUiStore((s) => s.map3d)
@@ -121,12 +125,60 @@ export default function MapView() {
       },
     })
 
+    // Waypoint dragging: pick by entity id `wp-<seq>`, commit to the mission store.
+    const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas)
+    let draggingSeq = -1
+    handler.setInputAction(
+      (click: Cesium.ScreenSpaceEventHandler.PositionedEvent) => {
+        const picked = viewer.scene.pick(click.position)
+        const id = Cesium.defined(picked) ? (picked.id as Cesium.Entity) : undefined
+        const seqStr = id?.id ? String(id.id).replace(/^wp-/, '') : ''
+        const seq = Number.parseInt(seqStr, 10)
+        if (Number.isNaN(seq)) return
+        draggingSeq = seq
+        viewer.scene.screenSpaceCameraController.enableRotate = false
+        viewer.scene.screenSpaceCameraController.enableTranslate = false
+      },
+      Cesium.ScreenSpaceEventType.LEFT_DOWN,
+    )
+    handler.setInputAction(
+      (movement: Cesium.ScreenSpaceEventHandler.MotionEvent) => {
+        if (draggingSeq < 0) return
+        const cartesian = viewer.camera.pickEllipsoid(
+          movement.endPosition,
+          viewer.scene.globe.ellipsoid,
+        )
+        if (!cartesian) return
+        const carto = Cesium.Cartographic.fromCartesian(cartesian)
+        useMissionStore.getState().updateItem(draggingSeq, {
+          x: Math.round(Cesium.Math.toDegrees(carto.latitude) * 1e7),
+          y: Math.round(Cesium.Math.toDegrees(carto.longitude) * 1e7),
+        })
+      },
+      Cesium.ScreenSpaceEventType.MOUSE_MOVE,
+    )
+    handler.setInputAction(
+      () => {
+        draggingSeq = -1
+        viewer.scene.screenSpaceCameraController.enableRotate = true
+        viewer.scene.screenSpaceCameraController.enableTranslate = true
+      },
+      Cesium.ScreenSpaceEventType.LEFT_UP,
+    )
+    wpHandlerRef.current = handler
+
     viewerRef.current = viewer
     droneRef.current = drone
     trailRef.current = trail
     homeRef.current = home
 
     return () => {
+      wpHandlerRef.current?.destroy()
+      wpHandlerRef.current = null
+      wpPointRefs.current.forEach((e) => viewer.entities.remove(e))
+      wpPointRefs.current.clear()
+      if (wpLineRef.current) viewer.entities.remove(wpLineRef.current)
+      wpLineRef.current = null
       viewer.destroy()
       viewerRef.current = null
       droneRef.current = null
@@ -194,6 +246,64 @@ export default function MapView() {
       destination: Cesium.Cartesian3.fromDegrees(HOME_LON, HOME_LAT, 12000),
     })
   }
+
+  // Mission waypoints: render a polyline + numbered points, re-run when items change.
+  const missionItems = useMissionStore((s) => s.items)
+  const selectedSeq = useMissionStore((s) => s.selectedSeq)
+
+  useEffect(() => {
+    const viewer = viewerRef.current
+    if (!viewer) return
+
+    // Remove previous waypoint entities (points + line).
+    wpPointRefs.current.forEach((e) => viewer.entities.remove(e))
+    wpPointRefs.current.clear()
+    if (wpLineRef.current) {
+      viewer.entities.remove(wpLineRef.current)
+      wpLineRef.current = null
+    }
+    if (missionItems.length === 0) return
+
+    const accent = Cesium.Color.fromCssColorString(cssVar('--mg-accent'))
+    const ok = Cesium.Color.fromCssColorString(cssVar('--mg-ok'))
+
+    const line = viewer.entities.add({
+      polyline: {
+        positions: missionItems.map((it) =>
+          Cesium.Cartesian3.fromDegrees(degFromMavInt(it.y), degFromMavInt(it.x), it.z + 5),
+        ),
+        width: 2,
+        material: new Cesium.PolylineGlowMaterialProperty({
+          glowPower: 0.18,
+          color: accent.withAlpha(0.8),
+        }),
+      },
+    })
+    wpLineRef.current = line
+
+    const accentColor = accent
+    missionItems.forEach((it) => {
+      const isSel = it.seq === selectedSeq
+      const color = isSel ? accentColor : ok
+      const entity = viewer.entities.add({
+        id: `wp-${it.seq}`,
+        position: Cesium.Cartesian3.fromDegrees(degFromMavInt(it.y), degFromMavInt(it.x), it.z + 5),
+        point: {
+          pixelSize: isSel ? 14 : 11,
+          color,
+          outlineColor: Cesium.Color.WHITE,
+          outlineWidth: 2,
+        },
+        label: {
+          text: String(it.seq),
+          font: '11px sans-serif',
+          pixelOffset: new Cesium.Cartesian2(0, -16),
+          fillColor: Cesium.Color.WHITE,
+        },
+      })
+      wpPointRefs.current.set(it.seq, entity)
+    })
+  }, [missionItems, selectedSeq])
 
   if (initError) {
     return (

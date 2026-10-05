@@ -24,7 +24,8 @@ pub fn run() {
             commands::mission_upload,
             commands::mission_download,
             commands::mission_clear,
-            commands::mission_set_current
+            commands::mission_set_current,
+            commands::send_command
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -33,6 +33,11 @@ impl AppState {
         self.inner.lock().connection.take()
     }
 
+    /// Clone of the active connection handle, if any.
+    pub fn connection(&self) -> Option<ConnectionHandle> {
+        self.inner.lock().connection.clone()
+    }
+
     /// Store the telemetry hub (replaces any previous one).
     pub fn set_hub(&self, hub: TelemetryHub) {
         self.inner.lock().hub = Some(hub);

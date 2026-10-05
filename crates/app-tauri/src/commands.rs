@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use maggcs_core::devices::{DeviceDatabase, DeviceManager, SerialDeviceInfo};
+use ::mavlink::common::{MavCmd, MavMessage, COMMAND_LONG_DATA};
 use maggcs_core::mavlink::connection::{spawn_connection, LinkStatus};
 use maggcs_core::mavlink::{ConnectionConfig, Endpoint};
 use maggcs_core::mission::types::MissionItem;
@@ -142,4 +143,35 @@ pub async fn mission_set_current(
         .mission()
         .ok_or_else(|| "not connected".to_string())?;
     mission.set_current(seq).await
+}
+
+/// Named vehicle command (pause/resume, RTL).
+///
+/// `name` is one of `"pause"`, `"resume"`, `"rtl"`. Uses a COMMAND_LONG.
+#[tauri::command]
+pub async fn send_command(name: String, state: State<'_, AppState>) -> Result<(), String> {
+    let handle = state
+        .connection()
+        .ok_or_else(|| "not connected".to_string())?;
+    let cfg = handle.config();
+    let (command, p1) = match name.as_str() {
+        "pause" => (MavCmd::MAV_CMD_DO_PAUSE_CONTINUE, 0.0),
+        "resume" => (MavCmd::MAV_CMD_DO_PAUSE_CONTINUE, 1.0),
+        "rtl" => (MavCmd::MAV_CMD_NAV_RETURN_TO_LAUNCH, 0.0),
+        other => return Err(format!("unknown command: {other}")),
+    };
+    let msg = MavMessage::COMMAND_LONG(COMMAND_LONG_DATA {
+        param1: p1,
+        param2: 0.0,
+        param3: 0.0,
+        param4: 0.0,
+        param5: 0.0,
+        param6: 0.0,
+        param7: 0.0,
+        command,
+        target_system: cfg.target_system_id,
+        target_component: cfg.target_component_id,
+        confirmation: 0,
+    });
+    handle.send(msg).await.map_err(|e| e.to_string())
 }
