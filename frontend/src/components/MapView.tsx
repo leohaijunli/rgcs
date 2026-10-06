@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import * as Cesium from 'cesium'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
 import { cssVar } from '../design-system/theme'
+import type { GlobalPositionInt } from '../generated-types/GlobalPositionInt'
 import i18n from '../i18n'
 import { degFromMavInt, useMissionStore } from '../stores/mission'
 import { useTelemetryStore } from '../stores/telemetry'
 import { useUiStore } from '../stores/ui'
+import { uavModelDataUri } from '../util/uavModel'
 import MapToolbar from './MapToolbar'
 
 const HOME_LAT = 48.6493
@@ -13,14 +15,24 @@ const HOME_LON = -123.3982
 const TRAIL_MAX = 512
 const TRAIL_EVERY = 2
 
+// Forward projection drawn ahead of the vehicle. Constant-velocity estimate
+// from the live NED velocity; it is rebuilt from the current fix on every
+// update, so any segment the aircraft has already flown is dropped and only
+// the future track remains.
+const PREDICT_HORIZON_S = 120
+const PREDICT_STEP_S = 4
+const PREDICT_MIN_GROUNDSPEED_M_S = 1
+
 export default function MapView() {
   const containerRef = useRef<HTMLDivElement>(null)
   const [initError, setInitError] = useState<string | null>(null)
   const viewerRef = useRef<Cesium.Viewer | null>(null)
   const droneRef = useRef<Cesium.Entity | null>(null)
   const trailRef = useRef<Cesium.Entity | null>(null)
+  const predictRef = useRef<Cesium.Entity | null>(null)
   const homeRef = useRef<Cesium.Entity | null>(null)
   const trailPos = useRef<Cesium.Cartesian3[]>([])
+  const predictPos = useRef<Cesium.Cartesian3[]>([])
   const tickRef = useRef(0)
   const wpLineRef = useRef<Cesium.Entity | null>(null)
   const wpPointRefs = useRef<Map<number, Cesium.Entity>>(new Map())
@@ -70,40 +82,33 @@ export default function MapView() {
 
     const accent = Cesium.Color.fromCssColorString(cssVar('--mg-accent'))
     const ok = Cesium.Color.fromCssColorString(cssVar('--mg-ok'))
+    const warn = Cesium.Color.fromCssColorString(cssVar('--mg-warn'))
+    const accentInk = Cesium.Color.fromCssColorString(cssVar('--mg-accent-ink'))
 
-    // Heading arrow sprite (offline, theme-tinted).
-    const arrowCanvas = document.createElement('canvas')
-    arrowCanvas.width = 64
-    arrowCanvas.height = 64
-    const ag = arrowCanvas.getContext('2d')
-    if (ag) {
-      ag.translate(32, 32)
-      ag.fillStyle = cssVar('--mg-accent')
-      ag.beginPath()
-      ag.moveTo(0, -22)
-      ag.lineTo(15, 18)
-      ag.lineTo(-15, 18)
-      ag.closePath()
-      ag.fill()
-    }
-    const arrowUrl = arrowCanvas.toDataURL('image/png')
-
+    // 3D UAV marker (runtime-generated glTF). A model is used instead of
+    // entity boxes because Cesium re-evaluates a model's position/orientation
+    // every frame, so it tracks the vehicle instead of freezing on first draw,
+    // and minimumPixelSize keeps it readable at any zoom. Hidden until the
+    // first fix: the map has no terrain provider, so an untagged placeholder
+    // would sit in the air above the ellipsoid ground.
     const drone = viewer.entities.add({
-      // Hidden until the first fix: the map has no terrain provider, so an
-      // untagged placeholder would sit in the air above the ellipsoid ground.
       show: false,
       position: Cesium.Cartesian3.fromDegrees(HOME_LON, HOME_LAT, 0),
-      billboard: {
-        image: arrowUrl,
-        rotation: 0,
-        width: 36,
-        height: 36,
-        verticalOrigin: Cesium.VerticalOrigin.CENTER,
+      orientation: new Cesium.ConstantProperty(Cesium.Quaternion.IDENTITY),
+      model: {
+        uri: uavModelDataUri(),
+        minimumPixelSize: 34,
+        maximumScale: 60,
+        color: accent,
+        colorBlendMode: Cesium.ColorBlendMode.MIX,
+        colorBlendAmount: 0.35,
+        silhouetteColor: accentInk,
+        silhouetteSize: 2,
       },
       label: {
         text: i18n.t('map.uav'),
         font: '12px sans-serif',
-        pixelOffset: new Cesium.Cartesian2(0, -18),
+        pixelOffset: new Cesium.Cartesian2(0, -34),
         fillColor: Cesium.Color.WHITE,
       },
     })
@@ -114,6 +119,18 @@ export default function MapView() {
         material: new Cesium.PolylineGlowMaterialProperty({
           glowPower: 0.18,
           color: accent,
+        }),
+      },
+    })
+    // Forward-projection hint: dashed and warn-tinted so it reads as a
+    // prediction, not the recorded track.
+    const predict = viewer.entities.add({
+      polyline: {
+        positions: new Cesium.CallbackProperty(() => predictPos.current, false),
+        width: 2,
+        material: new Cesium.PolylineDashMaterialProperty({
+          color: warn,
+          dashLength: 16,
         }),
       },
     })
@@ -177,8 +194,13 @@ export default function MapView() {
     wpHandlerRef.current = handler
 
     viewerRef.current = viewer
+    // Dev-only handle for inspecting the scene (e.g. via the DevTools protocol).
+    if (import.meta.env.DEV) {
+      ;(window as unknown as { __mgViewer?: Cesium.Viewer }).__mgViewer = viewer
+    }
     droneRef.current = drone
     trailRef.current = trail
+    predictRef.current = predict
     homeRef.current = home
 
     return () => {
@@ -192,8 +214,10 @@ export default function MapView() {
       viewerRef.current = null
       droneRef.current = null
       trailRef.current = null
+      predictRef.current = null
       homeRef.current = null
       trailPos.current = []
+      predictPos.current = []
     }
     } catch (e) {
       setInitError(e instanceof Error ? e.message : String(e))
@@ -230,14 +254,33 @@ export default function MapView() {
     const pos = snapshot?.global_position
     if (!viewer || !drone || !pos) return
 
-    const cart = Cesium.Cartesian3.fromDegrees(pos.longitude_deg, pos.latitude_deg, pos.altitude.meters)
+    // Render height above the home ground, not AMSL: the map has no terrain
+    // provider, so the home marker sits on the ellipsoid. Using relative_alt
+    // keeps a landed vehicle on the ground instead of floating by the site's
+    // MSL elevation. Switch back to MSL once a DEM/terrain provider lands.
+    const cart = Cesium.Cartesian3.fromDegrees(pos.longitude_deg, pos.latitude_deg, pos.relative_alt_m)
+
+    // Attitude straight from the MAVLink ATTITUDE message; fall back to the
+    // reported heading until the first attitude sample arrives. The marker is a
+    // world-space object, so orbiting the camera only changes the viewpoint.
+    const attitude = snapshot?.attitude
     drone.position = new Cesium.ConstantPositionProperty(cart)
+    drone.orientation = new Cesium.ConstantProperty(
+      uavOrientation(
+        cart,
+        attitude?.yaw_deg ?? pos.heading_deg,
+        attitude?.pitch_deg ?? 0,
+        attitude?.roll_deg ?? 0,
+      ),
+    )
     drone.show = true
-    if (drone.billboard && pos.heading_deg) {
-      drone.billboard.rotation = new Cesium.ConstantProperty(
-        Cesium.Math.toRadians(pos.heading_deg),
-      )
-    }
+
+    // Rebuild the forward projection from the live fix so the segment already
+    // flown disappears and only the predicted track ahead is drawn.
+    predictPos.current =
+      groundSpeedMps(pos) >= PREDICT_MIN_GROUNDSPEED_M_S
+        ? projectAhead(pos, PREDICT_HORIZON_S, PREDICT_STEP_S)
+        : []
 
     tickRef.current += 1
     if (tickRef.current % TRAIL_EVERY === 0) {
@@ -332,4 +375,90 @@ export default function MapView() {
       <MapToolbar onGoHome={goHome} onToggleMeasure={() => undefined} />
     </div>
   )
+}
+
+/** Ground speed (m/s) from the NED velocity vector. */
+function groundSpeedMps(pos: GlobalPositionInt): number {
+  return Math.hypot(pos.velocity.x_m_s, pos.velocity.y_m_s)
+}
+
+/**
+ * World-space orientation for the UAV model, ready for `Entity.orientation`.
+ *
+ * An entity's `orientation` is applied directly in the earth-fixed frame, not
+ * in a local east-north-up frame: an identity quaternion leaves the model
+ * aligned with the ECEF axes, so a level airframe at mid latitude would render
+ * tipped over. Compose the local attitude with the position's ENU-to-ECEF
+ * rotation so heading, pitch and roll stay true to the MAVLink attitude.
+ */
+function uavOrientation(
+  position: Cesium.Cartesian3,
+  yawDeg: number,
+  pitchDeg: number,
+  rollDeg: number,
+): Cesium.Quaternion {
+  const frame = Cesium.Transforms.eastNorthUpToFixedFrame(position)
+  const enuToEcef = Cesium.Quaternion.fromRotationMatrix(
+    Cesium.Matrix4.getMatrix3(frame, new Cesium.Matrix3()),
+    new Cesium.Quaternion(),
+  )
+  return Cesium.Quaternion.multiply(
+    enuToEcef,
+    uavQuaternion(yawDeg, pitchDeg, rollDeg),
+    new Cesium.Quaternion(),
+  )
+}
+
+/**
+ * Attitude quaternion in the vehicle's local east-north-up frame. The body
+ * frame is +X = right wing, +Y = nose, +Z = up, so a compass yaw rotates about
+ * -Z, nose-up pitch about +X, and right-wing-down roll about +Y.
+ */
+function uavQuaternion(yawDeg: number, pitchDeg: number, rollDeg: number): Cesium.Quaternion {
+  const yaw = Cesium.Quaternion.fromAxisAngle(
+    Cesium.Cartesian3.UNIT_Z,
+    Cesium.Math.toRadians(-yawDeg),
+    new Cesium.Quaternion(),
+  )
+  const pitch = Cesium.Quaternion.fromAxisAngle(
+    Cesium.Cartesian3.UNIT_X,
+    Cesium.Math.toRadians(pitchDeg),
+    new Cesium.Quaternion(),
+  )
+  const roll = Cesium.Quaternion.fromAxisAngle(
+    Cesium.Cartesian3.UNIT_Y,
+    Cesium.Math.toRadians(rollDeg),
+    new Cesium.Quaternion(),
+  )
+  return Cesium.Quaternion.multiply(
+    Cesium.Quaternion.multiply(yaw, pitch, new Cesium.Quaternion()),
+    roll,
+    new Cesium.Quaternion(),
+  )
+}
+
+/**
+ * Constant-velocity forward projection sampled from the live fix. Because it
+ * always starts at the current position, the segment already flown is never
+ * part of the result: each fix replaces the hint and only the track ahead
+ * remains.
+ */
+function projectAhead(pos: GlobalPositionInt, horizonS: number, stepS: number): Cesium.Cartesian3[] {
+  const mPerDegLat = 111_320
+  const cosLat = Math.max(Math.cos(Cesium.Math.toRadians(pos.latitude_deg)), 1e-6)
+  const mPerDegLon = mPerDegLat * cosLat
+  const north = pos.velocity.x_m_s
+  const east = pos.velocity.y_m_s
+  const climb = -pos.velocity.z_m_s
+  const points: Cesium.Cartesian3[] = []
+  for (let t = 0; t <= horizonS; t += stepS) {
+    points.push(
+      Cesium.Cartesian3.fromDegrees(
+        pos.longitude_deg + (east * t) / mPerDegLon,
+        pos.latitude_deg + (north * t) / mPerDegLat,
+        pos.relative_alt_m + climb * t,
+      ),
+    )
+  }
+  return points
 }
