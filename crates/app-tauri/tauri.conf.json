@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "io.maggcs.desktop",
   "build": {
-    "beforeDevCommand": "npm --prefix ../../frontend run dev",
-    "devUrl": "http://localhost:1420",
-    "frontendDist": "../../frontend/dist"
+    "frontendDist": "../../frontend/dist",
+    "beforeBuildCommand": "",
+    "beforeDevCommand": ""
   },
   "app": {
     "windows": [

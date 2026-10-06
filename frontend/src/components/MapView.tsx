@@ -33,6 +33,11 @@ export default function MapView() {
     const container = containerRef.current
     if (!container) return
     try {
+      // Fail loudly instead of a black map if the webview has no WebGL.
+      const probe = document.createElement('canvas')
+      if (!probe.getContext('webgl2') && !probe.getContext('webgl')) {
+        throw new Error('WebGL is unavailable in this webview; the map cannot render.')
+      }
 
     const grid = new Cesium.GridImageryProvider({
       cells: 16,

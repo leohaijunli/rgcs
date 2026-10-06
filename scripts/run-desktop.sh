@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # Build the frontend + desktop app and launch MagGCS on the current display.
-# Usage: scripts/sitl/../desktop/run-desktop.sh   (or: scripts/run-desktop.sh)
+# Usage: scripts/run-desktop.sh   (from the repository root or from scripts/)
 set -euo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")/../.."
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+# Prefer a cargo on PATH; fall back to the standard rustup location.
+if ! command -v cargo >/dev/null 2>&1 && [ -x "$HOME/.cargo/bin/cargo" ]; then
+  export PATH="$HOME/.cargo/bin:$PATH"
+fi
 
 echo "==> building frontend"
 npm --prefix frontend run build
