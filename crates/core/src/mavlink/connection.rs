@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::{broadcast, mpsc, watch, Mutex};
+use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex};
 
 use super::endpoint::Endpoint;
 use super::error::MavlinkError;
@@ -30,6 +30,15 @@ pub const EVENT_CAPACITY: usize = 4096;
 pub const OUTBOUND_CAPACITY: usize = 256;
 /// Default heartbeat timeout before `HeartbeatLost` is emitted.
 pub const DEFAULT_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(3);
+/// Poll period of the heartbeat watchdog. The watchdog runs on a fixed
+/// interval instead of a recreated sleep, so inbound traffic from non-target
+/// nodes can no longer reset the timeout (issue #1).
+pub const HEARTBEAT_WATCHDOG_TICK: Duration = Duration::from_millis(500);
+/// Period of the GCS heartbeat advertised to the link. PX4 uses the peer
+/// heartbeat for link-loss detection and — on `udpin` — to learn where to
+/// reply, so the GCS must announce itself even before the FC talks to it
+/// (issue #3).
+pub const GCS_HEARTBEAT_PERIOD: Duration = Duration::from_secs(1);
 /// Default delay before reconnect attempts after a link failure.
 pub const DEFAULT_RECONNECT_DELAY: Duration = Duration::from_secs(1);
 
@@ -282,14 +291,27 @@ impl ConnectionHandle {
 
 /// Spawn the connection worker for the given config.
 ///
-/// Returns a handle plus a receiver primed with the worker's first event.
+/// Returns a handle, a receiver primed with the worker's event stream, and a
+/// one-shot that resolves with the outcome of the first connection attempt:
+/// `Ok(())` once the transport is bound/connected, or `Err(failure)` when the
+/// first attempt fails. The caller can await it so errors (e.g. a UDP port
+/// already in use) surface synchronously instead of being reported only as a
+/// later event (issue #4).
 pub async fn spawn_connection(
     config: ConnectionConfig,
-) -> Result<(ConnectionHandle, broadcast::Receiver<ConnectionEvent>), MavlinkError> {
+) -> Result<
+    (
+        ConnectionHandle,
+        broadcast::Receiver<ConnectionEvent>,
+        oneshot::Receiver<Result<(), LinkFailure>>,
+    ),
+    MavlinkError,
+> {
     let (events_tx, events_rx) = broadcast::channel(EVENT_CAPACITY);
     let (outbound_tx, outbound_rx) = mpsc::channel(OUTBOUND_CAPACITY);
     let (reconnect_tx, reconnect_rx) = watch::channel(0u64);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (first_tx, first_rx) = oneshot::channel();
     let inner = Arc::new(ConnectionInner {
         config,
         outbound: outbound_tx,
@@ -308,12 +330,26 @@ pub async fn spawn_connection(
         outbound_rx,
         reconnect_rx,
         shutdown_rx,
+        first_tx,
     ));
 
-    Ok((handle, events_rx))
+    Ok((handle, events_rx, first_rx))
 }
 
 type Conn = Box<dyn ::mavlink::AsyncMavConnection<MavMessage> + Sync + Send>;
+
+/// A `MAV_TYPE_GCS` heartbeat, announced at [`GCS_HEARTBEAT_PERIOD`] so the
+/// FC and other GCS software see us as a live ground station (issue #3).
+fn gcs_heartbeat_message() -> MavMessage {
+    MavMessage::HEARTBEAT(::mavlink::common::HEARTBEAT_DATA {
+        custom_mode: 0,
+        mavtype: ::mavlink::common::MavType::MAV_TYPE_GCS,
+        autopilot: ::mavlink::common::MavAutopilot::MAV_AUTOPILOT_GENERIC,
+        base_mode: ::mavlink::common::MavModeFlag::empty(),
+        system_status: ::mavlink::common::MavState::MAV_STATE_ACTIVE,
+        mavlink_version: 3,
+    })
+}
 
 /// Connection worker task.
 async fn run_worker(
@@ -322,6 +358,7 @@ async fn run_worker(
     mut outbound_rx: mpsc::Receiver<OutboundFrame>,
     mut reconnect_rx: watch::Receiver<u64>,
     mut shutdown_rx: watch::Receiver<bool>,
+    first_result: oneshot::Sender<Result<(), LinkFailure>>,
 ) {
     let config = &inner.config;
     let address = config.endpoint.to_address_string();
@@ -332,6 +369,7 @@ async fn run_worker(
     );
     let mut fc_alive = false;
     let mut seq: u8 = 0;
+    let mut first_result = Some(first_result);
 
     loop {
         if *shutdown_rx.borrow() {
@@ -341,9 +379,11 @@ async fn run_worker(
         let mut conn: Conn = match ::mavlink::connect_async::<MavMessage>(&address).await {
             Ok(c) => c,
             Err(e) => {
-                let _ = events.send(ConnectionEvent::LinkError(LinkFailure::from(
-                    &MavlinkError::Io(e),
-                )));
+                let failure = LinkFailure::from(&MavlinkError::Io(e));
+                let _ = events.send(ConnectionEvent::LinkError(failure.clone()));
+                if let Some(tx) = first_result.take() {
+                    let _ = tx.send(Err(failure));
+                }
                 tokio::select! {
                     _ = tokio::time::sleep(config.reconnect_delay) => {}
                     _ = reconnect_rx.changed() => {}
@@ -351,11 +391,25 @@ async fn run_worker(
                 continue;
             }
         };
+        if let Some(tx) = first_result.take() {
+            let _ = tx.send(Ok(()));
+        }
         conn.set_protocol_version(config.mavlink_version.into());
         *inner.state.lock().await = LinkState::Connected;
         let _ = events.send(ConnectionEvent::Connected {
             endpoint: config.endpoint.clone(),
         });
+
+        // Fixed-interval heartbeat watchdog. A `sleep(timeout)` recreated on
+        // each loop iteration would be reset by any inbound frame, so the
+        // FC heartbeat could never time out while other traffic flowed;
+        // polling the monitor on a short fixed tick keeps the deadline real.
+        let mut watchdog = tokio::time::interval(HEARTBEAT_WATCHDOG_TICK);
+        watchdog.tick().await;
+        // GCS heartbeat so PX4 sees us as a live link partner (ADR-003,
+        // issue #3): on `udpin` it also learns our reply address from the
+        // first packet we send.
+        let mut gcs_heartbeat = tokio::time::interval(GCS_HEARTBEAT_PERIOD);
 
         'connected: loop {
             let reconnect = reconnect_rx.changed();
@@ -397,7 +451,7 @@ async fn run_worker(
                     }
                     None => return,
                 },
-                _ = tokio::time::sleep(config.heartbeat_timeout) => {
+                _ = watchdog.tick() => {
                     let now = Instant::now();
                     if fc_alive && !heartbeat.is_alive(now) {
                         fc_alive = false;
@@ -406,6 +460,24 @@ async fn run_worker(
                             .map(|t| now.duration_since(t))
                             .unwrap_or_default();
                         let _ = events.send(ConnectionEvent::HeartbeatLost { last_seen_age: age });
+                    }
+                }
+                _ = gcs_heartbeat.tick() => {
+                    // Errors are ignored: on `udpin` the peer address may not
+                    // be known yet Voice
+                    if conn
+                        .send(
+                            &MavHeader {
+                                system_id: config.system_id,
+                                component_id: config.component_id,
+                                sequence: seq,
+                            },
+                            &gcs_heartbeat_message(),
+                        )
+                        .await
+                        .is_ok()
+                    {
+                        seq = seq.wrapping_add(1);
                     }
                 }
                 _ = reconnect => {

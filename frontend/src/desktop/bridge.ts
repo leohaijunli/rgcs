@@ -16,6 +16,7 @@ import type { LinkStatus } from '../generated-types/LinkStatus'
 import type { TelemetrySnapshot } from '../generated-types/TelemetrySnapshot'
 import type { MissionItem } from '../generated-types/MissionItem'
 import type { MissionEventPayload } from '../stores/mission'
+import { reportConnectError } from './connect'
 import { useDevicesStore } from '../stores/devices'
 import { useLinkStore } from '../stores/link'
 import { useMissionStore } from '../stores/mission'
@@ -77,7 +78,9 @@ export function useTelemetryBridge() {
 
       if (!connectStarted) {
         connectStarted = true
-        await invoke('connect', { endpoint: DEFAULT_ENDPOINT }).catch(() => undefined)
+        // Report auto-connect failures in the status bar instead of hiding
+        // them (issue #4).
+        await invoke('connect', { endpoint: DEFAULT_ENDPOINT }).catch(reportConnectError)
       }
       void useDevicesStore.getState().load()
     }

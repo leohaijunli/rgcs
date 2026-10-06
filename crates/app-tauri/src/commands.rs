@@ -48,10 +48,38 @@ pub async fn connect(
         old.shutdown().await;
     }
 
-    let (handle, _rx) = spawn_connection(config.clone())
+    let (handle, events_rx, first_result) = spawn_connection(config.clone())
         .await
         .map_err(|e| e.to_string())?;
-    let hub = TelemetryHub::spawn(handle.clone(), DEFAULT_PUSH_HZ);
+
+    // Wait for the first connect/bind attempt so failures surface here instead
+    // of "ok: true" followed by a background error (issue #4).
+    let outcome = match tokio::time::timeout(FIRST_CONNECT_TIMEOUT, first_result).await {
+        Ok(Ok(Ok(()))) => Ok(()),
+        Ok(Ok(Err(failure))) => {
+            handle.shutdown().await;
+            Err(format!("{}", failure.message))
+        }
+        Ok(Err(_)) => {
+            // Worker exited without reporting (shutdown raced the connect).
+            handle.shutdown().await;
+            Err("connection worker stopped unexpectedly".to_string())
+        }
+        Err(_) => {
+            handle.shutdown().await;
+            Err(format!(
+                "timed out after {} s waiting for the link to come up",
+                FIRST_CONNECT_TIMEOUT.as_secs()
+            ))
+        }
+    };
+    if let Err(e) = outcome {
+        return Err(e);
+    }
+
+    // The hub consumes the initial event stream, so the `Connected` emitted by
+    // the worker cannot be missed (issue #2).
+    let hub = TelemetryHub::spawn(events_rx, DEFAULT_PUSH_HZ);
     let mission = MissionService::spawn(
         app.clone(),
         handle.clone(),
@@ -70,6 +98,9 @@ pub async fn connect(
         endpoint: config.endpoint.to_address_string(),
     })
 }
+
+/// How long `connect` waits for the first bind/connect attempt to resolve.
+const FIRST_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Stop the active connection and hub.
 #[tauri::command]

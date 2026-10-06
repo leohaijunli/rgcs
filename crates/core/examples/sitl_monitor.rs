@@ -40,7 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let our_sys = config.system_id;
-    let (handle, mut rx) = spawn_connection(config).await?;
+    let (handle, mut rx, _first) = spawn_connection(config).await?;
     let start = Instant::now();
     let deadline = start + Duration::from_secs(duration_s);
 

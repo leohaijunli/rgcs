@@ -7,9 +7,9 @@
 
 use std::time::Duration;
 
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 
-use crate::mavlink::connection::{ConnectionEvent, ConnectionHandle, LinkStatus};
+use crate::mavlink::connection::{ConnectionEvent, LinkStatus};
 use crate::mavlink::LinkState;
 use crate::telemetry::{TelemetryAggregator, TelemetrySnapshot, TelemetryUpdate};
 
@@ -26,14 +26,23 @@ pub struct TelemetryHub {
 }
 
 impl TelemetryHub {
-    /// Spawn the pump task for `conn`, pushing snapshots at `hz` Hz.
-    pub fn spawn(conn: ConnectionHandle, hz: u64) -> Self {
+    /// Spawn the pump task, consuming the connection's initial event stream
+    /// and pushing snapshots at `hz` Hz.
+    ///
+    /// The receiver is taken from [`crate::mavlink::connection::spawn_connection`]
+    /// so the pump is subscribed to the event bus from the very first event;
+    /// subscribing afterwards (in the pump task itself) could miss a `Connected`
+    /// already emitted and leave the UI reporting a dead link (issue #2).
+    pub fn spawn(
+        events: broadcast::Receiver<ConnectionEvent>,
+        hz: u64,
+    ) -> Self {
         let (snapshot_tx, snapshot_rx) = watch::channel(TelemetrySnapshot::default());
         let (link_tx, link_rx) = watch::channel(LinkStatus::disconnected());
         let (error_tx, error_rx) = watch::channel(None);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-        tokio::spawn(pump(conn, hz, snapshot_tx, link_tx, error_tx, shutdown_rx));
+        tokio::spawn(pump(events, hz, snapshot_tx, link_tx, error_tx, shutdown_rx));
 
         Self {
             snapshot_rx,
@@ -71,14 +80,13 @@ impl TelemetryHub {
 
 /// Pump task: fold messages, publish snapshots at `hz`, link on change.
 async fn pump(
-    conn: ConnectionHandle,
+    mut events: broadcast::Receiver<ConnectionEvent>,
     hz: u64,
     snapshot_tx: watch::Sender<TelemetrySnapshot>,
     link_tx: watch::Sender<LinkStatus>,
     error_tx: watch::Sender<Option<String>>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
-    let mut events = conn.subscribe();
     let mut agg = TelemetryAggregator::new();
     let interval = Duration::from_millis(1000 / hz.max(1));
     // Latched from `ConnectionEvent::Connected` so heartbeat transitions keep
@@ -148,4 +156,37 @@ fn epoch_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mavlink::connection::ConnectionEvent;
+    use crate::mavlink::{Endpoint, LinkState};
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn connected_emitted_before_spawn_is_not_lost() {
+        // Issue #2 regression: the pump consumes the initial event stream, so a
+        // `Connected` emitted before `TelemetryHub::spawn` runs must still reach
+        // the link status channel.
+        let (events_tx, events_rx) = broadcast::channel(16);
+        events_tx
+            .send(ConnectionEvent::Connected {
+                endpoint: Endpoint::UdpListener {
+                    addr: "0.0.0.0:14550".parse().expect("static addr"),
+                },
+            })
+            .expect("send");
+
+        let hub = TelemetryHub::spawn(events_rx, 100);
+        let mut link_rx = hub.subscribe_link();
+
+        let status = tokio::time::timeout(Duration::from_secs(2), link_rx.changed())
+            .await
+            .expect("link status update timed out");
+        assert!(status.is_ok());
+        assert_eq!(link_rx.borrow().link_state, LinkState::Connected);
+        assert!(!link_rx.borrow().fc_alive);
+        hub.shutdown();
+    }
 }

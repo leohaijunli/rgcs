@@ -76,7 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     const SELF_SYS: u8 = 250;
     const SELF_COMP: u8 = 250;
-    let (handle, mut rx) = spawn_connection(config).await?;
+    let (handle, mut rx, _first) = spawn_connection(config).await?;
 
     let mut proto = MissionProtocol::new(SELF_SYS, SELF_COMP, target_sys, target_comp);
     let mut events: Vec<MissionEvent> = Vec::new();
