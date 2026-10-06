@@ -33,16 +33,20 @@ impl TelemetryHub {
     /// so the pump is subscribed to the event bus from the very first event;
     /// subscribing afterwards (in the pump task itself) could miss a `Connected`
     /// already emitted and leave the UI reporting a dead link (issue #2).
-    pub fn spawn(
-        events: broadcast::Receiver<ConnectionEvent>,
-        hz: u64,
-    ) -> Self {
+    pub fn spawn(events: broadcast::Receiver<ConnectionEvent>, hz: u64) -> Self {
         let (snapshot_tx, snapshot_rx) = watch::channel(TelemetrySnapshot::default());
         let (link_tx, link_rx) = watch::channel(LinkStatus::disconnected());
         let (error_tx, error_rx) = watch::channel(None);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-        tokio::spawn(pump(events, hz, snapshot_tx, link_tx, error_tx, shutdown_rx));
+        tokio::spawn(pump(
+            events,
+            hz,
+            snapshot_tx,
+            link_tx,
+            error_tx,
+            shutdown_rx,
+        ));
 
         Self {
             snapshot_rx,

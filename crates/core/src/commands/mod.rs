@@ -16,9 +16,7 @@ pub use service::{CommandCommand, CommandService, RETRANSMIT_TICK};
 
 use std::time::{Duration, Instant};
 
-use ::mavlink::common::{
-    MavCmd, MavMessage, MavResult, COMMAND_ACK_DATA, COMMAND_LONG_DATA,
-};
+use ::mavlink::common::{MavCmd, MavMessage, MavResult, COMMAND_ACK_DATA, COMMAND_LONG_DATA};
 use ::mavlink::MavHeader;
 
 /// Timeout before an unacked command is retransmitted.
@@ -70,10 +68,7 @@ impl CommandResult {
 #[derive(Debug, Clone, PartialEq)]
 pub enum CommandEvent {
     /// A `COMMAND_LONG` was (re)transmitted; `confirmation` counts retries.
-    Sent {
-        command: MavCmd,
-        confirmation: u8,
-    },
+    Sent { command: MavCmd, confirmation: u8 },
     /// A terminal `COMMAND_ACK` was received from the target FC.
     Completed {
         command: MavCmd,
@@ -235,7 +230,13 @@ impl CommandSession {
         }
         *confirmation = confirmation.saturating_add(1);
         *deadline = now + COMMAND_RETRY_TIMEOUT;
-        let msg = command_long(*command, *params, *confirmation, self.target_sys, self.target_comp);
+        let msg = command_long(
+            *command,
+            *params,
+            *confirmation,
+            self.target_sys,
+            self.target_comp,
+        );
         (
             vec![CommandEvent::Sent {
                 command: *command,
@@ -398,7 +399,10 @@ mod tests {
         s.begin(rtl(), [0.0; 7]).unwrap();
         let (events, frames) = s.handle(
             &fc_header(),
-            &ack(MavCmd::MAV_CMD_COMPONENT_ARM_DISARM, MavResult::MAV_RESULT_ACCEPTED),
+            &ack(
+                MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
+                MavResult::MAV_RESULT_ACCEPTED,
+            ),
         );
         assert!(events.is_empty() && frames.is_empty());
         assert!(!s.is_idle());

@@ -92,11 +92,22 @@ async fn peer_recv_command_long(peer: &mut Peer) -> mavlink::common::COMMAND_LON
     }
 }
 
-async fn peer_send_ack(peer: &mut Peer, command: mavlink::common::MavCmd, result: mavlink::common::MavResult) {
+async fn peer_send_ack(
+    peer: &mut Peer,
+    command: mavlink::common::MavCmd,
+    result: mavlink::common::MavResult,
+) {
     let ack = MavMessage::COMMAND_ACK(mavlink::common::COMMAND_ACK_DATA { command, result });
-    peer.send(&MavHeader { system_id: 1, component_id: 1, sequence: 0 }, &ack)
-        .await
-        .expect("peer send ack");
+    peer.send(
+        &MavHeader {
+            system_id: 1,
+            component_id: 1,
+            sequence: 0,
+        },
+        &ack,
+    )
+    .await
+    .expect("peer send ack");
 }
 
 struct Harness {
@@ -126,9 +137,9 @@ async fn harness() -> Harness {
             continue;
         }
 
-        let mut peer = match mavlink::connect_async::<mavlink::common::MavMessage>(
-            &format!("udpout:127.0.0.1:{port}"),
-        )
+        let mut peer = match mavlink::connect_async::<mavlink::common::MavMessage>(&format!(
+            "udpout:127.0.0.1:{port}"
+        ))
         .await
         {
             Ok(p) => p,
@@ -140,9 +151,16 @@ async fn harness() -> Harness {
         peer.set_protocol_version(mavlink::MavlinkVersion::V2);
 
         // The `udpin` worker learns our address from the first inbound packet.
-        peer.send(&MavHeader { system_id: 1, component_id: 1, sequence: 0 }, &heartbeat())
-            .await
-            .expect("peer heartbeat");
+        peer.send(
+            &MavHeader {
+                system_id: 1,
+                component_id: 1,
+                sequence: 0,
+            },
+            &heartbeat(),
+        )
+        .await
+        .expect("peer heartbeat");
 
         // Wait for the worker to come up and the FC heartbeat to be seen.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
@@ -190,14 +208,22 @@ async fn ack_accepted_completes() {
     assert_eq!(cmd.command, RTL);
     assert_eq!(cmd.confirmation, 0);
 
-    peer_send_ack(&mut h.peer, cmd.command, mavlink::common::MavResult::MAV_RESULT_ACCEPTED)
-        .await;
-
-    let e = wait_for(
-        &mut h.evt,
-        Duration::from_secs(2),
-        |e| matches!(e, CommandEvent::Completed { result: CommandResult::Accepted, .. }),
+    peer_send_ack(
+        &mut h.peer,
+        cmd.command,
+        mavlink::common::MavResult::MAV_RESULT_ACCEPTED,
     )
+    .await;
+
+    let e = wait_for(&mut h.evt, Duration::from_secs(2), |e| {
+        matches!(
+            e,
+            CommandEvent::Completed {
+                result: CommandResult::Accepted,
+                ..
+            }
+        )
+    })
     .await;
     assert_eq!(
         e,
@@ -219,14 +245,22 @@ async fn denied_reports_result() {
     let mavlink::common::MavMessage::COMMAND_LONG(cmd) = msg else {
         panic!("FC expected COMMAND_LONG, got {msg:?}");
     };
-    peer_send_ack(&mut h.peer, cmd.command, mavlink::common::MavResult::MAV_RESULT_DENIED)
-        .await;
-
-    let e = wait_for(
-        &mut h.evt,
-        Duration::from_secs(2),
-        |e| matches!(e, CommandEvent::Completed { result: CommandResult::Denied, .. }),
+    peer_send_ack(
+        &mut h.peer,
+        cmd.command,
+        mavlink::common::MavResult::MAV_RESULT_DENIED,
     )
+    .await;
+
+    let e = wait_for(&mut h.evt, Duration::from_secs(2), |e| {
+        matches!(
+            e,
+            CommandEvent::Completed {
+                result: CommandResult::Denied,
+                ..
+            }
+        )
+    })
     .await;
     assert_eq!(
         e,
@@ -251,16 +285,27 @@ async fn lost_ack_retransmits_with_confirmation() {
     // The service retransmits after the retry timeout with confirmation = 1.
     let retry = peer_recv_command_long(&mut h.peer).await;
     assert_eq!(retry.command, first.command);
-    assert_eq!(retry.confirmation, 1, "retransmission must bump confirmation");
+    assert_eq!(
+        retry.confirmation, 1,
+        "retransmission must bump confirmation"
+    );
 
-    peer_send_ack(&mut h.peer, retry.command, mavlink::common::MavResult::MAV_RESULT_ACCEPTED)
-        .await;
-
-    let e = wait_for(
-        &mut h.evt,
-        Duration::from_secs(2),
-        |e| matches!(e, CommandEvent::Completed { result: CommandResult::Accepted, .. }),
+    peer_send_ack(
+        &mut h.peer,
+        retry.command,
+        mavlink::common::MavResult::MAV_RESULT_ACCEPTED,
     )
+    .await;
+
+    let e = wait_for(&mut h.evt, Duration::from_secs(2), |e| {
+        matches!(
+            e,
+            CommandEvent::Completed {
+                result: CommandResult::Accepted,
+                ..
+            }
+        )
+    })
     .await;
     assert_eq!(
         e,
@@ -282,11 +327,15 @@ async fn never_acked_fails_with_no_ack() {
     // retry budget (~4 s) and reports a terminal NoAck failure.
     let (_header, _msg) = peer_recv(&mut h.peer).await;
 
-    let e = wait_for(
-        &mut h.evt,
-        Duration::from_secs(10),
-        |e| matches!(e, CommandEvent::Failed { error: CommandError::NoAck { .. }, .. }),
-    )
+    let e = wait_for(&mut h.evt, Duration::from_secs(10), |e| {
+        matches!(
+            e,
+            CommandEvent::Failed {
+                error: CommandError::NoAck { .. },
+                ..
+            }
+        )
+    })
     .await;
     assert_eq!(
         e,

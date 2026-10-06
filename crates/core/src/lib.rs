@@ -15,9 +15,7 @@ pub mod mavlink;
 pub mod mission;
 pub mod telemetry;
 
-pub use commands::{
-    CommandError, CommandEvent, CommandResult, CommandService, CommandSession,
-};
+pub use commands::{CommandError, CommandEvent, CommandResult, CommandService, CommandSession};
 pub use devices::{DeviceDatabase, DeviceEvent, DeviceManager, DeviceRole, SerialDeviceInfo};
 pub use mavlink::connection::{ConnectionConfig, ConnectionEvent, ConnectionHandle};
 pub use mavlink::endpoint::Endpoint;

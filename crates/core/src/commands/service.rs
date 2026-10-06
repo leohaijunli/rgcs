@@ -22,10 +22,7 @@ pub const RETRANSMIT_TICK: Duration = Duration::from_millis(200);
 #[derive(Debug)]
 pub enum CommandCommand {
     /// Send a `COMMAND_LONG` and track it until its ack (or failure).
-    Send {
-        command: MavCmd,
-        params: [f32; 7],
-    },
+    Send { command: MavCmd, params: [f32; 7] },
 }
 
 /// Handle to the running command service.

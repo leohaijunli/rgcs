@@ -7,7 +7,8 @@ use std::time::Duration;
 
 use maggcs_core::mavlink::{
     connection::{spawn_connection, HEARTBEAT_WATCHDOG_TICK},
-    message::MavMessage, ConnectionConfig, ConnectionEvent, Endpoint, MavHeader,
+    message::MavMessage,
+    ConnectionConfig, ConnectionEvent, Endpoint, MavHeader,
 };
 use tokio::time::timeout;
 
@@ -163,7 +164,11 @@ async fn heartbeat_lost_while_other_nodes_keep_sending() {
 
     // FC heartbeat once so the link is declared alive.
     peer.send(
-        &MavHeader { system_id: 1, component_id: 1, sequence: 0 },
+        &MavHeader {
+            system_id: 1,
+            component_id: 1,
+            sequence: 0,
+        },
         &heartbeat(),
     )
     .await
@@ -178,7 +183,11 @@ async fn heartbeat_lost_while_other_nodes_keep_sending() {
     let noise = tokio::spawn(async move {
         for i in 0..20u8 {
             peer.send(
-                &MavHeader { system_id: 2, component_id: 1, sequence: i },
+                &MavHeader {
+                    system_id: 2,
+                    component_id: 1,
+                    sequence: i,
+                },
                 &heartbeat(),
             )
             .await
@@ -187,7 +196,9 @@ async fn heartbeat_lost_while_other_nodes_keep_sending() {
         }
     });
 
-    let lost_at = tokio::time::Instant::now() + heartbeat_timeout + HEARTBEAT_WATCHDOG_TICK
+    let lost_at = tokio::time::Instant::now()
+        + heartbeat_timeout
+        + HEARTBEAT_WATCHDOG_TICK
         + Duration::from_millis(500);
     let lost = wait_for(&mut rx, Duration::from_secs(3), |e| {
         matches!(e, ConnectionEvent::HeartbeatLost { .. })
@@ -222,7 +233,11 @@ async fn gcs_heartbeat_is_announced_automatically() {
 
     // On `udpin` the worker learns the peer address from an inbound packet.
     peer.send(
-        &MavHeader { system_id: 1, component_id: 1, sequence: 0 },
+        &MavHeader {
+            system_id: 1,
+            component_id: 1,
+            sequence: 0,
+        },
         &heartbeat(),
     )
     .await
@@ -268,7 +283,10 @@ async fn first_attempt_success_is_reported() {
         .await
         .expect("first result timed out")
         .expect("first result channel closed");
-    assert!(outcome.is_ok(), "a free UDP bind must succeed on the first attempt");
+    assert!(
+        outcome.is_ok(),
+        "a free UDP bind must succeed on the first attempt"
+    );
 
     handle.shutdown().await;
 }
