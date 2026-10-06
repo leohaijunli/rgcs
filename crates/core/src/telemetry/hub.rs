@@ -81,6 +81,9 @@ async fn pump(
     let mut events = conn.subscribe();
     let mut agg = TelemetryAggregator::new();
     let interval = Duration::from_millis(1000 / hz.max(1));
+    // Latched from `ConnectionEvent::Connected` so heartbeat transitions keep
+    // reporting the endpoint the UI is connected to.
+    let mut endpoint = String::new();
 
     loop {
         let mut dirty = false;
@@ -95,15 +98,18 @@ async fn pump(
                     }
                 }
                 Ok(ConnectionEvent::HeartbeatRestored) => {
-                    let _ = link_tx.send(LinkStatus::alive());
+                    let _ = link_tx.send(LinkStatus::alive(endpoint.clone()));
                 }
                 Ok(ConnectionEvent::HeartbeatLost { .. }) => {
-                    let _ = link_tx.send(LinkStatus::lost());
+                    let _ = link_tx.send(LinkStatus::lost(endpoint.clone()));
                 }
-                Ok(ConnectionEvent::Connected { endpoint }) => {
+                Ok(ConnectionEvent::Connected {
+                    endpoint: connected,
+                }) => {
+                    endpoint = connected.to_address_string();
                     let _ = link_tx.send(LinkStatus {
                         link_state: LinkState::Connected,
-                        endpoint: endpoint.to_address_string(),
+                        endpoint: endpoint.clone(),
                         fc_alive: false,
                     });
                 }

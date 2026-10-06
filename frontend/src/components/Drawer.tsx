@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { useLinkStore } from '../stores/link'
 import { useTelemetryStore } from '../stores/telemetry'
 import { useUiStore, type DrawerId } from '../stores/ui'
+import { fcStatusLabel } from '../util/linkLabel'
 
 export default function Drawer() {
   const { t } = useTranslation()
@@ -71,9 +72,7 @@ function VehiclesSection() {
   const link = useLinkStore((s) => s.link)
   const heartbeat = useTelemetryStore((s) => s.snapshot?.heartbeat ?? null)
 
-  const stateLabel = link
-    ? t(`link.${link.link_state.toLowerCase()}`)
-    : t('link.noLink')
+  const stateLabel = fcStatusLabel(t, link)
   const tone = link?.fc_alive ? 'text-ok' : 'text-error'
 
   return (

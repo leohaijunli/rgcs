@@ -123,20 +123,23 @@ impl LinkStatus {
         }
     }
 
-    /// FC heartbeat alive.
-    pub fn alive() -> Self {
+    /// FC heartbeat alive on a connected transport.
+    ///
+    /// `endpoint` is the address the link is connected to; heartbeat
+    /// transitions must not blank it out.
+    pub fn alive(endpoint: String) -> Self {
         Self {
             link_state: LinkState::Connected,
-            endpoint: String::new(),
+            endpoint,
             fc_alive: true,
         }
     }
 
-    /// FC heartbeat lost.
-    pub fn lost() -> Self {
+    /// FC heartbeat lost while the transport itself is still connected.
+    pub fn lost(endpoint: String) -> Self {
         Self {
             link_state: LinkState::Connected,
-            endpoint: String::new(),
+            endpoint,
             fc_alive: false,
         }
     }
@@ -426,5 +429,33 @@ async fn run_worker(
             _ = tokio::time::sleep(config.reconnect_delay) => {}
             _ = reconnect_rx.changed() => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn heartbeat_status_keeps_endpoint() {
+        let endpoint = "udpin:0.0.0.0:14550".to_string();
+
+        let alive = LinkStatus::alive(endpoint.clone());
+        assert_eq!(alive.link_state, LinkState::Connected);
+        assert!(alive.fc_alive);
+        assert_eq!(alive.endpoint, endpoint);
+
+        let lost = LinkStatus::lost(endpoint.clone());
+        assert_eq!(lost.link_state, LinkState::Connected);
+        assert!(!lost.fc_alive);
+        assert_eq!(lost.endpoint, endpoint);
+    }
+
+    #[test]
+    fn disconnected_status_clears_link() {
+        let down = LinkStatus::disconnected();
+        assert_eq!(down.link_state, LinkState::Disconnected);
+        assert!(!down.fc_alive);
+        assert!(down.endpoint.is_empty());
     }
 }

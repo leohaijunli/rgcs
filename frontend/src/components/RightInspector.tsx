@@ -3,6 +3,7 @@ import PlanningPanel from './panels/PlanningPanel'
 import { useLinkStore } from '../stores/link'
 import { useTelemetryStore } from '../stores/telemetry'
 import { useUiStore, VIEW_CONFIG } from '../stores/ui'
+import { modeLabel } from '../util/modeLabel'
 
 export default function RightInspector() {
   const { t } = useTranslation()
@@ -53,7 +54,7 @@ function FlightInspector() {
       <Card
         title={t('panels.telemetry')}
         rows={[
-          [t('link.mode'), heartbeat ? t(`mode.${heartbeat.flight_state.toLowerCase()}`) : '—'],
+          [t('link.mode'), modeLabel(t, heartbeat) ?? '—'],
           [t('link.armed'), heartbeat?.base_mode.safety_armed ? t('link.armed') : t('link.disarmed')],
           [t('hud.speed'), speedMs ? `${speedMs.toFixed(1)} m/s` : '—'],
           [t('hud.alt'), pos ? `${pos.relative_alt_m.toFixed(1)} m` : '—'],

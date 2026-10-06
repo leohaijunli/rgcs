@@ -5,7 +5,8 @@ import { useDevicesStore } from '../stores/devices'
 import { useLinkStore } from '../stores/link'
 import { useTelemetryStore } from '../stores/telemetry'
 import { useUiStore, type View } from '../stores/ui'
-import { px4Mode } from '../util/px4mode'
+import { fcStatusLabel } from '../util/linkLabel'
+import { modeLabel } from '../util/modeLabel'
 import SettingsDialog from './dialogs/SettingsDialog'
 
 const VIEWS: View[] = ['planning', 'flight', 'data']
@@ -65,11 +66,7 @@ export default function TopBar() {
   const sys = useTelemetryStore((s) => s.snapshot?.sys_status ?? null)
 
   const armed = heartbeat?.base_mode.safety_armed === true
-  const mode = heartbeat
-    ? heartbeat.autopilot === 'px4'
-      ? px4Mode(heartbeat.custom_mode)
-      : t(`mode.${heartbeat.flight_state.toLowerCase()}`)
-    : null
+  const mode = modeLabel(t, heartbeat)
   const rtk = gps?.fix_type ?? null
   const rtkTone: 'ok' | 'warn' | 'err' =
     rtk === 'RTK_FIXED' ? 'ok' : rtk === 'RTK_FLOAT' ? 'warn' : 'err'
@@ -111,7 +108,7 @@ export default function TopBar() {
           <span className={`h-1.5 w-1.5 rounded-full ${armed ? 'bg-ok-ink' : 'bg-muted'}`} />
           {armed ? t('link.armed') : t('link.disarmed')}
         </div>
-        <Pill label={t('link.mode')} value={mode ?? '—'} tone="off" />
+        <Pill label={t('link.mode')} value={mode ?? '—'} tone={mode ? 'ok' : 'off'} />
         <Pill
           label={t('link.rtk')}
           value={gps ? `${t(`hud.fix.${fixKey(rtk ?? 'NO_GPS')}`)} ${gps.satellites_visible}sv` : '—'}
@@ -120,7 +117,7 @@ export default function TopBar() {
         <Pill label={t('link.batt')} value={batteryText} tone={batteryTone} />
         <Pill
           label={t('link.fc')}
-          value={link ? t(`link.${link.link_state.toLowerCase()}`) : t('link.noLink')}
+          value={fcStatusLabel(t, link)}
           tone={link?.fc_alive ? 'ok' : 'err'}
         />
         <Pill

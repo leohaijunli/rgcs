@@ -36,7 +36,9 @@ export function startMockFeed(): number {
           manual_input_enabled: false,
           safety_armed: true,
         },
-        custom_mode: 5,
+        // PX4 packs main mode in bits 16-23, sub mode in 24-31:
+        // AUTO + LOITER, so the mode pill reads "Auto·Loiter".
+        custom_mode: (4 << 16) | (3 << 24),
         flight_state: 'active',
         mavlink_version: 3,
       },

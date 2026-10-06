@@ -7,6 +7,7 @@ import { connectEndpoint, disconnect, reportConnectError } from '../../desktop/c
 import { useDevicesStore } from '../../stores/devices'
 import { useLinkStore } from '../../stores/link'
 import { useUiStore } from '../../stores/ui'
+import { fcStatusLabel } from '../../util/linkLabel'
 
 const DEFAULT_ENDPOINT = 'udpin:0.0.0.0:14550'
 const APP_VERSION = '0.1.0'
@@ -109,7 +110,7 @@ function ConnectionTab() {
       <div className="flex items-center justify-between">
         <span className="text-muted">{t('settings.linkStatus')}:</span>
         <span className={`mono ${link?.fc_alive ? 'text-ok' : 'text-error'}`}>
-          {link ? t(`link.${link.link_state.toLowerCase()}`) : t('link.noLink')}
+          {fcStatusLabel(t, link)}
         </span>
       </div>
       <div className="flex gap-2">
