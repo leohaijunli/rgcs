@@ -13,8 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use maggcs_core::mavlink::{
-    connection::spawn_connection, message::MavMessage, ConnectionConfig, ConnectionEvent,
-    Endpoint,
+    connection::spawn_connection, message::MavMessage, ConnectionConfig, ConnectionEvent, Endpoint,
 };
 
 fn arg(args: &[String], i: usize) -> Option<&str> {

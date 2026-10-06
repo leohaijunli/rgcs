@@ -10,7 +10,9 @@ use std::collections::HashMap;
 
 use maggcs_core::mavlink::connection::{ConnectionEvent, ConnectionHandle};
 use maggcs_core::mavlink::MavMessage;
-use maggcs_core::mission::protocol::{mission_item_from_mav, MissionEvent, MissionOperation, MissionProtocol};
+use maggcs_core::mission::protocol::{
+    mission_item_from_mav, MissionEvent, MissionOperation, MissionProtocol,
+};
 use maggcs_core::mission::types::MissionItem;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -39,7 +41,11 @@ pub struct MissionEventPayload {
 /// Serialize an event into the UI payload.
 fn payload(e: &MissionEvent) -> MissionEventPayload {
     match e {
-        MissionEvent::Progress { operation, sent, total } => MissionEventPayload {
+        MissionEvent::Progress {
+            operation,
+            sent,
+            total,
+        } => MissionEventPayload {
             op: op_name(*operation),
             kind: "progress",
             sent: *sent,
@@ -101,7 +107,13 @@ impl MissionService {
     ) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
         tauri::async_runtime::spawn(run(
-            app, handle, cmd_rx, self_sys, self_comp, target_sys, target_comp,
+            app,
+            handle,
+            cmd_rx,
+            self_sys,
+            self_comp,
+            target_sys,
+            target_comp,
         ));
         Self { cmd_tx }
     }

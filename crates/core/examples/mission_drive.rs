@@ -108,7 +108,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         i.seq, i.command as u16, i.frame, i.x, i.y, i.z
                     );
                     pump(&mut proto, &handle, &m.header, &m.message, &mut events).await?;
-                    if events.iter().any(|e| matches!(e, MissionEvent::Completed(MissionOperation::Download))) {
+                    if events
+                        .iter()
+                        .any(|e| matches!(e, MissionEvent::Completed(MissionOperation::Download)))
+                    {
                         download_done = true;
                     }
                 }
@@ -121,7 +124,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let n_downloaded = events
         .iter()
         .filter_map(|e| match e {
-            MissionEvent::Progress { operation: MissionOperation::Download, sent, .. } => Some(*sent as usize),
+            MissionEvent::Progress {
+                operation: MissionOperation::Download,
+                sent,
+                ..
+            } => Some(*sent as usize),
             _ => None,
         })
         .max()
@@ -161,7 +168,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 MavMessage::MISSION_ACK(a) => {
                     println!("[recv]   MISSION_ACK result={:?}", a.mavtype);
                     pump(&mut proto, &handle, &m.header, &m.message, &mut events).await?;
-                    if events.iter().any(|e| matches!(e, MissionEvent::Completed(MissionOperation::Upload))) {
+                    if events
+                        .iter()
+                        .any(|e| matches!(e, MissionEvent::Completed(MissionOperation::Upload)))
+                    {
                         upload_done = true;
                     }
                 }
@@ -196,10 +206,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     pump(&mut proto, &handle, &m.header, &m.message, &mut events).await?;
                 }
                 MavMessage::MISSION_ITEM_INT(i) => {
-                    println!("[recv]   MISSION_ITEM_INT seq={} x={} y={} z={}", i.seq, i.x, i.y, i.z);
+                    println!(
+                        "[recv]   MISSION_ITEM_INT seq={} x={} y={} z={}",
+                        i.seq, i.x, i.y, i.z
+                    );
                     pump(&mut proto, &handle, &m.header, &m.message, &mut events).await?;
                     roundtrip.push(maggcs_core::mission::protocol::mission_item_from_mav(i));
-                    if events.iter().any(|e| matches!(e, MissionEvent::Completed(MissionOperation::Download))) {
+                    if events
+                        .iter()
+                        .any(|e| matches!(e, MissionEvent::Completed(MissionOperation::Download)))
+                    {
                         rd_done = true;
                     }
                 }
@@ -213,7 +229,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("roundtrip:  {roundtrip:?}");
     let mut ok = true;
     if roundtrip.len() != mission.len() {
-        eprintln!("FAIL: expected {} items on re-download, got {}", mission.len(), roundtrip.len());
+        eprintln!(
+            "FAIL: expected {} items on re-download, got {}",
+            mission.len(),
+            roundtrip.len()
+        );
         ok = false;
     }
     for (a, b) in mission.iter().zip(&roundtrip) {

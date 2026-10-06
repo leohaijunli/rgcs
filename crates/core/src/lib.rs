@@ -10,8 +10,8 @@
 
 pub mod devices;
 pub mod height;
-pub mod mission;
 pub mod mavlink;
+pub mod mission;
 pub mod telemetry;
 
 pub use devices::{DeviceDatabase, DeviceEvent, DeviceManager, DeviceRole, SerialDeviceInfo};

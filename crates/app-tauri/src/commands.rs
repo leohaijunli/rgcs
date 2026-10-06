@@ -2,8 +2,8 @@
 
 use std::time::Duration;
 
-use maggcs_core::devices::{DeviceDatabase, DeviceManager, SerialDeviceInfo};
 use ::mavlink::common::{MavCmd, MavMessage, COMMAND_LONG_DATA};
+use maggcs_core::devices::{DeviceDatabase, DeviceManager, SerialDeviceInfo};
 use maggcs_core::mavlink::connection::{spawn_connection, LinkStatus};
 use maggcs_core::mavlink::{ConnectionConfig, Endpoint};
 use maggcs_core::mission::types::MissionItem;
@@ -109,39 +109,28 @@ pub async fn mission_upload(
     state: State<'_, AppState>,
     items: Vec<MissionItem>,
 ) -> Result<(), String> {
-    let mission = state
-        .mission()
-        .ok_or_else(|| "not connected".to_string())?;
+    let mission = state.mission().ok_or_else(|| "not connected".to_string())?;
     mission.upload(items).await
 }
 
 /// Download the FC mission.
 #[tauri::command]
 pub async fn mission_download(state: State<'_, AppState>) -> Result<(), String> {
-    let mission = state
-        .mission()
-        .ok_or_else(|| "not connected".to_string())?;
+    let mission = state.mission().ok_or_else(|| "not connected".to_string())?;
     mission.download().await
 }
 
 /// Clear the FC mission.
 #[tauri::command]
 pub async fn mission_clear(state: State<'_, AppState>) -> Result<(), String> {
-    let mission = state
-        .mission()
-        .ok_or_else(|| "not connected".to_string())?;
+    let mission = state.mission().ok_or_else(|| "not connected".to_string())?;
     mission.clear().await
 }
 
 /// Set the active waypoint.
 #[tauri::command]
-pub async fn mission_set_current(
-    state: State<'_, AppState>,
-    seq: u16,
-) -> Result<(), String> {
-    let mission = state
-        .mission()
-        .ok_or_else(|| "not connected".to_string())?;
+pub async fn mission_set_current(state: State<'_, AppState>, seq: u16) -> Result<(), String> {
+    let mission = state.mission().ok_or_else(|| "not connected".to_string())?;
     mission.set_current(seq).await
 }
 
