@@ -8,12 +8,16 @@
 //! Absolute heights are never represented as bare `f64`. Use [`height::Height`],
 //! which carries a [`height::HeightDatum`] tag. See ADR-006.
 
+pub mod commands;
 pub mod devices;
 pub mod height;
 pub mod mavlink;
 pub mod mission;
 pub mod telemetry;
 
+pub use commands::{
+    CommandError, CommandEvent, CommandResult, CommandService, CommandSession,
+};
 pub use devices::{DeviceDatabase, DeviceEvent, DeviceManager, DeviceRole, SerialDeviceInfo};
 pub use mavlink::connection::{ConnectionConfig, ConnectionEvent, ConnectionHandle};
 pub use mavlink::endpoint::Endpoint;
