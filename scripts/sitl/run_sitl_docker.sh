@@ -15,6 +15,14 @@
 #               --no-sim-tools, so it has no jmavsim/Gazebo)
 #   PX4_SIM     simulator target (default none = no physics sim, still runs the
 #               MAVLink GCS link; use jmavsim/gz only with a *-simulation image)
+#   PX4_SIM_MODEL
+#               PX4 airframe model. Defaults to sihsim_quadx for PX4_SIM=none:
+#               a bare 'none' run leaves SYS_AUTOSTART=0, so no airframe
+#               defaults are applied, the baro/mag sim modules never start and
+#               the calibration IDs stay 0 -> 'Preflight Fail: Found 0 compass
+#               / barometer 0 missing / Accel 0 uncalibrated'. sihsim_quadx
+#               (SYS_AUTOSTART=10040) gives simulated IMU/baro/mag/GPS plus
+#               calibration, so the SITL reaches 'Ready for takeoff'.
 #   PX4_CONTAINER container name (default px4-sitl)
 #   PX4_INTERACTIVE
 #               1 = run in the foreground and drop into the PX4 'pxh>' shell
@@ -53,6 +61,12 @@ PX4_SIM="${PX4_SIM:-none}"
 PX4_CONTAINER="${PX4_CONTAINER:-px4-sitl}"
 PX4_INTERACTIVE="${PX4_INTERACTIVE:-0}"
 export PX4_INTERACTIVE
+# The 'none' simulator relies on SIH for sensors; default to an SIH airframe so
+# the vehicle has a barometer/magnetometer and passes preflight (see header).
+PX4_SIM_MODEL="${PX4_SIM_MODEL:-}"
+if [ "$PX4_SIM" = "none" ] && [ -z "$PX4_SIM_MODEL" ]; then
+  PX4_SIM_MODEL="sihsim_quadx"
+fi
 # SITL world origin — default Sidney BC, Canada (survey site), ~5 m MSL.
 export PX4_HOME_LAT="${PX4_HOME_LAT:-48.6493}"
 export PX4_HOME_LON="${PX4_HOME_LON:--123.3982}"
@@ -99,6 +113,7 @@ PX4_LOG="$PX4_DIR/build.log"
 
 echo "==> PX4 source: $PX4_DIR ($(git -C "$PX4_DIR" describe --tags 2>/dev/null || echo unknown))"
 echo "==> image: $PX4_IMAGE"
+echo "==> airframe: ${PX4_SIM_MODEL:-<sim default>} (PX4_SIM=$PX4_SIM)"
 docker image inspect "$PX4_IMAGE" >/dev/null 2>&1 || docker pull "$PX4_IMAGE"
 
 # Command executed inside the container. For the "none" simulator we build the
@@ -118,7 +133,7 @@ fi
 
 # Stamp the container with a hash of the command so a stale container (older
 # image or older command) is recreated instead of silently reused.
-CMD_SHA="$(printf '%s' "$RUN_CMD" | sha256sum | cut -c1-16)"
+CMD_SHA="$(printf '%s' "$RUN_CMD|model=$PX4_SIM_MODEL" | sha256sum | cut -c1-16)"
 LABEL_KEY="maggcs.sitl.cmd"
 DOCKER_ARGS=(
   --network host
@@ -128,6 +143,9 @@ DOCKER_ARGS=(
   -v "$PX4_DIR":/px4
   --label "$LABEL_KEY=$CMD_SHA"
 )
+if [ -n "$PX4_SIM_MODEL" ]; then
+  DOCKER_ARGS+=( -e "PX4_SIM_MODEL=$PX4_SIM_MODEL" )
+fi
 
 container_exists() {
   docker ps -a --format '{{.Names}}' | grep -qx "$PX4_CONTAINER"
