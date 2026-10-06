@@ -108,6 +108,7 @@ export default {
   map: {
     connect: 'Connect',
     cancel: 'Cancel',
+    uav: 'UAV ≈AMSL',
     endpointHint: 'MAVLink endpoint: udpin:<addr>:<port>, udpout:..., tcpout:..., serial:<port>:<baud>.',
     dashboard: 'Instrument dashboard',
     mode3d: '2D / 3D',

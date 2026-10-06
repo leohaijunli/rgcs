@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import * as Cesium from 'cesium'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
 import { cssVar } from '../design-system/theme'
+import i18n from '../i18n'
 import { degFromMavInt, useMissionStore } from '../stores/mission'
 import { useTelemetryStore } from '../stores/telemetry'
 import { useUiStore } from '../stores/ui'
@@ -88,7 +89,10 @@ export default function MapView() {
     const arrowUrl = arrowCanvas.toDataURL('image/png')
 
     const drone = viewer.entities.add({
-      position: Cesium.Cartesian3.fromDegrees(HOME_LON, HOME_LAT, 100),
+      // Hidden until the first fix: the map has no terrain provider, so an
+      // untagged placeholder would sit in the air above the ellipsoid ground.
+      show: false,
+      position: Cesium.Cartesian3.fromDegrees(HOME_LON, HOME_LAT, 0),
       billboard: {
         image: arrowUrl,
         rotation: 0,
@@ -97,7 +101,7 @@ export default function MapView() {
         verticalOrigin: Cesium.VerticalOrigin.CENTER,
       },
       label: {
-        text: 'UAV ≈MSL',
+        text: i18n.t('map.uav'),
         font: '12px sans-serif',
         pixelOffset: new Cesium.Cartesian2(0, -18),
         fillColor: Cesium.Color.WHITE,
@@ -228,6 +232,7 @@ export default function MapView() {
 
     const cart = Cesium.Cartesian3.fromDegrees(pos.longitude_deg, pos.latitude_deg, pos.altitude.meters)
     drone.position = new Cesium.ConstantPositionProperty(cart)
+    drone.show = true
     if (drone.billboard && pos.heading_deg) {
       drone.billboard.rotation = new Cesium.ConstantProperty(
         Cesium.Math.toRadians(pos.heading_deg),
