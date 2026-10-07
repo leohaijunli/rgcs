@@ -22,6 +22,18 @@ const PREDICT_HORIZON_S = 120
 const PREDICT_STEP_S = 4
 const PREDICT_MIN_GROUNDSPEED_M_S = 1
 
+// Largest gap the marker may be advanced past its last fix. Telemetry arrives
+// at a few Hz, so snapping the marker (and the followed camera) to each fix
+// makes the whole map move in visible steps; the reported NED velocity fills
+// the gaps instead. The cap bounds how far a stale velocity can extrapolate.
+const DEAD_RECKON_MAX_S = 0.5
+
+// Chase view applied when following starts, so enabling follow frames the
+// vehicle instead of keeping whatever overview the user happened to be at.
+// Once centred the user can orbit and zoom freely; follow keeps those.
+const FOLLOW_RANGE_M = 250
+const FOLLOW_PITCH_DEG = -35
+
 // Shipped airframe (see `model/README.md` at the repo root). Cesium maps the
 // asset's glTF axes onto the body frame as +X -> north (+Y), +Y -> up,
 // +Z -> east (+X), so the nose (the camera gimbal, glTF +Z) lies on the body's
@@ -41,11 +53,15 @@ export default function MapView() {
   const trailPos = useRef<Cesium.Cartesian3[]>([])
   const predictPos = useRef<Cesium.Cartesian3[]>([])
   const tickRef = useRef(0)
+  // Latest fix plus its ENU velocity, used to advance the marker between
+  // telemetry updates (see `DEAD_RECKON_MAX_S`).
+  const fixRef = useRef<{ cart: Cesium.Cartesian3; vel: Cesium.Cartesian3; atMs: number } | null>(null)
+  const dronePosRef = useRef<Cesium.ConstantPositionProperty | null>(null)
+  const droneOrientRef = useRef<Cesium.ConstantProperty | null>(null)
   const wpLineRef = useRef<Cesium.Entity | null>(null)
   const wpPointRefs = useRef<Map<number, Cesium.Entity>>(new Map())
   const wpHandlerRef = useRef<Cesium.ScreenSpaceEventHandler | null>(null)
 
-  const follow = useUiStore((s) => s.follow)
   const map3d = useUiStore((s) => s.map3d)
 
   // Viewer lifecycle.
@@ -90,16 +106,21 @@ export default function MapView() {
     const accent = Cesium.Color.fromCssColorString(cssVar('--mg-accent'))
     const ok = Cesium.Color.fromCssColorString(cssVar('--mg-ok'))
     const warn = Cesium.Color.fromCssColorString(cssVar('--mg-warn'))
-    // 3D UAV marker (runtime-generated glTF). A model is used instead of
-    // entity boxes because Cesium re-evaluates a model's position/orientation
-    // every frame, so it tracks the vehicle instead of freezing on first draw,
-    // and minimumPixelSize keeps it readable at any zoom. Hidden until the
-    // first fix: the map has no terrain provider, so an untagged placeholder
-    // would sit in the air above the ellipsoid ground.
+    // 3D UAV marker (see `model/README.md`). Hidden until the first fix: the
+    // map has no terrain provider, so an untagged placeholder would sit in the
+    // air above the ellipsoid ground. The position and orientation properties
+    // are created once and updated in place; swapping properties every frame
+    // makes Cesium rebuild the model.
+    const dronePosition = new Cesium.ConstantPositionProperty(
+      Cesium.Cartesian3.fromDegrees(HOME_LON, HOME_LAT, 0),
+    )
+    const droneOrientation = new Cesium.ConstantProperty(Cesium.Quaternion.IDENTITY)
+    dronePosRef.current = dronePosition
+    droneOrientRef.current = droneOrientation
     const drone = viewer.entities.add({
       show: false,
-      position: Cesium.Cartesian3.fromDegrees(HOME_LON, HOME_LAT, 0),
-      orientation: new Cesium.ConstantProperty(Cesium.Quaternion.IDENTITY),
+      position: dronePosition,
+      orientation: droneOrientation,
       model: {
         uri: UAV_MODEL_URI,
         minimumPixelSize: 44,
@@ -207,7 +228,42 @@ export default function MapView() {
     predictRef.current = predict
     homeRef.current = home
 
+    // Advance the marker past its last fix using the reported NED velocity, so
+    // the icon and the followed camera glide between telemetry updates instead
+    // of stepping at the update rate.
+    const advanced = new Cesium.Cartesian3()
+    let followCentred = false
+    const followFix = () => {
+      const fix = fixRef.current
+      if (!fix || !droneRef.current) return
+      const elapsed = Math.min((performance.now() - fix.atMs) / 1000, DEAD_RECKON_MAX_S)
+      Cesium.Cartesian3.multiplyByScalar(fix.vel, Math.max(elapsed, 0), advanced)
+      Cesium.Cartesian3.add(fix.cart, advanced, advanced)
+      dronePosRef.current?.setValue(advanced)
+      if (!useUiStore.getState().follow) {
+        followCentred = false
+        return
+      }
+      // Cesium's own `trackedEntity` derives its offset from the entity's
+      // bounding sphere, which `model.minimumPixelSize` makes view-dependent,
+      // so the camera oscillates and the whole map shakes. Re-centre by hand
+      // instead, keeping the user's heading/pitch/distance.
+      const camera = viewer.camera
+      if (!followCentred) {
+        followCentred = true
+        camera.lookAt(
+          advanced,
+          new Cesium.HeadingPitchRange(0, Cesium.Math.toRadians(FOLLOW_PITCH_DEG), FOLLOW_RANGE_M),
+        )
+        return
+      }
+      const range = Cesium.Cartesian3.distance(camera.positionWC, advanced)
+      camera.lookAt(advanced, new Cesium.HeadingPitchRange(camera.heading, camera.pitch, range))
+    }
+    viewer.scene.preRender.addEventListener(followFix)
+
     return () => {
+      viewer.scene.preRender.removeEventListener(followFix)
       wpHandlerRef.current?.destroy()
       wpHandlerRef.current = null
       wpPointRefs.current.forEach((e) => viewer.entities.remove(e))
@@ -220,6 +276,9 @@ export default function MapView() {
       trailRef.current = null
       predictRef.current = null
       homeRef.current = null
+      dronePosRef.current = null
+      droneOrientRef.current = null
+      fixRef.current = null
       trailPos.current = []
       predictPos.current = []
     }
@@ -239,19 +298,6 @@ export default function MapView() {
   // Telemetry updates: drone position, trail, camera follow.
   const snapshot = useTelemetryStore((s) => s.snapshot)
 
-  // Follow: Cesium's built-in smooth tracking. Re-evaluates when telemetry
-  // arrives so the camera follows the real GPS position, not the home default.
-  const hasPos = useTelemetryStore((s) => s.snapshot?.global_position != null)
-  useEffect(() => {
-    const viewer = viewerRef.current
-    if (!viewer) return
-    if (follow && hasPos && droneRef.current) {
-      viewer.trackedEntity = droneRef.current
-    } else {
-      viewer.trackedEntity = undefined
-    }
-  }, [follow, hasPos])
-
   useEffect(() => {
     const viewer = viewerRef.current
     const drone = droneRef.current
@@ -268,8 +314,15 @@ export default function MapView() {
     // reported heading until the first attitude sample arrives. The marker is a
     // world-space object, so orbiting the camera only changes the viewpoint.
     const attitude = snapshot?.attitude
-    drone.position = new Cesium.ConstantPositionProperty(cart)
-    drone.orientation = new Cesium.ConstantProperty(
+    const enu = Cesium.Transforms.eastNorthUpToFixedFrame(cart)
+    const vel = Cesium.Matrix4.multiplyByPointAsVector(
+      enu,
+      new Cesium.Cartesian3(pos.velocity.y_m_s, pos.velocity.x_m_s, -pos.velocity.z_m_s),
+      new Cesium.Cartesian3(),
+    )
+    fixRef.current = { cart, vel, atMs: performance.now() }
+    dronePosRef.current?.setValue(cart)
+    droneOrientRef.current?.setValue(
       uavOrientation(
         cart,
         (attitude?.yaw_deg ?? pos.heading_deg) + UAV_MODEL_NOSE_YAW_OFFSET_DEG,
@@ -298,7 +351,9 @@ export default function MapView() {
   const goHome = () => {
     const viewer = viewerRef.current
     if (!viewer) return
-    viewer.trackedEntity = undefined
+    // Home is a wide overview, so stop following or the next frame re-centres.
+    useUiStore.getState().setFollow(false)
+    viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY)
     viewer.camera.flyTo({
       destination: Cesium.Cartesian3.fromDegrees(HOME_LON, HOME_LAT, 12000),
     })

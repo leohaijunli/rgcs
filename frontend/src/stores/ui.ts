@@ -39,6 +39,7 @@ interface UiState {
   setDockHeight: (h: number) => void
   setDockTab: (tab: DockTab) => void
   toggleFollow: () => void
+  setFollow: (follow: boolean) => void
   toggleMap3d: () => void
   setDashboardOpen: (open: boolean) => void
   setQcOpen: (open: boolean) => void
@@ -95,6 +96,7 @@ export const useUiStore = create<UiState>((set) => ({
   setDockHeight: (h) => set({ dockHeight: Math.max(DOCK_MIN, Math.min(DOCK_MAX, h)) }),
   setDockTab: (dockTab) => set({ dockTab }),
   toggleFollow: () => set((s) => ({ follow: !s.follow })),
+  setFollow: (follow) => set({ follow }),
   toggleMap3d: () => set((s) => ({ map3d: !s.map3d })),
   setDashboardOpen: (dashboardOpen) => set({ dashboardOpen }),
   setQcOpen: (qcOpen) => set({ qcOpen }),
