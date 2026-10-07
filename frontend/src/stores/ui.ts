@@ -28,6 +28,8 @@ interface UiState {
   dockHeight: number
   follow: boolean
   map3d: boolean
+  /** Last known map-camera centre in degrees, used as the default new-waypoint spot. */
+  mapCenter: { lat: number; lon: number } | null
   dashboardOpen: boolean
   qcOpen: boolean
   setView: (v: View) => void
@@ -41,6 +43,7 @@ interface UiState {
   toggleFollow: () => void
   setFollow: (follow: boolean) => void
   toggleMap3d: () => void
+  setMapCenter: (c: { lat: number; lon: number }) => void
   setDashboardOpen: (open: boolean) => void
   setQcOpen: (open: boolean) => void
 }
@@ -77,6 +80,7 @@ export const useUiStore = create<UiState>((set) => ({
   dockHeight: narrowScreen() ? 160 : DOCK_DEFAULT,
   follow: true,
   map3d: true,
+  mapCenter: null,
   dashboardOpen: false,
   qcOpen: false,
   setView: (view) =>
@@ -98,6 +102,7 @@ export const useUiStore = create<UiState>((set) => ({
   toggleFollow: () => set((s) => ({ follow: !s.follow })),
   setFollow: (follow) => set({ follow }),
   toggleMap3d: () => set((s) => ({ map3d: !s.map3d })),
+  setMapCenter: (mapCenter) => set({ mapCenter }),
   setDashboardOpen: (dashboardOpen) => set({ dashboardOpen }),
   setQcOpen: (qcOpen) => set({ qcOpen }),
 }))

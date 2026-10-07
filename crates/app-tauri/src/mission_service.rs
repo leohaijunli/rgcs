@@ -1,30 +1,18 @@
-//! Mission service: wires `core::mission::MissionProtocol` to the live MAVLink
-//! link and forwards mission events to the React UI.
+//! Mission service adapter: drives `core::mission::service::MissionService` on
+//! the live MAVLink link and forwards its events to the React UI (issue #18).
 //!
-//! Events (`"mission"`): `{ op, kind, sent, total, seq, message? }`
-//! with `kind = progress | completed | current_changed | failed`. On a
-//! completed download the service also emits `"mission_plan"` with the
-//! downloaded items.
+//! Events (`"mission"`): `{ op, kind, sent, total, seq, message? }` with
+//! `kind = progress | completed | current_changed | failed`. On a completed
+//! download the adapter also emits `"mission_plan"` with the downloaded items.
+//!
+//! The state machine, retransmission loop, and download assembly all live in
+//! `core`; this module only maps events to the UI payload and emits them.
 
-use std::collections::HashMap;
-
-use maggcs_core::mavlink::connection::{ConnectionEvent, ConnectionHandle};
-use maggcs_core::mavlink::MavMessage;
-use maggcs_core::mission::protocol::{
-    mission_item_from_mav, MissionEvent, MissionOperation, MissionProtocol,
-};
-use maggcs_core::mission::types::MissionItem;
+use maggcs_core::mavlink::connection::ConnectionHandle;
+use maggcs_core::mission::protocol::{MissionEvent, MissionOperation};
+use maggcs_core::mission::service::{MissionIds, MissionService, MissionServiceEvent};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::mpsc;
-
-/// Commands accepted by the mission service task.
-pub enum MissionCommand {
-    Upload(Vec<MissionItem>),
-    Download,
-    Clear,
-    SetCurrent(u16),
-}
 
 /// Payload forwarded to the webview on every `"mission"` event.
 #[derive(Debug, Clone, Serialize)]
@@ -38,7 +26,7 @@ pub struct MissionEventPayload {
     pub message: Option<String>,
 }
 
-/// Serialize an event into the UI payload.
+/// Serialize a core event into the UI payload.
 fn payload(e: &MissionEvent) -> MissionEventPayload {
     match e {
         MissionEvent::Progress {
@@ -89,125 +77,20 @@ fn op_name(op: MissionOperation) -> &'static str {
     }
 }
 
-/// Handle to the running mission service task.
-#[derive(Clone)]
-pub struct MissionService {
-    cmd_tx: mpsc::Sender<MissionCommand>,
-}
-
-impl MissionService {
-    /// Start the mission service on the given link.
-    pub fn spawn(
-        app: AppHandle,
-        handle: ConnectionHandle,
-        self_sys: u8,
-        self_comp: u8,
-        target_sys: u8,
-        target_comp: u8,
-    ) -> Self {
-        let (cmd_tx, cmd_rx) = mpsc::channel(8);
-        tauri::async_runtime::spawn(run(
-            app,
-            handle,
-            cmd_rx,
-            self_sys,
-            self_comp,
-            target_sys,
-            target_comp,
-        ));
-        Self { cmd_tx }
-    }
-
-    /// Start uploading the given mission.
-    pub async fn upload(&self, items: Vec<MissionItem>) -> Result<(), String> {
-        self.cmd_tx
-            .send(MissionCommand::Upload(items))
-            .await
-            .map_err(|_| "mission service stopped".to_string())
-    }
-
-    /// Start downloading the FC mission.
-    pub async fn download(&self) -> Result<(), String> {
-        self.cmd_tx
-            .send(MissionCommand::Download)
-            .await
-            .map_err(|_| "mission service stopped".to_string())
-    }
-
-    /// Clear the FC mission.
-    pub async fn clear(&self) -> Result<(), String> {
-        self.cmd_tx
-            .send(MissionCommand::Clear)
-            .await
-            .map_err(|_| "mission service stopped".to_string())
-    }
-
-    /// Set the active waypoint.
-    pub async fn set_current(&self, seq: u16) -> Result<(), String> {
-        self.cmd_tx
-            .send(MissionCommand::SetCurrent(seq))
-            .await
-            .map_err(|_| "mission service stopped".to_string())
-    }
-}
-
-async fn run(
-    app: AppHandle,
-    handle: ConnectionHandle,
-    mut cmd_rx: mpsc::Receiver<MissionCommand>,
-    self_sys: u8,
-    self_comp: u8,
-    target_sys: u8,
-    target_comp: u8,
-) {
-    let mut proto = MissionProtocol::new(self_sys, self_comp, target_sys, target_comp);
-    let mut events_rx = handle.subscribe();
-    let mut downloading: Option<HashMap<u16, MissionItem>> = None;
-
-    loop {
-        let (events, frames) = tokio::select! {
-            cmd = cmd_rx.recv() => {
-                let Some(cmd) = cmd else { return; };
-                match cmd {
-                    MissionCommand::Upload(items) => match proto.begin_upload(items) {
-                        Ok(frames) => (Vec::new(), frames),
-                        Err(e) => (vec![MissionEvent::Failed(e)], Vec::new()),
-                    },
-                    MissionCommand::Download => {
-                        downloading = Some(HashMap::new());
-                        (Vec::new(), proto.begin_download())
-                    }
-                    MissionCommand::Clear => (Vec::new(), proto.begin_clear()),
-                    MissionCommand::SetCurrent(seq) => (Vec::new(), proto.begin_set_current(seq)),
+/// Start the mission service on the given link and forward its events to the UI.
+pub fn spawn(app: AppHandle, handle: ConnectionHandle, ids: MissionIds) -> MissionService {
+    let (service, mut events_rx) = MissionService::spawn(handle, ids);
+    tauri::async_runtime::spawn(async move {
+        while let Some(event) = events_rx.recv().await {
+            match event {
+                MissionServiceEvent::Protocol(e) => {
+                    let _ = app.emit("mission", payload(&e));
                 }
-            }
-            ev = events_rx.recv() => {
-                match ev {
-                    Ok(ConnectionEvent::Message(m)) => {
-                        if let MavMessage::MISSION_ITEM_INT(i) = &m.message {
-                            if let Some(map) = &mut downloading {
-                                map.insert(i.seq, mission_item_from_mav(i));
-                            }
-                        }
-                        proto.handle(&m.header, &m.message)
-                    }
-                    _ => (Vec::new(), Vec::new()),
-                }
-            }
-        };
-
-        for e in &events {
-            let _ = app.emit("mission", payload(e));
-            if let MissionEvent::Completed(MissionOperation::Download) = e {
-                if let Some(map) = downloading.take() {
-                    let mut items: Vec<MissionItem> = map.into_values().collect();
-                    items.sort_by_key(|i| i.seq);
+                MissionServiceEvent::PlanDownloaded(items) => {
                     let _ = app.emit("mission_plan", items);
                 }
             }
         }
-        for f in frames {
-            let _ = handle.send(f).await;
-        }
-    }
+    });
+    service
 }

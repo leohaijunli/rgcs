@@ -2,5 +2,9 @@
 
 /**
  * Coordinate frame of a mission item.
+ *
+ * Only the integer (`*_INT`) global frames are modelled: a mission item is
+ * always exchanged as `MISSION_ITEM_INT`, so keeping both the INT and
+ * non-INT spelling made download→upload round trips lossy (issues.md #11).
  */
-export type MissionFrame = "global" | "local_ned" | "global_relative_alt" | "local_enu" | "global_int" | "global_relative_alt_int" | "local_offset_ned" | "body_ned" | "global_terrain_alt" | "global_terrain_alt_int";
+export type MissionFrame = "global_int" | "global_relative_alt_int" | "global_terrain_alt_int" | "local_ned" | "local_enu" | "local_offset_ned" | "body_ned";

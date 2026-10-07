@@ -4,6 +4,7 @@ description = "Core library for MagGCS ground control station: MAVLink, telemetr
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
+license.workspace = true
 
 [dependencies]
 serde.workspace = true

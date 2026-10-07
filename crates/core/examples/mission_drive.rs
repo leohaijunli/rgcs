@@ -32,7 +32,7 @@ fn arg(args: &[String], i: usize) -> Option<&str> {
 }
 
 fn wp(seq: u16, lat: f64, lon: f64, alt_m: f32) -> MissionItem {
-    let mut item = MissionItem::waypoint(lat, lon, alt_m, MissionFrame::GlobalRelativeAlt);
+    let mut item = MissionItem::waypoint(lat, lon, alt_m, MissionFrame::GlobalRelativeAltInt);
     item.seq = seq;
     item
 }
@@ -211,7 +211,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         i.seq, i.x, i.y, i.z
                     );
                     pump(&mut proto, &handle, &m.header, &m.message, &mut events).await?;
-                    roundtrip.push(maggcs_core::mission::protocol::mission_item_from_mav(i));
+                    match maggcs_core::mission::protocol::mission_item_from_mav(i) {
+                        Ok(item) => roundtrip.push(item),
+                        Err(e) => println!("[warn]   unsupported frame: {e}"),
+                    }
                     if events
                         .iter()
                         .any(|e| matches!(e, MissionEvent::Completed(MissionOperation::Download)))

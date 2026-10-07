@@ -6,8 +6,12 @@
 
 pub mod error;
 pub mod protocol;
+pub mod service;
 pub mod types;
 
 pub use error::MissionError;
 pub use protocol::{MissionEvent, MissionOperation, MissionProtocol};
+pub use service::{
+    MissionCommand, MissionIds, MissionService, MissionServiceError, MissionServiceEvent,
+};
 pub use types::{Mission, MissionFrame, MissionItem};

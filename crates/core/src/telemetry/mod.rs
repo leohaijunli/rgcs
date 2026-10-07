@@ -13,7 +13,21 @@ use thiserror::Error;
 use ts_rs::TS;
 
 use crate::height::{Height, HeightDatum};
+use crate::mavlink::connection::LinkErrorKind;
 use crate::mavlink::message::{MavMessage, MessageEnvelope};
+
+/// A link-layer error surfaced to the UI.
+///
+/// Carries the failure category and a timestamp so the UI can show an error
+/// history instead of a single overwritten string (issues.md #17).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct TelemetryError {
+    pub kind: LinkErrorKind,
+    pub message: String,
+    #[ts(type = "number")]
+    pub at_ms: u64,
+}
 
 /// MAVLink scaling helpers (protocol integer → physical units).
 #[allow(dead_code)] // consumed by MAVLink parse functions (next phase)
@@ -374,6 +388,43 @@ impl BaseMode {
     }
 }
 
+/// Identity of a MAVLink node: the `(system_id, component_id)` pair a frame
+/// was sent from.
+///
+/// Telemetry must be attributed to one vehicle: a link shared with QGroundControl,
+/// a gimbal, a companion computer or a second airframe carries heartbeats and
+/// telemetry from several nodes, and only the target FC's data belongs in the
+/// snapshot (issue #6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct VehicleId {
+    pub system_id: u8,
+    pub component_id: u8,
+}
+
+impl VehicleId {
+    /// Construct a node identity.
+    pub const fn new(system_id: u8, component_id: u8) -> Self {
+        Self {
+            system_id,
+            component_id,
+        }
+    }
+
+    /// Identity of the sender of `env`.
+    pub fn from_envelope(env: &MessageEnvelope) -> Self {
+        Self {
+            system_id: env.header.system_id,
+            component_id: env.header.component_id,
+        }
+    }
+
+    /// True when both ids match.
+    pub fn matches(&self, other: Self) -> bool {
+        self.system_id == other.system_id && self.component_id == other.component_id
+    }
+}
+
 /// Normalized `HEARTBEAT`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -571,30 +622,75 @@ impl TelemetryUpdate {
 }
 
 /// Folds [`TelemetryUpdate`]s into a single [`TelemetrySnapshot`].
+///
+/// When a target [`VehicleId`] is set, updates from any other node are
+/// dropped so a shared link cannot overwrite the snapshot with another
+/// node's heartbeat, position or attitude (issue #6).
 #[derive(Debug, Clone, Default)]
 pub struct TelemetryAggregator {
+    target: Option<VehicleId>,
     snapshot: TelemetrySnapshot,
 }
 
 impl TelemetryAggregator {
-    /// Empty aggregator.
+    /// Empty aggregator that accepts updates from every node.
+    ///
+    /// Use [`TelemetryAggregator::for_vehicle`] in production so foreign
+    /// traffic is filtered out.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Empty aggregator that only accepts updates from `target`.
+    pub fn for_vehicle(target: VehicleId) -> Self {
+        Self {
+            target: Some(target),
+            snapshot: TelemetrySnapshot::default(),
+        }
+    }
+
+    /// True when an update from `source` belongs in this snapshot.
+    pub fn accepts(&self, source: VehicleId) -> bool {
+        match self.target {
+            Some(target) => target.matches(source),
+            None => true,
+        }
+    }
+
     /// Apply one update. `now_ms` is a caller-provided monotonic or epoch
     /// millisecond timestamp used for `last_heartbeat_at_ms`.
-    pub fn apply(&mut self, update: TelemetryUpdate, now_ms: u64) {
+    ///
+    /// Updates whose `source` is not the target vehicle are ignored.
+    pub fn apply(&mut self, source: VehicleId, update: TelemetryUpdate, now_ms: u64) {
+        if !self.accepts(source) {
+            return;
+        }
         match update {
             TelemetryUpdate::Heartbeat(hb) => {
                 self.snapshot.last_heartbeat_at_ms = Some(now_ms);
+                self.snapshot.field_ages.heartbeat_at_ms = Some(now_ms);
                 self.snapshot.heartbeat = Some(hb);
             }
-            TelemetryUpdate::GlobalPosition(p) => self.snapshot.global_position = Some(p),
-            TelemetryUpdate::Attitude(a) => self.snapshot.attitude = Some(a),
-            TelemetryUpdate::SysStatus(s) => self.snapshot.sys_status = Some(s),
-            TelemetryUpdate::Battery(b) => self.snapshot.battery = Some(b),
-            TelemetryUpdate::Gps(g) => self.snapshot.gps = Some(g),
+            TelemetryUpdate::GlobalPosition(p) => {
+                self.snapshot.field_ages.global_position_at_ms = Some(now_ms);
+                self.snapshot.global_position = Some(p);
+            }
+            TelemetryUpdate::Attitude(a) => {
+                self.snapshot.field_ages.attitude_at_ms = Some(now_ms);
+                self.snapshot.attitude = Some(a);
+            }
+            TelemetryUpdate::SysStatus(s) => {
+                self.snapshot.field_ages.sys_status_at_ms = Some(now_ms);
+                self.snapshot.sys_status = Some(s);
+            }
+            TelemetryUpdate::Battery(b) => {
+                self.snapshot.field_ages.battery_at_ms = Some(now_ms);
+                self.snapshot.battery = Some(b);
+            }
+            TelemetryUpdate::Gps(g) => {
+                self.snapshot.field_ages.gps_at_ms = Some(now_ms);
+                self.snapshot.gps = Some(g);
+            }
         }
     }
 
@@ -617,6 +713,29 @@ pub struct TelemetrySnapshot {
     pub sys_status: Option<SysStatus>,
     pub battery: Option<BatteryStatus>,
     pub gps: Option<GpsRawInt>,
+    /// Per-field freshness, so a field that stopped updating while others keep
+    /// streaming can be greyed out (issues.md #16).
+    pub field_ages: TelemetryFieldAges,
+}
+
+/// Epoch-ms timestamp of the last update per telemetry field.
+///
+/// `None` means the field has not been seen since connecting.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct TelemetryFieldAges {
+    #[ts(type = "number | null")]
+    pub heartbeat_at_ms: Option<u64>,
+    #[ts(type = "number | null")]
+    pub global_position_at_ms: Option<u64>,
+    #[ts(type = "number | null")]
+    pub attitude_at_ms: Option<u64>,
+    #[ts(type = "number | null")]
+    pub sys_status_at_ms: Option<u64>,
+    #[ts(type = "number | null")]
+    pub battery_at_ms: Option<u64>,
+    #[ts(type = "number | null")]
+    pub gps_at_ms: Option<u64>,
 }
 
 impl TelemetrySnapshot {
@@ -856,7 +975,11 @@ mod tests {
             system_status: MavState::MAV_STATE_ACTIVE,
             mavlink_version: 3,
         }));
-        agg.apply(TelemetryUpdate::try_from_envelope(&hb).unwrap(), 1_000);
+        agg.apply(
+            VehicleId::from_envelope(&hb),
+            TelemetryUpdate::try_from_envelope(&hb).unwrap(),
+            1_000,
+        );
 
         let pos = envelope(MavMessage::GLOBAL_POSITION_INT(
             ::mavlink::common::GLOBAL_POSITION_INT_DATA {
@@ -871,13 +994,171 @@ mod tests {
                 hdg: 0,
             },
         ));
-        agg.apply(TelemetryUpdate::try_from_envelope(&pos).unwrap(), 1_000);
+        agg.apply(
+            VehicleId::from_envelope(&pos),
+            TelemetryUpdate::try_from_envelope(&pos).unwrap(),
+            1_000,
+        );
 
         let snap = agg.snapshot();
         assert!(snap.is_alive());
         assert_eq!(snap.last_heartbeat_at_ms, Some(1_000));
         assert!(snap.global_position.is_some());
         assert!(snap.gps.is_none());
+    }
+
+    #[test]
+    fn aggregator_tracks_per_field_ages() {
+        // Issue #16: a field that stops updating keeps its own timestamp while
+        // the others advance.
+        use ::mavlink::common::{MavAutopilot, MavModeFlag, MavState, MavType};
+        let mut agg = TelemetryAggregator::new();
+
+        let hb = envelope(MavMessage::HEARTBEAT(::mavlink::common::HEARTBEAT_DATA {
+            custom_mode: 0,
+            mavtype: MavType::MAV_TYPE_QUADROTOR,
+            autopilot: MavAutopilot::MAV_AUTOPILOT_PX4,
+            base_mode: MavModeFlag::empty(),
+            system_status: MavState::MAV_STATE_ACTIVE,
+            mavlink_version: 3,
+        }));
+        agg.apply(
+            VehicleId::from_envelope(&hb),
+            TelemetryUpdate::try_from_envelope(&hb).unwrap(),
+            1_000,
+        );
+
+        let gps = envelope(MavMessage::GPS_RAW_INT(
+            ::mavlink::common::GPS_RAW_INT_DATA {
+                time_usec: 0,
+                lat: 0,
+                lon: 0,
+                alt: 0,
+                eph: 0,
+                epv: 0,
+                vel: 0,
+                cog: 0,
+                fix_type: ::mavlink::common::GpsFixType::GPS_FIX_TYPE_3D_FIX,
+                satellites_visible: 10,
+            },
+        ));
+        agg.apply(
+            VehicleId::from_envelope(&gps),
+            TelemetryUpdate::try_from_envelope(&gps).unwrap(),
+            1_000,
+        );
+
+        let att = envelope(MavMessage::ATTITUDE(::mavlink::common::ATTITUDE_DATA {
+            time_boot_ms: 0,
+            roll: 0.0,
+            pitch: 0.0,
+            yaw: 0.0,
+            rollspeed: 0.0,
+            pitchspeed: 0.0,
+            yawspeed: 0.0,
+        }));
+        agg.apply(
+            VehicleId::from_envelope(&att),
+            TelemetryUpdate::try_from_envelope(&att).unwrap(),
+            2_000,
+        );
+
+        let ages = &agg.snapshot().field_ages;
+        assert_eq!(ages.attitude_at_ms, Some(2_000));
+        assert_eq!(ages.gps_at_ms, Some(1_000));
+        assert_eq!(ages.heartbeat_at_ms, Some(1_000));
+        assert_eq!(ages.global_position_at_ms, None);
+    }
+
+    #[test]
+    fn aggregator_rejects_foreign_sources() {
+        use ::mavlink::common::{
+            MavAutopilot, MavModeFlag, MavState, MavType, GLOBAL_POSITION_INT_DATA, HEARTBEAT_DATA,
+        };
+
+        // Target FC is system 1 / component 1; the other nodes are a QGC-like
+        // GCS (255/190) and a companion computer on the same link (42/1).
+        let target = VehicleId::new(1, 1);
+        let mut agg = TelemetryAggregator::for_vehicle(target);
+
+        let foreign_hb = MessageEnvelope {
+            header: ::mavlink::MavHeader {
+                system_id: 255,
+                component_id: 190,
+                sequence: 0,
+            },
+            message: MavMessage::HEARTBEAT(HEARTBEAT_DATA {
+                custom_mode: 0x0504_0000, // foreign node claims Auto·RTL
+                mavtype: MavType::MAV_TYPE_QUADROTOR,
+                autopilot: MavAutopilot::MAV_AUTOPILOT_PX4,
+                base_mode: MavModeFlag::empty(),
+                system_status: MavState::MAV_STATE_ACTIVE,
+                mavlink_version: 3,
+            }),
+            received_at: std::time::Instant::now(),
+        };
+        agg.apply(
+            VehicleId::from_envelope(&foreign_hb),
+            TelemetryUpdate::try_from_envelope(&foreign_hb).unwrap(),
+            1_000,
+        );
+        assert!(
+            !agg.snapshot().is_alive(),
+            "a foreign heartbeat must not mark the FC alive"
+        );
+        assert!(agg.snapshot().heartbeat.is_none());
+
+        let target_hb = MessageEnvelope {
+            header: ::mavlink::MavHeader {
+                system_id: 1,
+                component_id: 1,
+                sequence: 1,
+            },
+            message: MavMessage::HEARTBEAT(HEARTBEAT_DATA {
+                custom_mode: 0x0004_0000, // target is in Auto·Mission
+                mavtype: MavType::MAV_TYPE_QUADROTOR,
+                autopilot: MavAutopilot::MAV_AUTOPILOT_PX4,
+                base_mode: MavModeFlag::empty(),
+                system_status: MavState::MAV_STATE_ACTIVE,
+                mavlink_version: 3,
+            }),
+            received_at: std::time::Instant::now(),
+        };
+        agg.apply(
+            VehicleId::from_envelope(&target_hb),
+            TelemetryUpdate::try_from_envelope(&target_hb).unwrap(),
+            2_000,
+        );
+        let snap = agg.snapshot();
+        assert_eq!(snap.last_heartbeat_at_ms, Some(2_000));
+        assert_eq!(snap.heartbeat.as_ref().unwrap().custom_mode, 0x0004_0000);
+
+        // A foreign position fix must not overwrite the target's.
+        let foreign_pos = MessageEnvelope {
+            header: ::mavlink::MavHeader {
+                system_id: 42,
+                component_id: 1,
+                sequence: 2,
+            },
+            message: MavMessage::GLOBAL_POSITION_INT(GLOBAL_POSITION_INT_DATA {
+                time_boot_ms: 0,
+                lat: 10_000_000,
+                lon: 10_000_000,
+                alt: 0,
+                relative_alt: 0,
+                vx: 0,
+                vy: 0,
+                vz: 0,
+                hdg: 0,
+            }),
+            received_at: std::time::Instant::now(),
+        };
+        agg.apply(
+            VehicleId::from_envelope(&foreign_pos),
+            TelemetryUpdate::try_from_envelope(&foreign_pos).unwrap(),
+            3_000,
+        );
+        assert!(agg.snapshot().global_position.is_none());
     }
 
     #[test]

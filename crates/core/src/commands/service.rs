@@ -9,11 +9,13 @@
 
 use std::time::{Duration, Instant};
 
-use ::mavlink::common::MavCmd;
+use ::mavlink::common::{MavCmd, COMMAND_ACK_DATA};
+use ::mavlink::MessageData;
 use tokio::sync::mpsc;
 
 use super::{CommandError, CommandEvent, CommandSession};
 use crate::mavlink::connection::{ConnectionEvent, ConnectionHandle};
+use crate::mavlink::router::MessageRoute;
 
 /// Retransmission tick period of the service loop.
 pub const RETRANSMIT_TICK: Duration = Duration::from_millis(200);
@@ -67,7 +69,9 @@ async fn run(
     target_comp: u8,
 ) {
     let mut session = CommandSession::new(target_sys, target_comp);
-    let mut events_rx = handle.subscribe();
+    // Only COMMAND_ACK frames wake the service (issue #20); heartbeat/link
+    // lifecycle events still pass through the router.
+    let mut events_rx = handle.subscribe_route(MessageRoute::messages(&[COMMAND_ACK_DATA::ID]));
     let mut ticker = tokio::time::interval(RETRANSMIT_TICK);
 
     loop {
@@ -90,7 +94,11 @@ async fn run(
                         (session.cancel(), Vec::new())
                     }
                     Ok(_) => (Vec::new(), Vec::new()),
-                    Err(_) => return,
+                    // A lagged bus is not a shutdown; keep serving.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        (Vec::new(), Vec::new())
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
                 }
             }
             _ = ticker.tick() => {

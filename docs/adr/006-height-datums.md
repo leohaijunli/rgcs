@@ -1,7 +1,8 @@
 # ADR-006: Height datum tagging in core
 
-- Status: Draft
+- Status: Accepted (implemented)
 - Date: 2026-10-03
+- Accepted: 2026-10-07 — Datum-tagged `height::Height` type; working datum AMSL.
 
 ## Decision
 

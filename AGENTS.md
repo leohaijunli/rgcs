@@ -13,13 +13,14 @@ used side-by-side with QGroundControl. All user-facing code and docs are in **En
 
 ## Repository layout
 
-- `crates/core` — library crate: `mavlink`, `telemetry`, `mission`, `terrain`,
-  `survey`, `mag`, `qc`, `rtk`, `devices`, `height`.
-- `crates/app-tauri` — desktop entry (not yet scaffolded).
-- `crates/server` — headless: REST + WebSocket (not yet scaffolded).
-- `helpers/udev-installer` — privilege-raising helper (udev rules only).
-- `tools/dem-prep` — LAS → DTM/DSM → COG + metadata.
-- `frontend` — React UI (not yet scaffolded).
+- `crates/core` — library crate: scaffolded `mavlink`, `telemetry`, `mission`,
+  `commands`, `devices`, `height`; planned `terrain`, `survey`, `mag`, `qc`,
+  `rtk`.
+- `crates/app-tauri` — desktop entry (scaffolded).
+- `crates/server` — headless: REST + WebSocket (placeholder only; not scaffolded).
+- `helpers/udev-installer` — privilege-raising helper (placeholder only; udev rules only).
+- `tools/dem-prep` — LAS → DTM/DSM → COG + metadata (placeholder only).
+- `frontend` — React UI (scaffolded).
 - `scripts/sitl` — PX4 SITL integration test scripts.
 - `testdata` — small DEM, ULog, `.plan`, RTCM recordings.
 - `docs/adr` — architecture decision records.

@@ -22,6 +22,19 @@ export default {
     lost: 'Heartbeat lost',
     disconnected: 'Disconnected',
     noLink: 'No link',
+    error: {
+      title: 'Link error',
+      history: 'History',
+      dismiss: 'Dismiss',
+      dropped_one: '{{count}} frame dropped',
+      dropped_other: '{{count}} frames dropped',
+      io: 'I/O',
+      serial: 'Serial',
+      protocol: 'Protocol',
+      heartbeat_timeout: 'Heartbeat timeout',
+      invalid_endpoint: 'Invalid endpoint',
+      other: 'Error',
+    },
   },
   mode: {
     uninit: 'UNINIT',
@@ -58,7 +71,12 @@ export default {
     clear: 'Clear',
     properties: 'Properties',
     command: 'Command',
+    lat: 'Lat',
+    lon: 'Lon',
     current: 'CURRENT',
+    unsaved: 'Unsaved changes — not the FC plan',
+    mismatch: 'FC mission differs from the uploaded plan',
+    importUnsupported: 'Unsupported items skipped: {{items}}',
     goTo: 'Set current',
     failed: 'Mission failed',
     mode: {
@@ -129,6 +147,10 @@ export default {
     menu: 'Settings',
     theme: 'Theme',
     language: 'Language',
+    disconnect: 'Disconnect',
+    shutdown: 'Shut down',
+    shutdownConfirm: 'Confirm shutdown?',
+    linkStatus: 'Link status',
   },
   theme: {
     dark: 'Dark',
@@ -159,6 +181,7 @@ export default {
     profilePlaceholder: 'Terrain profile arrives in Phase 3.',
   },
   mock: {
-    badge: 'MOCK',
+    banner: 'MOCK DATA',
+    detail: 'Simulated telemetry — not a live link',
   },
 }

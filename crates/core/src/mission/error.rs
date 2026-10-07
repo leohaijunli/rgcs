@@ -25,6 +25,10 @@ pub enum MissionError {
     #[error("count mismatch: expected {expected}, got {got}")]
     CountMismatch { expected: u16, got: u16 },
 
+    /// The FC reported a MAV_FRAME this build does not model.
+    #[error("unsupported mission frame: {0}")]
+    UnsupportedFrame(u8),
+
     /// Upload called with an empty mission.
     #[error("no mission items")]
     NoItems,

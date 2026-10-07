@@ -3,6 +3,7 @@ name: ci
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
   schedule:
@@ -29,7 +30,22 @@ jobs:
       # ADR-002: committed ts-rs bindings must match regeneration.
       - name: Check ts-rs bindings are in sync
         run: |
-          git diff --exit-code -- crates/core/bindings || echo "Run: cargo test -p maggcs-core, then commit the regenerated bindings"
+          if ! git diff --exit-code -- crates/core/bindings; then
+            echo "::error::Generated ts-rs bindings are stale. Run 'cargo test -p maggcs-core', then commit crates/core/bindings."
+            exit 1
+          fi
+
+  deny:
+    name: Dependency & license check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # ADR-007: CI must check dependency licenses (config in deny.toml).
+      # Pinned so the deny.toml schema matches what was validated locally.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+      - run: cargo deny check
 
   frontend:
     name: Frontend typecheck / build / lint
@@ -45,6 +61,10 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
+      - name: Audit production dependencies
+        # Runtime deps only: devDependencies (vite plugins) are build tools and
+        # carry advisories that do not ship to users.
+        run: npm audit --omit=dev --audit-level=high
       - run: npm run typecheck
       - run: bash scripts/check-colors.sh
       - run: npm run check:contrast
@@ -53,7 +73,8 @@ jobs:
   windows-build:
     name: Build Windows installer (NSIS/MSI)
     runs-on: windows-latest
-    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    # Only build a release when a version tag is pushed (or on manual dispatch).
+    if: ${{ startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' }}
     permissions:
       contents: write
     steps:
@@ -76,8 +97,8 @@ jobs:
         with:
           projectPath: crates/app-tauri
           args: ''
-          tagName: v0.1.0
-          releaseName: 'MagGCS v0.1.0'
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v0.1.0' }}
+          releaseName: ${{ github.ref_type == 'tag' && format('MagGCS {0}', github.ref_name) || 'MagGCS v0.1.0' }}
           releaseBody: 'Windows installer (NSIS/MSI). See assets to download.'
           releaseDraft: true
       - name: Upload installer artifact
@@ -90,8 +111,7 @@ jobs:
   sitl:
     name: PX4 SITL heartbeat integration
     runs-on: ubuntu-latest
-    # Long-running SITL jobs run on schedule/manual; the short smoke runs on
-    # every push.
+    # Long-running SITL: schedule/manual only (not on every push).
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     steps:
       - uses: actions/checkout@v4
@@ -103,9 +123,9 @@ jobs:
             libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libudev-dev
       - uses: Swatinem/rust-cache@v2
 
-      - name: Clone PX4-Autopilot (pinned)
+      - name: Clone PX4-Autopilot (pinned to the documented dev version)
         run: |
-          git clone --recursive --depth 1 --branch v1.14.3 \
+          git clone --recursive --depth 1 --branch v1.17.0 \
             https://github.com/PX4/PX4-Autopilot.git "$HOME/PX4-Autopilot"
 
       - name: Build MagGCS monitor

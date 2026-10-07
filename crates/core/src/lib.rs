@@ -21,4 +21,6 @@ pub use mavlink::connection::{ConnectionConfig, ConnectionEvent, ConnectionHandl
 pub use mavlink::endpoint::Endpoint;
 pub use mavlink::error::MavlinkError;
 pub use mavlink::heartbeat::{HeartbeatMonitor, HeartbeatStatus};
+pub use mavlink::router::{MessageRoute, RoutedEvents};
+pub use mission::{MissionIds, MissionService, MissionServiceError, MissionServiceEvent};
 pub use telemetry::{GlobalPositionInt, TelemetrySnapshot};

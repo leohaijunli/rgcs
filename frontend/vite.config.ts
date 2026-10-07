@@ -6,6 +6,20 @@ import { viteStaticCopy } from 'vite-plugin-static-copy'
 // Cesium workers/assets are served as static files (no online assets in the field).
 const cesium = 'node_modules/cesium/Build/Cesium'
 
+// Only the Cesium asset subtrees this app actually reaches are copied. The
+// default imagery (NaturalEarthII), the maki pin icons (PinBuilder is never
+// used) and the ocean/water normal maps are dropped to trim the packaged app
+// (issues.md #30). Add a subtree back here if a new layer starts requesting it.
+const cesiumAssets = [
+  { src: `${cesium}/Assets/approximateTerrainHeights.json`, dest: 'cesium/Assets' },
+  // High-precision ICRF data; the default scene requests it for the sun/moon.
+  { src: `${cesium}/Assets/IAU2006_XYS`, dest: 'cesium/Assets' },
+  { src: `${cesium}/Assets/Images`, dest: 'cesium/Assets' },
+  { src: `${cesium}/Assets/Textures/SkyBox`, dest: 'cesium/Assets/Textures' },
+  { src: `${cesium}/Assets/Textures/LensFlare`, dest: 'cesium/Assets/Textures' },
+  { src: `${cesium}/Assets/Textures/moonSmall.jpg`, dest: 'cesium/Assets/Textures' },
+]
+
 export default defineConfig({
   plugins: [
     react(),
@@ -14,8 +28,8 @@ export default defineConfig({
       targets: [
         { src: `${cesium}/Workers`, dest: 'cesium' },
         { src: `${cesium}/ThirdParty`, dest: 'cesium' },
-        { src: `${cesium}/Assets`, dest: 'cesium' },
         { src: `${cesium}/Widgets`, dest: 'cesium' },
+        ...cesiumAssets,
       ],
     }),
   ],

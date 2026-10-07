@@ -6,6 +6,7 @@ import Drawer from './components/Drawer'
 import RightInspector from './components/RightInspector'
 import Dock from './components/Dock'
 import Hud from './components/Hud'
+import MockBanner from './components/MockBanner'
 import FlightCommands from './components/FlightCommands'
 import MapView from './components/MapView'
 import ErrorBanner from './components/ErrorBanner'
@@ -24,6 +25,7 @@ export default function App() {
         {drawer && <Drawer />}
         <main className="relative min-w-0 flex-1">
           <MapView />
+          <MockBanner />
           <Hud />
           <FlightCommands />
           <ErrorBanner />

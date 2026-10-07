@@ -1,283 +1,448 @@
-# MagGCS 开发计划 v2.2
+# MagGCS Development Plan v2.2
 
-2026-10-05 · 在 v2.1 基础上新增：连接层加固与诊断、设置页重构、WSL2/Docker SITL 联调约定、QGC 共存方案修订（见第二节）
+2026-10-05 · Adds to v2.1: connection-layer hardening and diagnostics, settings
+page rework, WSL2/Docker SITL development agreement, and a revised QGC
+coexistence approach (see Section 2).
 
-2026-10-03 · v2.1 在 v2.0 基础上新增：RTK 基站连接与 RTCM 转发、USB 设备 udev 规则自动配置、科技感 UI 与 UgCS 式布局
+2026-10-03 · v2.1 added to v2.0: RTK base-station connection and RTCM
+forwarding, automatic USB udev rule configuration, tech-style UI and UgCS-like
+layout.
 
-## 一、定位与边界
+## 1. Positioning and Scope
 
-**定位**：与 QGroundControl 并行使用的开源地面站，面向测绘/地球物理类无人机作业。飞控设置、传感器校准、Airframe、Radio 仍交给 QGC。
+**Positioning**: an open-source ground control station running side-by-side
+with QGroundControl, for survey/geophysics drone operations. Flight-controller
+setup, sensor calibration, Airframe and Radio configuration stay in QGC.
 
-**三个差异化支柱**
+**Three differentiating pillars**
 
-1. Survey-grade 规划：3D 测线、切割线、沿地形 drape、爬升率约束，任务参数与 DEM 版本一并存档。
-2. 实时数据与质控：磁场曲线、航迹偏差、AGL 偏差、RTK 状态一眼可见。
-3. 开放集成：兼容 QGC `.plan`，提供 headless 模式与 REST/WebSocket API。
+1. Survey-grade planning: 3D survey lines, tie lines, terrain draping,
+   climb-rate constraints; mission parameters and DEM version archived
+   together.
+2. Realtime data & QC: magnetic-field curves, track deviation, AGL deviation,
+   RTK status at a glance.
+3. Open integration: QGC `.plan` compatibility, headless mode, REST/WebSocket
+   API.
 
-**目标机型**：先按多旋翼。**不做**：传感器校准、Airframe、Radio、固件刷写。
+**Target airframe**: multirotor first. **Out of scope**: sensor calibration,
+Airframe, Radio, firmware flashing.
 
-## 二、变更摘要
+## 2. Change Summary
 
-### v2.2 变更（2026-10-05，来自对 rgcs-main 代码的 review 与 SITL 联调）
+### v2.2 changes (2026-10-05, from a code review of rgcs-main and SITL bring-up)
 
-- **连接层加固（Phase 0 收尾，Phase 1 的前置条件）**：修复 UI 状态订阅竞态、心跳丢失检测被其他流量重置、GCS 不发心跳、连接错误被吞等问题；增加链路诊断字段与四级链路状态（见 Phase 0 补充）。
-- **设置页重构**：补齐缺失的 i18n 键并加 CI 检查；弹窗固定尺寸；删除多余的独立连接弹窗，连接入口统一到设置；端点改为结构化表单。
-- **ADR-003 修订、新增 ADR-011**：单播 UDP 同一端口只能有一个监听者，与 QGC 并行需分流；新增链路状态模型与 GCS 心跳的决策。
-- **联调环境约定**：Windows 上的 MagGCS + WSL2 里 Docker 中的 PX4 SITL，网络前提见 Phase 0 的"联调环境约定"。
-- **验收补充**：见 Phase 0 的补充验收。
+- **Connection-layer hardening (Phase 0 wrap-up; prerequisite for Phase 1)**:
+  fix the UI subscription race, heartbeat-loss detection being reset by other
+  traffic, the GCS not sending HEARTBEAT, and swallowed connection errors; add
+  link diagnostics and a four-level link state (see the Phase 0 addendum).
+- **Settings page rework**: close the missing i18n keys and add a CI check;
+  fixed dialog size; remove the redundant standalone connect dialog so the
+  connection entry point lives in Settings; structured endpoint form.
+- **ADR-003 revision, new ADR-011**: a unicast UDP port can have only one
+  listener, so running alongside QGC needs a splitter; new decision on the link
+  state model and the GCS heartbeat.
+- **Development agreement**: MagGCS on Windows + PX4 SITL in Docker inside
+  WSL2; network prerequisites in the Phase 0 "development agreement".
+- **Acceptance addendum**: see the Phase 0 addendum acceptance.
 
-### 当前进度（基于代码 review，未逐项对照数值验收）
+### Current progress (from code review; not item-by-item against numeric acceptance)
 
-- `crates/core` 已有 `mavlink`、`telemetry`、`devices`、`height`；`mission`、`rtk`、`terrain`、`survey`、`mag`、`qc` 尚未开始。
-- Phase 0 的骨架已具备：连接管理与重连、遥测聚合、设备枚举、UI 壳（三视图、主题、设置弹窗、Playwright 截图基线）、CI 工作流（未逐项核对）。
-- Phase 0 的数值验收（30 分钟心跳丢失 0 次、位置延迟 < 200 ms、与 QGC 同连）尚未在代码里证实，需按下文补充验收重新跑。
-- SITL 与 MagGCS 的 UDP 链路已联调连通（Windows 11 26200、WSL 2.7.3、PX4 v1.17.0 SITL 在 WSL 的 Docker 中运行）。
+- `crates/core` now has `mavlink`, `telemetry`, `mission`, `commands`,
+  `devices`, `height`; `rtk`, `terrain`, `survey`, `mag`, `qc` are not started.
+- Phase 0 skeleton exists: connection management and reconnect, telemetry
+  aggregation, device enumeration, UI shell (three views, themes, settings
+  dialog, Playwright screenshot baseline), CI workflow (not item-checked).
+- Phase 0 numeric acceptance (0 heartbeat losses over 30 minutes, position
+  latency < 200 ms, coexisting with QGC) is not yet proven in code; re-run per
+  the addendum acceptance below.
+- The SITL ↔ MagGCS UDP link is connected (Windows 11 26200, WSL 2.7.3, PX4
+  v1.17.0 SITL in Docker under WSL).
 
-### v2.1 变更
+### v2.1 changes
 
+- New `core::rtk`: RTK base-station connection, configuration, status display,
+  and forwarding of base-station RTCM to the flight controller over MAVLink
+  (Section 8).
+- New `core::devices`: USB device identification and udev rule
+  generation/installation (Section 9).
+- New UI design spec: dark tech style, UgCS-like layout (Section 6); design
+  tokens and the UI shell moved to Phase 0 to avoid later rework.
+- Phase reorder: Phase 2 is now RTK; terrain and Survey move to Phase 3. RTK
+  and terrain are independent and can be developed in parallel.
 
-- 新增 `core::rtk`：RTK 基站连接、设置、状态显示，并把基站发来的 RTCM 消息经 MAVLink 转发给飞控（第八节）。
-- 新增 `core::devices`：USB 设备识别与 udev 规则自动生成/安装（第九节）。
-- 新增 UI 设计规范：深色科技感风格，布局参考 UgCS（第六节），设计令牌与界面壳提前到 Phase 0，避免后期返工。
-- 阶段重排：Phase 2 为 RTK，地形与 Survey 顺延为 Phase 3。RTK 与地形互相独立，可并行。
+## 3. Technical Decisions (each recorded as an ADR in `docs/adr/`)
 
-## 三、技术决策（每条写成 ADR，放 `docs/adr/`）
-
-| ADR | 决策 |
+| ADR | Decision |
 | --- | --- |
-| 001 | 架构：`core` library crate + `app-tauri`（桌面）+ `server`（headless），Tauri 本身是 Rust，不另起后端 |
-| 002 | 前端类型由 Rust 经 `ts-rs` 或 `specta` 生成，不手写两份 |
-| 003 | 与 QGC 共存：MAVLink 2、独立 system/component ID、UDP 或 mavlink-router 分流（ID 取值对照 PX4 文档确认）。**v2.2 修订**：单播 UDP 同一端口只能有一个监听者，不能假设两个 GCS 同时 `udpin` 14550；并行使用时由 mavlink-router 分流，或让 QGC 的 MAVLink 转发功能转到另一端口，MagGCS 监听该端口（是否设置 `SO_REUSEADDR` 待核实） |
-| 004 | 地形源：本地 GeoTIFF 为默认，Cesium ion 仅可选 |
-| 005 | 地形跟随：路径 A（地面站预计算）优先，路径 B（机载）后续对照 |
-| 006 | 高度基准：内部统一用椭球高，所有高度类型带基准标签 |
-| 007 | 许可证：Apache-2.0 或 GPLv3，Phase 0 内必须定 |
-| 008 | RTCM 来源抽象与转发策略（单源注入、分片、带宽统计） |
-| 009 | udev 提权策略：polkit + 独立辅助程序，主程序不以 root 运行 |
-| 010 | 前端框架与设计系统（建议 React + Zustand + Tailwind + Radix，待确认） |
-| 011 | 链路状态模型与 GCS 心跳：四级状态（未连接 / 监听中 / 有数据无 FC 心跳 / FC 在线）；GCS 以 1 Hz 发送 HEARTBEAT；心跳超时由独立定时器检测，不受其他流量影响 |
+| 001 | Architecture: `core` library crate + `app-tauri` (desktop) + `server` (headless); Tauri is itself Rust, no separate backend. **Accepted.** |
+| 002 | Frontend types generated from Rust via `ts-rs` (or `specta`); never hand-write two copies. **Accepted.** |
+| 003 | Coexistence with QGC: MAVLink 2, independent system/component IDs, UDP or mavlink-router splitting (IDs validated against PX4 docs). **v2.2 revision**: a unicast UDP port has only one listener, so two GCSs cannot both `udpin` 14550; run alongside via mavlink-router, or let QGC's MAVLink forwarding target another port that MagGCS listens on (whether to set `SO_REUSEADDR` is TBD). |
+| 004 | Terrain source: local GeoTIFF by default; Cesium ion optional only. |
+| 005 | Terrain following: path A (GCS pre-computation) first; path B (onboard) later for comparison. |
+| 006 | Height datum: the working datum is **AMSL** (`h − N(EGM96)`), matching PX4 `MAV_FRAME_GLOBAL`; every height is a datum-tagged `Height`, never a bare `f64`. **Accepted.** |
+| 007 | License: **Apache-2.0**. **Accepted.** |
+| 008 | RTCM source abstraction and forwarding strategy (single-source injection, fragmentation, bandwidth accounting). |
+| 009 | udev privilege model: polkit + a separate helper; the main program never runs as root. |
+| 010 | Frontend framework and design system: React + Zustand + Tailwind + Radix. **Accepted.** |
+| 011 | Link state model and GCS heartbeat: four levels (disconnected / listening / data without FC heartbeat / FC online); the GCS sends HEARTBEAT at 1 Hz; heartbeat timeout is detected by an independent timer that other traffic cannot reset. **Accepted.** |
 
-## 四、仓库结构
+## 4. Repository Structure
 
 ```
 maggcs/
-├── AGENTS.md                 # 定位、不做清单、高度约定、AI 规则
+├── AGENTS.md                 # positioning, out-of-scope list, height rules, AI rules
 ├── crates/
-│   ├── core/                 # mavlink/ mission/ telemetry/ terrain/ survey/ mag/ qc/ rtk/ devices/
-│   ├── app-tauri/            # 桌面入口
-│   └── server/               # headless：REST + WebSocket
-├── helpers/udev-installer/   # 提权辅助程序（只写本应用的规则文件）
-├── tools/dem-prep/           # LAS → DTM/DSM → COG + 元数据
+│   ├── core/                 # mavlink/ telemetry/ mission/ commands/ devices/ height/ (+ terrain/ survey/ mag/ qc/ rtk planned)
+│   ├── app-tauri/            # desktop entry
+│   └── server/               # headless: REST + WebSocket (placeholder)
+├── helpers/udev-installer/   # privilege-raising helper (writes only this app's rule files)
+├── tools/dem-prep/           # LAS → DTM/DSM → COG + metadata
 ├── frontend/                 # cesium/ views/ components/ design-system/ stores/ i18n/ generated-types/
-├── testdata/                 # 小型 DEM、ULog、.plan、RTCM 录制样本
+├── testdata/                 # small DEM, ULog, .plan, RTCM recordings
 ├── scripts/sitl/
 └── docs/adr/
 ```
 
-## 五、高度与坐标约定
+## 5. Height and Coordinate Conventions
 
-- 三种高度：CGVD2013 正高（BC LiDAR）、WGS84 椭球高（Cesium）、AMSL（PX4 `MAV_FRAME_GLOBAL`）。转换链：`H + N(CGG2013) = h`，`h − N(EGM96) = AMSL`。
-- `core` 内禁止裸 `f64` 表示高度，必须用带基准的类型，转换集中在一个模块。
-- AGL 默认相对 DTM，另提供相对 DSM 的最小净空检查。
-- **验收**：已知高程点经转换后与 PX4 AMSL 偏差 < 0.5 m（阈值待实测调整）。
+- Three datums: CGVD2013 orthometric (`H`, BC LiDAR), WGS84 ellipsoid (`h`,
+  Cesium), AMSL (PX4 `MAV_FRAME_GLOBAL`). Conversion chain:
+  `H + N(CGG2013) = h`, `h − N(EGM96) = AMSL`.
+- `core` forbids bare `f64` for heights: use the datum-tagged type, with
+  conversions centralized in one module.
+- AGL defaults to DTM-relative; a separate minimum-clearance check relative to
+  DSM is provided.
+- **Acceptance**: known control points converted through the chain are within
+  `< 0.5 m` of PX4 AMSL (threshold pending field validation).
 
-## 六、UI 设计规范
+## 6. UI Design Spec
 
-**视觉风格（科技感）**
+**Visual style (tech)**
 
-- 默认深色主题：深蓝灰底 + 青色（cyan）主强调色，细线框、半透明毛玻璃面板、克制的发光。
-- 状态色（绿/黄/红）只表示状态，不做装饰；磁场色标与状态色分开。
-- 遥测数字用等宽（tabular）字体，字体本地打包，不依赖在线字体（外场可能无网）。
-- 动效只用于状态变化（面板展开、告警）。毛玻璃面板的数量和面积设上限，避免拖慢 Cesium 帧率。
-- 提供高对比度浅色主题（户外强光），触控目标不小于 44 px，中英文 i18n 从第一天开始。
+- Dark theme by default: deep blue-gray background with a cyan accent, thin
+  borders, translucent frosted-glass panels, restrained glow.
+- Status colors (green/yellow/red) mean state only, never decoration; the
+  magnetic color scale is kept separate from status colors.
+- Telemetry digits use a tabular font, bundled locally — no online fonts in
+  the field.
+- Motion is used only for state changes (panel expand, alarms). The number and
+  area of frosted panels are capped to protect Cesium frame rate.
+- A high-contrast light theme is provided (outdoor sunlight); touch targets are
+  ≥ 44 px; en + zh i18n from day one.
 
-**布局（参考 UgCS 的布局思路，不复制其图标、配色和资源）**
+**Layout (inspired by UgCS; its icons, colors and assets are not copied)**
 
-- 中央：全屏 3D/2D 地图。
-- 顶部：模式切换（规划 / 飞行 / 数据）+ 链路状态条（飞控、RTK、设备）。
-- 左侧：任务/测线列表、机体列表、图层管理。
-- 右侧：所选对象的属性面板（航点、测线、区域参数）。
-- 底部（可折叠）：沿测线的地形/AGL 剖面图，飞行时切换为实时 QC 曲线。
-- 悬浮 HUD：姿态、速度、高度、电池、GPS/RTK 状态。
-- 我没有逐像素核对 UgCS 当前界面，布局细节请对照其截图确认。
+- Center: full-screen 3D/2D map.
+- Top: mode switch (Plan / Flight / Data) + link status bar (FC, RTK, devices).
+- Left: mission/survey-line list, vehicle list, layer manager.
+- Right: properties panel for the selected object (waypoint, survey line,
+  region parameters).
+- Bottom (collapsible): terrain/AGL profile along the survey line; switches to
+  a realtime QC curve in flight.
 
-**实现建议（ADR-010 确认）**：React + TypeScript 严格模式、Zustand、Tailwind + Radix（无样式组件）、uPlot（高频实时曲线）。颜色/间距/字号全部定义为设计令牌（CSS 变量），主题切换只改令牌。
+**Implementation note (ADR-010 confirmed)**: React + TypeScript strict mode,
+Zustand, Tailwind + Radix (unstyled primitives), uPlot (high-frequency realtime
+curves). Colors/spacing/typography are all design tokens (CSS variables); theme
+switching changes tokens only.
 
-**UI 验收**
+**UI acceptance**
 
-- 1920×1080 与 1366×768 下关键信息不被遮挡，每个视图有截图基线（Playwright 视觉回归）。
-- 代码中无硬编码颜色（lint 规则检查），两套主题均通过对比度检查。
-- 打开侧边面板时地图保持 ≥ 30 fps（指定参考硬件）。
+- At 1920×1080 and 1366×768, no critical information is occluded; each view has
+  a screenshot baseline (Playwright visual regression).
+- No hardcoded colors in code (lint check); both themes pass the contrast check.
+- The map stays ≥ 30 fps with side panels open (reference hardware).
 
-## 七、分阶段计划
+## 7. Phased Plan
 
-原则：差异化功能前移，通用控制后移。每个验收标准必须是可自动化测试或带明确数值（下列数值均为初值，需实测校准）。
+Principle: differentiating features first, generic controls later. Every
+acceptance criterion must be automatable or carry an explicit number (the
+numbers below are initial values, to be calibrated by measurement).
 
-### Phase 0：骨架、设备枚举与 UI 壳
+### Phase 0: skeleton, device enumeration, and UI shell
 
-**任务**
+**Tasks**
 
-1. workspace、`AGENTS.md`、ADR 草稿、许可证。
-2. `core::mavlink`：UDP/串口/TCP 连接、心跳监测、重连；解析 HEARTBEAT、GLOBAL_POSITION_INT、ATTITUDE、SYS_STATUS、BATTERY_STATUS、GPS_RAW_INT。
-3. `core::devices` 基础版：枚举串口及 VID/PID/序列号，热插拔事件。
-4. 前端 UI 壳：设计令牌、两套主题、布局框架（顶栏/左右面板/底栏）、i18n 骨架；Cesium 基础场景 + 实时位置。
-5. GitHub Actions 跑 PX4 SITL 集成测试。
+1. Workspace, `AGENTS.md`, ADR drafts, license.
+2. `core::mavlink`: UDP/serial/TCP connection, heartbeat monitoring, reconnect;
+   parse HEARTBEAT, GLOBAL_POSITION_INT, ATTITUDE, SYS_STATUS, BATTERY_STATUS,
+   GPS_RAW_INT.
+3. `core::devices` (basic): enumerate serial ports and VID/PID/serial, hotplug
+   events.
+4. Frontend UI shell: design tokens, two themes, layout frame
+   (top bar / side panels / bottom bar), i18n skeleton; basic Cesium scene +
+   realtime position.
+5. GitHub Actions running the PX4 SITL integration test.
 
-**补充（Phase 0 收尾）**：设置菜单合并为单一 tab 弹窗（连接 / 主题·语言 / 日志 / 设备·udev / 关于），替换原主题 Popover，为后续阶段设置预留 tab 位（RTK、QC）。
+**Addendum (Phase 0 wrap-up)**: merge the settings menu into a single tabbed
+dialog (Connection / Theme·Language / Logs / Devices·udev / About), replacing
+the old theme popover and reserving tabs for later phases (RTK, QC).
 
-**补充（v2.2，连接层加固与设置页重构；0.1–0.4 必须在 Phase 1 之前完成，因为 Mission 协议依赖可靠的链路状态和 GCS 心跳）**
+**Addendum (v2.2, connection-layer hardening and settings rework; 0.1–0.4 must
+land before Phase 1, because the mission protocol depends on a reliable link
+state and GCS heartbeat)**
 
-| 编号 | 任务 | 验收 |
+| # | Task | Acceptance |
 | --- | --- | --- |
-| 0.1 | 修复 hub 订阅竞态：把 `spawn_connection` 返回的接收器传给 `TelemetryHub`，不再丢弃 | 单测：绑定后 100 ms 内 hub 收到 `Connected`；无包时 UI 显示"监听中"而非"未连接" |
-| 0.2 | 心跳超时检测改用循环外的定时器（≤ 500 ms 检查一次），不再被其他帧重置 | 单测：持续注入非目标帧，FC 心跳停止后 ≤ timeout + 500 ms 触发 `HeartbeatLost` |
-| 0.3 | 以 1 Hz 发送 GCS HEARTBEAT（`MAV_TYPE_GCS`，sysid 250，ID 取值按 ADR-003 对照 PX4 文档确认） | SITL 抓包看到 1 Hz 心跳；`udpout:` 端点能收到 FC 数据 |
-| 0.4 | `connect` 命令等待绑定成功或失败再返回，错误原样透传；前端启动自动连接不再吞错 | 占用 14550 后点击连接，≤ 1 s 内在连接页显示 "Address in use"；自动连接失败在状态条可见 |
-| 0.5 | `LinkStatus` 增加 `bound_addr`、`peer_addr`、`last_rx_age_ms`、`rx_msgs_per_s`；链路状态按 ADR-011 分四级；Connection 页显示 | 四种状态各一张截图；能直接看出"包到没到" |
-| 0.6 | i18n 键检查脚本：`t('...')` 引用的键必须存在于 `en.ts`，补齐 `settings.*` 缺失键 | CI 中缺键数为 0；设置页无原始键名显示 |
-| 0.7 | 设置弹窗固定高度，切换标签页尺寸不变；删除 `App.tsx` 中多余的 `<ConnectDialog />`，连接入口统一到设置 > 连接，顶栏 FC 状态点击直达该标签 | Playwright 逐页截图，弹窗包围盒一致；1366×768 根布局无多余占位 |
-| 0.8 | 端点结构化表单：类型（UDP 监听 / UDP 客户端 / TCP / 串口）+ 地址端口；预设（PX4 SITL 14550、QGC 转发端口）；串口下拉用 `enumerate_devices`；记住上次端点与自动连接开关 | 非法输入在字段下提示；重启后端点保留 |
-| 0.9 | 触控目标统一 ≥ 44 px；连接错误在设置弹窗内联显示，不被遮罩盖住 | 截图检查；设置页打开时错误可见 |
+| 0.1 | Fix the hub subscription race: pass the receiver returned by `spawn_connection` into `TelemetryHub` instead of dropping it | Unit test: the hub sees `Connected` within 100 ms of binding; with no packets the UI shows "listening", not "disconnected" |
+| 0.2 | Detect heartbeat timeout with a timer created outside the loop (checked ≤ 500 ms), no longer reset by other frames | Unit test: keep injecting non-target frames; after the FC heartbeat stops, `HeartbeatLost` fires within timeout + 500 ms |
+| 0.3 | Send a GCS HEARTBEAT at 1 Hz (`MAV_TYPE_GCS`, sysid 250; ID validated against PX4 docs per ADR-003) | SITL capture shows a 1 Hz heartbeat; a `udpout:` endpoint receives FC data |
+| 0.4 | `connect` waits for bind success/failure before returning and passes errors through; frontend auto-connect no longer swallows errors | With 14550 occupied, clicking connect shows "Address in use" within ≤ 1 s; auto-connect failure is visible in the status bar |
+| 0.5 | Link diagnostics surfaced in the Connection page; four-level link state per ADR-011 | One screenshot per state; "are packets arriving?" is visible at a glance |
+| 0.6 | i18n key check: every key referenced by `t('...')` exists in `en.ts`; fill in the missing `settings.*` keys | CI reports 0 missing keys; the settings page shows no raw key names |
+| 0.7 | Fixed-height settings dialog; tab switches do not resize it; remove the redundant `<ConnectDialog />` from `App.tsx` and unify the connection entry point under Settings > Connection; clicking the top-bar FC status jumps to that tab | Playwright per-page screenshots with a consistent dialog bounding box; no stray placeholder at 1366×768 |
+| 0.8 | Structured endpoint form: type (UDP listen / UDP client / TCP / serial) + address and port; presets (PX4 SITL 14550, QGC forwarding port); serial dropdown from `enumerate_devices`; remember the last endpoint and the auto-connect toggle | Invalid input is flagged under the field; the endpoint survives a restart |
+| 0.9 | Touch targets ≥ 44 px; connection errors are shown inline in the settings dialog, not covered by the overlay | Screenshot check; the error is visible with Settings open |
 
-**联调环境约定（Windows 上的 MagGCS + WSL2 里 Docker 中的 PX4 SITL）**
+**Development agreement (MagGCS on Windows + PX4 SITL in Docker inside WSL2)**
 
-- PX4 SITL 默认把 GCS 数据发往 `127.0.0.1:14550`。WSL2 默认 NAT 模式下，WSL 与 Windows 的回环互不相通，Windows 上的 MagGCS 收不到包。
-- 前提：在 `%UserProfile%\.wslconfig` 设置 `networkingMode=mirrored`（Windows 11 22H2+、WSL 2.0+），然后 `wsl --shutdown` 重启 WSL。**（本次联调实际采用的修复方式，待确认）**
-- Docker 必须是装在 WSL 发行版里的 Docker Engine 并使用 `--network host`；Docker Desktop 的 host 网络指向其虚拟机，不是 WSL，需改用端口映射（未验证）。
-- 排查顺序：先在 WSL 里用 `sitl_monitor` 确认 PX4 端有心跳，再看 Windows 端 `Get-NetUDPEndpoint -LocalPort 14550` 是否只有 MagGCS 在监听，最后检查 Windows 防火墙对 MagGCS 的入站 UDP 放行。
-- 文档修正：`docs/sitl-wsl-windows.md` 里"GCS 把命令发回 14540"不准确。14540 是 PX4 给 offboard/onboard 接口使用的远端端口；`udpin` 模式下命令回复发往收到的第一个包的来源地址，所以必须先收到包才能下发命令。
-- `scripts/sitl/run_sitl_docker.sh` 默认目标是 `jmavsim`，是否适用于 PX4 v1.17.0 待核实；仅验证链路时可用不依赖仿真器的目标（如 `none_iris`，待核实）。
+- PX4 SITL sends GCS data to `127.0.0.1:14550` by default. Under WSL2's default
+  NAT mode, the WSL and Windows loopbacks are separate, so MagGCS on Windows
+  receives nothing.
+- Prerequisite: set `networkingMode=mirrored` in `%UserProfile%\.wslconfig`
+  (Windows 11 22H2+, WSL 2.0+), then `wsl --shutdown`. **(This is the fix used
+  in the bring-up; to be confirmed.)**
+- Docker must be the Docker Engine inside the WSL distro with `--network host`;
+  Docker Desktop's host network points at its own VM, not WSL, so it would need
+  port mapping instead (unverified).
+- Debug order: first confirm PX4 has a heartbeat from WSL with `sitl_monitor`;
+  then check `Get-NetUDPEndpoint -LocalPort 14550` on Windows to confirm only
+  MagGCS is listening; finally check that the Windows firewall allows inbound
+  UDP to MagGCS.
+- Doc fix: `docs/sitl-wsl-windows.md`'s "the GCS sends commands back to 14540"
+  is inaccurate. 14540 is PX4's remote port for offboard/onboard; in `udpin`
+  mode, command replies go to the source address of the first packet received,
+  so a packet must arrive before commands can be sent.
+- `scripts/sitl/run_sitl_docker.sh` targets `jmavsim` by default; whether that
+  works on PX4 v1.17.0 is TBD; a simulator-free target (e.g. `none_iris`, TBD)
+  can be used when only the link is being verified.
 
-**验收**：SITL 连续 30 分钟心跳丢失 0 次；位置延迟 < 200 ms（本地测）；与 QGC 同时连接同一 SITL 正常；UI 验收见第六节。
+**Acceptance**: 0 heartbeat losses over 30 continuous SITL minutes; position
+latency < 200 ms (local); coexisting with QGC connected to the same SITL; UI
+acceptance per Section 6.
 
-**补充验收（v2.2）**
+**Addendum acceptance (v2.2)**
 
-- 在 Windows 主机的 MagGCS + WSL2 中 Docker 里的 SITL 环境下，连续 30 分钟心跳丢失 0 次。
-- 混入非目标帧的持续流量下，FC 心跳中断仍能在 timeout + 500 ms 内检出。
-- 端口被占用、地址非法、对端无数据三类错误，各有明确的界面提示，不依赖后端日志。
-- 与 QGC 同连按 ADR-003 修订方案验证（mavlink-router 或 QGC 转发），记录实际配置。
+- 0 heartbeat losses over 30 continuous minutes with MagGCS on Windows + SITL
+  in Docker under WSL2.
+- With sustained traffic of non-target frames mixed in, an FC heartbeat
+  interruption is still detected within timeout + 500 ms.
+- The three error classes — port in use, invalid address, silence from the peer
+  — each have a clear UI message that does not rely on backend logs.
+- Coexistence with QGC is verified per the ADR-003 revision (mavlink-router or
+  QGC forwarding), recording the actual configuration.
 
-### Phase 1：Mission Protocol + 规划视图
+### Phase 1: Mission protocol + planning view
 
-**任务**：Upload/Download/Clear/Set Current 状态机（超时、重传、断线恢复，MISSION_ITEM_INT）；兼容 MISSION_CURRENT 扩展；规划视图（左侧列表、右侧属性、航点点击与拖拽、三种高度模式）；QGC `.plan` 导入导出；Pause/Continue、RTL。
+**Tasks**: Upload/Download/Clear/Set Current state machine (timeouts,
+retransmission, reconnect recovery, `MISSION_ITEM_INT`); `MISSION_CURRENT`
+extension support; planning view (left list, right properties, waypoint click
+and drag, three altitude modes); QGC `.plan` import/export; Pause/Continue, RTL.
 
-**前置**：Phase 0 补充任务 0.1–0.4 完成（可靠的链路状态、GCS 心跳、命令回复地址）。
+**Prerequisite**: Phase 0 addendum tasks 0.1–0.4 complete (reliable link state,
+GCS heartbeat, command reply address).
 
-**验收**：100 航点上传后下载逐项一致；10% 丢包仍能完成上传；`.plan` 往返无信息丢失。
+**Acceptance**: 100 waypoints uploaded and downloaded item-for-item identical;
+upload still completes with 10% packet loss; `.plan` round-trips without
+information loss.
 
-### Phase 2：RTK 基站与 RTCM 转发
+### Phase 2: RTK base station and RTCM forwarding
 
-任务、验收见第八节。与地形互相独立，可并行开发。
+Tasks and acceptance in Section 8. Independent of terrain; can be developed in
+parallel.
 
-### Phase 3：地形 + Survey 规划器（MVP，可发 alpha）
+### Phase 3: terrain + Survey planner (MVP, alpha-ready)
 
-**任务**：`ElevationSource` trait（GeoTIFF 为默认实现）、高度转换链、多边形 → 平行测线 + 切割线（方位角、间距、外延、转弯半径显式）、沿 DEM 加密并平滑（爬升率/坡度约束）、AGL 剖面图、DEM 元数据显示、任务存档（参数 + DEM 版本 + 航点）。
+**Tasks**: `ElevationSource` trait (GeoTIFF default implementation), height
+conversion chain, polygon → parallel survey lines + tie lines (azimuth,
+spacing, extension, turn radius explicit), densify and smooth along the DEM
+(climb-rate/slope constraints), AGL profile, DEM metadata display, mission
+archive (parameters + DEM version + waypoints).
 
-**验收**：同一存档重新生成航点逐点一致；起伏地形 SITL（需 Gazebo）实飞与设定 AGL 偏差 < 2 m；爬升率超限测线能检出并告警。
+**Acceptance**: regenerating waypoints from the same archive is point-for-point
+identical; on rugged terrain the SITL flight (requires Gazebo) deviates from
+the target AGL by < 2 m; over-limit climb rates are detected and warned.
 
-### Phase 4：磁数据层与实时 QC（飞行视图完整化）
+### Phase 4: magnetic data layer and realtime QC (complete the flight view)
 
-**任务**：实时磁场曲线、cross-track error、AGL 偏差、噪声指标及告警；加载 GeoJSON/GeoTIFF/CSV/瓦片，色标、透明度、图例；飞后导入 ULog，叠加轨迹与 crossover；飞行视图 HUD 与底部 QC 曲线。
+**Tasks**: realtime magnetic-field curves, cross-track error, AGL deviation,
+noise metrics and alarms; load GeoJSON/GeoTIFF/CSV/tiles with color scale,
+opacity, legend; import ULog post-flight and overlay track and crossover;
+flight-view HUD and bottom QC curve.
 
-**验收**：10 万点以上 30 fps；SITL 注入偏航/高度偏差后 QC 告警 2 秒内触发；ULog crossover 结果与离线脚本一致。
+**Acceptance**: > 100k points at 30 fps; injecting yaw/altitude deviation via
+SITL triggers a QC alarm within 2 s; ULog crossover results match the offline
+script.
 
-### Phase 5：按需补齐通用功能
+### Phase 5: fill in generic controls on demand
 
-只读参数、必要参数修改、Guided Goto、Set Mode、多机基础、日志回放；评估固定翼。
+Read-only parameters, necessary parameter writes, Guided Goto, Set Mode, basic
+multi-vehicle, log replay; evaluate fixed-wing.
 
-**补充：PX4 日志拉取/保存**。core 实现 MAVLink LOG 协议（`LOG_REQUEST_LIST`、`LOG_REQUEST_DATA`、`LOG_ERASE`），从飞控拉取 ULog；写入本地日志目录；设置页日志 tab 提供"刷新列表 / 拉取 / 保存为 / 擦除"操作。与日志回放共用 MAVLink 端与存储层。（日志 tab 目前是禁用占位；在此之前可先把它用作 MAVLink 链路日志——收发计数与错误历史，替代一闪而过的错误横幅。）
+**Addendum: PX4 log download/save**. `core` implements the MAVLink LOG protocol
+(`LOG_REQUEST_LIST`, `LOG_REQUEST_DATA`, `LOG_ERASE`) to pull ULog from the FC;
+written to the local log directory; the settings page's Logs tab offers
+"refresh list / download / save as / erase". Shares the MAVLink link and storage
+layer with log replay. (The Logs tab is currently a disabled placeholder; until
+then it can be used as a MAVLink link log — rx/tx counts and error history —
+replacing the flash-in-the-pan error banner.)
 
-### Phase 6：发布
+### Phase 6: release
 
-Tauri 打包（Linux/Windows）、udev 辅助程序打包与 polkit 策略、离线包（示例 DEM + 大地水准面格网）、文档、插件接口稳定化。
+Tauri packaging (Linux/Windows), udev helper packaging and polkit policy,
+offline bundle (sample DEM + geoid grid), documentation, plugin-interface
+stabilization.
 
-## 八、RTK 与 RTCM 转发设计
+## 8. RTK and RTCM Forwarding Design
 
-**数据流**：RTK 基站接收机（USB 串口）→ `rtk::source` 读取 RTCM3 字节流 → `rtk::rtcm` 按帧解析并校验 CRC → `rtk::forward` 封装为 MAVLink `GPS_RTCM_DATA` → 经飞控链路发送 → 飞控 GPS 驱动注入机载 RTK 接收机。
+**Data flow**: RTK base receiver (USB serial) → `rtk::source` reads the RTCM3
+byte stream → `rtk::rtcm` parses frames and validates CRC → `rtk::forward`
+wraps them as MAVLink `GPS_RTCM_DATA` → sent over the FC link → the FC GPS
+driver injects them into the onboard RTK receiver.
 
-**来源抽象**：`RtcmSource` trait。Phase 2 实现串口基站；NTRIP 客户端、TCP/UDP 转发作为后续可选实现。同一时刻只允许一个来源注入。
+**Source abstraction**: the `RtcmSource` trait. Phase 2 implements a serial base
+station; NTRIP client and TCP/UDP forwarding are later optional
+implementations. Only one source may inject at a time.
 
-**转发要点**
+**Forwarding notes**
 
-- `GPS_RTCM_DATA` 单包最多 180 字节，更长的 RTCM 帧需按协议分片（最多 4 片，带序号）。长度恰为 180 的整数倍等边界情况以 MAVLink 文档为准，写单元测试。
-- 与 QGC 共存时 QGC 也可能注入 RTCM：提供“RTCM 注入”开关，检测到多源时告警，避免双路注入。
-- 带宽：RTCM 数据量取决于消息类型和星座数，低速数传电台可能被占满。统计实际 B/s，UI 给占用提示，支持选择消息集（例如优先 MSM4 而非 MSM7）。
-- 基站数据中断超过阈值（默认 5 s，可配置）告警。
+- A `GPS_RTCM_DATA` packet holds at most 180 bytes; longer RTCM frames must be
+  fragmented per the protocol (up to 4 fragments, numbered). Boundary cases
+  such as an exact multiple of 180 follow the MAVLink docs, with unit tests.
+- When coexisting with QGC, QGC may also inject RTCM: provide an "RTCM
+  injection" toggle, warn on multiple sources, and avoid dual injection.
+- Bandwidth: RTCM volume depends on message types and constellations and can
+  saturate a low-rate telemetry radio. Measure actual B/s, show a usage hint in
+  the UI, and allow selecting a message set (e.g. prefer MSM4 over MSM7).
+- Alarm when base-station data is interrupted beyond a threshold (default 5 s,
+  configurable).
 
-**基站设置**（首个支持对象为 u-blox ZED-F9P，其余通过 trait 扩展）
+**Base-station configuration** (first supported device: u-blox ZED-F9P; others
+via the trait)
 
-- Survey-in（最小时长、目标精度）或固定坐标模式；输出的 RTCM3 消息集；端口输出配置；保存到 RAM/Flash。
-- 先预览再应用，应用后读回校验。
+- Survey-in (minimum duration, target accuracy) or fixed-coordinate mode; output
+  RTCM3 message set; port output configuration; save to RAM/Flash.
+- Preview before applying; read back to verify after applying.
 
-**状态显示**
+**Status display**
 
-- 基站：模式、survey-in 进度与当前精度、卫星数、各类型 RTCM 消息速率、数据年龄、累计字节。
-- 机载：`fix_type`（RTK Float = 5，RTK Fixed = 6）、卫星数、HDOP、进入 RTK Fixed 的计时。
-- 顶部状态条及告警：绿 = Fixed，黄 = Float，红 = 无 RTK 或中断。
+- Base: mode, survey-in progress and current accuracy, satellite count, per-type
+  RTCM message rate, data age, cumulative bytes.
+- Onboard: `fix_type` (RTK Float = 5, RTK Fixed = 6), satellite count, HDOP,
+  time to reach RTK Fixed.
+- Top status bar and alarms: green = Fixed, yellow = Float, red = no RTK or
+  interrupted.
 
-**测试与验收**
+**Testing and acceptance**
 
-- RTCM 帧解析单测（坐帧、粘包、半包、错误 CRC），用录制样本；分片后重组字节一致；转发路径用模拟 MAVLink 接收端校验。
-- SITL 没有真实 GPS 接收机，只能验证发送正确，不能验证 RTK Fixed；真机验证用基站 + 机载接收机，开阔环境下记录进入 RTK Fixed 的时间（阈值实测后定）。
-- 基站链路中断 5 s 内触发告警。
+- RTCM frame-parsing unit tests (frame sync, coalesced packets, partial packets,
+  bad CRC) using recorded samples; reassembled bytes match after fragmentation;
+  the forwarding path verified with a mock onboard receiver; record the
+  time-to-RTK-Fixed in an open environment (threshold set after measurement).
+- Base-station link interruption triggers an alarm within 5 s.
 
-## 九、USB 设备与 udev 自动配置
+## 9. USB Devices and udev Auto-configuration
 
-**目标**：插入已知 USB 设备后，自动识别并生成稳定设备名与权限规则，免手写。
+**Goal**: plug in a known USB device and get a stable device name and
+permission rule generated automatically, with no hand-written rules.
 
-**适用范围**：Linux 原生。Windows/macOS 没有 udev，只做设备识别和端口命名映射。WSL2 中 USB 需先用 usbipd-win 附加到 WSL，且 udev 是否生效取决于 WSL 的 systemd 设置，需单独验证。
+**Scope**: native Linux. Windows/macOS have no udev, so only device
+identification and port-name mapping. Under WSL2 USB must first be attached with
+usbipd-win, and whether udev takes effect depends on the WSL systemd setting, to
+be verified separately.
 
-**流程**
+**Flow**
 
-1. 监听 USB 串口热插拔，读取 VID/PID/序列号/厂商/产品名。
-2. 匹配设备库（常见：PX4/Pixhawk 系、u-blox、FTDI、CP210x、CH340），给出角色建议（飞控 / RTK 基站 / 其他），用户确认或手选。
-3. 生成规则预览：设置权限（`MODE`/`GROUP` 或 `TAG+="uaccess"`）、稳定符号链接 `/dev/maggcs/<角色>`、ModemManager 忽略标记（`ID_MM_DEVICE_IGNORE`），避免其占用串口。
-4. 同 VID/PID 多个设备：优先用序列号区分；无序列号时按物理端口路径区分，并提示规则绑定的是接口。
-5. 提权安装：经 polkit（pkexec）调用独立辅助程序，只允许写 `/etc/udev/rules.d/` 下本应用命名的文件并重载规则，主程序不以 root 运行。headless 模式提供 CLI 子命令。
-6. 支持列出/卸载/回滚已装规则；失败时给出可手动执行的命令。
+1. Watch USB serial hotplug; read VID/PID/serial/vendor/product.
+2. Match against the device database (common: PX4/Pixhawk, u-blox, FTDI, CP210x,
+   CH340) and suggest a role (FC / RTK base / other); the user confirms or picks.
+3. Preview the generated rule: permissions (`MODE`/`GROUP` or `TAG+="uaccess"`),
+   a stable symlink `/dev/maggcs/<role>`, and a ModemManager ignore tag
+   (`ID_MM_DEVICE_IGNORE`) so it does not claim the port.
+4. Multiple devices with the same VID/PID: distinguish by serial first; with no
+   serial, by physical port path, flagging that the rule binds to the interface.
+5. Privileged install: call a separate helper via polkit (pkexec) that may only
+   write this app's named files under `/etc/udev/rules.d/` and reload rules; the
+   main program never runs as root. Headless mode offers a CLI subcommand.
+6. List/uninstall/rollback installed rules; on failure, print the command to run
+   manually.
 
-**验收**
+**Acceptance**
 
-- 规则生成器黄金文件测试：给定设备输入，规则文本逐字一致。
-- 辅助程序拒绝写入其他路径和其他文件名（安全测试）。
-- 真机插入后 5 s 内 `/dev/maggcs/<角色>` 出现，且无需 sudo 即可打开；卸载后规则与链接清除。
+- Rule-generator golden-file test: given device input, the rule text is
+  byte-identical.
+- The helper refuses to write any other path or filename (security test).
+- On real hardware, `/dev/maggcs/<role>` appears within 5 s and opens without
+  sudo; uninstalling removes the rule and symlink.
 
-## 十、任务卡：DEM 预处理（tools/dem-prep）
+## 10. Task Card: DEM Preprocessing (tools/dem-prep)
 
-- 输入：GeoBC LiDAR 点云（LAS 1.4，NAD83(CSRS)/UTM10，CGVD2013，CGG2013）；若已是栅格产品，跳过栅格化，只做元数据与基准核对。
-- 输出：DTM（第 2 类点，COG，1–2 m）、DSM（第 1 类点最大值，树冠安全层）、元数据 JSON（项目、日期、密度、标称精度、基准、空洞掩膜）。
-- 要求：空洞和水体明确标记，不静默插值。
-- 验收：检查点误差在元数据标称精度内；单测覆盖空洞与坐标基准。
+- Input: GeoBC LiDAR point cloud (LAS 1.4, NAD83(CSRS)/UTM10, CGVD2013,
+  CGG2013); if a raster product already exists, skip rasterization and only
+  check metadata and datums.
+- Output: DTM (class-2 points, COG, 1–2 m), DSM (max of class-1 points, canopy
+  safety layer), metadata JSON (project, date, density, nominal accuracy,
+  datum, void mask).
+- Requirement: voids and water are explicitly marked, never silently
+  interpolated.
+- Acceptance: checkpoint error within the metadata's nominal accuracy; unit
+  tests cover voids and coordinate datums.
 
-## 十一、AI 协作规则
+## 11. AI Collaboration Rules
 
-1. 每次只做一个小任务，不一次生成整个 Phase。
-2. 先输出 struct/enum/trait/函数签名/错误类型，确认后再写实现。
-3. 每个任务附可自动化或有数值的验收标准，完成后自检并说明验证方法。
-4. 后端模块必须有单元测试或 SITL 测试脚本；前端任务附截图与手动验证步骤。
-5. 涉及提权、串口写入、基站配置写入的任务，必须先给出失败与风险分析（写错配置、误写其他设备）。
-6. Rust 生产代码使用 Result，避免 unwrap；TypeScript 严格模式；魔法数字提取为常量或配置。
-7. 每个模块完成后同步 README/docs；重要决定写 ADR；不确定时先提问或给方案对比。
-8. 执行顺序：MAVLink 与遥测 → UI 壳 → Mission 协议 → 航点编辑 → RTK → DEM 与高度转换 → Survey 规划 → 磁数据层与 QC。
+1. Do one small task at a time; never generate a whole phase in one shot.
+2. First output struct/enum/trait/function signatures and error types; get
+   confirmation before implementing.
+3. Every task carries an automated or numerically measurable acceptance
+   criterion; after finishing, self-check and state how it was verified.
+4. Backend modules must ship with unit tests or SITL test scripts; frontend
+   tasks ship with screenshots and manual verification steps.
+5. Privilege escalation, serial writes, and base-station config writes require a
+   failure/risk analysis up front (wrong config, wrong device, etc.).
+6. Rust production code uses `Result`, never `unwrap`; TypeScript strict mode;
+   magic numbers extracted to constants or config.
+7. Update README/docs per module; record important decisions as ADRs; when
+   unsure, ask or present option comparisons.
+8. Execution order: MAVLink & telemetry → UI shell → Mission protocol →
+   waypoint editing → RTK → DEM & height conversion → Survey planning →
+   magnetic data & QC.
 
-## 十二、启动指令
+## 12. Kickoff Instructions
 
-> 当前从 Phase 0 开始。先创建 workspace 骨架与 `AGENTS.md`，输出 `core` crate 的 struct / enum / 错误类型与函数签名（包括 `mavlink`、`devices` 两个模块），等我确认后再实现 UDP 连接管理与 HEARTBEAT / GLOBAL_POSITION_INT 解析，并附 SITL 集成测试脚本。
+> Start from Phase 0. First create the workspace skeleton and `AGENTS.md`,
+> output the `core` crate's struct/enum/error types and function signatures
+> (including `mavlink` and `devices`), and wait for confirmation before
+> implementing UDP connection management and HEARTBEAT / GLOBAL_POSITION_INT
+> parsing, with a SITL integration test script.
 >
-> 完成后输出：文件树、关键代码、运行验证方法、对照 Phase 0 验收标准的自检结果。
+> When done, output: file tree, key code, how to run/verify, and a self-check
+> against the Phase 0 acceptance criteria.
 
-### v2.2 当前任务
+### v2.2 current task
 
-> 当前从 Phase 0 补充任务 0.1 开始。先输出 `TelemetryHub::spawn` 的新签名和 `LinkStatus` 新增字段（0.5 的字段，先定义类型），等我确认后再实现。每个任务附单测或 SITL 脚本，并说明如何验证；设置页相关任务附 1920×1080 与 1366×768 的截图。
+> Start from Phase 0 addendum task 0.1. First output the new signature of
+> `TelemetryHub::spawn` and the new `LinkStatus` fields (the 0.5 fields, types
+> first), and wait for confirmation before implementing. Each task ships with a
+> unit test or SITL script and a note on how to verify it; settings-page tasks
+> ship with 1920×1080 and 1366×768 screenshots.
 
-## 十三、待决事项
+## 13. Open Questions
 
-1. RTK 基站具体型号（是否 u-blox ZED-F9P 一类），决定首个支持的设置协议。**（已确认：u-blox ZED-F9P）**
-2. 是否需要 NTRIP 作为 RTCM 来源。
-3. 前端框架与组件库（ADR-010）。**（代码已按建议实现：React + Zustand + Tailwind + Radix；ADR-010 状态仍为 Draft，待转 Accepted）**
-4. 许可证：Apache-2.0 还是 GPLv3。
-5. GeoBC 数据实际提供点云还是栅格，以及覆盖范围。
-6. 各阶段验收数值需在 SITL 与实飞数据上校准。
-7. 与 QGC 并行的分流方式：mavlink-router 还是 QGC 转发到另一端口；rust-mavlink 的 UDP 监听是否设置 `SO_REUSEADDR`（决定 ADR-003 修订的具体写法）。
-8. PX4 v1.17.0 下 SITL 目标的选择（`jmavsim` 是否可用，`gz_x500` 需要 Gazebo；仅验证链路时用哪个目标），并同步 `scripts/sitl`。
-9. Docker 运行方式：WSL 内 Docker Engine + `--network host` 作为官方联调方式，Docker Desktop 是否需要支持。
+1. The specific RTK base-station model (whether a u-blox ZED-F9P class),
+   which decides the first supported configuration protocol. **(Confirmed:
+   u-blox ZED-F9P.)**
+2. Whether NTRIP is needed as an RTCM source.
+3. Frontend framework and component library (ADR-010). **(Implemented as
+   recommended: React + Zustand + Tailwind + Radix; ADR-010 is now Accepted.)**
+4. License: Apache-2.0 or GPLv3. **(Decided: Apache-2.0, ADR-007.)**
+5. Whether GeoBC data is actually provided as a point cloud or a raster, and
+   its coverage.
+6. Each phase's acceptance numbers must be calibrated on SITL and real flight
+   data.
+7. The splitting method for running alongside QGC: mavlink-router or QGC
+   forwarding to another port; whether rust-mavlink's UDP listener sets
+   `SO_REUSEADDR` (decides the exact ADR-003 revision).
+8. The SITL target under PX4 v1.17.0 (whether `jmavsim` works, `gz_x500` needs
+   Gazebo, which target to use for link-only verification), synced with
+   `scripts/sitl`.
+9. Docker mode: Docker Engine inside WSL with `--network host` as the official
+   development setup; whether Docker Desktop needs support.

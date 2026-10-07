@@ -103,11 +103,19 @@ impl DeviceManager {
     ///
     /// Returns a handle; subscribe to receive [`DeviceEvent`]s. The caller
     /// reconciles the initial state by calling [`DeviceManager::enumerate`]
-    /// before subscribing.
-    pub fn spawn_watcher(self) -> Result<DeviceManagerHandle, DeviceError> {
+    /// before subscribing. A failure to enumerate at startup or during polling
+    /// is non-fatal: the watcher keeps running and adopts the next successful
+    /// enumeration as its baseline (issues.md #31).
+    pub fn spawn_watcher(self) -> DeviceManagerHandle {
         let (events_tx, _) = broadcast::channel(EVENT_CAPACITY);
         let interval = self.watch_interval;
-        let mut previous = self.enumerate()?;
+        // Seed the baseline when possible; otherwise start unprimed and adopt
+        // the first successful enumeration without emitting a spurious "added"
+        // burst for devices that were already attached.
+        let (mut previous, mut primed) = match self.enumerate() {
+            Ok(ports) => (ports, true),
+            Err(_) => (Vec::new(), false),
+        };
 
         let tx = events_tx.clone();
         tokio::spawn(async move {
@@ -116,20 +124,41 @@ impl DeviceManager {
                 tick.tick().await;
                 let current = match self.enumerate() {
                     Ok(c) => c,
+                    // A transient enumeration failure must not stop the watcher.
                     Err(_) => continue,
                 };
-                for dev in current.diff(&previous, |a, b| a == b) {
-                    let _ = tx.send(DeviceEvent::Added(dev));
-                }
-                for dev in previous.diff(&current, |a, b| a == b) {
-                    let _ = tx.send(DeviceEvent::Removed(dev));
+                for event in hotplug_events(&previous, &current, primed).unwrap_or_default() {
+                    let _ = tx.send(event);
                 }
                 previous = current;
+                primed = true;
             }
         });
 
-        Ok(DeviceManagerHandle { events: events_tx })
+        DeviceManagerHandle { events: events_tx }
     }
+}
+
+/// Hotplug events between two enumerations.
+///
+/// Returns `None` while the watcher is unprimed (before the first successful
+/// enumeration): there is no meaningful baseline to diff against yet.
+fn hotplug_events(
+    previous: &[SerialDeviceInfo],
+    current: &[SerialDeviceInfo],
+    primed: bool,
+) -> Option<Vec<DeviceEvent>> {
+    if !primed {
+        return None;
+    }
+    let mut events = Vec::new();
+    for dev in current.diff(previous, |a, b| a == b) {
+        events.push(DeviceEvent::Added(dev));
+    }
+    for dev in previous.diff(current, |a, b| a == b) {
+        events.push(DeviceEvent::Removed(dev));
+    }
+    Some(events)
 }
 
 impl DeviceManagerHandle {
@@ -146,7 +175,7 @@ trait Diff<T> {
         F: Fn(&T, &T) -> bool;
 }
 
-impl<T: Clone> Diff<T> for Vec<T> {
+impl<T: Clone> Diff<T> for [T] {
     fn diff<F>(&self, other: &[T], eq: F) -> Vec<T>
     where
         F: Fn(&T, &T) -> bool,
@@ -161,6 +190,18 @@ impl<T: Clone> Diff<T> for Vec<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::devices::device::PortTransport;
+
+    fn dev(name: &str) -> SerialDeviceInfo {
+        SerialDeviceInfo {
+            port_name: name.to_string(),
+            transport: PortTransport::Usb,
+            device_id: None,
+            serial_number: None,
+            manufacturer: None,
+            product: None,
+        }
+    }
 
     #[test]
     fn diff_reports_added_and_removed() {
@@ -168,5 +209,22 @@ mod tests {
         let after = vec![2, 3, 4];
         assert_eq!(after.diff(&before, |a, b| a == b), vec![4]);
         assert_eq!(before.diff(&after, |a, b| a == b), vec![1]);
+    }
+
+    #[test]
+    fn hotplug_events_are_empty_while_unprimed() {
+        // The first successful enumeration only establishes the baseline.
+        let current = vec![dev("/dev/ttyUSB0")];
+        assert_eq!(hotplug_events(&[], &current, false), None);
+    }
+
+    #[test]
+    fn hotplug_events_report_add_and_remove() {
+        let before = vec![dev("/dev/ttyUSB0"), dev("/dev/ttyACM0")];
+        let after = vec![dev("/dev/ttyACM0"), dev("/dev/ttyUSB1")];
+        let events = hotplug_events(&before, &after, true).expect("primed");
+        assert!(events.contains(&DeviceEvent::Added(dev("/dev/ttyUSB1"))));
+        assert!(events.contains(&DeviceEvent::Removed(dev("/dev/ttyUSB0"))));
+        assert_eq!(events.len(), 2);
     }
 }

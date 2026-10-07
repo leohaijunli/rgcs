@@ -5,6 +5,7 @@ import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import type { MissionItem } from '../generated-types/MissionItem'
 import type { MissionFrame } from '../generated-types/MissionFrame'
+import type { PlanImport, QgcPlan } from '../mission/planfile'
 
 export type AltitudeMode = 'relative' | 'amsl' | 'agl'
 
@@ -31,6 +32,18 @@ interface MissionState {
   busy: boolean
   lastEvent: MissionEventPayload | null
   syncState: 'idle' | 'uploading' | 'downloading' | 'clearing'
+  /** True when the plan was edited since it was last known to match the FC. */
+  dirty: boolean
+  /** Hash of the items at the last successful sync (upload or download). */
+  lastSyncedHash: string | null
+  /** Result of the post-upload read-back: null = unknown/not checked. */
+  fcMatches: boolean | null
+  /** True while a read-back download is in flight. */
+  verifying: boolean
+  /** Original imported `.plan`, kept so export can write back unknown fields. */
+  planBase: QgcPlan | null
+  /** `plannedHomePosition` from the imported plan, if any. */
+  home: [number, number, number] | null
   select: (seq: number | null) => void
   setItems: (items: MissionItem[]) => void
   setAltitudeMode: (mode: AltitudeMode) => void
@@ -44,11 +57,30 @@ interface MissionState {
   setCurrent: (seq: number) => Promise<void>
   handleEvent: (e: MissionEventPayload) => void
   handlePlan: (items: MissionItem[]) => void
+  applyImport: (result: PlanImport) => void
+  verifyFc: () => Promise<void>
   reset: () => void
 }
 
 function resequence(items: MissionItem[]): MissionItem[] {
   return items.map((it, i) => ({ ...it, seq: i }))
+}
+
+/** Structural hash used to compare a plan with what the FC reports. */
+export function itemsHash(items: MissionItem[]): string {
+  return JSON.stringify(
+    items.map((i) => [
+      i.seq,
+      i.frame,
+      i.command,
+      i.params,
+      i.x,
+      i.y,
+      i.z,
+      i.autocontinue,
+      i.current,
+    ]),
+  )
 }
 
 function useSelection(items: MissionItem[], selectedSeq: number | null): number | null {
@@ -63,6 +95,12 @@ export const useMissionStore = create<MissionState>((set, get) => ({
   busy: false,
   lastEvent: null,
   syncState: 'idle',
+  dirty: false,
+  lastSyncedHash: null,
+  fcMatches: null,
+  verifying: false,
+  planBase: null,
+  home: null,
 
   select: (seq) => set({ selectedSeq: seq }),
 
@@ -70,6 +108,8 @@ export const useMissionStore = create<MissionState>((set, get) => ({
     set((s) => ({
       items,
       selectedSeq: useSelection(items, s.selectedSeq),
+      dirty: true,
+      fcMatches: null,
     })),
 
   setAltitudeMode: (mode) => set({ altitudeMode: mode }),
@@ -77,6 +117,8 @@ export const useMissionStore = create<MissionState>((set, get) => ({
   updateItem: (seq, patch) =>
     set((s) => ({
       items: s.items.map((it) => (it.seq === seq ? { ...it, ...patch } : it)),
+      dirty: true,
+      fcMatches: null,
     })),
 
   addWaypoint: (latDeg, lonDeg, altM) =>
@@ -85,20 +127,22 @@ export const useMissionStore = create<MissionState>((set, get) => ({
         seq: s.items.length,
         frame: FRAME_BY_MODE[s.altitudeMode],
         command: 16, // MAV_CMD_NAV_WAYPOINT
-        params: [0, 0, 0, 0, 0, 0, 0],
+        params: [0, 0, 0, 0],
         x: Math.round(latDeg * 1e7),
         y: Math.round(lonDeg * 1e7),
         z: altM,
         autocontinue: true,
         current: s.items.length === 0,
       }
-      return { items: [...s.items, item], selectedSeq: item.seq }
+      return { items: [...s.items, item], selectedSeq: item.seq, dirty: true, fcMatches: null }
     }),
 
   removeWaypoint: (seq) =>
     set((s) => ({
       items: resequence(s.items.filter((it) => it.seq !== seq)),
       selectedSeq: null,
+      dirty: true,
+      fcMatches: null,
     })),
 
   moveWaypoint: (from, to) =>
@@ -108,13 +152,18 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       const [moved] = items.splice(from, 1)
       items.splice(to, 0, moved)
       const next = resequence(items)
-      return { items: next, selectedSeq: useSelection(next, s.selectedSeq) }
+      return {
+        items: next,
+        selectedSeq: useSelection(next, s.selectedSeq),
+        dirty: true,
+        fcMatches: null,
+      }
     }),
 
   upload: async () => {
     const { items } = get()
     if (items.length === 0) return
-    set({ busy: true, syncState: 'uploading' })
+    set({ busy: true, syncState: 'uploading', fcMatches: null })
     try {
       await invoke('mission_upload', { items })
     } catch (err) {
@@ -134,7 +183,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
   },
 
   download: async () => {
-    set({ busy: true, syncState: 'downloading' })
+    set({ busy: true, syncState: 'downloading', verifying: false })
     try {
       await invoke('mission_download')
     } catch (err) {
@@ -193,17 +242,61 @@ export const useMissionStore = create<MissionState>((set, get) => ({
           : e.op === 'download' && e.kind === 'progress'
             ? 'downloading'
             : s.syncState
-      return { lastEvent: e, busy, syncState }
+      const patch: Partial<MissionState> = { lastEvent: e, busy, syncState }
+      if (e.kind === 'completed' && e.op === 'upload') {
+        // We believe the FC now holds exactly our plan; confirm with a
+        // read-back download (issues.md #15).
+        patch.dirty = false
+        patch.lastSyncedHash = itemsHash(s.items)
+        patch.fcMatches = true
+      }
+      return patch
     })
+    if (e.kind === 'completed' && e.op === 'upload') {
+      void get().verifyFc()
+    }
   },
 
   handlePlan: (items) => {
     set((s) => ({
-      items,
-      busy: false,
-      syncState: 'idle',
-      selectedSeq: useSelection(items, s.selectedSeq),
+      ...(s.verifying
+        ? {
+            verifying: false,
+            fcMatches: itemsHash(items) === s.lastSyncedHash,
+            busy: false,
+            syncState: 'idle' as const,
+          }
+        : {
+            items,
+            dirty: false,
+            lastSyncedHash: itemsHash(items),
+            fcMatches: true,
+            busy: false,
+            syncState: 'idle' as const,
+            selectedSeq: useSelection(items, s.selectedSeq),
+          }),
     }))
+  },
+
+  applyImport: (result) =>
+    set((s) => ({
+      items: result.items,
+      altitudeMode: result.mode,
+      selectedSeq: useSelection(result.items, s.selectedSeq),
+      dirty: true,
+      fcMatches: null,
+      planBase: result.base,
+      home: result.home,
+    })),
+
+  verifyFc: async () => {
+    if (!get().lastSyncedHash) return
+    set({ verifying: true })
+    try {
+      await invoke('mission_download')
+    } catch {
+      set({ verifying: false, fcMatches: false })
+    }
   },
 
   reset: () =>
@@ -213,6 +306,12 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       busy: false,
       lastEvent: null,
       syncState: 'idle',
+      dirty: false,
+      lastSyncedHash: null,
+      fcMatches: null,
+      verifying: false,
+      planBase: null,
+      home: null,
     }),
 }))
 

@@ -17,7 +17,11 @@ seq: number, frame: MissionFrame,
  */
 command: number, 
 /**
- * Command parameters P1..P7.
+ * Command parameters P1..P4.
+ *
+ * For an integer mission item P5/P6/P7 are the coordinate fields, which
+ * live in `x`/`y`/`z`; duplicating them here would lose precision when the
+ * `i32` lat/lon is narrowed to `f32` (issues.md #10).
  */
 params: Array<number>, x: number, y: number, z: number, autocontinue: boolean, 
 /**

@@ -1,7 +1,8 @@
 # ADR-010: Frontend stack — React + Zustand + Tailwind + Radix
 
-- Status: Draft
+- Status: Accepted (implemented)
 - Date: 2026-10-03
+- Accepted: 2026-10-07 — React + Zustand + Tailwind + Radix frontend stack.
 - Confirmed: Rust + Tauri desktop; u-blox ZED-F9P base station; PX4 FC.
 
 ## Decision

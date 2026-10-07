@@ -1,7 +1,8 @@
 # ADR-002: Frontend types generated from Rust (ts-rs)
 
-- Status: Draft
+- Status: Accepted (implemented)
 - Date: 2026-10-03
+- Accepted: 2026-10-07 — Frontend types are generated from Rust with ts-rs.
 
 ## Decision
 

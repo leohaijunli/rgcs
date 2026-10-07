@@ -1,3 +1,3 @@
 # PX4 SITL integration test scripts.
 
-Added in Phase 0 (task 5), acceptance per DEVELOPMENT_PLAN_v2.1.md.
+Added in Phase 0 (task 5), acceptance per DEVELOPMENT_PLAN.md.

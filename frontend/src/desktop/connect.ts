@@ -14,7 +14,16 @@ export async function disconnect(): Promise<void> {
   await invoke('disconnect')
 }
 
+/** Ask the desktop shell to stop the link and quit the application. */
+export async function shutdownApp(): Promise<void> {
+  await invoke('shutdown_app')
+}
+
 /** Present a connection error to the user. */
 export function reportConnectError(e: unknown): void {
-  useLinkStore.getState().setError(e instanceof Error ? e.message : String(e))
+  useLinkStore.getState().pushError({
+    kind: 'other',
+    message: e instanceof Error ? e.message : String(e),
+    at_ms: Date.now(),
+  })
 }

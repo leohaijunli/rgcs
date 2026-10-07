@@ -4,6 +4,7 @@ description = "MagGCS desktop ground control station (Tauri 2)"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
+license.workspace = true
 
 [lib]
 name = "maggcs_app_lib"
@@ -17,7 +18,7 @@ maggcs-core = { path = "../core" }
 mavlink.workspace = true
 parking_lot = "0.12"
 serde.workspace = true
-tauri = { version = "2", features = ["devtools"] }
+tauri = { version = "2" }
 tauri-plugin-dialog = "2.8.1"
 tauri-plugin-fs = "2.6.0"
 tokio.workspace = true

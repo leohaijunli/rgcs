@@ -15,6 +15,7 @@ import { listen } from '@tauri-apps/api/event'
 import type { LinkStatus } from '../generated-types/LinkStatus'
 import type { TelemetrySnapshot } from '../generated-types/TelemetrySnapshot'
 import type { MissionItem } from '../generated-types/MissionItem'
+import type { TelemetryError } from '../generated-types/TelemetryError'
 import type { MissionEventPayload } from '../stores/mission'
 import { reportConnectError } from './connect'
 import type { CommandEventPayload } from '../stores/command'
@@ -58,11 +59,17 @@ export function useTelemetryBridge() {
       if (disposed) return un2()
       unlisteners.push(un2)
 
-      const un3 = await listen<string>('link_error', (e) => {
-        useLinkStore.getState().setError(e.payload)
+      const un3 = await listen<TelemetryError>('link_error', (e) => {
+        useLinkStore.getState().pushError(e.payload)
       })
       if (disposed) return un3()
       unlisteners.push(un3)
+
+      const un3b = await listen<number>('telemetry_dropped', (e) => {
+        useLinkStore.getState().setDroppedFrames(e.payload)
+      })
+      if (disposed) return un3b()
+      unlisteners.push(un3b)
 
       const un4 = await listen<MissionEventPayload>('mission', (e) => {
         useMissionStore.getState().handleEvent(e.payload)

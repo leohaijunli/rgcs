@@ -21,6 +21,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::connect,
             commands::disconnect,
+            commands::shutdown_app,
             commands::link_status,
             commands::get_snapshot,
             commands::enumerate_devices,

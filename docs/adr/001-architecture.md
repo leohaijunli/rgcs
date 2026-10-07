@@ -1,7 +1,8 @@
 # ADR-001: Architecture — core library + Tauri desktop + headless server
 
-- Status: Draft
+- Status: Accepted (implemented)
 - Date: 2026-10-03
+- Accepted: 2026-10-07 — Architecture: `core` library + Tauri desktop + headless server.
 
 ## Decision
 

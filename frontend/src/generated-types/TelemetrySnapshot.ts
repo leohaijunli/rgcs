@@ -5,6 +5,7 @@ import type { GlobalPositionInt } from "./GlobalPositionInt";
 import type { GpsRawInt } from "./GpsRawInt";
 import type { Heartbeat } from "./Heartbeat";
 import type { SysStatus } from "./SysStatus";
+import type { TelemetryFieldAges } from "./TelemetryFieldAges";
 
 /**
  * Combined telemetry snapshot published to the UI (e.g. at 10–30 Hz).
@@ -13,4 +14,9 @@ export type TelemetrySnapshot = {
 /**
  * Monotonic ms timestamp of the latest HEARTBEAT from the FC.
  */
-last_heartbeat_at_ms: number, heartbeat: Heartbeat | null, global_position: GlobalPositionInt | null, attitude: Attitude | null, sys_status: SysStatus | null, battery: BatteryStatus | null, gps: GpsRawInt | null, };
+last_heartbeat_at_ms: number, heartbeat: Heartbeat | null, global_position: GlobalPositionInt | null, attitude: Attitude | null, sys_status: SysStatus | null, battery: BatteryStatus | null, gps: GpsRawInt | null, 
+/**
+ * Per-field freshness, so a field that stopped updating while others keep
+ * streaming can be greyed out (issues.md #16).
+ */
+field_ages: TelemetryFieldAges, };

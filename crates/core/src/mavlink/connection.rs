@@ -156,7 +156,9 @@ impl LinkStatus {
 
 /// Clone-friendly classification of a link failure (the underlying
 /// `MavlinkError` is not `Clone`, so events carry this summary).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
 pub enum LinkErrorKind {
     Io,
     Serial,
@@ -236,6 +238,18 @@ impl ConnectionHandle {
     /// Subscribe to the event stream.
     pub fn subscribe(&self) -> broadcast::Receiver<ConnectionEvent> {
         self.events.subscribe()
+    }
+
+    /// Subscribe to the event stream filtered by a [`MessageRoute`] (issue #20).
+    ///
+    /// Lifecycle events are always delivered; only inbound messages are
+    /// filtered, so a subscriber is not woken for traffic it does not care
+    /// about.
+    pub fn subscribe_route(
+        &self,
+        route: crate::mavlink::router::MessageRoute,
+    ) -> crate::mavlink::router::RoutedEvents {
+        crate::mavlink::router::RoutedEvents::new(self.events.subscribe(), route)
     }
 
     /// Connection configuration.

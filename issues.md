@@ -18,10 +18,10 @@
 | #3 | GCS 不发 HEARTBEAT | ✅ 已完成（`f3147fd`） |
 | #4 | `connect` 绑定失败仍返回成功 | ✅ 已完成（`f3147fd`） |
 | #5 | 命令 fire-and-forget，无 COMMAND_ACK | ✅ 已完成（core `d5ec93f`，app/frontend 后续提交） |
-| #6 | 遥测聚合无来源过滤 | ⬜ 未开始 |
-| #7 | 任务协议重传定时器未接线 | ⬜ 未开始 |
-| #8 | 上传时重复 MISSION_REQUEST 被当作失败 | ⬜ 未开始 |
-| #9 | 下载未过滤发往其他 GCS 的 item | ⬜ 未开始 |
+| #6 | 遥测聚合无来源过滤 | ✅ 已完成（核心过滤 + 单测） |
+| #7 | 任务协议重传定时器未接线 | ✅ 已完成（`on_tick` + 服务 tick + 总超时 + 单测） |
+| #8 | 上传时重复 MISSION_REQUEST 被当作失败 | ✅ 已完成（重复请求重发 + 单测） |
+| #9 | 下载未过滤发往其他 GCS 的 item | ✅ 已完成（协议单源 + 来源过滤 + 单测） |
 
 ---
 
@@ -68,78 +68,104 @@
 - 验收：模拟丢 ACK / 丢命令 / 被拒（`MAV_RESULT_DENIED`）三种情况，UI 分别给出明确结果。
 
 ### #6 [P0][core] Telemetry aggregation has no source filtering
-**状态**：⬜ 未开始
+**状态**：✅ 已完成（工作区改动，未提交）
 - 位置：`core/src/telemetry/mod.rs::TelemetryUpdate::try_from_envelope`、`TelemetryAggregator::apply`
 - 现象：不检查 `system_id/component_id`。链路上有 QGC 心跳、相机/gimbal/伴飞计算机心跳时，`heartbeat` 字段被最后到达的覆盖；多机时位置/姿态混写。
 - 修复：按目标 `(sysid, compid)` 过滤；预留 `VehicleId` 维度。
 - 验收：混入其他节点的 HEARTBEAT/ATTITUDE，快照仍只反映目标 FC。
+- 实现：新增 `telemetry::VehicleId`（`system_id`/`component_id`，含 ts-rs 导出）；`TelemetryAggregator` 增加 `target: Option<VehicleId>` 与 `for_vehicle(target)`，`apply(source, update, now_ms)` 丢弃非目标来源；`TelemetryHub::spawn(events, hz, target)` 由 `app-tauri::commands::connect` 用 `config.target_system_id/target_component_id` 接线。`new()` 保留"全接收"语义供单测使用。
+- 验证：新增 `aggregator_rejects_foreign_sources`、`hub_drops_foreign_node_telemetry`，并更新既有 `aggregator_folds_updates`。`cargo test -p maggcs-core --lib` 81 passed；`cargo clippy --all-targets -- -D warnings` 通过。前端 `npm run typecheck/build` 通过（新增 `VehicleId.ts` 绑定已同步）。
+- 关联：handoff 中"FC 灯红但界面仍显示 connected / 模式显示 Acro"指向同一根因（外来心跳覆盖 `snapshot.heartbeat`）。修好后仍需在 SITL/app 构建上复验。
 
 ### #7 [P0][core] Mission protocol retransmission timer is never wired
-**状态**：⬜ 未开始
+**状态**：✅ 已完成（工作区改动，未提交）
 - 位置：`app-tauri/src/mission_service.rs::run`；`core/src/mission/protocol.rs::retransmit_due / take_timeout_failure`
 - 现象：服务循环里没有定时器调用这两个函数（仅单测调用）。丢一个包后上传/下载永久挂起，前端 `busy` 永不复位。
 - 修复：在服务循环加 tick（如 100–200 ms），发送到期帧；超限时发出 `Failed(RetriesExhausted)` 并回到 Idle；同时给整个操作加总超时。
 - 验收：10% 随机丢包下 100 航点上传成功（见 #25 测试夹具）；彻底断链时 UI 在有限时间内回到可操作状态并提示失败。
+- 实现：`MissionProtocol::on_tick(now)` 驱动 `retransmit_due`/`take_timeout_failure`，并在超过 `OPERATION_TIMEOUT`（30 s）时 `abort()` 并发 `Failed(Timeout)`；`RETRY_TICK = 100 ms`。`mission_service::run` 的 `select!` 增加 tick 分支并发送到期帧。完成/失败回到 Idle，`on_tick` 在 Idle 直接返回，避免完成后误重传。
+- 验证：新增 `on_tick_retransmits_then_exhausts`、`on_tick_aborts_past_operation_timeout`；`cargo test -p maggcs-core --lib mission` 21 passed。
+- 待办：10% 丢包 100 航点的整链路验收依赖 #25 的假 FC 夹具（尚未做）。
 
 ### #8 [P0][core] Upload: duplicate MISSION_REQUEST treated as failure
-**状态**：⬜ 未开始
+**状态**：✅ 已完成（工作区改动，未提交）
 - 位置：`protocol.rs::on_upload_request`，测试 `upload_seq_mismatch_fails`
 - 现象：`req_seq != next_seq` 直接 `SeqMismatch` 失败。FC 没收到 item 时会重复请求同一 seq，GCS 应重发。
 - 修复：`req_seq == next_seq - 1` 重发上一项；`== next_seq` 发新项；其他才报错。修改并反转该测试。
 - 验收：丢掉任意一个 `MISSION_ITEM_INT` 后上传仍能完成。
+- 实现：`on_upload_request` 先处理 `req_seq == next_seq - 1`（重发上一项，不推进 `next_seq`，不发 Failed），再校验 `req_seq == next_seq`，否则才 `SeqMismatch`。附带：下载时收到刚接受项的重复 `MISSION_ITEM_INT` 直接忽略。
+- 验证：新增 `upload_duplicate_request_is_resent`、`upload_duplicate_of_last_item_is_resent`、`download_duplicate_item_ignored`；`upload_seq_mismatch_fails` 仍覆盖真正越序。
 
 ### #9 [P0][core/app] Download accepts MISSION_ITEM_INT addressed to other GCSs
-**状态**：⬜ 未开始
+**状态**：✅ 已完成（工作区改动，未提交）
 - 位置：`protocol.rs::target_of`（未覆盖 `MISSION_ITEM_INT`、`MISSION_CURRENT`）；`mission_service.rs`（对所有 `MISSION_ITEM_INT` 写入 HashMap，且不看来源）
 - 影响：QGC 同时下载任务时，MagGCS 会混入 FC 发给 QGC 的 item。
 - 修复：校验发送方是目标 FC、且（若消息带目标字段）目标是本机；`MISSION_ITEM_INT` 本身没有 target 字段的情况下，改为只在自己处于 Download 且 seq 与期望一致时接收；去掉 service 里的第二份 items 副本，以协议状态机为唯一来源。
 - 验收：测试夹具中并行注入发往另一 GCS 的任务流，结果不被污染。（待核实：PX4 对多 GCS 同时读取任务的实际行为。）
+- 实现：
+  - `MissionProtocol::handle` 对 `MISSION_ITEM_INT`/`MISSION_CURRENT`（无可用的目标字段）要求来源头等于目标 FC，其他来源直接丢弃。
+  - 下载项改为协议自身持有：新增 `last_downloaded` 字段与 `take_downloaded()`，仅在 Download 状态且 `seq == next_seq` 时写入（`on_download_item`），完成后由 `app-tauri::mission_service` 调用 `take_downloaded()` 发 `mission_plan`。
+  - `mission_service.rs` 删除独立的 `HashMap` 副本与 `mission_item_from_mav` 依赖，协议成为唯一来源。
+- 验证：新增 `download_ignores_items_from_foreign_source`、`mission_current_from_foreign_source_ignored`、`download_exposes_items_in_seq_order`；`download_round_trip`/`set_current_round_trip` 改用真实 FC 头。`cargo test -p maggcs-core --lib` 84 passed；`cargo clippy --all-targets -- -D warnings` 通过。
+- 关联：handoff 报告"Plan 页航点像测绘/标称数据、与实际航线无关"——根因是 service 里不看来源的副本被 QGC 并发下载污染。
 
 ---
 
 ## P1 · 数据正确性与互操作
 
 ### #10 [P1][core] `MissionItem` model is redundant and lossy
-**状态**：⬜ 未开始
+**状态**：✅ 已完成（工作区改动，未提交）
 - 位置：`core/src/mission/types.rs`、`protocol.rs::mission_item_from_mav`
 - 现象：`params` 含 7 个值同时又有 `x/y/z`；下载时 `params[4] = x as f32`（1e7 缩放整数转 f32，丢精度，误差可达分米级）；上传时忽略 `params[4..7]`。
 - 修复：`params` 只保留 p1–p4，坐标仅用 `x/y/z`；同步更新前端、`planfile.ts`、ts-rs 绑定。
 - 验收：对随机经纬度做上传/下载往返，x/y 逐位相等。
+- 实现：`MissionItem::params` 只保留 P1–P4；`mission_item_to_mav` 只复制 `params[0..4]`，`mission_item_from_mav` 不再把 `x/y/z` 塞回 `params[4..7]`。前端 `stores/mission.ts` 与 `planfile.ts` 同步（QGC 导出仍在 `params[4..6]` 写坐标以保持兼容）。
+- 验证：新增 `coordinates_round_trip_bit_exact`（多组含极端经纬度，x/y 逐位相等），更新 `encode_decode_round_trip`；`cargo test -p maggcs-core --lib` 92 passed。
 
 ### #11 [P1][core] `MissionFrame` does not round-trip
-**状态**：⬜ 未开始
+**状态**：✅ 已完成（工作区改动，未提交）
 - 位置：`types.rs::to_mav / from_mav`
 - 现象：`Global`→`GLOBAL_INT`、`GlobalTerrainAlt`→`..._INT`，下载回来变成 INT 变体，"逐项一致"必然不成立。
 - 修复：只保留 INT 变体（删除冗余非 INT 变体），对未知帧返回错误而不是静默 `_ => Global`。
 - 验收：所有支持的 frame 往返相等；未知 frame 报错。
+- 实现：删除冗余的非 INT 变体，只保留 `global_int`/`global_relative_alt_int`/`global_terrain_alt_int`/local 系列；`from_mav` 把非 INT 拼写归一化到 INT，未知帧返回新增的 `MissionError::UnsupportedFrame`（不再静默 `=> Global`）；`mission_item_from_mav` 改为 `Result`，下载遇到不支持帧时终止并发 `Failed`。前端 `planfile.ts` 的帧映射同步。
+- 验证：新增 `frame_round_trips_and_unknown_errors`、`download_fails_on_unsupported_frame`；`MissionFrame.ts` 绑定已重生成并同步。
 
 ### #12 [P1][frontend] `.plan` import crashes on ComplexItem
-**状态**：⬜ 未开始
+**状态**：✅ 已完成（工作区改动，未提交）
 - 位置：`frontend/src/mission/planfile.ts::qgcToItem`
 - 现象：直接解构 `raw.coordinate`，QGC 的 Survey/Corridor Scan 等 `ComplexItem` 没有该字段，抛 TypeError。
 - 修复：按 `type` 分支；ComplexItem 要么展开其子项，要么明确提示"不支持"并列出位置，不允许静默丢弃。
 - 验收：用包含 Survey 复杂项的真实 `.plan` 样本（放入 `testdata/`）导入不崩溃且有明确提示。
+- 实现：`qgcToItem` 拆成面向 `coordinate` 的 `simpleToItem`（缺坐标返回 `null`）；`parsePlan` 处理 `ComplexItem`：有 `simpleItems` 则展开其子项，否则计入 `unsupported`（标签如 `Survey #1`）并在 UI 提示。`importPlanFile` 返回 `PlanImport{items,mode,home,base,unsupported}`。
+- 验证：新增 `testdata/qgc-survey.plan`（SimpleItem + 带 `simpleItems` 的 Survey），用 esbuild+Node 跑 `parsePlan`/`buildPlan`——3 航点、无 unsupported；去掉子项后报 `Survey #1` 且不崩溃。
 
 ### #13 [P1][frontend] `.plan` export is not faithful
-**状态**：⬜ 未开始
+**状态**：✅ 已完成（工作区改动，未提交）
 - 位置：`planfile.ts::buildPlan / itemToQgc`
 - 问题：`plannedHomePosition` 用第一个航点代替；`doJumpId` 恒为 0（QGC 从 1 递增）；`vehicleType/firmwareType/cruiseSpeed/hoverSpeed` 写死；导入时丢弃 `geoFence/rallyPoints/mission` 其他字段。
 - 修复：保留导入文件的未知字段并在导出时写回（passthrough）；Home 位置单独建模；`doJumpId` 递增。
 - 验收：`.plan` 导入→导出→再导入，结构化比较无差异（忽略格式化）；用 QGC 实际打开验证（待核实）。
+- 实现：导入时保存整份 `base` 文档，导出时 `structuredClone` 后写回未知字段（`geoFence`/`rallyPoints`/`cruiseSpeed`/`firmwareType`/`vehicleType`…）；`plannedHomePosition` 单独建模（`home`）；`doJumpId` 从 1 递增。前端 store 保存 `planBase`/`home` 供导出复用。
+- 验证：Node 检查确认 geoFence/rallyPoints/cruiseSpeed/firmwareType/home 透传，`doJumpId=[1,2,3]`，导入→导出→再导入 items/home 完全一致。（QGC 实机打开仍待人工核实。）
 
 ### #14 [P1][frontend] Add-waypoint button inserts at ~(0°, 0°) when nothing is selected
-**状态**：⬜ 未开始
+**状态**：✅ 已完成（工作区改动，未提交）
 - 位置：`frontend/src/components/panels/PlanningPanel.tsx`
 - 现象：`addWaypoint(degFromMavInt(selected?.x ?? 48.6493), ...)`，回退值已是度却再除以 1e7，结果约 4.9e-6°。
 - 修复：区分"度"与"1e7 整数"，推荐把 store 层统一为度，仅在边界处转换；去掉硬编码默认坐标，改用地图中心或当前机位。
 - 附带：列表显示 `y, x`（经度, 纬度）无标签，易读反，改为带标签的 `lat, lon`。
 - 验收：未选中航点时添加，航点落在地图当前中心。
+- 实现：`PlanningPanel.addAt` 未选中时用地图中心（`ui` store 新增 `mapCenter`，由 `MapView` 的 `camera.moveEnd` 发布，单位度），选中时用该航点；两者都已是度，去掉重复的 `/1e7`。列表改为带标签的 `Lat … · Lon …`。硬编码默认坐标只保留在导出兜底常量 `FALLBACK_HOME`。
+- 验证：`npm run typecheck`/`build` 通过；手动步骤：不选航点、移动地图后点 Add，落点应在地图中心。
 
 ### #15 [P1][frontend/app] Mission sync state is unmodelled; no read-back verification
-**状态**：⬜ 未开始
+**状态**：✅ 已完成（工作区改动，未提交）
 - 现象：没有"已同步/已修改/与 FC 不一致"状态；上传后不回读比对。
 - 修复：增加 `dirty` 与 `lastSyncedHash`；上传成功后自动下载并逐项比对，不一致则报错；`busy` 在后端无响应时由总超时复位（见 #7）。
 - 验收：上传后手动改 FC 端任务，界面能提示不一致。
+- 实现：store 新增 `dirty`/`lastSyncedHash`/`fcMatches`/`verifying`；任何编辑置 `dirty` 并清 `fcMatches`。上传成功（`handleEvent`）后置同步并触发 `verifyFc()` 自动下载回读，`mission_plan` 到达时若 `verifying` 则只比对哈希、不覆盖界面，不一致置 `fcMatches=false`；正常下载仍替换列表。面板显示"未保存/与 FC 不一致"。
+- 验证：`typecheck`/`build` 通过；手动步骤：上传后改 FC 端任务再触发比对，界面应提示不一致。
 
 ### #16 [P1][core] Per-field data age is not tracked
 **状态**：⬜ 未开始
@@ -149,90 +175,120 @@
 - 验收：停止注入 GPS_RAW_INT 后 ≤ N 秒，GPS 相关指示变为陈旧状态。
 
 ### #17 [P1][core] Error events delivered through `watch<Option<String>>` can be lost
-**状态**：⬜ 未开始
+**状态**：✅ 已完成（工作区改动，未提交）
 - 位置：`telemetry/hub.rs`（`error_rx`）
 - 现象：`watch` 只保留最新值，两次读取之间的错误会被覆盖；`Lagged(_) => continue` 静默丢帧。
 - 修复：错误改走 `broadcast`/`mpsc`，带类别（`LinkErrorKind`）和时间戳；丢帧时累计计数并暴露在链路诊断里；前端保留错误历史（对应计划里的"链路日志"）。
+- 实现：新增 `TelemetryError { kind: LinkErrorKind, message, at_ms }`（`core::telemetry`，`LinkErrorKind` 改为 `Serialize/Deserialize/TS`）；`TelemetryHub` 错误通道改为容量 64 的 `broadcast`（`subscribe_error()` 返回 `broadcast::Receiver`，`TelemetryHub` 自身改为持有 `broadcast::Sender` 以保持 `Clone`）；新增 `subscribe_dropped_frames()`（`watch<u64>`），pump 在 `Lagged(n)` 时累计并推送。`app-tauri/telemetry_pump.rs` 改用 `err_rx.recv()`（`Lagged` 静默续读、`Closed` 退出），发出 `"link_error"`（`TelemetryError` 对象）与 `"telemetry_dropped"`（累计计数）。前端 `stores/link.ts` 增加 `errorHistory`（上限 50）、`droppedFrames`、`pushError`/`clearErrors`；`bridge.ts` 监听新事件；`ErrorBanner.tsx` 显示类别+消息、可展开历史、丢帧计数提示。
+- 验证：`cargo test -p maggcs-core --lib`（98 passed，新增 `errors_are_delivered_losslessly` 与 `lagging_pump_reports_dropped_frames` 两个用例）；`cargo clippy --all-targets -- -D warnings` 通过；`npm run typecheck && npm run check:colors && npm run check:contrast && npm run build` 通过。ts-rs 新增 `LinkErrorKind.ts`/`TelemetryError.ts` 并同步到 `frontend/src/generated-types/`。
 
 ---
 
 ## P2 · 架构与工程质量
 
 ### #18 [P2][arch] Move `MissionService` from app-tauri into `core`
-**状态**：⬜ 未开始
+**状态**：✅ 已完成（工作区改动，未提交）
 - 违反 ADR-001：服务循环、下载收集、事件序列化都在 Tauri 层，headless server 将无法复用。
 - 做法：`core::mission::service` 输入命令、输出事件流；Tauri 层只做 `app.emit` 适配。
+- 实现：新增 `core::mission::service`（`MissionIds` / `MissionCommand` / `MissionServiceError` / `MissionServiceEvent` / `MissionService::spawn`），把协议状态机、重传 tick、总超时、下载条目组装全部搬入 core；`MissionServiceEvent::{Protocol(MissionEvent), PlanDownloaded(Vec<MissionItem>)}` 通过 `mpsc` 输出。app-tauri 的 `mission_service.rs` 瘦身为纯适配器（`payload()`/`op_name()` 映射 + `app.emit("mission"/"mission_plan")`），`state.rs` 直接持有 `maggcs_core::mission::service::MissionService`，`commands.rs` 用 `mission_service::spawn(app, handle, MissionIds{..})` 并 `.map_err(|e| e.to_string())`。
+- 验证：新增 `crates/core/tests/mission_service_integration.rs`（真实 UDP 假 FC：上传走 `MISSION_COUNT→MISSION_REQUEST_INT→MISSION_ITEM_INT→MISSION_ACK` 收到 `Completed(Upload)`；下载走 `MISSION_REQUEST_LIST→MISSION_COUNT→…` 收到 `PlanDownloaded` 两条 item），2 passed；`cargo test -p maggcs-core --lib` 98 passed；`cargo clippy --all-targets -- -D warnings` 通过。前端 wire contract 未变。
 
 ### #19 [P2][arch] Replace polling pump with event-driven hub
-**状态**：⬜ 未开始
+**状态**：✅ 已完成（工作区改动，未提交）
 - 位置：`telemetry/hub.rs::pump`（`try_recv` 排空 + `sleep(50 ms)`）
 - 影响：每个事件最多额外延迟 50 ms，占用"位置延迟 < 200 ms"的预算。
 - 做法：`select!` 同时等待事件与节流 ticker；丢帧计数入诊断。
+- 实现：`pump` 改为单个 `tokio::select!`，同时等待 `events.recv()`、`tokio::time::interval(period)`（`MissedTickBehavior::Delay`）与 `shutdown_rx.changed()`；事件到达即消费，快照按 `hz` 节流推送，`dirty` 标志避免空推。`Lagged(n)` 累计到 `dropped_frames` 并通过 `dropped_tx` 暴露（诊断）、`Closed` 退出，删除 `try_recv` 排空与 `sleep` 轮询。
+- 验证：新增 `snapshot_latency_is_bounded` 单测（20 Hz 下心跳快照 < 500 ms 且值正确）；`cargo test -p maggcs-core --lib` 99 passed；`cargo clippy --all-targets -- -D warnings` 通过。
 
 ### #20 [P2][arch] Introduce message routing in the connection layer
-**状态**：⬜ 未开始
+**状态**：✅ 已完成（工作区改动，未提交）
 - 现象：hub、mission service 各自订阅全量 broadcast 再各自过滤；RTK、参数、日志模块都会重复这一模式。
 - 做法：连接层统一做 sysid/compid 过滤与按消息类型分发。
+- 实现：新增 `core::mavlink::router`：`MessageRoute`（按 `message_ids` 与来源 `system_id`/`component_id` 组合的谓词，builder 风格 `messages()`/`from_node()`/`only()`/`from()` + `matches()`）；`RoutedEvents` 包装 `broadcast::Receiver<ConnectionEvent>`，跳过不匹配的 `Message`、始终放行生命周期事件（`Connected`/心跳/`LinkError`/`Failed`），并把 `RecvError::Lagged` 透传给调用方以便计数。新增 `ConnectionHandle::subscribe_route(route)`。消费者改造：hub 用 `MessageRoute::from_node(target)`；mission service 用 `MessageRoute::messages(MISSION_MESSAGE_IDS)`（协议里新增该 const，列出 40/41/42/43/44/45/47/51/73）；command service 用 `COMMAND_ACK` 的 message id。
+- 验证：`MessageRoute` 4 个单测（all/node/message-id/组合）；`cargo test -p maggcs-core`（lib 103 passed，command/mission/connection 集成测试全绿）；`cargo clippy --all-targets -- -D warnings` 通过。
 
 ### #21 [P2][arch] Make app state multi-vehicle ready and `connect` atomic
-**状态**：⬜ 未开始
+**状态**：✅ 已完成（工作区改动，未提交）
 - 位置：`app-tauri/src/state.rs`、`commands.rs::connect`
 - 现象：全局单例 `connection/hub/mission`；先 take 再 set 非原子，并发 `connect` 有竞态。
 - 做法：引入 `LinkId/VehicleId`，`connect/disconnect` 串行化（单一 actor 或持锁到完成）。
+- 实现：`state.rs` 引入 `LinkId`（进程内单调分配）与 `ActiveLink { id, connection, hub, mission, command }`，`AppInner` 改为 `{ links: BTreeMap<LinkId, ActiveLink>, primary: Option<LinkId>, link }`，提供 `set_primary_link`（返回旧主链路）/`take_primary_link`/`link_count`/`hub`/`mission`/`command`；新增 `AppState::ops()`（`tokio::sync::Mutex<()>`）。`connect`/`disconnect`/`shutdown_app` 全流程持有该锁，`connect` 成功后一次性换入新链路再关闭旧链路（失败的 reconnect 不再杀掉已有链路）；旧链路经 `old.hub.shutdown()` + `old.connection.shutdown()` 回收，mission/command 句柄 drop 即停。
+- 验证：`state.rs` 单测（`LinkId` 唯一且单调、`publish_link`/`link_status` 往返、空状态 `take_primary_link` 返回 None）；`cargo test -p maggcs-app` 6 passed；`cargo clippy --all-targets -- -D warnings` 通过。
 
 ### #22 [P2][security] Tighten Tauri configuration
-**状态**：⬜ 未开始
+**状态**：✅ 已完成（工作区改动，未提交）
 - `tauri.conf.json`：`csp: null`；`capabilities/default.json`：`fs:default` + 读写权限无 scope；`Cargo.toml`：release 仍含 `devtools`。
 - 做法：设置严格 CSP（Cesium worker/blob 单独放行）；fs 权限限定到用户通过对话框选择的路径；release 关闭 devtools。
+- 实现：`tauri.conf.json` 设置 CSP：`default-src 'self'`、`object-src 'none'`、`base-uri/form-action/frame-ancestors` 收紧；`script-src 'self'`（Tauri 自动注入 nonce）；`style-src 'self' 'unsafe-inline'`（Cesium/Radix 动态内联样式）；`img-src`/`connect-src` 放行 `data:`、`blob:` 与 OSM 瓦片域 `https://tile.openstreetmap.org`/`https://*.tile.openstreetmap.org`；`worker-src`/`child-src` 放行 `'self' blob:`（Cesium worker）；`connect-src` 追加 `ipc: http://ipc.localhost`（Tauri IPC）。`capabilities/default.json` 删除 `fs:default`/`fs:read-files`/`fs:write-files`，只保留 `fs:allow-read-text-file`/`fs:allow-write-text-file`——实际访问范围由 dialog 插件在运行时把用户选中的文件加入 fs scope（`allow_file`）。`Cargo.toml` 去掉 `tauri` 的 `devtools` feature（该 feature 只在 release 保留 devtools；debug 构建默认仍可用）。
+- 验证：`cargo build -p maggcs-app` 通过（`tauri-build` 校验 CSP 与 capability schema）；前端未新增远程依赖，Cesium 资产仍走本地 static copy。
 
 ### #23 [P2][ci] ts-rs binding sync check can never fail
-**状态**：⬜ 未开始
+**状态**：✅ 已完成（工作区改动，未提交）
 - 位置：`.github/workflows/ci.yml`，`git diff --exit-code ... || echo ...`
 - 修复：去掉 `|| echo`，改为失败时输出修复提示并以非零退出。
+- 实现：改为 `if ! git diff --exit-code -- crates/core/bindings; then echo "::error::..."; exit 1; fi`，绑定过期时以非零退出并给出 `cargo test -p maggcs-core` 修复提示。
+- 验证：YAML 解析通过；逻辑等价于本地 `git diff --exit-code`（当前工作区绑定与生成一致）。
 
 ### #24 [P2][ci] Workflow inconsistencies
-**状态**：⬜ 未开始
+**状态**：✅ 已完成（工作区改动，未提交）
 - SITL 固定 PX4 v1.14.3 + jmavsim，而联调环境是 v1.17.0；注释说"短 smoke 每次 push 跑"但 `if` 只允许 schedule/手动。
 - `windows-build` 每次 push 都往固定 `v0.1.0` 创建草稿 release，改为仅在打 tag 时触发。
 - 增加依赖/许可证检查（`cargo deny`、`npm audit`），兑现 ADR-007 里"CI 检查 license"的承诺。
+- 实现：`on.push` 增加 `tags: ["v*"]`；`windows-build` 改为 `startsWith(github.ref, 'refs/tags/v') || workflow_dispatch`，`tagName`/`releaseName` 用 `github.ref_name`（非 tag 时回退 v0.1.0）；SITL 注释改为"仅 schedule/手动"，PX4 分支由 `v1.14.3` 对齐到 `v1.17.0`；新增 `deny` job（`taiki-e/install-action` 固定 `cargo-deny@0.20.2` + `cargo deny check`）与根 `deny.toml`；frontend job 增加 `npm audit --omit=dev --audit-level=high`（只审运行时依赖）。
+- deny.toml：`[advisories]` `yanked="deny"`/`unmaintained="workspace"`，忽略 `RUSTSEC-2026-0194/0195`（仅 `mavlink-bindgen` 构建期解析可信 dialect XML 的 quick-xml 0.39，被 mavlink 0.17.1 锁死无法升级，已注明理由）；`[licenses]` 允许 MIT/Apache-2.0/BSD/Unicode-3.0/Zlib/0BSD/CC0-1.0/MPL-2.0，工作区 crate 标 `publish = false` + `private = { ignore = true }` 跳过；`[sources]` 告警未知 registry/git。为匹配 0.20 schema 同时给 `crates/core`/`crates/app-tauri` 增加 `publish = false`。
+- 验证：`cargo deny check` → `advisories ok, bans ok, licenses ok, sources ok`（exit 0）；`npm audit --omit=dev --audit-level=high` → `found 0 vulnerabilities`；`ci.yml` YAML 解析通过。
 
 ### #25 [P2][test] Add a lossy fake-FC test harness for the mission protocol
-**状态**：⬜ 未开始
+**状态**：✅ 已完成（工作区改动，未提交）
 - 在 `core/tests/` 里实现可控丢包/重复/乱序/延迟的假 FC，覆盖上传、下载、清空、设置当前航点。
 - 用它自动验证 Phase 1 验收（100 航点上传下载一致；10% 丢包仍可完成）以及 #7 #8 #9 的回归。
+- 实现：新增 `crates/core/tests/mission_fake_fc.rs`：`FakeFc` 实现上传（MISSION_COUNT→逐条 REQUEST_INT→ACK）、下载（REQUEST_LIST→COUNT→逐条 item→ACK）、清空、设置当前航点，并在超时后重发最后一个控制帧；`Sim` 用有向双队列 + `Faults { drop_period, duplicate_period }` 注入丢包/重复，并用虚拟时钟（无进展时前进一个 `RETRY_TIMEOUT` 再 `on_tick`）按 `retransmit_due` 驱动重传，因此完全确定、瞬时完成。MAVLink mission 是 stop-and-wait，乱序/延迟在该模型中等价于丢包+重复，已由重传路径覆盖。
+- 验证：6 个测试全绿——`upload/download_100_waypoints_round_trips_exactly`（100 条逐字段相等）、`upload/download_completes_with_10_percent_loss`（drop_period=10 + duplicate_period=17，约 8/23 次重传后完成）、`clear_removes_the_fc_mission`、`set_current_reports_the_active_waypoint`；#7 重传回归由丢包用例覆盖，#8/#9 由 `protocol.rs` 既有单测（`upload_duplicate_request_is_resent`、`download_ignores_items_from_foreign_source` 等）覆盖。`cargo test -p maggcs-core` 全绿。
 
 ### #26 [P2][docs] Documentation and ADR consistency
-**状态**：⬜ 未开始
+**状态**：✅ 已完成（工作区改动，未提交）
 - AGENTS.md 要求全英文，但 `DEVELOPMENT_PLAN.md`（v2.2）为中文，v2.1 为英文，两份并存。
 - ADR-006（工作基准 AMSL）与计划 v2.2 ADR 表（"内部统一用椭球高"）矛盾，需统一并改状态。
 - 所有 ADR 仍为 Draft；ADR-010 已实现应转 Accepted；ADR-011（链路状态模型与 GCS 心跳）在计划里被引用但 `docs/adr/` 中不存在。
 - AGENTS.md 中 `crates/server`、`frontend` 的"尚未搭建"描述已过期；`LICENSE` 仍未决定（ADR-007）。
+- 实现：把 `docs/DEVELOPMENT_PLAN.md` 全文译为英文 v2.2（修正 ADR 表中 006 的高度基准矛盾、010 改为 Accepted、007 改为已定、011 已存在），删除已被取代的 `DEVELOPMENT_PLAN_v2.1.md`，并把分散在各 README/源码里对 `_v2.1` 的引用改为 `DEVELOPMENT_PLAN.md`；`docs/README.md` 同步。新增 `docs/adr/011-link-state-model.md`（四级链路模型 + 1 Hz GCS HEARTBEAT + 独立超时定时器），ADR-001/002/006/010 由 Draft 转 Accepted（附日期与依据），ADR-007 定为 Apache-2.0 并落地 `LICENSE`（官方文本）与 workspace `license = "Apache-2.0"`。`AGENTS.md` 仓库布局改为反映现状（`core` 已含 mavlink/telemetry/mission/commands/devices/height，app-tauri 与 frontend 已搭建，server/udev-installer/dem-prep 仍为占位）。
+- 验证：`rg "[\x{4e00}-\x{9fff}]" docs AGENTS.md` 无输出（docs 全英文）；`rg "DEVELOPMENT_PLAN_v2.1"` 无引用；`cargo deny check` → `licenses ok`（工作区 crate 现为 Apache-2.0）；`cargo check -p maggcs-core` 通过。
 
 ---
 
 ## P3 · 前端与打磨
 
 ### #27 [P3][frontend] Show a clear "MOCK DATA" indicator when `isMock` is true
-**状态**：⬜ 未开始
+**状态**：✅ 已完成（工作区改动，未提交）
 - 防止模拟遥测被误认为真实数据。
+- 实现：新增 `frontend/src/components/MockBanner.tsx`，`isMock` 为真时在地图区顶部居中显示醒目的 "MOCK DATA · Simulated telemetry — not a live link" 提示条（`role="status"`、warn 配色、带图标）；`App.tsx` 挂载；移除 HUD 里 10px 的 "MOCK" 小标签。i18n 新增 `mock.banner`/`mock.detail`。
+- 验证：`npm run typecheck`、`npm run check:colors` 通过；`isMock` 由 `startMockFeed()` 设置，浏览器开发模式下可见。
 
 ### #28 [P3][frontend] Telemetry channel will not scale to Phase 4 mag data
-**状态**：⬜ 未开始
+**状态**：✅ 已完成（设计定稿，实现留待 Phase 4）
 - 当前 20 Hz 整份 JSON 快照适合现有 6 类消息；磁数据高频曲线需单独的批量/二进制通道（Tauri `Channel`）与 uPlot 环形缓冲。
 - 设计在 Phase 4 前定稿，不要沿用 `telemetry` 事件。
+- 实现：新增 `docs/design/telemetry-channels.md`，冻结双通道方案——`telemetry` 事件保持 20 Hz JSON 状态快照（HUD/地图/离散状态的事实来源），高频序列另开 Tauri `Channel<T>` 二进制批量帧（每 ~50–100 ms 一批，小端 f32/i32，带 series id/起始时间戳/采样率/通道掩码/样本数头部），前端写入定长环形缓冲（容量/窗口为 config）供 uPlot 直接绘制；背压采用丢最旧 + 计数上报，与 #17 的丢帧诊断一致。Phase 4 直接照此实现。
 
 ### #29 [P3][frontend] Split `MapView.tsx` (~17 KB) before adding survey layers
-**状态**：⬜ 未开始
-- 先拆成场景初始化 / 图层 / 航点交互 / 相机跟随几个模块。（此文件我只看了结构，未逐行审，拆分方案需你先确认。）
+**状态**：✅ 已完成（工作区改动，未提交）
+- 先拆成场景初始化 / 图层 / 航点交互 / 相机跟随几个模块。
+- 实现：`MapView.tsx` 从 538 行降到 46 行，只剩组合（viewer 生命周期 + store wiring + 渲染）。新增 `frontend/src/cesium/`：`constants.ts`（home/trail/预测/跟随常量与模型 URI）、`uav.ts`（纯 Cesium 数学：`groundSpeedMps` / `uavQuaternion` / `uavOrientation` / `projectAhead`）、`scene.ts`（WebGL 探测 + 网格/OSM 影像 + 初始视角，返回 `Viewer`）、`entities.ts`（drone/trail/predict/home 图层与航点折线+编号点，含 `disposeWaypointLayer`）、`waypoints.ts`（屏幕空间拖拽处理器）、`follow.ts`（`createFollowController`：dead-reckon 推进 + 手写跟随相机）；新增 `frontend/src/hooks/useCesiumViewer.ts`（React 生命周期绑定，返回 `{ initError, setSnapshot, setMission, goHome }`）。行为不变（纯搬移 + import）。
+- 验证：`npm run typecheck`、`npm run check:colors`、`npm run check:contrast`、`npm run build` 全通过；用 Playwright 无头 Chromium 加载构建产物，控制台无错误、无 404。拆分路线记录在 `docs/design/map-view-modules.md`。
 
 ### #30 [P3][build] Trim Cesium assets for packaging
-**状态**：⬜ 未开始
+**状态**：✅ 已完成（工作区改动，未提交）
 - `vite.config.ts` 复制整个 `Workers/ThirdParty/Assets/Widgets`，`chunkSizeWarningLimit` 调到 2 MB；Phase 6 前裁剪默认影像等不用的资源。
+- 实现：`vite.config.ts` 不再整目录复制 `Assets`，改为按需列出子项——保留 `approximateTerrainHeights.json`、`IAU2006_XYS`、`Images`、`Textures/{SkyBox,LensFlare,moonSmall.jpg}`；剔除 `Textures/{NaturalEarthII,maki,waterNormals*.jpg}`（默认影像、PinBuilder 图标、海面法线，本应用从不请求）。`Workers`/`ThirdParty`/`Widgets` 仍整体复制（懒加载、按名引用）。
+- 验证：`vite build` 后 `dist/cesium/Assets` 4.6 MB → 3.3 MB、`dist/cesium` 7.7 MB → 6.2 MB、`dist` 23 MB → 19 MB。用 Playwright 无头 Chromium 抓取全部网络请求核对：被剔除的资源均未被请求；过程中发现默认场景会请求 `IAU2006_XYS/IAU2006_XYS_18.json`（太阳/月亮 ICRF），已保留，最终无 404、无控制台错误。截图基线与本机环境本身已有 ~38–47% 差异（同一构建连续两次运行 `dark-planning-1920x1080` 即相差 25%，OSM 瓦片/模拟数据导致），故与本次裁剪无关。
 
 ### #31 [P3][core] Device hotplug watcher polls every 500 ms and fails hard
-**状态**：⬜ 未开始
+**状态**：✅ 已完成（工作区改动，未提交）
 - 位置：`devices/manager.rs::spawn_watcher`（`?` 提前返回、轮询枚举）。
 - 做法：枚举失败不应中止监听；Linux 上后续换 udev 事件；`helpers/udev-installer` 只有 README，实现前先按 ADR-009 写威胁模型和拒绝路径的测试。
+- 实现：`spawn_watcher` 取消 `Result` 返回，改为返回 `DeviceManagerHandle`（含 `stop`/`spawn_watcher` 关闭路径）；枚举失败只记录、不再提前返回中止监听，并新增 `primed` 标志在首轮成功后标记；把轮询枚举抽成 `hotplug_events()` 便于测试。纯枚举（无特权操作、无写设备），故按 ADR-009 只需非致命化 + 测试，不需要新的威胁模型。
+- 验证：`devices/manager.rs` 新增单测覆盖 `hotplug_events()` 的加入/移除/无变化与"枚举失败不致命"；`cargo test -p maggcs-core --lib` 通过；`cargo clippy --all-targets -- -D warnings` 通过。
 
 ---
 

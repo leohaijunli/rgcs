@@ -3,7 +3,7 @@ import * as Dialog from '@radix-ui/react-dialog'
 import * as Tabs from '@radix-ui/react-tabs'
 import { X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { connectEndpoint, disconnect, reportConnectError } from '../../desktop/connect'
+import { connectEndpoint, disconnect, reportConnectError, shutdownApp } from '../../desktop/connect'
 import { useDevicesStore } from '../../stores/devices'
 import { useLinkStore } from '../../stores/link'
 import { useUiStore } from '../../stores/ui'
@@ -83,6 +83,7 @@ function ConnectionTab() {
   const { t } = useTranslation()
   const [endpoint, setEndpoint] = useState(DEFAULT_ENDPOINT)
   const [busy, setBusy] = useState(false)
+  const [confirmShutdown, setConfirmShutdown] = useState(false)
   const link = useLinkStore((s) => s.link)
 
   const connect = async () => {
@@ -126,6 +127,18 @@ function ConnectionTab() {
           className="rounded border border-line bg-canvas px-4 py-2 text-muted hover:text-ink"
         >
           {t('settings.disconnect')}
+        </button>
+      </div>
+      <div className="border-t border-line pt-3">
+        <button
+          onClick={() => (confirmShutdown ? void shutdownApp() : setConfirmShutdown(true))}
+          className={`rounded border px-4 py-2 ${
+            confirmShutdown
+              ? 'border-error bg-error text-canvas'
+              : 'border-line bg-canvas text-error hover:bg-canvas'
+          }`}
+        >
+          {confirmShutdown ? t('settings.shutdownConfirm') : t('settings.shutdown')}
         </button>
       </div>
     </div>

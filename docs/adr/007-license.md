@@ -1,8 +1,8 @@
-# ADR-007: License — Apache-2.0 or GPLv3
+# ADR-007: License — Apache-2.0
 
-- Status: Draft
+- Status: Accepted
 - Date: 2026-10-03
-- Decision required during Phase 0.
+- Accepted: 2026-10-07 — Apache-2.0.
 
 ## Options
 
@@ -17,13 +17,18 @@
   commercial. Copyleft may deter integration with proprietary payload
   software (magnetometry/geophysics post-processing).
 
-## Recommendation (pending confirmation)
+## Decision
 
-- Apache-2.0. Rationale: distribution goal (wide adoption side-by-side with
-  QGC, which is GPLv3) and permissive attitude of the Rust/Tauri stack.
-- `docs/` and test data may carry their own permissive terms.
+- **Apache-2.0.** Rationale: the distribution goal (wide adoption side-by-side
+  with QGC, which is GPLv3) and the permissive attitude of the Rust/Tauri
+  stack. Apache-2.0 keeps the door open for commercial field teams and
+  proprietary payload software.
+- `docs/` and test data are covered by the same license unless a file states
+  otherwise.
 
 ## Consequences
 
-- Once chosen, the `LICENSE` file and every crate's `license` field must
-  reflect the decision; CI must check it.
+- The repository `LICENSE` holds the Apache-2.0 text; every crate inherits
+  `license.workspace = true` (`Apache-2.0`).
+- CI checks dependency licenses with `cargo deny` (`deny.toml`), rejecting
+  copyleft/unknown licenses that would constrain distribution.

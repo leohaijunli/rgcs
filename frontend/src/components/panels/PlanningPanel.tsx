@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { importPlanFile, exportPlanFile } from '../../mission/planfile'
 import { useLinkStore } from '../../stores/link'
+import { useUiStore } from '../../stores/ui'
 import { useMissionStore, degFromMavInt, type AltitudeMode } from '../../stores/mission'
 import type { MissionItem } from '../../generated-types/MissionItem'
 
@@ -17,6 +18,10 @@ export default function PlanningPanel() {
   const busy = useMissionStore((s) => s.busy)
   const syncState = useMissionStore((s) => s.syncState)
   const lastEvent = useMissionStore((s) => s.lastEvent)
+  const dirty = useMissionStore((s) => s.dirty)
+  const fcMatches = useMissionStore((s) => s.fcMatches)
+  const planBase = useMissionStore((s) => s.planBase)
+  const home = useMissionStore((s) => s.home)
   const select = useMissionStore((s) => s.select)
   const setAltitudeMode = useMissionStore((s) => s.setAltitudeMode)
   const addWaypoint = useMissionStore((s) => s.addWaypoint)
@@ -28,6 +33,8 @@ export default function PlanningPanel() {
 
   const selected = selectedSeq !== null ? items.find((it) => it.seq === selectedSeq) ?? null : null
   const [dragSeq, setDragSeq] = useState<number | null>(null)
+  const [importNotice, setImportNotice] = useState<string[]>([])
+  const mapCenter = useUiStore((s) => s.mapCenter)
 
   const onDrop = (targetSeq: number) => {
     if (dragSeq === null || dragSeq === targetSeq) return
@@ -38,12 +45,21 @@ export default function PlanningPanel() {
   const onImport = async () => {
     const result = await importPlanFile()
     if (!result) return
-    useMissionStore.getState().setItems(result.items)
-    useMissionStore.getState().setAltitudeMode(result.mode)
+    useMissionStore.getState().applyImport(result)
+    setImportNotice(result.unsupported)
   }
 
   const onExport = async () => {
-    await exportPlanFile(items, altitudeMode)
+    await exportPlanFile(items, altitudeMode, { base: planBase ?? undefined, home })
+  }
+
+  // Default a new waypoint to the selected item, else the map centre; both in
+  // degrees (issues.md #14).
+  const addAt = () => {
+    const latDeg = selected ? degFromMavInt(selected.x) : mapCenter?.lat
+    const lonDeg = selected ? degFromMavInt(selected.y) : mapCenter?.lon
+    if (latDeg == null || lonDeg == null) return
+    addWaypoint(latDeg, lonDeg, 50)
   }
 
   return (
@@ -92,8 +108,10 @@ export default function PlanningPanel() {
                   }`}
                 >
                   <span className="mono w-6 shrink-0 text-right text-muted">{it.seq}</span>
-                  <span className="min-w-0 flex-1 truncate">
-                    {degFromMavInt(it.y).toFixed(6)}, {degFromMavInt(it.x).toFixed(6)}
+                  <span className="mono min-w-0 flex-1 truncate">
+                    {t('plan.lat')} {degFromMavInt(it.x).toFixed(6)}
+                    <span className="text-muted"> · </span>
+                    {t('plan.lon')} {degFromMavInt(it.y).toFixed(6)}
                   </span>
                   <span className="mono shrink-0 text-muted">{it.z.toFixed(1)} m</span>
                   {it.current ? (
@@ -110,9 +128,21 @@ export default function PlanningPanel() {
 
       {selected ? <ItemEditor item={selected} /> : null}
 
+      {importNotice.length > 0 && (
+        <div className="rounded border border-warn px-2 py-1 text-xs text-warn">
+          {t('plan.importUnsupported', { items: importNotice.join(', ') })}
+        </div>
+      )}
+      {!busy && (dirty || fcMatches === false) && (
+        <div className={`text-xs ${fcMatches === false ? 'text-error' : 'text-warn'}`}>
+          {fcMatches === false ? t('plan.mismatch') : t('plan.unsaved')}
+        </div>
+      )}
+
       <div className="grid grid-cols-2 gap-1.5">
         <button
-          onClick={() => addWaypoint(degFromMavInt(selected?.x ?? 48.6493), degFromMavInt(selected?.y ?? -123.3982), 50)}
+          onClick={addAt}
+          disabled={selected == null && mapCenter == null}
           className="rounded-md border border-line bg-panel px-2 py-1.5 text-sm hover:bg-canvas"
         >
           {t('plan.add')}

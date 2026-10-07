@@ -1,116 +1,108 @@
 # MagGCS — Session Handoff
 
-Snapshot of the current session (map/UAV work). Issue statuses live in
-`issues.md`; keep both in sync when a task lands.
+Snapshot of the current session (issues.md backlog clearance). Issue statuses
+live in `issues.md`; keep both in sync when a task lands.
+
+## Latest landing — issues.md backlog cleared
+
+The whole `issues.md` backlog (P0 #1–#9, P1 #10–#17, P2 #18–#26, P3 #27–#32)
+is implemented in the working tree; the only deliberately skipped items are the
+UAV-model refinements the user asked to defer. Highlights:
+
+- **#17** lossless link-error channel: `TelemetryError { kind, message, at_ms }`
+  on a `broadcast` (cap 64) plus a dropped-frame `watch`; surfaced in the
+  frontend as an error banner with history.
+- **#18** `MissionService` moved into `core::mission::service`; app-tauri is now
+  a thin `app.emit` adapter (headless-reusable).
+- **#19/#20** `TelemetryHub` pump is event-driven `select!`; new
+  `core::mavlink::router` (`MessageRoute` / `RoutedEvents`,
+  `ConnectionHandle::subscribe_route`) so hub/mission/command filter by
+  sysid/compid + message id in the connection layer.
+- **#21** app state is multi-vehicle ready (`LinkId` / `ActiveLink` /
+  `BTreeMap` + `primary`); `connect`/`disconnect`/`shutdown_app` run under
+  `AppState::ops()` and connect swaps links atomically.
+- **#22–#24** Tauri CSP + least-privilege capabilities, CI `deny` job
+  (`cargo deny check`, new `deny.toml`), ts-rs sync check, frontend
+  `npm audit --omit=dev`.
+- **#26** docs/ADRs reconciled: `docs/DEVELOPMENT_PLAN.md` is English v2.2
+  (the `_v2.1` copy is deleted), new `docs/adr/011-link-state-model.md`,
+  ADR-001/002/006/010 → Accepted, ADR-007 → Apache-2.0 with an Apache-2.0
+  `LICENSE`, `AGENTS.md` layout refreshed.
+- **#27/#28** prominent MOCK DATA banner; `docs/design/telemetry-channels.md`
+  freezes the Phase 4 high-rate channel design (keep 20 Hz JSON state, add a
+  Tauri `Channel` binary batch + frontend ring buffer).
+- **#29** `MapView.tsx` split from 538 → 46 lines into
+  `frontend/src/cesium/{constants,uav,scene,entities,waypoints,follow}.ts` +
+  `hooks/useCesiumViewer.ts` (see `docs/design/map-view-modules.md`).
+- **#30** `vite.config.ts` no longer copies all of Cesium `Assets`; the default
+  imagery (`NaturalEarthII`), maki pins and water-normal maps are dropped.
+  `dist/cesium` 7.7 MB → 6.2 MB, `dist` 23 MB → 19 MB.
+- **#31** device hotplug watcher no longer aborts on an enumeration failure
+  (`spawn_watcher` returns `DeviceManagerHandle`, `hotplug_events()` extracted
+  and unit-tested).
+
+Verified: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
+`cargo test -p maggcs-core` (lib 105 + integration all green), `cargo deny
+check`, `cd frontend && npm run typecheck && npm run check:colors &&
+npm run check:contrast && npm run build`. A Playwright headless-Chromium load of
+the built app showed no console errors and no failing requests.
 
 ## Repo state
 
-- Branch `main`; `origin/main == b7a77c3`.
-- Pushed: **#5** (flight commands / RTL through the command session) and
-  **#32** (real glTF UAV model, MAVLink-driven attitude, forward-only
-  prediction).
-- Uncommitted working tree (this session, not yet pushed):
-  - `crates/core/src/telemetry/mod.rs` — `parse_attitude` test now asserts
-    roll/pitch/yaw **and** the rate signs.
-  - `frontend/src/telemetry/mock.ts` — the mock path is now self-consistent
-    (derives NED velocity + heading from its own sine path); was 44 m/s actual
-    vs 4 m/s reported before.
-  - `frontend/src/stores/ui.ts` — added `setFollow(follow)`.
-  - `frontend/src/components/MapView.tsx` — dead-reckoned marker, custom
-    camera follow (Cesium `trackedEntity` removed), one-shot chase framing,
-    `goHome` clears follow.
+- Branch `main`. This landing is the first commit since `abe03cc`; it is
+  committed and pushed (see the commit message) — no uncommitted changes are
+  expected after it.
 
-## Open work (everything raised after #5)
+## Open work
 
-Ordered; nothing here is finished unless marked.
+1. **UAV model items — skipped by request.** HANDOFF items 1–4 ("UAV nose
+   direction", "map jitter", "attitude must match `ATTITUDE`", "UAV on the
+   ground") and issues.md #32 are considered done/deferred; do not reopen
+   without the user asking.
+2. **SITL re-verification of issues.md #6/#9 root-cause fixes.** Items 5–7
+   (link status light) and 8 (plan page items) have a code fix but still need
+   a SITL + real-QGC re-check on the app build.
+3. **HANDOFF item 9 (shutdown).** The in-app Shut down control exists; confirm
+   the intent (quit MagGCS vs. a vehicle/FC shutdown command).
+4. **HANDOFF item 10 (SITL preflight "found 0 compass")** and **item 11 (UAV
+   initial position on the ground)** — SITL-side, not yet reproduced here.
+5. **Continue `docs/DEVELOPMENT_PLAN.md`.** Issues are clear; next is the plan
+   remainder — finish/verify the Phase 0 addendum 0.5–0.9 acceptance and the
+   Phase 1 mission-protocol acceptance, then Phase 2 (RTK + RTCM forwarding).
+   Execution order is §11.8: MAVLink & telemetry → UI shell → Mission protocol
+   → waypoint editing → RTK → DEM & height → Survey → mag & QC.
 
-1. **UAV nose direction** — investigated this session; the dev build is
-   geometrically correct (see next section). Verify against the *app build*
-   before changing code.
-2. **Map jitter** — "地图整体会间歇性的抖动". Dead reckoning already removes the
-   4 Hz position stepping; still to confirm the residual is not a rendering
-   artifact. See below.
-3. **Attitude must match the incoming MAVLink `ATTITUDE`** — roll/pitch/yaw
-   signs need a clean isolated re-verification (an earlier test was invalid
-   because `follow` overrode the injected camera).
-4. **UAV not on the ground at init / after landing** — position uses
-   `relative_alt_m` and the home marker is on the ellipsoid; a landed vehicle
-   should sit at 0. Re-check in SITL.
-5. **Link status wrong** — FC light is red yet the UI still shows *connected*.
-6. **Flight-mode display wrong** — mode pill does not show the real PX4 mode;
-   during RTL it read *Acro*.
-7. **Link status light is grey** in some states.
-8. **Plan page mission items** look like survey/stand data, unrelated to the
-   actual flight plan.
-9. **Missing shutdown button** in the app.
-10. **SITL preflight always fails**, "found 0 compass".
-11. **UAV initial position not on the ground** on the map.
+## Reference — UAV nose analysis (issues.md #32)
 
-## Issue #32 follow-up — is the nose correct?
+`UAV_MODEL_NOSE_YAW_OFFSET_DEG = -90` is geometrically correct: Cesium maps the
+asset's glTF `+Z` onto the body `+X` axis (`ModelUtility.getAxisCorrectionMatrix`,
+default `upAxis=Y, forwardAxis=Z`), and `uavQuaternion` calls body `+Y` the
+nose. Measured in-app: model glTF `+Z` world bearing equals the injected yaw
+(yaw 0 → 0.0°, yaw 90 → 90.00001°). The asset's gimbal (`Object_183`) sits
+under the front on the same centreline as the X-frame's forward bisector.
+**Do not flip the offset** without a fresh measurement.
 
-**Short answer: yes, the current code is geometrically correct in the dev
-build.** `UAV_MODEL_NOSE_YAW_OFFSET_DEG = -90` aligns the asset's front with
-the reported heading. Two independent checks:
+## Known flakes and tooling notes
 
-- **Cesium axis correction** (verified in `Build/CesiumUnminified/index.js`,
-  `ModelUtility.getAxisCorrectionMatrix`, default `upAxis=Y, forwardAxis=Z`):
-  glTF `(x,y,z)` maps to body `(z,x,y)`, i.e. glTF `+Z → body +X`,
-  glTF `+X → body +Y`, glTF `+Y → body +Z`. `uavQuaternion` calls body `+Y`
-  the nose, so the asset's `+Z` needs a −90° yaw correction.
-- **Live in-app measurement**: with the offset applied, the world bearing of
-  the model's glTF `+Z` equals the injected yaw exactly (yaw 0 → 0.0°;
-  yaw 90 → 90.00001°). The dashed prediction line and the nose agree.
-
-**Asset geometry (corrected).** The glTF root node `Sketchfab_model` carries a
-`matrix` (rotation −90° about X + uniform scale 4.0684); an earlier analysis
-that ignored `node.matrix` reported wrong coordinates. Corrected world bounds:
-`x ∈ [-0.52, 0.52]`, `y ∈ [0, 0.27]`, `z ∈ [-0.39, 0.41]` (~1.03 m × 0.27 m ×
-0.79 m). The four arm/motor pods are at `(±0.25, 0.09, ±0.25/+0.23)`, props at
-`(±0.34, 0.23, ±0.30/-0.28)`, and the **only** centerline mesh below the body
-is the camera gimbal (`Object_183`) at `(0, 0.05, +0.17)`. So the camera sits
-under the front and the X-frame's two front arms bisect `+Z`: gimbal and
-X-frame forward are the same axis.
-
-**Rendered confirmation.** In an isolated Cesium overlay (north = red arrow,
-east = green arrow) the model reads as an X-config quad with the camera lens
-facing `+Z`; in the app at yaw 90 with eastward velocity the gimbal tab points
-east, matching the east-pointing prediction line.
-
-**So the user-visible "机头方向不对" is most likely one of:**
-- running a **stale app build** (`frontend/dist` is current — rebuilt 01:33,
-  newer than the sources — but the Tauri binary may predate it); or
-- a different intended "front" than the asset's camera end (the user said not
-  to use the gimbal; note that for this asset it gives the same axis).
-Do **not** flip the offset until the app build is rebuilt and re-checked.
-
-## Map jitter — current approach
-
-`MapView.tsx` dead-reckons the marker between fixes (cap `DEAD_RECKON_MAX_S =
-0.5 s`) and re-centres with a hand-rolled chase instead of `viewer.trackedEntity`
-(whose offset comes from the bounding sphere, which `minimumPixelSize` makes
-view-dependent → oscillation). Measured in dev: camera step p95 0.62 m vs
-9.5 m before. Residual jitter still needs to be reproduced on the **Tauri app**
-(at the real feed rate), not only in the dev browser.
-
-## Verification tooling (sandbox notes)
-
-- Port binding and any localhost network call need escalation.
-- `frontend/dist` is what the Tauri app loads (`frontendDist:
-  ../../frontend/dist`) — after frontend edits run `cd frontend && npm run build`
-  before rebuilding/relaunching the app.
-- Dev tooling used for measurement (both still running this session):
-  - Vite dev server: `cd frontend && npm run dev -- --port 8731 --strictPort
-    --host 127.0.0.1`.
-  - Headless Chromium over CDP on port 9226, plus the `/tmp/cdp9.mjs` helper
-    (`eval` / `shot` / `metric` modes); `/tmp/expr-setup.js` injects known
-    snapshots and camera modes.
-- Isolated model inspection: `/tmp/analyze2.mjs` (per-mesh bounds honouring
-  `node.matrix`), and an overlay Cesium viewer with north/east arrows.
+- `crates/core/tests/command_service_integration.rs` occasionally fails when
+  the whole suite runs concurrently (UDP port contention); it passes
+  standalone. Pre-existing, not caused by recent changes.
+- `frontend/scripts/screenshot.mjs` needs Playwright, which is not in
+  `devDependencies`. Install transiently:
+  `npm i --no-save --no-package-lock playwright && npx playwright install chromium`.
+  The committed baselines are stale for this environment: the same build
+  compared against them differs ~38–47%, and two consecutive runs of one build
+  differ by up to 25% (`dark-planning-1920x1080`, OSM tiles + mock feed). Treat
+  the pixel diff as noise and watch **console errors / failing requests**
+  instead.
+- `frontend/dist` is what the Tauri app loads (`frontendDist: ../../frontend/dist`)
+  — rebuild the frontend before rebuilding/relaunching the app.
 
 ## Verification commands
 
-- `cargo clippy --all-targets -- -D warnings`, `cargo test -p maggcs-core`,
-  `cargo test -p maggcs-app`
+- `export PATH="$HOME/.cargo/bin:$PATH"`
+- `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`
+- `cargo test -p maggcs-core` (and `-p maggcs-app`), `cargo deny check`
 - `cd frontend && npm run typecheck && npm run check:colors &&
   npm run check:contrast && npm run build`
 - SITL: `scripts/sitl/run_sitl_docker.sh` (PX4 v1.17, container `px4-sitl`).

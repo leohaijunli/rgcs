@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { useTelemetryStore } from '../stores/telemetry'
-import { useDataAge } from '../hooks/useDataAge'
+import { FIELD_STALE_MS, useDataAge, useFieldAge } from '../hooks/useDataAge'
 import AttitudeIndicator from './instruments/AttitudeIndicator'
 
 const STALE_MS = 3000
@@ -10,8 +10,8 @@ const DIM_MS = 1000
 export default function Hud() {
   const { t } = useTranslation()
   const snapshot = useTelemetryStore((s) => s.snapshot)
-  const isMock = useTelemetryStore((s) => s.isMock)
   const age = useDataAge()
+  const gpsAge = useFieldAge(snapshot?.field_ages.gps_at_ms)
   const att = snapshot?.attitude ?? null
   const pos = snapshot?.global_position ?? null
   const battery = snapshot?.battery ?? null
@@ -20,6 +20,7 @@ export default function Hud() {
   const speedMs = pos ? Math.hypot(pos.velocity.x_m_s, pos.velocity.y_m_s) : 0
   const stale = age > STALE_MS
   const dim = stale || age > DIM_MS
+  const gpsStale = snapshot != null && gpsAge > FIELD_STALE_MS
 
   return (
     <div
@@ -32,9 +33,9 @@ export default function Hud() {
             STALE
           </div>
         )}
-        {isMock && (
-          <div className="col-span-2 rounded bg-canvas px-2 py-0.5 text-center text-[10px] text-warn">
-            MOCK
+        {gpsStale && (
+          <div className="col-span-2 rounded bg-warn px-2 py-0.5 text-center text-[10px] text-canvas">
+            GPS STALE
           </div>
         )}
         <Readout label={t('hud.speed')} value={speedMs.toFixed(1)} unit="m/s" />

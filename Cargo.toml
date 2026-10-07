@@ -10,7 +10,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["MagGCS Contributors"]
 repository = "https://github.com/maggcs/maggcs"
-# License TBD — see docs/adr/007-license.md (Apache-2.0 or GPL-3.0).
+license = "Apache-2.0"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

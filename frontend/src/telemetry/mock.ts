@@ -104,6 +104,14 @@ export function startMockFeed(): number {
         velocity_m_s: Math.hypot(vn, ve),
         course_over_ground_deg: heading,
       },
+      field_ages: {
+        heartbeat_at_ms: Date.now(),
+        global_position_at_ms: Date.now(),
+        attitude_at_ms: Date.now(),
+        sys_status_at_ms: Date.now(),
+        battery_at_ms: Date.now(),
+        gps_at_ms: Date.now(),
+      },
     }
     useTelemetryStore.getState().applySnapshot(snap)
   }, 250)
