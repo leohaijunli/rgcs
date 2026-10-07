@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use ::mavlink::common::{MavCmd, MavMessage, COMMAND_LONG_DATA};
+use ::mavlink::common::MavCmd;
 use maggcs_core::devices::{DeviceDatabase, DeviceManager, SerialDeviceInfo};
 use maggcs_core::mavlink::connection::{spawn_connection, LinkStatus};
 use maggcs_core::mavlink::{ConnectionConfig, Endpoint};
@@ -12,6 +12,7 @@ use maggcs_core::telemetry::TelemetrySnapshot;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
+use crate::command_service;
 use crate::mission_service::MissionService;
 use crate::state::AppState;
 use crate::telemetry_pump;
@@ -44,6 +45,7 @@ pub async fn connect(
 
     state.take_hub();
     state.take_mission();
+    state.take_command();
     if let Some(old) = state.take_connection() {
         old.shutdown().await;
     }
@@ -58,7 +60,7 @@ pub async fn connect(
         Ok(Ok(Ok(()))) => Ok(()),
         Ok(Ok(Err(failure))) => {
             handle.shutdown().await;
-            Err(format!("{}", failure.message))
+            Err(failure.message.to_string())
         }
         Ok(Err(_)) => {
             // Worker exited without reporting (shutdown raced the connect).
@@ -73,9 +75,7 @@ pub async fn connect(
             ))
         }
     };
-    if let Err(e) = outcome {
-        return Err(e);
-    }
+    outcome?;
 
     // The hub consumes the initial event stream, so the `Connected` emitted by
     // the worker cannot be missed (issue #2).
@@ -88,9 +88,16 @@ pub async fn connect(
         config.target_system_id,
         config.target_component_id,
     );
+    let command = command_service::spawn(
+        app.clone(),
+        handle.clone(),
+        config.target_system_id,
+        config.target_component_id,
+    );
     state.set_connection(handle);
     state.set_hub(hub.clone());
     state.set_mission(mission);
+    state.set_command(command);
     tauri::async_runtime::spawn(telemetry_pump::run(app.clone(), hub));
 
     Ok(ConnectResponse {
@@ -107,6 +114,7 @@ const FIRST_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 pub async fn disconnect(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     state.take_hub();
     state.take_mission();
+    state.take_command();
     if let Some(handle) = state.take_connection() {
         handle.shutdown().await;
     }
@@ -165,33 +173,22 @@ pub async fn mission_set_current(state: State<'_, AppState>, seq: u16) -> Result
     mission.set_current(seq).await
 }
 
-/// Named vehicle command (pause/resume, RTL).
+/// Named vehicle command.
 ///
-/// `name` is one of `"pause"`, `"resume"`, `"rtl"`. Uses a COMMAND_LONG.
+/// `name` is one of `"rtl"`. The command is enqueued to the command service,
+/// which sends a `COMMAND_LONG` and retransmits until the FC acks; the
+/// outcome arrives asynchronously on the `"command"` event (issue #5). Pause
+/// and resume are deliberately not exposed: `DO_PAUSE_CONTINUE` on PX4 v1.17
+/// is unverified (see issues.md).
 #[tauri::command]
 pub async fn send_command(name: String, state: State<'_, AppState>) -> Result<(), String> {
-    let handle = state
-        .connection()
-        .ok_or_else(|| "not connected".to_string())?;
-    let cfg = handle.config();
-    let (command, p1) = match name.as_str() {
-        "pause" => (MavCmd::MAV_CMD_DO_PAUSE_CONTINUE, 0.0),
-        "resume" => (MavCmd::MAV_CMD_DO_PAUSE_CONTINUE, 1.0),
-        "rtl" => (MavCmd::MAV_CMD_NAV_RETURN_TO_LAUNCH, 0.0),
+    let service = state.command().ok_or_else(|| "not connected".to_string())?;
+    let command = match name.as_str() {
+        "rtl" => MavCmd::MAV_CMD_NAV_RETURN_TO_LAUNCH,
         other => return Err(format!("unknown command: {other}")),
     };
-    let msg = MavMessage::COMMAND_LONG(COMMAND_LONG_DATA {
-        param1: p1,
-        param2: 0.0,
-        param3: 0.0,
-        param4: 0.0,
-        param5: 0.0,
-        param6: 0.0,
-        param7: 0.0,
-        command,
-        target_system: cfg.target_system_id,
-        target_component: cfg.target_component_id,
-        confirmation: 0,
-    });
-    handle.send(msg).await.map_err(|e| e.to_string())
+    service
+        .send(command, [0.0; 7])
+        .await
+        .map_err(|e| e.to_string())
 }

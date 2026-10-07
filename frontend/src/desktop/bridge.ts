@@ -17,6 +17,8 @@ import type { TelemetrySnapshot } from '../generated-types/TelemetrySnapshot'
 import type { MissionItem } from '../generated-types/MissionItem'
 import type { MissionEventPayload } from '../stores/mission'
 import { reportConnectError } from './connect'
+import type { CommandEventPayload } from '../stores/command'
+import { useCommandStore } from '../stores/command'
 import { useDevicesStore } from '../stores/devices'
 import { useLinkStore } from '../stores/link'
 import { useMissionStore } from '../stores/mission'
@@ -50,6 +52,8 @@ export function useTelemetryBridge() {
 
       const un2 = await listen<LinkStatus>('link', (e) => {
         useLinkStore.getState().setLink(e.payload)
+        // A dead link ends any in-flight command; its ack will never arrive.
+        if (!e.payload.fc_alive) useCommandStore.getState().reset()
       })
       if (disposed) return un2()
       unlisteners.push(un2)
@@ -71,6 +75,12 @@ export function useTelemetryBridge() {
       })
       if (disposed) return un5()
       unlisteners.push(un5)
+
+      const un6 = await listen<CommandEventPayload>('command', (e) => {
+        useCommandStore.getState().handleEvent(e.payload)
+      })
+      if (disposed) return un6()
+      unlisteners.push(un6)
 
       const snap = await invoke<LinkStatus | null>('link_status')
       if (disposed) return

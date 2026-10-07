@@ -4,6 +4,7 @@
 use maggcs_core::mavlink::connection::LinkStatus;
 use maggcs_core::mavlink::ConnectionHandle;
 use maggcs_core::telemetry::hub::TelemetryHub;
+use maggcs_core::CommandService;
 use parking_lot::Mutex;
 
 use crate::mission_service::MissionService;
@@ -13,6 +14,7 @@ struct AppInner {
     connection: Option<ConnectionHandle>,
     hub: Option<TelemetryHub>,
     mission: Option<MissionService>,
+    command: Option<CommandService>,
     link: Option<LinkStatus>,
 }
 
@@ -31,11 +33,6 @@ impl AppState {
     /// Take the active connection (used by `disconnect`).
     pub fn take_connection(&self) -> Option<ConnectionHandle> {
         self.inner.lock().connection.take()
-    }
-
-    /// Clone of the active connection handle, if any.
-    pub fn connection(&self) -> Option<ConnectionHandle> {
-        self.inner.lock().connection.clone()
     }
 
     /// Store the telemetry hub (replaces any previous one).
@@ -70,6 +67,21 @@ impl AppState {
     /// Clone of the current mission service, if any.
     pub fn mission(&self) -> Option<MissionService> {
         self.inner.lock().mission.clone()
+    }
+
+    /// Store the command service (replaces any previous one).
+    pub fn set_command(&self, service: CommandService) {
+        self.inner.lock().command = Some(service);
+    }
+
+    /// Take the command service; dropping the handle stops its task.
+    pub fn take_command(&self) -> Option<CommandService> {
+        self.inner.lock().command.take()
+    }
+
+    /// Clone of the current command service, if any.
+    pub fn command(&self) -> Option<CommandService> {
+        self.inner.lock().command.clone()
     }
 
     /// Latest link status published by the pump.

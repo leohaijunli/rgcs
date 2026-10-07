@@ -4,6 +4,7 @@
 //! Tauri process, telemetry/link events are pushed to the React frontend via
 //! Tauri events, and commands let the UI control the link.
 
+mod command_service;
 mod commands;
 mod mission_service;
 mod state;
