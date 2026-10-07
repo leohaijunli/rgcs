@@ -8,16 +8,36 @@ import { useTelemetryStore } from '../stores/telemetry'
 const HOME_LAT = 48.6493
 const HOME_LON = -123.3982
 
+/** Tick period of the mock feed, in seconds. */
+const TICK_S = 0.25
+const M_PER_DEG_LAT = 111_320
+
+/** Position on the mock's flight path at tick `t`. */
+function pathAt(t: number) {
+  return {
+    lat: HOME_LAT + 0.004 * Math.sin(t / 40),
+    lon: HOME_LON + 0.006 * Math.cos(t / 50),
+    alt: 100 + 8 * Math.sin(t / 60),
+  }
+}
+
 /** Start a sine-wave flight loop; returns the interval id. */
 export function startMockFeed(): number {
   useTelemetryStore.getState().setMock(true)
   let t = 0
   const id = window.setInterval(() => {
     t += 1
-    const lat = HOME_LAT + 0.004 * Math.sin(t / 40)
-    const lon = HOME_LON + 0.006 * Math.cos(t / 50)
-    const alt = 100 + 8 * Math.sin(t / 60)
-    const heading = (t * 3) % 360
+    const { lat, lon, alt } = pathAt(t)
+
+    // NED velocity derived from the path itself. The map dead-reckons the
+    // marker and draws the forward projection from this, so a velocity that
+    // disagrees with the trajectory would make the marker lag and jump.
+    const ahead = pathAt(t + 1)
+    const mPerDegLon = M_PER_DEG_LAT * Math.cos((lat * Math.PI) / 180)
+    const vn = ((ahead.lat - lat) * M_PER_DEG_LAT) / TICK_S
+    const ve = ((ahead.lon - lon) * mPerDegLon) / TICK_S
+    const vd = -(ahead.alt - alt) / TICK_S
+    const heading = (Math.atan2(ve, vn) * (180 / Math.PI) + 360) % 360
 
     const snap: TelemetrySnapshot = {
       last_heartbeat_at_ms: Date.now(),
@@ -48,7 +68,7 @@ export function startMockFeed(): number {
         longitude_deg: lon,
         altitude: { datum: 'AMSL_EGM96', meters: alt },
         relative_alt_m: alt - 80,
-        velocity: { x_m_s: 4, y_m_s: 1, z_m_s: 0 },
+        velocity: { x_m_s: vn, y_m_s: ve, z_m_s: vd },
         heading_deg: heading,
       },
       attitude: {
@@ -81,7 +101,7 @@ export function startMockFeed(): number {
         altitude: { datum: 'AMSL_EGM96', meters: alt },
         hdop: 0.7,
         vdop: 1.1,
-        velocity_m_s: 4,
+        velocity_m_s: Math.hypot(vn, ve),
         course_over_ground_deg: heading,
       },
     }
