@@ -738,7 +738,13 @@ mod tests {
             yawspeed: 0.03,
         });
         let a = Attitude::try_from(&msg).expect("parse");
+        // MAVLink reports radians; the snapshot is degrees with the sign kept,
+        // so the map marker can apply roll/pitch/yaw verbatim.
         assert!((a.roll_deg - 0.1_f64.to_degrees()).abs() < 1e-6);
+        assert!((a.pitch_deg - (-0.2_f64).to_degrees()).abs() < 1e-6);
+        assert!((a.yaw_deg - 1.5_f64.to_degrees()).abs() < 1e-6);
+        assert!((a.roll_speed_deg_s - 0.01_f64.to_degrees()).abs() < 1e-6);
+        assert!((a.pitch_speed_deg_s - 0.02_f64.to_degrees()).abs() < 1e-6);
         assert!((a.yaw_speed_deg_s - 0.03_f64.to_degrees()).abs() < 1e-6);
     }
 
