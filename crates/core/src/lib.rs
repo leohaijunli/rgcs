@@ -13,6 +13,7 @@ pub mod devices;
 pub mod height;
 pub mod mavlink;
 pub mod mission;
+pub mod rtk;
 pub mod telemetry;
 
 pub use commands::{CommandError, CommandEvent, CommandResult, CommandService, CommandSession};

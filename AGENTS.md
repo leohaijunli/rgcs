@@ -14,8 +14,8 @@ used side-by-side with QGroundControl. All user-facing code and docs are in **En
 ## Repository layout
 
 - `crates/core` — library crate: scaffolded `mavlink`, `telemetry`, `mission`,
-  `commands`, `devices`, `height`; planned `terrain`, `survey`, `mag`, `qc`,
-  `rtk`.
+  `commands`, `devices`, `height`, `rtk` (RTCM3 framing + `GPS_RTCM_DATA`
+  fragmentation so far); planned `terrain`, `survey`, `mag`, `qc`.
 - `crates/app-tauri` — desktop entry (scaffolded).
 - `crates/server` — headless: REST + WebSocket (placeholder only; not scaffolded).
 - `helpers/udev-installer` — privilege-raising helper (placeholder only; udev rules only).

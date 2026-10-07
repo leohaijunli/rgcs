@@ -79,6 +79,14 @@ Phase 0 wrap-up items and the Phase 1 gap were closed:
   click for the disruptive ones. PX4 v1.17 semantics still need a SITL check
   (a NACK shows as "Not supported by the FC").
 
+**Phase 2 started**: `core::rtk::rtcm` (RTCM3 preamble/length/CRC-24Q parsing
+plus a resynchronising streaming `RtcmFramer`) and `core::rtk::forward`
+(`GPS_RTCM_DATA` fragmentation: ≤ 180 bytes, ≤ 4 fragments, sequence ids) are
+implemented and unit-tested (24 tests; the CRC matches the standard
+"123456789" = 0xCDE703 check value and a golden frame computed by an
+independent implementation). Still to build: `RtcmSource` (serial base),
+injection service + send path, u-blox base-station config, status alarms/UI.
+
 Verified: `npm run typecheck`, `check:colors`, `check:contrast`, `check:i18n`,
 `build`; `cargo fmt --check`, `clippy -D warnings`, `cargo test -p maggcs-core`
 (105 lib) and `-p maggcs-app` (9, incl. the new command mapping), `cargo deny
@@ -106,8 +114,10 @@ opens the Connection tab, no raw i18n keys appear and the console is clean.
 4. **HANDOFF item 10 (SITL preflight "found 0 compass")** and **item 11 (UAV
    initial position on the ground)** — SITL-side, not yet reproduced here.
 5. **Continue `docs/DEVELOPMENT_PLAN.md`.** Phases 0 and 1 are implemented and
-   their acceptance is covered against the fake FC; the next real work is
-   **Phase 2 (RTK + RTCM forwarding, §8)**. A live SITL pass for the Phase 0
+   their acceptance is covered against the fake FC. **Phase 2 (RTK, §8)** is
+   started: RTCM3 framing + `GPS_RTCM_DATA` fragmentation are done; next is the
+   `RtcmSource` trait, a serial base-station source, the injection service over
+   the FC link, and the base/onboard status UI. A live SITL pass for the Phase 0
    numeric acceptance and the Phase 1 upload/download/pause items is still
    outstanding.
    Execution order is §11.8: MAVLink & telemetry → UI shell → Mission protocol

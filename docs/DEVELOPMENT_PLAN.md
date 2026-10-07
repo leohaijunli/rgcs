@@ -270,6 +270,15 @@ against the fake FC; a live SITL pass is the remaining gap.
 Tasks and acceptance in Section 8. Independent of terrain; can be developed in
 parallel.
 
+**Status (2026-10-07)**: started. `core::rtk::rtcm` parses RTCM3 frames
+(preamble/length/CRC-24Q) and provides a resynchronising streaming framer;
+`core::rtk::forward` fragments frames into `GPS_RTCM_DATA` (max 180 bytes, up
+to 4 fragments, sequence ids), both unit-tested including an independently
+computed golden frame. Still to build: the `RtcmSource` trait with a serial
+base station, the injection service and `GPS_RTCM_DATA` send path, the
+base-station configuration flow (u-blox ZED-F9P survey-in / fixed mode), and
+the status alarms/UI.
+
 ### Phase 3: terrain + Survey planner (MVP, alpha-ready)
 
 **Tasks**: `ElevationSource` trait (GeoTIFF default implementation), height
