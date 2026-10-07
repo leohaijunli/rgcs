@@ -52,6 +52,9 @@ Airframe, Radio, firmware flashing.
 - Phase 0 skeleton exists: connection management and reconnect, telemetry
   aggregation, device enumeration, UI shell (three views, themes, settings
   dialog, Playwright screenshot baseline), CI workflow (not item-checked).
+  The Phase 0 addendum tasks 0.1–0.9 are implemented (see the status note under
+  the addendum table); the numeric Phase 0 acceptance below is still the open
+  item.
 - Phase 0 numeric acceptance (0 heartbeat losses over 30 minutes, position
   latency < 200 ms, coexisting with QGC) is not yet proven in code; re-run per
   the addendum acceptance below.
@@ -193,6 +196,15 @@ state and GCS heartbeat)**
 | 0.8 | Structured endpoint form: type (UDP listen / UDP client / TCP / serial) + address and port; presets (PX4 SITL 14550, QGC forwarding port); serial dropdown from `enumerate_devices`; remember the last endpoint and the auto-connect toggle | Invalid input is flagged under the field; the endpoint survives a restart |
 | 0.9 | Touch targets ≥ 44 px; connection errors are shown inline in the settings dialog, not covered by the overlay | Screenshot check; the error is visible with Settings open |
 
+**Addendum status (2026-10-07)**: 0.1–0.9 are implemented. 0.6 is enforced by
+`frontend/scripts/check-i18n.mjs` (`npm run check:i18n`) in CI. 0.5/0.7/0.8/0.9
+were checked with a headless-Chromium load of the built app: the structured
+endpoint form renders, presets apply, an out-of-range port shows an inline
+error and disables Connect, the top-bar FC pill opens the Connection tab with a
+fixed-height dialog, and there are no console errors or raw key names. The
+per-state screenshots for "listening" / "data, no FC" / "online" still need a
+live FC (SITL) attached.
+
 **Development agreement (MagGCS on Windows + PX4 SITL in Docker inside WSL2)**
 
 - PX4 SITL sends GCS data to `127.0.0.1:14550` by default. Under WSL2's default
@@ -244,6 +256,14 @@ GCS heartbeat, command reply address).
 **Acceptance**: 100 waypoints uploaded and downloaded item-for-item identical;
 upload still completes with 10% packet loss; `.plan` round-trips without
 information loss.
+
+**Status (2026-10-07)**: implemented — `MISSION_SET_CURRENT`/`MISSION_CURRENT`,
+clear, 100-waypoint round-trip and the 10 %-loss upload are covered by
+`crates/core/tests/mission_fake_fc.rs`; the planning view, `.plan`
+import/export and RTL are in place; Pause/Continue is wired to
+`MAV_CMD_DO_PAUSE_CONTINUE` (param1 0/1, unit-tested) but its PX4 v1.17
+handling still needs SITL confirmation (see issues.md). The acceptance runs
+against the fake FC; a live SITL pass is the remaining gap.
 
 ### Phase 2: RTK base station and RTCM forwarding
 

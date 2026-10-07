@@ -68,6 +68,8 @@ jobs:
       - run: npm run typecheck
       - run: bash scripts/check-colors.sh
       - run: npm run check:contrast
+      # 0.6: every t('...') key must exist, so the UI never shows raw keys.
+      - run: npm run check:i18n
       - run: npm run build
 
   windows-build:

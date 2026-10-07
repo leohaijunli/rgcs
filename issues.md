@@ -306,6 +306,6 @@
 
 ## 待核实项（先验证再决定是否开 issue）
 - `mavlink` crate 0.17 的 UDP 监听是否设置 `SO_REUSEADDR`；`udpin` 的回复地址行为（抓包确认）。
-- `DO_PAUSE_CONTINUE` 在 PX4 v1.17 的实际语义。
+- `DO_PAUSE_CONTINUE` 在 PX4 v1.17 的实际语义。现状（2026-10-07）：Pause/Continue 已按 MAVLink 规范接入（param1 = 0 暂停 / 1 继续，`send_command("pause"|"continue")`，见 `crates/app-tauri/src/commands.rs::named_command`，含 3 个单测）；PX4 v1.17 是否支持、以及参数语义仍需 SITL 抓包确认——不支持时 FC 回 NACK，UI 会显示 "Not supported by the FC"。
 - `MISSION_COUNT` 的 `mission_type` 等扩展字段默认值，与 QGC 上传的帧对比。
 - PX4 对多个 GCS 同时读取任务时的行为（影响 #9 的具体修法）。

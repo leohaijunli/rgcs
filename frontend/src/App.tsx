@@ -10,7 +10,6 @@ import MockBanner from './components/MockBanner'
 import FlightCommands from './components/FlightCommands'
 import MapView from './components/MapView'
 import ErrorBanner from './components/ErrorBanner'
-import ConnectDialog from './components/dialogs/ConnectDialog'
 import QcDialog from './components/dialogs/QcDialog'
 
 export default function App() {
@@ -33,7 +32,6 @@ export default function App() {
         <RightInspector />
       </div>
       <Dock />
-      <ConnectDialog />
       <QcDialog />
     </div>
   )

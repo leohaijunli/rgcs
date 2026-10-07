@@ -47,11 +47,50 @@ check`, `cd frontend && npm run typecheck && npm run check:colors &&
 npm run check:contrast && npm run build`. A Playwright headless-Chromium load of
 the built app showed no console errors and no failing requests.
 
+## Continuation — Phase 0 addendum 0.5–0.9 and Phase 1 wrap-up
+
+After the backlog commit (`c01afcf`), the remaining `docs/DEVELOPMENT_PLAN.md`
+Phase 0 wrap-up items and the Phase 1 gap were closed:
+
+- **0.5** Connection page now shows the four-level link state
+  (`settings.linkState.*`, derived by `util/linkLevel.ts` from the transport
+  state + `fc_alive` + whether any telemetry field has arrived), the
+  last-packet age, dropped-frame count, the endpoint and the recent link
+  errors — so "are packets arriving?" is visible at a glance.
+- **0.6** new `frontend/scripts/check-i18n.mjs` (`npm run check:i18n`, wired
+  into CI) bundles `src/i18n/en.ts` with esbuild, flattens it and fails on any
+  `t('...')` key that does not exist (plurals and `t(`prefix.${x}`)` templates
+  handled). It immediately found 8 missing `settings.*` keys, now filled in:
+  187 keys, 16 dynamic prefixes, 0 missing.
+- **0.7** `ConnectDialog` deleted; the top-bar FC pill and the gear both open
+  the single Settings dialog on the Connection tab; the dialog has a fixed
+  height (`h-[min(85vh,560px)]`) so tab switches do not resize it.
+- **0.8** structured endpoint form (`desktop/endpoint.ts`): type select
+  (UDP listen/client, TCP server/client, serial), address + port or serial
+  dropdown (from `enumerate_devices`) + baud, presets (PX4 SITL/QGC 14550,
+  QGC forwarding 14551, serial telemetry), inline field validation. The last
+  endpoint and the auto-connect toggle persist in `localStorage`
+  (`desktop/prefs.ts`) and `desktop/bridge.ts` honours the toggle.
+- **0.9** all Connection controls are `h-11` + `touch-target` (≥ 44 px); link
+  errors are listed inline in the dialog instead of only behind the overlay.
+- **Phase 1** Pause/Continue added: `send_command("pause"|"continue")` maps to
+  `MAV_CMD_DO_PAUSE_CONTINUE` with param1 0/1 (unit-tested in
+  `crates/app-tauri/src/commands.rs`); the flight-view buttons arm on the first
+  click for the disruptive ones. PX4 v1.17 semantics still need a SITL check
+  (a NACK shows as "Not supported by the FC").
+
+Verified: `npm run typecheck`, `check:colors`, `check:contrast`, `check:i18n`,
+`build`; `cargo fmt --check`, `clippy -D warnings`, `cargo test -p maggcs-core`
+(105 lib) and `-p maggcs-app` (9, incl. the new command mapping), `cargo deny
+check`. A headless-Chromium pass confirmed the form renders, presets apply, an
+out-of-range port shows the inline error and disables Connect, the FC pill
+opens the Connection tab, no raw i18n keys appear and the console is clean.
+
 ## Repo state
 
-- Branch `main`. This landing is the first commit since `abe03cc`; it is
-  committed and pushed (see the commit message) — no uncommitted changes are
-  expected after it.
+- Branch `main`, pushed to `origin/main`. Two landings since `abe03cc`: the
+  backlog commit `c01afcf` and the Phase 0 addendum / Phase 1 wrap-up commit
+  on top of it — no uncommitted changes are expected after them.
 
 ## Open work
 
@@ -66,9 +105,11 @@ the built app showed no console errors and no failing requests.
    the intent (quit MagGCS vs. a vehicle/FC shutdown command).
 4. **HANDOFF item 10 (SITL preflight "found 0 compass")** and **item 11 (UAV
    initial position on the ground)** — SITL-side, not yet reproduced here.
-5. **Continue `docs/DEVELOPMENT_PLAN.md`.** Issues are clear; next is the plan
-   remainder — finish/verify the Phase 0 addendum 0.5–0.9 acceptance and the
-   Phase 1 mission-protocol acceptance, then Phase 2 (RTK + RTCM forwarding).
+5. **Continue `docs/DEVELOPMENT_PLAN.md`.** Phases 0 and 1 are implemented and
+   their acceptance is covered against the fake FC; the next real work is
+   **Phase 2 (RTK + RTCM forwarding, §8)**. A live SITL pass for the Phase 0
+   numeric acceptance and the Phase 1 upload/download/pause items is still
+   outstanding.
    Execution order is §11.8: MAVLink & telemetry → UI shell → Mission protocol
    → waypoint editing → RTK → DEM & height → Survey → mag & QC.
 

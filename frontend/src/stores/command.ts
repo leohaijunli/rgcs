@@ -6,10 +6,11 @@ import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 
 /**
- * Commands the UI may send. Pause/resume are deliberately absent: PX4 v1.17
- * `DO_PAUSE_CONTINUE` semantics are unverified (see issues.md #5).
+ * Commands the UI may send. `pause`/`continue` map to
+ * `MAV_CMD_DO_PAUSE_CONTINUE` (param1 0/1); PX4 v1.17 handling is still to be
+ * confirmed on SITL, and a rejection surfaces as a NACK in the UI.
  */
-export type CommandName = 'rtl'
+export type CommandName = 'rtl' | 'pause' | 'continue'
 
 /** Payload of the backend `command` event. */
 export interface CommandEventPayload {

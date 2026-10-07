@@ -6,8 +6,9 @@ import { useLinkStore } from '../stores/link'
 import { useTelemetryStore } from '../stores/telemetry'
 import { useUiStore, type View } from '../stores/ui'
 import { fcStatusLabel } from '../util/linkLabel'
+import { hasInboundPackets, linkLevel, linkLevelTone } from '../util/linkLevel'
 import { modeLabel } from '../util/modeLabel'
-import SettingsDialog from './dialogs/SettingsDialog'
+import SettingsDialog, { type SettingsTab } from './dialogs/SettingsDialog'
 
 const VIEWS: View[] = ['planning', 'flight', 'data']
 
@@ -57,6 +58,7 @@ function Pill({
 export default function TopBar() {
   const { t } = useTranslation()
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('connection')
   const view = useUiStore((s) => s.view)
   const setView = useUiStore((s) => s.setView)
   const link = useLinkStore((s) => s.link)
@@ -64,6 +66,13 @@ export default function TopBar() {
   const heartbeat = useTelemetryStore((s) => s.snapshot?.heartbeat ?? null)
   const gps = useTelemetryStore((s) => s.snapshot?.gps ?? null)
   const sys = useTelemetryStore((s) => s.snapshot?.sys_status ?? null)
+  const fieldAges = useTelemetryStore((s) => s.snapshot?.field_ages)
+
+  const openConnection = () => {
+    setSettingsTab('connection')
+    setSettingsOpen(true)
+  }
+  const level = linkLevel(link, hasInboundPackets(fieldAges))
 
   const armed = heartbeat?.base_mode.safety_armed === true
   const mode = modeLabel(t, heartbeat)
@@ -118,7 +127,9 @@ export default function TopBar() {
         <Pill
           label={t('link.fc')}
           value={fcStatusLabel(t, link)}
-          tone={link?.fc_alive ? 'ok' : 'err'}
+          tone={linkLevelTone(level)}
+          onClick={openConnection}
+          title={t('settings.tab.connection')}
         />
         <Pill
           label={t('link.devices')}
@@ -134,7 +145,12 @@ export default function TopBar() {
           <Settings size={16} />
         </button>
       </div>
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <SettingsDialog
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        tab={settingsTab}
+        onTabChange={setSettingsTab}
+      />
     </header>
   )
 }

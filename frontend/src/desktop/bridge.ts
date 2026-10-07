@@ -18,6 +18,7 @@ import type { MissionItem } from '../generated-types/MissionItem'
 import type { TelemetryError } from '../generated-types/TelemetryError'
 import type { MissionEventPayload } from '../stores/mission'
 import { reportConnectError } from './connect'
+import { usePrefsStore } from './prefs'
 import type { CommandEventPayload } from '../stores/command'
 import { useCommandStore } from '../stores/command'
 import { useDevicesStore } from '../stores/devices'
@@ -25,8 +26,6 @@ import { useLinkStore } from '../stores/link'
 import { useMissionStore } from '../stores/mission'
 import { useTelemetryStore } from '../stores/telemetry'
 import { startMockFeed } from '../telemetry/mock'
-
-const DEFAULT_ENDPOINT = 'udpin:0.0.0.0:14550'
 
 function inTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -96,8 +95,12 @@ export function useTelemetryBridge() {
       if (!connectStarted) {
         connectStarted = true
         // Report auto-connect failures in the status bar instead of hiding
-        // them (issue #4).
-        await invoke('connect', { endpoint: DEFAULT_ENDPOINT }).catch(reportConnectError)
+        // them (issue #4). The endpoint and the toggle are remembered across
+        // restarts (Phase 0 addendum, task 0.8).
+        const { endpoint, autoConnect } = usePrefsStore.getState()
+        if (autoConnect) {
+          await invoke('connect', { endpoint }).catch(reportConnectError)
+        }
       }
       void useDevicesStore.getState().load()
     }
