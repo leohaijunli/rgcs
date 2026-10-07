@@ -8,6 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "build:model": "node scripts/build-uav-model.mjs",
     "check:colors": "bash scripts/check-colors.sh",
     "check:contrast": "node scripts/check-contrast.mjs",
     "tauri": "tauri"

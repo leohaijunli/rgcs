@@ -7,7 +7,6 @@ import i18n from '../i18n'
 import { degFromMavInt, useMissionStore } from '../stores/mission'
 import { useTelemetryStore } from '../stores/telemetry'
 import { useUiStore } from '../stores/ui'
-import { uavModelDataUri } from '../util/uavModel'
 import MapToolbar from './MapToolbar'
 
 const HOME_LAT = 48.6493
@@ -22,6 +21,14 @@ const TRAIL_EVERY = 2
 const PREDICT_HORIZON_S = 120
 const PREDICT_STEP_S = 4
 const PREDICT_MIN_GROUNDSPEED_M_S = 1
+
+// Shipped airframe (see `model/README.md` at the repo root). Cesium maps the
+// asset's glTF axes onto the body frame as +X -> north (+Y), +Y -> up,
+// +Z -> east (+X), so the nose (the camera gimbal, glTF +Z) lies on the body's
+// +X axis, 90 degrees clockwise of the +Y axis `uavQuaternion` calls the nose.
+// Passing `yaw - 90` puts the nose back on the reported heading.
+const UAV_MODEL_URI = '/model/scene-static.gltf'
+const UAV_MODEL_NOSE_YAW_OFFSET_DEG = -90
 
 export default function MapView() {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -83,8 +90,6 @@ export default function MapView() {
     const accent = Cesium.Color.fromCssColorString(cssVar('--mg-accent'))
     const ok = Cesium.Color.fromCssColorString(cssVar('--mg-ok'))
     const warn = Cesium.Color.fromCssColorString(cssVar('--mg-warn'))
-    const accentInk = Cesium.Color.fromCssColorString(cssVar('--mg-accent-ink'))
-
     // 3D UAV marker (runtime-generated glTF). A model is used instead of
     // entity boxes because Cesium re-evaluates a model's position/orientation
     // every frame, so it tracks the vehicle instead of freezing on first draw,
@@ -96,13 +101,12 @@ export default function MapView() {
       position: Cesium.Cartesian3.fromDegrees(HOME_LON, HOME_LAT, 0),
       orientation: new Cesium.ConstantProperty(Cesium.Quaternion.IDENTITY),
       model: {
-        uri: uavModelDataUri(),
-        minimumPixelSize: 34,
-        maximumScale: 60,
-        color: accent,
-        colorBlendMode: Cesium.ColorBlendMode.MIX,
-        colorBlendAmount: 0.35,
-        silhouetteColor: accentInk,
+        uri: UAV_MODEL_URI,
+        minimumPixelSize: 44,
+        maximumScale: 10,
+        // Keep the airframe's own materials; the silhouette is what keeps it
+        // legible against the imagery at any zoom.
+        silhouetteColor: accent,
         silhouetteSize: 2,
       },
       label: {
@@ -268,7 +272,7 @@ export default function MapView() {
     drone.orientation = new Cesium.ConstantProperty(
       uavOrientation(
         cart,
-        attitude?.yaw_deg ?? pos.heading_deg,
+        (attitude?.yaw_deg ?? pos.heading_deg) + UAV_MODEL_NOSE_YAW_OFFSET_DEG,
         attitude?.pitch_deg ?? 0,
         attitude?.roll_deg ?? 0,
       ),
@@ -412,7 +416,9 @@ function uavOrientation(
 /**
  * Attitude quaternion in the vehicle's local east-north-up frame. The body
  * frame is +X = right wing, +Y = nose, +Z = up, so a compass yaw rotates about
- * -Z, nose-up pitch about +X, and right-wing-down roll about +Y.
+ * -Z, nose-up pitch about +X, and right-wing-down roll about +Y. Cesium maps
+ * the asset's glTF +X here, so an asset whose nose is glTF +Z needs
+ * [`UAV_MODEL_NOSE_YAW_OFFSET_DEG`] to re-align the heading.
  */
 function uavQuaternion(yawDeg: number, pitchDeg: number, rollDeg: number): Cesium.Quaternion {
   const yaw = Cesium.Quaternion.fromAxisAngle(
