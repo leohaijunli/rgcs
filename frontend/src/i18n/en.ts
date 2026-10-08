@@ -225,6 +225,7 @@ export default {
     north: 'North up',
     addWaypoint: 'Add waypoints (click the map)',
     heights: 'Waypoint heights (stick + label)',
+    aglLabel: '{{value}} m AGL',
     addHint: 'Click the map to add a waypoint · Esc to finish',
   },
   settings: {

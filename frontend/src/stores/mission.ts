@@ -8,7 +8,6 @@
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import type { MissionItem } from '../generated-types/MissionItem'
-import type { MissionFrame } from '../generated-types/MissionFrame'
 import type { PatternLine } from '../generated-types/PatternLine'
 import type { PatternPlan } from '../generated-types/PatternPlan'
 import type { PlannedWaypoint } from '../generated-types/PlannedWaypoint'
@@ -16,6 +15,7 @@ import {
   compileWaypoints,
   DEFAULT_ALT_AGL_M,
   makeWaypoint,
+  modeFromFrame,
   waypointFromItem,
 } from '../mission/compile'
 import { orderedMissionItems } from '../mission/planfile'
@@ -44,20 +44,6 @@ export interface MissionEventPayload {
   total: number
   seq: number
   message?: string | null
-}
-
-/** Map a wire frame back to the UI altitude mode, if it has one. */
-function modeFromFrame(frame: MissionFrame): AltitudeMode | null {
-  switch (frame) {
-    case 'global_int':
-      return 'amsl'
-    case 'global_relative_alt_int':
-      return 'relative'
-    case 'global_terrain_alt_int':
-      return 'agl'
-    default:
-      return null
-  }
 }
 
 interface MissionState {

@@ -46,12 +46,23 @@ interface LatLonLike {
   lon: number
 }
 
+/**
+ * Vertical line from the vehicle down to the ground plus its AGL readout, so
+ * the height above ground is visible in the scene and not only in the HUD
+ * (issues.md #40).
+ */
+export interface DropLayer {
+  line: Cesium.Entity
+  label: Cesium.Entity
+}
+
 /** The fixed drone/trail/predict/home layer, created once per viewer. */
 export interface DroneLayer {
   drone: Cesium.Entity
   trail: Cesium.Entity
   predict: Cesium.Entity
   home: Cesium.Entity
+  drop: DropLayer
   /** Created once and updated in place; swapping properties rebuilds the model. */
   dronePosition: Cesium.ConstantPositionProperty
   droneOrientation: Cesium.ConstantProperty
@@ -96,6 +107,39 @@ export function createDroneLayer(
       fillColor: Cesium.Color.WHITE,
     },
   })
+  // Ground drop line: from the vehicle straight down to the ellipsoid, which is
+  // the ground plane the map draws everything else on while there is no DEM.
+  // Hidden until the first fix and when the vehicle is on the ground.
+  const dropLine = viewer.entities.add({
+    show: false,
+    polyline: {
+      positions: Cesium.Cartesian3.fromDegreesArrayHeights([
+        initial.lon,
+        initial.lat,
+        0,
+        initial.lon,
+        initial.lat,
+        0,
+      ]),
+      width: 2,
+      material: new Cesium.PolylineDashMaterialProperty({
+        color: warn.withAlpha(0.9),
+        dashLength: 12,
+      }),
+    },
+  })
+  const dropLabel = viewer.entities.add({
+    show: false,
+    label: {
+      text: '',
+      font: '11px sans-serif',
+      fillColor: Cesium.Color.WHITE,
+      pixelOffset: new Cesium.Cartesian2(0, 10),
+      disableDepthTestDistance: Number.POSITIVE_INFINITY,
+    },
+  })
+  const drop: DropLayer = { line: dropLine, label: dropLabel }
+
   const trail = viewer.entities.add({
     polyline: {
       positions: new Cesium.CallbackProperty(trailPos, false),
@@ -128,7 +172,40 @@ export function createDroneLayer(
       fillColor: Cesium.Color.WHITE,
     },
   })
-  return { drone, trail, predict, home, dronePosition, droneOrientation }
+  return { drone, trail, predict, home, drop, dronePosition, droneOrientation }
+}
+
+/** Below this the drop line is noise: the vehicle is on the ground. */
+const DROP_MIN_AGL_M = 1.5
+
+/**
+ * Point the AGL drop line straight down from the vehicle to the ground and
+ * label it with the height above ground.
+ */
+export function updateDropLine(
+  drop: DropLayer,
+  lonDeg: number,
+  latDeg: number,
+  aglM: number,
+): void {
+  const visible = Number.isFinite(aglM) && aglM >= DROP_MIN_AGL_M
+  drop.line.show = visible
+  drop.label.show = visible
+  if (!visible) return
+  const polyline = drop.line.polyline
+  if (polyline) {
+    polyline.positions = new Cesium.ConstantProperty(
+      Cesium.Cartesian3.fromDegreesArrayHeights([lonDeg, latDeg, aglM, lonDeg, latDeg, 0]),
+    )
+  }
+  drop.label.position = new Cesium.ConstantPositionProperty(
+    Cesium.Cartesian3.fromDegrees(lonDeg, latDeg, 0),
+  )
+  if (drop.label.label) {
+    drop.label.label.text = new Cesium.ConstantProperty(
+      i18n.t('map.aglLabel', { value: aglM.toFixed(1) }),
+    )
+  }
 }
 
 /** Rendered mission waypoints: the polylines, one point per item, and the

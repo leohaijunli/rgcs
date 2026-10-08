@@ -15,6 +15,7 @@ import {
   previewWaypoint,
   renderWaypoints,
   setGhostPoint,
+  updateDropLine,
 } from '../cesium/entities'
 import type {
   DroneLayer,
@@ -196,6 +197,9 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
       ),
     )
     layer.drone.show = true
+    // Straight down to the ground, labelled with the height above it, so the
+    // clearance is visible in the scene and not only in the HUD (issues.md #40).
+    updateDropLine(layer.drop, pos.longitude_deg, pos.latitude_deg, pos.relative_alt_m)
 
     // Rebuild the forward projection from the live fix so the segment already
     // flown disappears and only the predicted track ahead is drawn.

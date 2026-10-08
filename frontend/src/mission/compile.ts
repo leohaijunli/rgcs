@@ -60,11 +60,42 @@ export function commandUsesCoordinate(command: number): boolean {
   return COORDINATE_COMMANDS.includes(command)
 }
 
-/** Wire frame each UI altitude mode compiles to. */
+/**
+ * Wire frame each UI altitude mode compiles to.
+ *
+ * AGL deliberately does **not** use `MAV_FRAME_GLOBAL_TERRAIN_ALT_INT`: PX4
+ * v1.17 rejects every terrain frame on upload (`MAV_MISSION_UNSUPPORTED_FRAME`,
+ * the sibling of issues.md #34), and ADR-005 puts terrain following in the
+ * ground station rather than relying on the FC's terrain database. Until a DEM
+ * exists the ground is the flat plane through HOME — exactly what the relative
+ * frame means — so AGL compiles to the relative frame and becomes a true AGL
+ * profile once WS-D drapes the path (issues.md #40).
+ */
 export const FRAME_BY_MODE: Record<AltitudeMode, MissionFrame> = {
   relative: 'global_relative_alt_int',
   amsl: 'global_int',
-  agl: 'global_terrain_alt_int',
+  agl: 'global_relative_alt_int',
+}
+
+/**
+ * Map a wire frame back to the UI altitude mode, if it has one.
+ *
+ * A frame with no altitude meaning (`local_*`, `mission`) returns null: those
+ * items are not editable waypoints.
+ */
+export function modeFromFrame(frame: MissionFrame): AltitudeMode | null {
+  switch (frame) {
+    case 'global_int':
+      return 'amsl'
+    case 'global_relative_alt_int':
+      return 'relative'
+    case 'global_terrain_alt_int':
+      // Only ever seen on a plan from another GCS: we compile AGL to the
+      // relative frame because PX4 rejects terrain frames (issues.md #40).
+      return 'agl'
+    default:
+      return null
+  }
 }
 
 /** Wrap a metres-AMSL value as an absolute, datum-tagged height. */

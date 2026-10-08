@@ -50,7 +50,8 @@ async function bundle(entry) {
 
 const { parsePlan, buildPlan, orderedMissionItems } = await bundle('mission/planfile.ts')
 const { itemsHash } = await bundle('mission/hash.ts')
-const { compileWaypoints, commandUsesCoordinate, frameToAmsl, waypointFromItem } = await bundle(
+const { compileWaypoints, commandUsesCoordinate, frameToAmsl, modeFromFrame, waypointFromItem } =
+  await bundle(
   'mission/compile.ts',
 )
 const { rectanglePolygon, defaultSweep, defaultCloverleaf } = await bundle('mission/patterns.ts')
@@ -183,10 +184,27 @@ check('absolute and relative compiles share geometry (finding 1)', () => {
   eq(rel[0].z, 30, 'relative z is AMSL - home')
 })
 
-check('agl compiles to the terrain frame with the flat-ground anchor', () => {
+check('agl compiles to the relative frame, not to a terrain frame', () => {
+  // PX4 v1.17 refuses terrain frames on upload and ADR-005 drapes on the GCS,
+  // so AGL is a height above the flat ground plane through HOME for now
+  // (issues.md #40).
   const agl = compileWaypoints(plan, 'agl', home)
-  eq(agl[0].frame, 'global_terrain_alt_int', 'terrain frame')
+  eq(agl[0].frame, 'global_relative_alt_int', 'relative frame')
   eq(agl[0].z, 30, 'z = AMSL - home ground')
+  eq(
+    JSON.stringify(agl),
+    JSON.stringify(compileWaypoints(plan, 'relative', home)),
+    'identical to relative until the DEM lands',
+  )
+})
+
+check('a foreign terrain-frame plan still reads back as AGL', () => {
+  const wire = compileWaypoints(plan, 'relative', home).map((i) => ({
+    ...i,
+    frame: 'global_terrain_alt_int',
+  }))
+  eq(modeFromFrame(wire[0].frame), 'agl', 'frame maps to the AGL mode')
+  eq(waypointFromItem(wire[0], home).altitude.meters, 130, 'flat-ground anchor')
 })
 
 check('wire item round-trips back to AMSL', () => {
