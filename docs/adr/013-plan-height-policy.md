@@ -32,10 +32,12 @@
 
 ## Consequences
 
-- Planning code (frontend store, survey generator) should hold AMSL heights;
-  the frontend `MissionItem`-based editor is migrated to `PlannedMission` as a
-  follow-up. Until then the frontend still converts altitudes itself
-  (`frontend/src/mission/altitude.ts`).
+- Planning code (frontend store, survey generator) holds AMSL heights. The
+  frontend store was migrated: it holds `PlannedWaypoint`s and compiles them
+  with `frontend/src/mission/compile.ts` (a TS mirror of this module). QGC
+  complex-item children still keep the frames stored in the file and are not
+  re-compiled on a mode switch; they are re-based when the survey generator
+  replaces them (WS-C).
 - Ellipsoid or CGVD2013 planning would need a `GeoidModel` to reach AMSL;
   `compile` therefore rejects non-AMSL inputs with `PlanError` (Phase 3 adds
   the geoid grids, ADR-006 height chain).

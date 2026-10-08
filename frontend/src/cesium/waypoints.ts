@@ -65,10 +65,7 @@ export function installWaypointDrag(
     reset()
     if (moved) {
       if (ground) {
-        useMissionStore.getState().updateItem(seq, {
-          x: Math.round(ground.lat * 1e7),
-          y: Math.round(ground.lon * 1e7),
-        })
+        useMissionStore.getState().updatePosition(seq, ground.lat, ground.lon)
       }
     } else {
       opts.onSelect?.(seq)

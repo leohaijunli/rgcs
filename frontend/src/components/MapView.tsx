@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { useCesiumViewer } from '../hooks/useCesiumViewer'
+import { compileWaypoints } from '../mission/compile'
 import { orderedMissionItems } from '../mission/planfile'
 import { useMissionStore } from '../stores/mission'
 import { useTelemetryStore } from '../stores/telemetry'
@@ -16,16 +17,24 @@ export default function MapView() {
     setSnapshot(snapshot)
   }, [snapshot, setSnapshot])
 
-  // Mission waypoints: render a polyline + numbered points, re-run when items
-  // change. Complex-item children are appended in flyable order so an imported
-  // survey is drawn (findings 3).
-  const items = useMissionStore((s) => s.items)
+  // Mission waypoints: render a polyline + numbered points, re-run when the
+  // plan changes. Planned waypoints are compiled to the current frame, and
+  // complex-item children are appended in flyable order so an imported survey
+  // is drawn (findings 3, ADR-013).
+  const waypoints = useMissionStore((s) => s.waypoints)
+  const altitudeMode = useMissionStore((s) => s.altitudeMode)
+  const home = useMissionStore((s) => s.home)
   const blocks = useMissionStore((s) => s.blocks)
   const planBase = useMissionStore((s) => s.planBase)
   const selectedSeq = useMissionStore((s) => s.selectedSeq)
   const missionItems = useMemo(
-    () => orderedMissionItems(items, blocks, planBase ?? undefined),
-    [items, blocks, planBase],
+    () =>
+      orderedMissionItems(
+        compileWaypoints(waypoints, altitudeMode, home?.[2] ?? 0),
+        blocks,
+        planBase ?? undefined,
+      ),
+    [waypoints, altitudeMode, home, blocks, planBase],
   )
   useEffect(() => {
     setMission(missionItems, selectedSeq)

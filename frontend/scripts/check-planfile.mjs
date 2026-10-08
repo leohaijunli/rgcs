@@ -50,7 +50,7 @@ async function bundle(entry) {
 
 const { parsePlan, buildPlan, orderedMissionItems } = await bundle('mission/planfile.ts')
 const { itemsHash } = await bundle('mission/hash.ts')
-const { convertAltitudeZ } = await bundle('mission/altitude.ts')
+const { compileWaypoints, frameToAmsl, waypointFromItem } = await bundle('mission/compile.ts')
 
 const failures = []
 function check(name, fn) {
@@ -151,22 +151,52 @@ check('itemsHash ignores seq and current (finding 5)', () => {
   assert(itemsHash(a) !== itemsHash(c), 'hash must still detect a real change')
 })
 
-console.log('altitude:')
+console.log('compile (ADR-013):')
 
-check('relative <-> amsl conversion preserves AMSL (finding 1)', () => {
-  const anchor = { homeAmslM: 488 }
-  eq(convertAltitudeZ(30, 'relative', 'amsl', anchor), 518, 'relative -> amsl')
-  eq(convertAltitudeZ(518, 'amsl', 'relative', anchor), 30, 'amsl -> relative')
+function planned(lat, lon, amslM) {
+  return {
+    position: { latitude_deg: lat, longitude_deg: lon },
+    altitude: { datum: 'AMSL_EGM96', meters: amslM },
+    command: 16,
+    params: [0, 0, 0, 0],
+    autocontinue: true,
+  }
+}
+
+const plan = [planned(48.6493, -123.3982, 130), planned(48.65, -123.397, 180)]
+const home = 100
+
+check('absolute and relative compiles share geometry (finding 1)', () => {
+  const abs = compileWaypoints(plan, 'amsl', home)
+  const rel = compileWaypoints(plan, 'relative', home)
+  eq(abs[0].frame, 'global_int', 'amsl frame')
+  eq(rel[0].frame, 'global_relative_alt_int', 'relative frame')
+  abs.forEach((a, i) => {
+    eq(a.x, rel[i].x, `lat ${i}`)
+    eq(a.y, rel[i].y, `lon ${i}`)
+    eq(a.z, rel[i].z + home, `z offset ${i}`)
+  })
+  eq(abs[0].z, 130, 'absolute z is AMSL')
+  eq(rel[0].z, 30, 'relative z is AMSL - home')
 })
 
-check('agl converts via the home/ground anchor', () => {
-  const anchor = { homeAmslM: 488 }
-  eq(convertAltitudeZ(518, 'amsl', 'agl', anchor), 30, 'amsl -> agl')
-  eq(convertAltitudeZ(30, 'agl', 'amsl', anchor), 518, 'agl -> amsl')
+check('agl compiles to the terrain frame with the flat-ground anchor', () => {
+  const agl = compileWaypoints(plan, 'agl', home)
+  eq(agl[0].frame, 'global_terrain_alt_int', 'terrain frame')
+  eq(agl[0].z, 30, 'z = AMSL - home ground')
 })
 
-check('identical mode is a no-op', () => {
-  eq(convertAltitudeZ(42, 'amsl', 'amsl', { homeAmslM: 488 }), 42, 'no-op')
+check('wire item round-trips back to AMSL', () => {
+  const rel = compileWaypoints(plan, 'relative', home)
+  const wp = waypointFromItem(rel[1], home)
+  eq(wp.position.latitude_deg, plan[1].position.latitude_deg, 'lat')
+  eq(wp.altitude.datum, 'AMSL_EGM96', 'datum')
+  eq(wp.altitude.meters, 180, 'AMSL restored')
+})
+
+check('frameToAmsl is the inverse of the compile offset', () => {
+  eq(frameToAmsl(30, 'global_relative_alt_int', 100), 130, 'relative -> AMSL')
+  eq(frameToAmsl(130, 'global_int', 100), 130, 'absolute is identity')
 })
 
 if (failures.length > 0) {

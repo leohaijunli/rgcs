@@ -3,6 +3,33 @@
 Snapshot of the current session (issues.md backlog clearance). Issue statuses
 live in `issues.md`; keep both in sync when a task lands.
 
+## Latest landing — frontend migrated onto the planned (AMSL) model
+
+The mission store now holds planned waypoints in absolute AMSL
+(`PlannedWaypoint`/`Height`, ADR-013) instead of `MissionItem`s whose `z`
+depended on the selected mode:
+
+- `stores/mission.ts`: `waypoints: PlannedWaypoint[]`; new
+  `updatePosition`/`updateAltitude`/`setWaypoints`; `compiled()`/`flyable()`
+  compile to the current frame; `upload` and the sync hash use `flyable()`.
+  Downloads/imports convert back to AMSL with `waypointFromItem`.
+- `mission/compile.ts`: TS mirror of `core::plan` (`compileWaypoints`,
+  `frameToAmsl`, `waypointFromItem`, `FRAME_BY_MODE`). AGL is frontend-only
+  (terrain frame, flat-ground assumption) until a DEM lands.
+- Switching the altitude mode is now lossless and instant (it only changes the
+  compile target), so the finding-1 confirmation bar and
+  `mission/altitude.ts` were removed.
+- `PlanningPanel` edits lat/lon/AMSL and shows the compiled/flyable count and
+  read-only complex-item blocks; `MapView` and the drag handler use the
+  compiled list (`updatePosition`).
+
+Verified: `npm run typecheck`, `check:colors`, `check:contrast`, `check:i18n`,
+`check:planfile` (Survey round trip + compile/datum cases), `npm run build`,
+`cargo test -p maggcs-app`, `scripts/desktop-smoke.sh` (53% bright, PASS).
+
+Known transitional gap: complex-item children keep the frames stored in the
+QGC file and are not re-compiled on a mode switch (documented in ADR-013).
+
 ## Latest landing — geoid grid interpolation (finding 12 groundwork)
 
 `crates/core/src/height/grid.rs` gives `core::height` a working `GeoidModel`:

@@ -1,18 +1,22 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { compileWaypoints } from '../../mission/compile'
 import { exportPlanFile, importPlanFile, orderedMissionItems } from '../../mission/planfile'
 import { useLinkStore } from '../../stores/link'
 import { useUiStore } from '../../stores/ui'
-import { useMissionStore, degFromMavInt, type AltitudeMode } from '../../stores/mission'
-import type { MissionItem } from '../../generated-types/MissionItem'
+import { useMissionStore, type AltitudeMode } from '../../stores/mission'
+import type { PlannedWaypoint } from '../../generated-types/PlannedWaypoint'
 
 const MODES: AltitudeMode[] = ['relative', 'amsl', 'agl']
+
+/** Default clearance above home for a new waypoint when none is selected. */
+const DEFAULT_ALT_AGL_M = 50
 
 export default function PlanningPanel() {
   const { t } = useTranslation()
   const link = useLinkStore((s) => s.link)
   const connected = Boolean(link?.fc_alive)
-  const items = useMissionStore((s) => s.items)
+  const waypoints = useMissionStore((s) => s.waypoints)
   const selectedSeq = useMissionStore((s) => s.selectedSeq)
   const altitudeMode = useMissionStore((s) => s.altitudeMode)
   const busy = useMissionStore((s) => s.busy)
@@ -32,29 +36,22 @@ export default function PlanningPanel() {
   const download = useMissionStore((s) => s.download)
   const clear = useMissionStore((s) => s.clear)
 
-  const selected = selectedSeq !== null ? items.find((it) => it.seq === selectedSeq) ?? null : null
+  const selected = selectedSeq !== null ? waypoints[selectedSeq] ?? null : null
   const [dragSeq, setDragSeq] = useState<number | null>(null)
   const [importNotice, setImportNotice] = useState<string[]>([])
-  const [pendingMode, setPendingMode] = useState<AltitudeMode | null>(null)
   const mapCenter = useUiStore((s) => s.mapCenter)
-  // Editable items + complex-item children, in the order they will be flown.
-  const flyable = orderedMissionItems(items, blocks, planBase ?? undefined)
-
   const homeAmsl = home?.[2] ?? 0
 
-  const onModeClick = (mode: AltitudeMode) => {
-    if (mode === altitudeMode) return
-    if (items.length === 0) {
-      setAltitudeMode(mode)
-      return
-    }
-    setPendingMode(mode)
-  }
-
-  const applyPendingMode = (convert: boolean) => {
-    if (pendingMode) setAltitudeMode(pendingMode, { convert })
-    setPendingMode(null)
-  }
+  // Compiled items + complex-item children, in the order they will be flown.
+  const flyable = useMemo(
+    () =>
+      orderedMissionItems(
+        compileWaypoints(waypoints, altitudeMode, homeAmsl),
+        blocks,
+        planBase ?? undefined,
+      ),
+    [waypoints, altitudeMode, homeAmsl, blocks, planBase],
+  )
 
   const onDrop = (targetSeq: number) => {
     if (dragSeq === null || dragSeq === targetSeq) return
@@ -70,16 +67,21 @@ export default function PlanningPanel() {
   }
 
   const onExport = async () => {
-    await exportPlanFile(items, altitudeMode, { base: planBase ?? undefined, home, blocks })
+    // Export needs items already compiled to the selected frame.
+    await exportPlanFile(compileWaypoints(waypoints, altitudeMode, homeAmsl), altitudeMode, {
+      base: planBase ?? undefined,
+      home,
+      blocks,
+    })
   }
 
-  // Default a new waypoint to the selected item, else the map centre; both in
-  // degrees (issues.md #14).
+  // Default a new waypoint to the selected position (inheriting its altitude)
+  // else the map centre, at the default clearance above home (issues.md #14).
   const addAt = () => {
-    const latDeg = selected ? degFromMavInt(selected.x) : mapCenter?.lat
-    const lonDeg = selected ? degFromMavInt(selected.y) : mapCenter?.lon
+    const latDeg = selected ? selected.position.latitude_deg : mapCenter?.lat
+    const lonDeg = selected ? selected.position.longitude_deg : mapCenter?.lon
     if (latDeg == null || lonDeg == null) return
-    addWaypoint(latDeg, lonDeg, 50)
+    addWaypoint(latDeg, lonDeg, selected ? selected.altitude.meters : homeAmsl + DEFAULT_ALT_AGL_M)
   }
 
   return (
@@ -90,7 +92,7 @@ export default function PlanningPanel() {
           {MODES.map((m) => (
             <button
               key={m}
-              onClick={() => onModeClick(m)}
+              onClick={() => setAltitudeMode(m)}
               className={`flex-1 rounded px-1 py-1 transition-colors ${
                 altitudeMode === m
                   ? 'bg-accent text-canvas'
@@ -101,43 +103,9 @@ export default function PlanningPanel() {
             </button>
           ))}
         </div>
-        {pendingMode && (
-          <div className="mt-2 space-y-1.5 rounded border border-warn bg-warn/10 p-2 text-xs">
-            <div className="text-warn">
-              {t('plan.modeSwitch.title', {
-                count: items.length,
-                from: t(`plan.mode.${altitudeMode}`),
-                to: t(`plan.mode.${pendingMode}`),
-              })}
-            </div>
-            <div className="text-muted">
-              {t('plan.modeSwitch.hint', { m: homeAmsl.toFixed(0) })}
-            </div>
-            <div className="flex gap-1.5">
-              <button
-                onClick={() => applyPendingMode(true)}
-                className="flex-1 rounded border border-warn bg-warn px-2 py-1 text-canvas"
-              >
-                {t('plan.modeSwitch.convert')}
-              </button>
-              <button
-                onClick={() => applyPendingMode(false)}
-                className="flex-1 rounded border border-line bg-panel px-2 py-1"
-              >
-                {t('plan.modeSwitch.keep')}
-              </button>
-              <button
-                onClick={() => setPendingMode(null)}
-                className="flex-1 rounded border border-line bg-panel px-2 py-1"
-              >
-                {t('plan.modeSwitch.cancel')}
-              </button>
-            </div>
-          </div>
-        )}
       </div>
 
-      <div className="min-h-0 flex-1">
+      <div className="min-h-0 flex-1 overflow-auto">
         <div className="mb-1.5 flex items-center justify-between px-1">
           <span className="text-xs uppercase tracking-wide text-muted">
             {t('plan.items')} · {flyable.length}
@@ -147,28 +115,30 @@ export default function PlanningPanel() {
           <div className="panel rounded p-3 text-xs text-muted">{t('plan.empty')}</div>
         ) : (
           <ul className="space-y-1">
-            {items.map((it, idx) => (
-              <li key={it.seq}>
+            {waypoints.map((wp, idx) => (
+              <li key={idx}>
                 <div
                   draggable
                   onDragStart={() => setDragSeq(idx)}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={() => onDrop(idx)}
-                  onClick={() => select(it.seq)}
+                  onClick={() => select(idx)}
                   className={`flex cursor-pointer items-center gap-2 rounded border px-2 py-1.5 text-sm transition-colors ${
-                    it.seq === selectedSeq
+                    idx === selectedSeq
                       ? 'border-accent bg-accent/10'
                       : 'border-line bg-panel hover:bg-canvas'
                   }`}
                 >
-                  <span className="mono w-6 shrink-0 text-right text-muted">{it.seq}</span>
+                  <span className="mono w-6 shrink-0 text-right text-muted">{idx}</span>
                   <span className="mono min-w-0 flex-1 truncate">
-                    {t('plan.lat')} {degFromMavInt(it.x).toFixed(6)}
+                    {t('plan.lat')} {wp.position.latitude_deg.toFixed(6)}
                     <span className="text-muted"> · </span>
-                    {t('plan.lon')} {degFromMavInt(it.y).toFixed(6)}
+                    {t('plan.lon')} {wp.position.longitude_deg.toFixed(6)}
                   </span>
-                  <span className="mono shrink-0 text-muted">{it.z.toFixed(1)} m</span>
-                  {it.current ? (
+                  <span className="mono shrink-0 text-muted">
+                    {wp.altitude.meters.toFixed(1)} m
+                  </span>
+                  {idx === 0 ? (
                     <span className="shrink-0 rounded bg-ok/20 px-1 text-[10px] text-ok">
                       {t('plan.current')}
                     </span>
@@ -196,7 +166,9 @@ export default function PlanningPanel() {
         )}
       </div>
 
-      {selected ? <ItemEditor item={selected} /> : null}
+      {selected && selectedSeq !== null ? (
+        <ItemEditor seq={selectedSeq} waypoint={selected} />
+      ) : null}
 
       {importNotice.length > 0 && (
         <div className="rounded border border-warn px-2 py-1 text-xs text-warn">
@@ -218,8 +190,8 @@ export default function PlanningPanel() {
           {t('plan.add')}
         </button>
         <button
-          disabled={selected == null}
-          onClick={() => selected != null && removeWaypoint(selected.seq)}
+          disabled={selectedSeq == null}
+          onClick={() => selectedSeq != null && removeWaypoint(selectedSeq)}
           className="rounded-md border border-line bg-panel px-2 py-1.5 text-sm hover:bg-canvas disabled:opacity-40"
         >
           {t('plan.remove')}
@@ -287,15 +259,16 @@ export default function PlanningPanel() {
   )
 }
 
-function ItemEditor({ item }: { item: MissionItem }) {
+function ItemEditor({ seq, waypoint }: { seq: number; waypoint: PlannedWaypoint }) {
   const { t } = useTranslation()
-  const updateItem = useMissionStore((s) => s.updateItem)
+  const updatePosition = useMissionStore((s) => s.updatePosition)
+  const updateAltitude = useMissionStore((s) => s.updateAltitude)
   const setCurrent = useMissionStore((s) => s.setCurrent)
 
   return (
     <div className="panel rounded p-2 text-sm">
       <div className="mb-1.5 text-xs uppercase tracking-wide text-muted">
-        {t('plan.properties')} · WP {item.seq}
+        {t('plan.properties')} · WP {seq}
       </div>
       <div className="space-y-1.5">
         <label className="flex items-center gap-2">
@@ -303,8 +276,10 @@ function ItemEditor({ item }: { item: MissionItem }) {
           <input
             type="number"
             step="0.0000001"
-            value={degFromMavInt(item.x).toFixed(7)}
-            onChange={(e) => updateItem(item.seq, { x: Math.round(parseFloat(e.target.value) * 1e7) })}
+            value={waypoint.position.latitude_deg.toFixed(7)}
+            onChange={(e) =>
+              updatePosition(seq, parseFloat(e.target.value), waypoint.position.longitude_deg)
+            }
             className="mono w-full rounded border border-line bg-canvas px-1.5 py-1"
           />
         </label>
@@ -313,8 +288,10 @@ function ItemEditor({ item }: { item: MissionItem }) {
           <input
             type="number"
             step="0.0000001"
-            value={degFromMavInt(item.y).toFixed(7)}
-            onChange={(e) => updateItem(item.seq, { y: Math.round(parseFloat(e.target.value) * 1e7) })}
+            value={waypoint.position.longitude_deg.toFixed(7)}
+            onChange={(e) =>
+              updatePosition(seq, waypoint.position.latitude_deg, parseFloat(e.target.value))
+            }
             className="mono w-full rounded border border-line bg-canvas px-1.5 py-1"
           />
         </label>
@@ -323,18 +300,19 @@ function ItemEditor({ item }: { item: MissionItem }) {
           <input
             type="number"
             step="0.5"
-            value={item.z}
-            onChange={(e) => updateItem(item.seq, { z: parseFloat(e.target.value) })}
+            value={waypoint.altitude.meters}
+            onChange={(e) => updateAltitude(seq, parseFloat(e.target.value))}
             className="mono w-full rounded border border-line bg-canvas px-1.5 py-1"
           />
+          <span className="shrink-0 text-[10px] text-muted">AMSL</span>
         </label>
         <div className="flex items-center justify-between">
           <span className="text-muted">{t('plan.command')}</span>
-          <span className="mono">{item.command === 16 ? 'NAV_WAYPOINT' : item.command}</span>
+          <span className="mono">{waypoint.command === 16 ? 'NAV_WAYPOINT' : waypoint.command}</span>
         </div>
-        {item.current ? (
+        {seq === 0 ? (
           <button
-            onClick={() => void setCurrent(item.seq)}
+            onClick={() => void setCurrent(seq)}
             className="w-full rounded border border-line bg-panel px-2 py-1 text-xs hover:bg-canvas"
           >
             {t('plan.goTo')}

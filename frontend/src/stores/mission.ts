@@ -1,12 +1,17 @@
-// Mission planning state: waypoint list, altitude mode, and the upload /
+// Mission planning state: planned waypoints, altitude mode, and the upload /
 // download / clear operations driven through the desktop mission service.
+//
+// Waypoints are stored in absolute AMSL (ADR-013); the wire frame is chosen at
+// compile time by `mission/compile.ts`. That keeps a mode switch lossless: it
+// only changes how the plan compiles, never what the plan means.
 
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import type { MissionItem } from '../generated-types/MissionItem'
 import type { MissionFrame } from '../generated-types/MissionFrame'
+import type { PlannedWaypoint } from '../generated-types/PlannedWaypoint'
+import { compileWaypoints, makeWaypoint, waypointFromItem } from '../mission/compile'
 import { orderedMissionItems } from '../mission/planfile'
-import { convertAltitudeZ } from '../mission/altitude'
 import { itemsHash } from '../mission/hash'
 import type { PlanBlock, PlanImport, QgcPlan } from '../mission/planfile'
 
@@ -22,14 +27,23 @@ export interface MissionEventPayload {
   message?: string | null
 }
 
-export const FRAME_BY_MODE: Record<AltitudeMode, MissionFrame> = {
-  relative: 'global_relative_alt_int',
-  amsl: 'global_int',
-  agl: 'global_terrain_alt_int',
+/** Map a wire frame back to the UI altitude mode, if it has one. */
+function modeFromFrame(frame: MissionFrame): AltitudeMode | null {
+  switch (frame) {
+    case 'global_int':
+      return 'amsl'
+    case 'global_relative_alt_int':
+      return 'relative'
+    case 'global_terrain_alt_int':
+      return 'agl'
+    default:
+      return null
+  }
 }
 
 interface MissionState {
-  items: MissionItem[]
+  /** Editable waypoints, stored in AMSL (ADR-013). */
+  waypoints: PlannedWaypoint[]
   selectedSeq: number | null
   altitudeMode: AltitudeMode
   busy: boolean
@@ -50,10 +64,11 @@ interface MissionState {
   /** `plannedHomePosition` from the imported plan, if any. */
   home: [number, number, number] | null
   select: (seq: number | null) => void
-  setItems: (items: MissionItem[]) => void
-  setAltitudeMode: (mode: AltitudeMode, opts?: { convert?: boolean }) => void
-  updateItem: (seq: number, patch: Partial<MissionItem>) => void
-  addWaypoint: (latDeg: number, lonDeg: number, altM: number) => void
+  setWaypoints: (waypoints: PlannedWaypoint[]) => void
+  setAltitudeMode: (mode: AltitudeMode) => void
+  updatePosition: (seq: number, latDeg: number, lonDeg: number) => void
+  updateAltitude: (seq: number, amslM: number) => void
+  addWaypoint: (latDeg: number, lonDeg: number, amslM: number) => void
   removeWaypoint: (seq: number) => void
   moveWaypoint: (from: number, to: number) => void
   upload: () => Promise<void>
@@ -62,26 +77,29 @@ interface MissionState {
   setCurrent: (seq: number) => Promise<void>
   handleEvent: (e: MissionEventPayload) => void
   handlePlan: (items: MissionItem[]) => void
-  /** Editable items plus complex-item children, in flyable order. */
+  /** Editable waypoints compiled to the current wire frame. */
+  compiled: () => MissionItem[]
+  /** Compiled waypoints plus complex-item children, in flyable order. */
   flyable: () => MissionItem[]
   applyImport: (result: PlanImport) => void
   verifyFc: () => Promise<void>
   reset: () => void
 }
 
-function resequence(items: MissionItem[]): MissionItem[] {
-  return items.map((it, i) => ({ ...it, seq: i }))
-}
-
 export { itemsHash } from '../mission/hash'
 
-function useSelection(items: MissionItem[], selectedSeq: number | null): number | null {
+/** Home/ground AMSL anchor, from the imported plan's `plannedHomePosition`. */
+function homeAmsl(home: [number, number, number] | null): number {
+  return home?.[2] ?? 0
+}
+
+function useSelection(count: number, selectedSeq: number | null): number | null {
   if (selectedSeq === null) return null
-  return items.some((it) => it.seq === selectedSeq) ? selectedSeq : null
+  return selectedSeq >= 0 && selectedSeq < count ? selectedSeq : null
 }
 
 export const useMissionStore = create<MissionState>((set, get) => ({
-  items: [],
+  waypoints: [],
   selectedSeq: null,
   altitudeMode: 'relative',
   busy: false,
@@ -97,58 +115,50 @@ export const useMissionStore = create<MissionState>((set, get) => ({
 
   select: (seq) => set({ selectedSeq: seq }),
 
-  setItems: (items) =>
+  setWaypoints: (waypoints) =>
     set((s) => ({
-      items,
-      selectedSeq: useSelection(items, s.selectedSeq),
+      waypoints,
+      selectedSeq: useSelection(waypoints.length, s.selectedSeq),
       dirty: true,
       fcMatches: null,
     })),
 
-  setAltitudeMode: (mode, opts) =>
-    set((s) => {
-      if (mode === s.altitudeMode) return s
-      // Complex-item children keep the frame stored in the file, so only the
-      // editable items can be converted here (finding 1).
-      if (!opts?.convert || s.items.length === 0) return { altitudeMode: mode }
-      const anchor = { homeAmslM: s.home?.[2] ?? 0 }
-      const items = s.items.map((it) => ({
-        ...it,
-        z: convertAltitudeZ(it.z, s.altitudeMode, mode, anchor),
-        frame: FRAME_BY_MODE[mode],
-      }))
-      return { altitudeMode: mode, items, dirty: true, fcMatches: null }
-    }),
+  setAltitudeMode: (mode) => set({ altitudeMode: mode }),
 
-  updateItem: (seq, patch) =>
+  updatePosition: (seq, latDeg, lonDeg) =>
     set((s) => ({
-      items: s.items.map((it) => (it.seq === seq ? { ...it, ...patch } : it)),
+      waypoints: s.waypoints.map((wp, i) =>
+        i === seq
+          ? { ...wp, position: { latitude_deg: latDeg, longitude_deg: lonDeg } }
+          : wp,
+      ),
       dirty: true,
       fcMatches: null,
     })),
 
-  addWaypoint: (latDeg, lonDeg, altM) =>
+  updateAltitude: (seq, amslM) =>
+    set((s) => ({
+      waypoints: s.waypoints.map((wp, i) =>
+        i === seq ? { ...wp, altitude: { datum: wp.altitude.datum, meters: amslM } } : wp,
+      ),
+      dirty: true,
+      fcMatches: null,
+    })),
+
+  addWaypoint: (latDeg, lonDeg, amslM) =>
     set((s) => {
-      // Continue past every existing seq so a new item never shares an id with
-      // an imported complex-item child (which uses a high synthetic seq base).
-      const nextSeq = s.items.reduce((m, it) => Math.max(m, it.seq + 1), 0)
-      const item: MissionItem = {
-        seq: nextSeq,
-        frame: FRAME_BY_MODE[s.altitudeMode],
-        command: 16, // MAV_CMD_NAV_WAYPOINT
-        params: [0, 0, 0, 0],
-        x: Math.round(latDeg * 1e7),
-        y: Math.round(lonDeg * 1e7),
-        z: altM,
-        autocontinue: true,
-        current: s.items.length === 0,
+      const waypoints = [...s.waypoints, makeWaypoint(latDeg, lonDeg, amslM)]
+      return {
+        waypoints,
+        selectedSeq: waypoints.length - 1,
+        dirty: true,
+        fcMatches: null,
       }
-      return { items: [...s.items, item], selectedSeq: item.seq, dirty: true, fcMatches: null }
     }),
 
   removeWaypoint: (seq) =>
     set((s) => ({
-      items: resequence(s.items.filter((it) => it.seq !== seq)),
+      waypoints: s.waypoints.filter((_wp, i) => i !== seq),
       selectedSeq: null,
       dirty: true,
       fcMatches: null,
@@ -156,14 +166,13 @@ export const useMissionStore = create<MissionState>((set, get) => ({
 
   moveWaypoint: (from, to) =>
     set((s) => {
-      const items = [...s.items]
-      if (from < 0 || from >= items.length || to < 0 || to >= items.length) return s
-      const [moved] = items.splice(from, 1)
-      items.splice(to, 0, moved)
-      const next = resequence(items)
+      const waypoints = [...s.waypoints]
+      if (from < 0 || from >= waypoints.length || to < 0 || to >= waypoints.length) return s
+      const [moved] = waypoints.splice(from, 1)
+      waypoints.splice(to, 0, moved)
       return {
-        items: next,
-        selectedSeq: useSelection(next, s.selectedSeq),
+        waypoints,
+        selectedSeq: useSelection(waypoints.length, s.selectedSeq),
         dirty: true,
         fcMatches: null,
       }
@@ -241,8 +250,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
 
   handleEvent: (e) => {
     set((s) => {
-      const done =
-        e.kind === 'completed' || e.kind === 'failed'
+      const done = e.kind === 'completed' || e.kind === 'failed'
       const busy = done ? false : s.busy
       const syncState: MissionState['syncState'] = done
         ? 'idle'
@@ -257,7 +265,11 @@ export const useMissionStore = create<MissionState>((set, get) => ({
         // read-back download (issues.md #15).
         patch.dirty = false
         patch.lastSyncedHash = itemsHash(
-          orderedMissionItems(s.items, s.blocks, s.planBase ?? undefined),
+          orderedMissionItems(
+            compileWaypoints(s.waypoints, s.altitudeMode, homeAmsl(s.home)),
+            s.blocks,
+            s.planBase ?? undefined,
+          ),
         )
         patch.fcMatches = true
       }
@@ -269,43 +281,58 @@ export const useMissionStore = create<MissionState>((set, get) => ({
   },
 
   handlePlan: (items) => {
-    set((s) => ({
-      ...(s.verifying
-        ? {
-            verifying: false,
-            fcMatches: itemsHash(items) === s.lastSyncedHash,
-            busy: false,
-            syncState: 'idle' as const,
-          }
-        : {
-            items,
-            blocks: [],
-            planBase: null,
-            dirty: false,
-            lastSyncedHash: itemsHash(items),
-            fcMatches: true,
-            busy: false,
-            syncState: 'idle' as const,
-            selectedSeq: useSelection(items, s.selectedSeq),
-          }),
-    }))
+    set((s) => {
+      if (s.verifying) {
+        return {
+          verifying: false,
+          fcMatches: itemsHash(items) === s.lastSyncedHash,
+          busy: false,
+          syncState: 'idle' as const,
+        }
+      }
+      const anchor = homeAmsl(s.home)
+      const mode = items.length > 0 ? modeFromFrame(items[0].frame) : null
+      return {
+        waypoints: items.map((it) => waypointFromItem(it, anchor)),
+        blocks: [],
+        planBase: null,
+        ...(mode ? { altitudeMode: mode } : {}),
+        dirty: false,
+        lastSyncedHash: itemsHash(items),
+        fcMatches: true,
+        busy: false,
+        syncState: 'idle' as const,
+        selectedSeq: null,
+      }
+    })
   },
 
-  applyImport: (result) =>
-    set((s) => ({
-      items: result.items,
+  compiled: () => {
+    const s = get()
+    return compileWaypoints(s.waypoints, s.altitudeMode, homeAmsl(s.home))
+  },
+
+  flyable: () => {
+    const s = get()
+    return orderedMissionItems(
+      compileWaypoints(s.waypoints, s.altitudeMode, homeAmsl(s.home)),
+      s.blocks,
+      s.planBase ?? undefined,
+    )
+  },
+
+  applyImport: (result) => {
+    const anchor = homeAmsl(result.home)
+    set({
+      waypoints: result.items.map((it) => waypointFromItem(it, anchor)),
       altitudeMode: result.mode,
-      selectedSeq: useSelection(result.items, s.selectedSeq),
+      selectedSeq: null,
       dirty: true,
       fcMatches: null,
       planBase: result.base,
       blocks: result.blocks,
       home: result.home,
-    })),
-
-  flyable: () => {
-    const s = get()
-    return orderedMissionItems(s.items, s.blocks, s.planBase ?? undefined)
+    })
   },
 
   verifyFc: async () => {
@@ -320,7 +347,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
 
   reset: () =>
     set({
-      items: [],
+      waypoints: [],
       selectedSeq: null,
       busy: false,
       lastEvent: null,

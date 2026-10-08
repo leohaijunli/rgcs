@@ -272,8 +272,9 @@ against the fake FC; a live SITL pass is the remaining gap.
 Planning model (ADR-013, 2026-10-07): `core::plan::PlannedMission` stores
 absolute datum-tagged AMSL heights and compiles to wire `MissionItem`s on
 demand (`FramePolicy::{GlobalInt, GlobalRelativeAltInt}`, never terrain-alt);
-`PlanError` guards the datum and coordinate ranges. The frontend store
-migration onto it is the follow-up.
+`PlanError` guards the datum and coordinate ranges. The frontend store is
+migrated: it holds AMSL `PlannedWaypoint`s and compiles via
+`frontend/src/mission/compile.ts`; switching altitude mode is now lossless.
 
 Planning hardening (improve_plan findings, 2026-10-07): QGC complex items
 (Survey, …) now round-trip losslessly as opaque blocks
