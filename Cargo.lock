@@ -1813,6 +1813,7 @@ dependencies = [
  "mavlink",
  "parking_lot",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",

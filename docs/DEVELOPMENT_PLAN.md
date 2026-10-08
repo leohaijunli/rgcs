@@ -58,6 +58,10 @@ Airframe, Radio, firmware flashing.
 - Phase 0 numeric acceptance (0 heartbeat losses over 30 minutes, position
   latency < 200 ms, coexisting with QGC) is not yet proven in code; re-run per
   the addendum acceptance below.
+- Desktop shell guard rails (ADR-012): `cargo test -p maggcs-app` pins the
+  webview CSP directives CesiumJS needs, and `scripts/desktop-smoke.sh` launches
+  the real binary on a hidden Hyprland headless output and asserts the window
+  paints. Run both after desktop or frontend dependency bumps.
 - The SITL ↔ MagGCS UDP link is connected (Windows 11 26200, WSL 2.7.3, PX4
   v1.17.0 SITL in Docker under WSL).
 

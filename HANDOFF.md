@@ -133,6 +133,30 @@ nose. Measured in-app: model glTF `+Z` world bearing equals the injected yaw
 under the front on the same centreline as the X-frame's forward bisector.
 **Do not flip the offset** without a fresh measurement.
 
+## Reference — desktop window rendered blank/black (2026-10-07)
+
+Symptom: the Tauri window came up showing only the flat `--mg-bg` colour while
+the process, WebKitGTK and the compositor were healthy.
+
+Root cause: the CSP. `script-src 'self'` blocked CesiumJS during module
+evaluation — WebAssembly instantiation (needs `'wasm-unsafe-eval'`) and
+knockout's `new Function` binding parser used by `Cesium.Viewer`'s DOM (needs
+`'unsafe-eval'`). The bundle threw, React never mounted, and only the CSS
+background was painted. Fixed in `crates/app-tauri/tauri.conf.json`; decision
+recorded in ADR-012.
+
+Do not chase WebKitGTK DMA-BUF / NVIDIA compositing first: the same
+`frontend/dist` renders in a plain WebKitGTK harness over HTTP (no CSP), and the
+window does paint its CSS background, so the GPU path is fine. The
+`WEBKIT_DISABLE_DMABUF_RENDERER=1` workaround that was added on that wrong
+hypothesis is removed — it only disabled accelerated compositing.
+
+Diagnosing a blank window: the page state can be read from the webview by
+injecting a script that reports `#root` children / canvases over a Tauri
+command, e.g. `[DIAG] rootKids=1 canvas=1 cesium=1` means the page booted. If
+`rootKids=0`, look for CSP errors (`Refused to create a WebAssembly object`,
+`Refused to evaluate a string as JavaScript`) before touching the GPU stack.
+
 ## Known flakes and tooling notes
 
 - `crates/core/tests/command_service_integration.rs` occasionally fails when
@@ -157,3 +181,6 @@ under the front on the same centreline as the X-frame's forward bisector.
 - `cd frontend && npm run typecheck && npm run check:colors &&
   npm run check:contrast && npm run build`
 - SITL: `scripts/sitl/run_sitl_docker.sh` (PX4 v1.17, container `px4-sitl`).
+- Desktop window (ADR-012): `cargo test -p maggcs-app` pins the CSP directives,
+  and `scripts/desktop-smoke.sh` launches the real binary on a hidden Hyprland
+  headless output and fails if the window does not paint.
