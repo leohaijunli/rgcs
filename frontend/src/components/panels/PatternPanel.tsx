@@ -210,12 +210,16 @@ export default function PatternPanel() {
       <button
         disabled={busy || !center}
         onClick={() => void onGenerate()}
+        title={lastPattern ? t('plan.pattern.replaces') : undefined}
         className="mt-2 w-full rounded-md border border-line bg-panel px-2 py-1.5 text-sm hover:bg-canvas disabled:opacity-40"
       >
-        {t('plan.pattern.generate')}
+        {lastPattern ? t('plan.pattern.regenerate') : t('plan.pattern.generate')}
       </button>
 
       {!center && <div className="mt-1 text-[11px] text-warn">{t('plan.pattern.noCenter')}</div>}
+      {lastPattern && (
+        <div className="mt-1 text-[11px] text-muted">{t('plan.pattern.replaces')}</div>
+      )}
       {error && <div className="mt-1 text-[11px] text-error">{t('plan.pattern.failed', { message: error })}</div>}
       {lineCounts && (
         <div className="mt-1 text-[11px] text-ok">

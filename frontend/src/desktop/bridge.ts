@@ -52,8 +52,13 @@ export function useTelemetryBridge() {
 
       const un2 = await listen<LinkStatus>('link', (e) => {
         useLinkStore.getState().setLink(e.payload)
-        // A dead link ends any in-flight command; its ack will never arrive.
-        if (!e.payload.fc_alive) useCommandStore.getState().reset()
+        // A dead link ends any in-flight command or mission operation; their
+        // acks/events will never arrive (the mission service exits with the
+        // connection), so clear the pending state instead of hanging.
+        if (!e.payload.fc_alive) {
+          useCommandStore.getState().reset()
+          useMissionStore.getState().linkLost()
+        }
       })
       if (disposed) return un2()
       unlisteners.push(un2)

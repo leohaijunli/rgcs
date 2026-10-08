@@ -3,6 +3,39 @@
 Snapshot of the current session (issues.md backlog clearance). Issue statuses
 live in `issues.md`; keep both in sync when a task lands.
 
+## Latest landing — mission sync state, local Clear plan, pattern replace
+
+The operator reported that clicking Upload kept showing "Unsaved changes — not
+the FC plan" with no way to drop the plan (issues.md #33):
+
+- `mission/sync.ts::planSyncStatus` replaces the bare `dirty` flag with one
+  status the panel renders: `empty` / `unsynced` ("Local plan — not on the FC
+  yet") / `dirty` ("Unsaved changes") / `mismatch` (red) / `synced` ("In sync
+  with the FC"). A plan that was simply never uploaded no longer claims to
+  differ from the FC, and a completed upload now says so.
+- `stores/mission.ts::clearPlan` discards the **local** plan (waypoints, complex
+  blocks, home, baseline) without a link; the panel's `Clear plan` button is
+  two-click confirmed and sits next to Import/Export. The FC's button is renamed
+  `Clear FC`, and Upload/Clear FC explain themselves when disabled.
+- Two state-machine holes: a `failed` event now resets `verifying` (a lost
+  read-back used to swallow the next download), and `linkLost` (called from
+  `bridge.ts` when `fc_alive` goes false) clears `busy`/`verifying` — the
+  mission service task exits with its connection, so no terminal event would
+  ever arrive and Upload stayed disabled forever.
+- Re-clicking Generate replaces the previously generated preset trajectory
+  instead of stacking a duplicate (`InsertedPattern.count`; any manual edit or
+  an import releases the block, so those paths still append).
+
+`npm run check:mission-sync` (new) bundles the real store with esbuild and
+drives it through the upload/download event sequences — 15 scenarios covering
+upload success, upload failure, mismatch, link loss, clear, and pattern
+replace.
+
+Verified: frontend typecheck/colors/contrast/i18n/planfile/mission-sync/build,
+`cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
+`cargo test -p maggcs-core --lib` (163), `cargo test -p maggcs-app`,
+`cargo deny check`, `scripts/desktop-smoke.sh` (56.5% bright, PASS).
+
 ## Latest landing — map click-to-add waypoints (WS-G part 1)
 
 The planning map can now create waypoints directly (finding 13):

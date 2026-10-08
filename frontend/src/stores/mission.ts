@@ -24,9 +24,15 @@ import type { PlanBlock, PlanImport, QgcPlan } from '../mission/planfile'
 
 export type AltitudeMode = 'relative' | 'amsl' | 'agl'
 
-/** The most recently inserted preset pattern, for the line readout. */
+/**
+ * The most recently inserted preset pattern, for the line readout and for
+ * re-generating: while it is set the trailing `count` waypoints are exactly the
+ * block it produced, so Generate replaces them instead of appending a duplicate.
+ * Any manual edit clears it.
+ */
 export interface InsertedPattern {
   label: string
+  count: number
   lines: PatternLine[]
 }
 
@@ -92,7 +98,12 @@ interface MissionState {
   insertPattern: (plan: PatternPlan, label: string) => void
   upload: () => Promise<void>
   download: () => Promise<void>
+  /** Clear the mission *on the flight controller* (link required). */
   clear: () => Promise<void>
+  /** Discard the local plan (waypoints, complex blocks, home) — no link needed. */
+  clearPlan: () => void
+  /** The link dropped: no mission event will arrive, so stop showing progress. */
+  linkLost: () => void
   setCurrent: (seq: number) => Promise<void>
   handleEvent: (e: MissionEventPayload) => void
   handlePlan: (items: MissionItem[]) => void
@@ -221,23 +232,57 @@ export const useMissionStore = create<MissionState>((set, get) => ({
     }),
 
   insertPattern: (plan, label) =>
-    set((s) => ({
-      waypoints: [...s.waypoints, ...plan.waypoints],
-      lastPattern: {
-        label,
-        lines: plan.lines.map((line) => ({
-          ...line,
-          start_seq: line.start_seq + s.waypoints.length,
-          end_seq: line.end_seq + s.waypoints.length,
-        })),
-      },
+    set((s) => {
+      // Generate replaces the previous preset block rather than stacking a
+      // second copy of the trajectory. `lastPattern` is cleared by every manual
+      // edit, so when it is set those trailing waypoints are ours to drop.
+      const previous = s.lastPattern?.count ?? 0
+      const kept =
+        previous > 0 && previous <= s.waypoints.length
+          ? s.waypoints.slice(0, s.waypoints.length - previous)
+          : s.waypoints
+      return {
+        waypoints: [...kept, ...plan.waypoints],
+        lastPattern: {
+          label,
+          count: plan.waypoints.length,
+          lines: plan.lines.map((line) => ({
+            ...line,
+            start_seq: line.start_seq + kept.length,
+            end_seq: line.end_seq + kept.length,
+          })),
+        },
+        selectedSeq: null,
+        dirty: true,
+        fcMatches: null,
+      }
+    }),
+
+  clearPlan: () =>
+    set({
+      waypoints: [],
+      blocks: [],
+      planBase: null,
+      home: null,
+      lastPattern: null,
       selectedSeq: null,
-      dirty: true,
+      dirty: false,
       fcMatches: null,
-    })),
+      lastSyncedHash: null,
+      lastEvent: null,
+      verifying: false,
+    }),
+
+  // The mission service task exits with its connection (core::mission::service),
+  // so a dead link never emits the terminal event. Without this the panel would
+  // sit on "Uploading…" with every button disabled.
+  linkLost: () =>
+    set({ busy: false, verifying: false, syncState: 'idle' }),
 
   upload: async () => {
     const items = get().flyable()
+    // Nothing to fly: the panel disables the button, but a clear-then-upload
+    // race would otherwise leave `busy` set forever.
     if (items.length === 0) return
     set({ busy: true, syncState: 'uploading', fcMatches: null })
     try {
@@ -318,6 +363,11 @@ export const useMissionStore = create<MissionState>((set, get) => ({
             ? 'downloading'
             : s.syncState
       const patch: Partial<MissionState> = { lastEvent: e, busy, syncState }
+      if (e.kind === 'failed') {
+        // A failed operation ends any read-back too: without this a lost
+        // `mission_plan` left `verifying` set and swallowed the next download.
+        patch.verifying = false
+      }
       if (e.kind === 'completed' && e.op === 'upload') {
         // We believe the FC now holds exactly our plan; confirm with a
         // read-back download (issues.md #15).
@@ -386,6 +436,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       waypoints: result.items.map((it) => waypointFromItem(it, anchor)),
       altitudeMode: result.mode,
       selectedSeq: null,
+      lastPattern: null,
       dirty: true,
       fcMatches: null,
       planBase: result.base,

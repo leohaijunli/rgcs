@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { compileWaypoints, DEFAULT_ALT_AGL_M } from '../../mission/compile'
 import { exportPlanFile, importPlanFile, orderedMissionItems } from '../../mission/planfile'
+import { planSyncStatus, type PlanSyncStatus } from '../../mission/sync'
 import PatternPanel from './PatternPanel'
 import { useLinkStore } from '../../stores/link'
 import { useUiStore } from '../../stores/ui'
@@ -9,6 +10,18 @@ import { useMissionStore, type AltitudeMode } from '../../stores/mission'
 import type { PlannedWaypoint } from '../../generated-types/PlannedWaypoint'
 
 const MODES: AltitudeMode[] = ['relative', 'amsl', 'agl']
+
+/** How long a destructive button stays armed while waiting for the second click. */
+const CONFIRM_WINDOW_MS = 5000
+
+/** Tone of each sync status (the text comes from `plan.sync.*`). */
+const SYNC_TONE: Record<PlanSyncStatus, string> = {
+  empty: 'text-muted',
+  unsynced: 'text-muted',
+  dirty: 'text-warn',
+  mismatch: 'text-error',
+  synced: 'text-ok',
+}
 
 export default function PlanningPanel() {
   const { t } = useTranslation()
@@ -25,6 +38,8 @@ export default function PlanningPanel() {
   const planBase = useMissionStore((s) => s.planBase)
   const home = useMissionStore((s) => s.home)
   const blocks = useMissionStore((s) => s.blocks)
+  const lastSyncedHash = useMissionStore((s) => s.lastSyncedHash)
+  const verifying = useMissionStore((s) => s.verifying)
   const select = useMissionStore((s) => s.select)
   const setAltitudeMode = useMissionStore((s) => s.setAltitudeMode)
   const addWaypoint = useMissionStore((s) => s.addWaypoint)
@@ -33,10 +48,14 @@ export default function PlanningPanel() {
   const upload = useMissionStore((s) => s.upload)
   const download = useMissionStore((s) => s.download)
   const clear = useMissionStore((s) => s.clear)
+  const clearPlan = useMissionStore((s) => s.clearPlan)
 
   const selected = selectedSeq !== null ? waypoints[selectedSeq] ?? null : null
   const [dragSeq, setDragSeq] = useState<number | null>(null)
   const [importNotice, setImportNotice] = useState<string[]>([])
+  const [confirmClearPlan, setConfirmClearPlan] = useState(false)
+  const confirmTimer = useRef<number | undefined>(undefined)
+  useEffect(() => () => window.clearTimeout(confirmTimer.current), [])
   const mapCenter = useUiStore((s) => s.mapCenter)
   const homeAmsl = home?.[2] ?? 0
 
@@ -81,6 +100,26 @@ export default function PlanningPanel() {
     if (latDeg == null || lonDeg == null) return
     addWaypoint(latDeg, lonDeg, selected ? selected.altitude.meters : homeAmsl + DEFAULT_ALT_AGL_M)
   }
+
+  // Clear the *local* plan (the FC keeps its mission); two clicks, as for RTL.
+  const pressClearPlan = () => {
+    if (!confirmClearPlan) {
+      setConfirmClearPlan(true)
+      window.clearTimeout(confirmTimer.current)
+      confirmTimer.current = window.setTimeout(() => setConfirmClearPlan(false), CONFIRM_WINDOW_MS)
+      return
+    }
+    window.clearTimeout(confirmTimer.current)
+    setConfirmClearPlan(false)
+    clearPlan()
+  }
+
+  const sync = planSyncStatus({
+    itemCount: flyable.length,
+    dirty,
+    fcMatches,
+    lastSyncedHash,
+  })
 
   return (
     <div className="flex h-full flex-col gap-2">
@@ -175,9 +214,9 @@ export default function PlanningPanel() {
           {t('plan.importUnsupported', { items: importNotice.join(', ') })}
         </div>
       )}
-      {!busy && (dirty || fcMatches === false) && (
-        <div className={`text-xs ${fcMatches === false ? 'text-error' : 'text-warn'}`}>
-          {fcMatches === false ? t('plan.mismatch') : t('plan.unsaved')}
+      {sync !== 'empty' && (
+        <div className={`text-xs ${SYNC_TONE[sync]}`}>
+          {verifying ? t('plan.sync.verifying') : t(`plan.sync.${sync}`)}
         </div>
       )}
 
@@ -201,6 +240,7 @@ export default function PlanningPanel() {
       <div className="grid grid-cols-3 gap-1.5">
         <button
           disabled={!connected || busy || flyable.length === 0}
+          title={!connected ? t('plan.needLink') : undefined}
           onClick={() => void upload()}
           className="rounded-md bg-accent px-2 py-1.5 text-sm text-canvas disabled:opacity-40"
         >
@@ -215,6 +255,7 @@ export default function PlanningPanel() {
         </button>
         <button
           disabled={!connected || busy}
+          title={!connected ? t('plan.needLink') : undefined}
           onClick={() => void clear()}
           className="rounded-md border border-line bg-panel px-2 py-1.5 text-sm hover:bg-canvas disabled:opacity-40"
         >
@@ -222,7 +263,7 @@ export default function PlanningPanel() {
         </button>
       </div>
 
-      <div className="grid grid-cols-2 gap-1.5">
+      <div className="grid grid-cols-3 gap-1.5">
         <button
           onClick={() => void onImport()}
           className="rounded-md border border-line bg-panel px-2 py-1.5 text-sm hover:bg-canvas"
@@ -235,6 +276,15 @@ export default function PlanningPanel() {
           className="rounded-md border border-line bg-panel px-2 py-1.5 text-sm hover:bg-canvas disabled:opacity-40"
         >
           {t('plan.export')}
+        </button>
+        <button
+          disabled={busy || sync === 'empty'}
+          onClick={pressClearPlan}
+          className={`rounded-md border border-line px-2 py-1.5 text-sm transition-colors disabled:opacity-40 ${
+            confirmClearPlan ? 'bg-warn text-canvas' : 'bg-panel hover:bg-canvas'
+          }`}
+        >
+          {confirmClearPlan ? t('plan.confirmClearPlan') : t('plan.clearPlan')}
         </button>
       </div>
 

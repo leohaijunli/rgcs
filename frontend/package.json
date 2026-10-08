@@ -13,6 +13,7 @@
     "check:contrast": "node scripts/check-contrast.mjs",
     "check:i18n": "node scripts/check-i18n.mjs",
     "check:planfile": "node scripts/check-planfile.mjs",
+    "check:mission-sync": "node scripts/check-mission-sync.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

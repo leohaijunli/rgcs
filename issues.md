@@ -306,6 +306,20 @@
 - 已知限制：Cesium 不会光栅化该资产的 skinned mesh，因此由 `scripts/build-uav-model.mjs` 生成去蒙皮静态模型（8.4 MB → 2.8 MB）供运行时加载；源资产保留在 `model/`（CC-BY-4.0，署名见 `model/README.md`）。
 - 验收：注入已知 roll/pitch/yaw 的 MAVLink 快照后截图核对——roll=pitch=0 时图标水平；机头指向 = HDG；+pitch 机头上仰；+roll 右翼下压。
 
+### #33 [P1][frontend] Upload keeps saying "Unsaved changes — not the FC plan"
+**状态**：✅ 已完成（工作区改动，未提交）
+- 现象（操作员报告）：编辑好航迹后点 Upload，面板仍显示 "Unsaved changes — not the FC plan"，看不出上传到底成没成功；而且没有清空本地航迹的按钮。
+- 根因：同步状态只有一个布尔 `dirty`，"从未上传"和"改过后未同步"、"上传失败"共用同一句红色警告；上传失败（未连 FC、FC 不应答、回读丢失）时 `dirty` 本就该保持 true，但文案让人以为上传成功了。另有 `verifying` 悬挂与链路断开后 `busy` 永不复位两处状态机漏洞。
+- 修复：
+  - 新增 `frontend/src/mission/sync.ts::planSyncStatus`，把 `itemCount/dirty/fcMatches/lastSyncedHash` 归为 5 态：`empty`（无航迹）/`unsynced`（本地航迹，从未上传）/`dirty`（上传后又改）/`mismatch`（FC 回读不一致，红）/`synced`（与 FC 一致，绿）。面板按状态显示单一文案，上传成功后明确显示 "In sync with the FC"。
+  - 新增本地 `clearPlan`（清空航迹/复杂块/home/基线，无需链路，二次点击确认）与 FC 的 `Clear FC` 区分开，按钮文案同步修改；Upload/Clear FC 在未连接时补 `title` 说明。
+  - `handleEvent` 收到任意 `failed` 时复位 `verifying`（回读丢失不再吞掉下一次下载）；新增 `linkLost`，`bridge.ts` 在 `fc_alive` 转假时调用（mission service 任务随连接一起退出，永远不会再发终止事件，否则 Upload 会永远停在 "Uploading…" 且按钮全灰）。
+  - 重新 Generate 预设轨迹时替换上一次生成的轨迹块而不是叠加（`InsertedPattern.count`；任何手工编辑会解除该块），`applyImport` 也解除，避免导入后误删导入的航点。
+- 验收：`npm run check:mission-sync`（新增，esbuild+Node 驱动真实 store 跑 15 个场景：上传成功清警告、失败保留编辑、回读不一致报 mismatch、断链复位、清空航迹、预设轨迹替换）。
+- 验证：`npm run typecheck`、`check:colors`、`check:contrast`、`check:i18n`、`check:planfile`、`check:mission-sync`、`npm run build` 全通过；`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test -p maggcs-core --lib`（163）、`cargo test -p maggcs-app`、`cargo deny check` 通过；`scripts/desktop-smoke.sh` PASS（56.5% bright）。
+
+---
+
 ## 待核实项（先验证再决定是否开 issue）
 - `mavlink` crate 0.17 的 UDP 监听是否设置 `SO_REUSEADDR`；`udpin` 的回复地址行为（抓包确认）。
 - `DO_PAUSE_CONTINUE` 在 PX4 v1.17 的实际语义。现状（2026-10-07）：Pause/Continue 已按 MAVLink 规范接入（param1 = 0 暂停 / 1 继续，`send_command("pause"|"continue")`，见 `crates/app-tauri/src/commands.rs::named_command`，含 3 个单测）；PX4 v1.17 是否支持、以及参数语义仍需 SITL 抓包确认——不支持时 FC 回 NACK，UI 会显示 "Not supported by the FC"。
