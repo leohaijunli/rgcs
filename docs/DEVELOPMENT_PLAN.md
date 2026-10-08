@@ -269,6 +269,12 @@ import/export and RTL are in place; Pause/Continue is wired to
 handling still needs SITL confirmation (see issues.md). The acceptance runs
 against the fake FC; a live SITL pass is the remaining gap.
 
+Planning model (ADR-013, 2026-10-07): `core::plan::PlannedMission` stores
+absolute datum-tagged AMSL heights and compiles to wire `MissionItem`s on
+demand (`FramePolicy::{GlobalInt, GlobalRelativeAltInt}`, never terrain-alt);
+`PlanError` guards the datum and coordinate ranges. The frontend store
+migration onto it is the follow-up.
+
 Planning hardening (improve_plan findings, 2026-10-07): QGC complex items
 (Survey, …) now round-trip losslessly as opaque blocks
 (`npm run check:planfile`), switching the altitude mode converts existing

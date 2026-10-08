@@ -3,6 +3,30 @@
 Snapshot of the current session (issues.md backlog clearance). Issue statuses
 live in `issues.md`; keep both in sync when a task lands.
 
+## Latest landing — `core::plan` (WS-B, ADR-013)
+
+New planning model, separated from the wire model:
+
+- `crates/core/src/plan/{mod,types,error}.rs`: `PlannedMission { home, waypoints,
+  blocks, meta }` with datum-tagged AMSL `Height` altitudes, and
+  `PlannedMission::compile(FramePolicy)` producing `MissionItem`s.
+  `FramePolicy::{GlobalInt, GlobalRelativeAltInt}` differ only in `z`/`frame`
+  (`GlobalInt` = AMSL `z`, relative = AMSL − HOME AMSL); terrain-alt frames are
+  never emitted (ADR-005). `PlanError` rejects non-AMSL inputs, out-of-range
+  coordinates, and >65535 items.
+- `docs/adr/013-plan-height-policy.md` records the decision (ADR-012 is the
+  desktop CSP, so the map-tools ADR becomes ADR-014).
+- ts-rs bindings exported and copied to `frontend/src/generated-types/`.
+- Acceptance test: one plan compiles to both frames with identical `x`/`y`/`seq`
+  and `z` differing by exactly the home altitude.
+
+Not yet wired: the frontend store still holds `MissionItem`s in the selected
+mode and converts via `frontend/src/mission/altitude.ts`; migrating it onto
+`PlannedMission` is the follow-up (tracked in the ADR).
+
+Verified: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
+`cargo test -p maggcs-core --lib` (141 passed), `cargo deny check`.
+
 ## Latest landing — improve_plan findings 1/3/4/5/14–19
 
 Hardening of the Phase 1 planning path from `improve_plan.md` (verified

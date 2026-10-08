@@ -13,6 +13,7 @@ pub mod devices;
 pub mod height;
 pub mod mavlink;
 pub mod mission;
+pub mod plan;
 pub mod rtk;
 pub mod telemetry;
 
@@ -24,4 +25,5 @@ pub use mavlink::error::MavlinkError;
 pub use mavlink::heartbeat::{HeartbeatMonitor, HeartbeatStatus};
 pub use mavlink::router::{MessageRoute, RoutedEvents};
 pub use mission::{MissionIds, MissionService, MissionServiceError, MissionServiceEvent};
+pub use plan::{FramePolicy, PlanError, PlannedMission, PlannedWaypoint};
 pub use telemetry::{GlobalPositionInt, TelemetrySnapshot};
