@@ -3,6 +3,54 @@
 Snapshot of the current session (issues.md backlog clearance). Issue statuses
 live in `issues.md`; keep both in sync when a task lands.
 
+## Latest landing — map height reference fixed, drop line grounded
+
+The operator reported the vehicle marker flew **below the drawn flight-plan
+trajectory** and the AGL "drop line" never appeared (issues.md #40):
+
+- Root cause: the plan, its labels and its height sticks are drawn in **AMSL**
+  (`MapView.toDisplayItems` adds HOME's AMSL), but the vehicle marker was drawn
+  at PX4's `relative_alt` (0 = HOME) — so on a site at ~115 m MSL a 30 m AGL
+  flight hung the marker ~115 m below the path. A leftover `+5 m` lift
+  on the drawn path/points/sticks pushed the trajectory another 5 m above the
+  true altitude.
+- `useCesiumViewer.setSnapshot` now places the marker at `HOME AMSL +
+  relative_alt_m`, and `entities.ts::updateDropLine` takes explicit top/bottom
+  metres so the drop line runs **from the vehicle down to the plan's ground
+  plane** (HOME AMSL), labelled with the AGL. The `+5 m` lift was removed from
+  `renderWaypoints`/`previewWaypoint` so the path sits exactly at the planned
+  altitude. HOME's marker and the add-tool ghost stand on the same ground plane
+  and follow the store's `home`.
+- Companion fix (9a3e355): AGL now compiles to `MAV_FRAME_GLOBAL_RELATIVE_ALT_INT`
+  instead of the terrain frame PX4 v1.17 rejects on upload; a foreign
+  terrain-frame `.plan` still reads back as AGL. This is exactly the relative
+  frame, so the AGL mode becomes a true AGL profile once WS-D drapes the path.
+
+Verified: frontend typecheck/build, `check:planfile/i18n/progress/
+mission-sync/coords`.
+
+## Next — irregular-boundary sweep + adjustable pattern centre (agreed 2026-10-08)
+
+From the operator review: "how do I adjust the cloverleaf/sweep centre, and how
+do I sweep an irregular (concave) field?" The agreed decomposition (also in
+`docs/DEVELOPMENT_PLAN.md` Phase 3) — land one step at a time:
+
+- **B1** `core::survey`: replace `clip_to_convex` with a simple-polygon (concave
+  OK) line clipper that returns several segments per crossing line;
+  `build_parallel_lines` emits one `PatternLine` per segment; drop the
+  convexity check and add `SurveyError::SelfIntersectingPolygon`.
+- **B2** golden-geometry tests (L-shape / U-shape: segments, lengths, line
+  table, fly order).
+- **B3** polygon map tool (`stores/ui.ts` `mapTool: 'polygon'`,
+  `cesium/tools/polygon.ts`): click vertices, double-click / first-vertex
+  closes, drag vertices, self-intersection flagged, area/perimeter readout;
+  ADR-014 to be recorded.
+- **B4** `PatternPanel` generates the sweep from the drawn polygon.
+- **A1** `InsertedPattern` remembers centre + params; `PatternPanel` gains lat/lon
+  centre inputs + "use map centre".
+- **A2** draggable centre handle on the map (cloverleaf `center`, sweep rectangle
+  centre), regenerate preview; one drag = one commit.
+
 ## Latest landing — flight progress, line colours, heights, wire-precision sync
 
 Five operator reports, all in the map/plan/mission readout (issues.md #35-#39):

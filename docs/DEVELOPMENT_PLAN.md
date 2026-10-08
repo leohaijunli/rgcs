@@ -326,12 +326,31 @@ generates them as pure geometry and returns `PatternPlan` (AMSL
   `samples_per_petal`, `start_heading_deg`) for magnetometer calibration.
 - Projection is a local tangent plane (`survey::LocalProjection`); UTM 10 lands
   with the `geo`-crate clipping in WS-C. Non-convex polygons are rejected
-  (fail closed) until then.
+  (fail closed) for now; that restriction is being replaced by the irregular
+  boundary work below (B1).
 
 The preset UI is wired (`PlanningPanel` -> `PatternPanel`: choose sweep or
 cloverleaf, edit parameters, Generate appends the geometry to the plan). The
 sweep polygon is a rectangle around the map centre until the polygon tool
-(WS-G) lands; DEM draping is the remaining Phase 3 work.
+(B3) lands; DEM draping is the remaining Phase 3 work.
+
+**Irregular-boundary sweep + adjustable pattern centre (agreed 2026-10-08).**
+Two planner improvements from the operator review, decomposed to land in small
+steps (one at a time, each with tests / a measurable acceptance):
+
+| Step | Task | Acceptance |
+| --- | --- | --- |
+| B1 | `core::survey`: clip parallel lines against a *simple* polygon (convex or concave) instead of `clip_to_convex`; an infinite line crosses a concave polygon in several segments, so `build_parallel_lines` emits one `PatternLine` per segment. `validate_polygon` drops the convexity requirement and gains a self-intersection check (`SurveyError::SelfIntersectingPolygon`). | L-shape and U-shape polygons generate; a self-intersecting polygon returns `SelfIntersectingPolygon` |
+| B2 | Golden-geometry tests for the concave clipper: L-shape and U-shape — segment count, waypoint count, per-segment lengths, line table and fly order all asserted. | `cargo test -p maggcs-core` green; numbers match the hand-computed geometry |
+| B3 | Frontend polygon tool: `stores/ui.ts` gains `mapTool: 'polygon'`; new `cesium/tools/polygon.ts` — click to add vertices, close by double-click or clicking the first vertex, drag existing vertices, self-intersection flagged in the error colour, live area/perimeter readout (WS-G G2). | Playwright: draw an L-shape, drag a vertex, close; a self-crossing polygon is flagged and Generate is blocked |
+| B4 | `PatternPanel` generates the sweep from the drawn polygon (replacing the rectangle quick mode, which stays as a shortcut). | The drawn polygon produces a sweep clipped to its boundary (waypoints inside it) |
+| A1 | `stores/mission.ts`: `InsertedPattern` remembers the centre + parameters it was generated from; `PatternPanel` gains lat/lon centre inputs and a "use map centre" button (cloverleaf `center`; sweep rectangle centre). | Entering a centre and regenerating places the pattern there (cloverleaf waypoints centred to < 1 m) |
+| A2 | Map handle: the last pattern's centre is draggable on the map; dragging moves the centre and regenerates the preview. One drag commits once. | One drag = one store commit; regenerating honours the dragged centre |
+
+Steps B1→B4 build the custom-boundary path (the operator's irregular-field
+case); A1/A2 are the lightweight centre-adjustment path on top of the same
+map-tool infrastructure. ADR-014 (map tools: the polygon tool + the single
+`pickLatLon` pick) will be recorded with B3.
 
 **Acceptance**: regenerating waypoints from the same archive is point-for-point
 identical; on rugged terrain the SITL flight (requires Gazebo) deviates from
