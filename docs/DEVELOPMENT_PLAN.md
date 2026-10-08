@@ -305,6 +305,10 @@ spacing, extension, turn radius explicit), densify and smooth along the DEM
 (climb-rate/slope constraints), AGL profile, DEM metadata display, mission
 archive (parameters + DEM version + waypoints).
 
+Geoid interpolation is already implemented (`core::height::grid`: regular
+lat/lon grids + bilinear interpolation, out-of-coverage fails closed). Phase 3
+only has to load the real EGM96 / CGG2013 grids (finding 12).
+
 **Acceptance**: regenerating waypoints from the same archive is point-for-point
 identical; on rugged terrain the SITL flight (requires Gazebo) deviates from
 the target AGL by < 2 m; over-limit climb rates are detected and warned.

@@ -3,6 +3,28 @@
 Snapshot of the current session (issues.md backlog clearance). Issue statuses
 live in `issues.md`; keep both in sync when a task lands.
 
+## Latest landing — geoid grid interpolation (finding 12 groundwork)
+
+`crates/core/src/height/grid.rs` gives `core::height` a working `GeoidModel`:
+
+- `GeoidGrid { spec, values }` + `GeoidGridSpec` describe a regular
+  latitude/longitude grid (row-major, lat-first) of undulation values.
+- `GeoidGrid::new`/`constant` validate shape, positive steps, `nlat*nlon`
+  length and finiteness; malformed input returns `HeightError::InvalidGrid`.
+- `GeoidGridModel` holds one grid per `HeightDatum` and interpolates
+  bilinearly; a query outside coverage returns
+  `HeightError::UndulationUnavailable` (never extrapolated, matching ADR-004),
+  and a datum without a grid returns `HeightError::ModelNotLoaded`.
+- `HeightError` gained the `InvalidGrid` variant.
+
+Tests cover constant/linear fields, corner/edge nodes, out-of-coverage and
+missing-datum failures, invalid grids, and the AMSL→ellipsoid→AMSL chain
+through a grid. The real EGM96/CGG2013 grids (and the COG reader) land in
+Phase 3, which is the only remaining part of finding 12.
+
+Verified: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
+`cargo test -p maggcs-core --lib` (149 passed), `cargo deny check`.
+
 ## Latest landing — `core::plan` (WS-B, ADR-013)
 
 New planning model, separated from the wire model:

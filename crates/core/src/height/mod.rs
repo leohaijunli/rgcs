@@ -8,8 +8,10 @@
 //!   (BC LiDAR), with `H + N(CGG2013) = h`.
 //!
 //! Absolute heights must be represented as [`Height`], never as bare `f64`.
-//! All datum conversions live in this module (geoid interpolation lands in
-//! Phase 3; the type surface is fixed now).
+//! All datum conversions live in this module. The grid interpolation is in
+//! [`grid`]; the real EGM96 / CGG2013 grids are loaded in Phase 3.
+
+pub mod grid;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -121,7 +123,9 @@ pub trait GeoidModel: Send + Sync {
     ) -> Result<f64, HeightError>;
 }
 
-/// Errors from height conversion.
+pub use grid::{GeoidGrid, GeoidGridModel};
+
+/// Errors from height conversion or geoid-grid construction.
 #[derive(Debug, Error)]
 pub enum HeightError {
     /// Geoid undulation unavailable for the datum at the requested location.
@@ -134,6 +138,9 @@ pub enum HeightError {
     /// The geoid model is not loaded.
     #[error("geoid model not loaded: {0}")]
     ModelNotLoaded(String),
+    /// A geoid grid is malformed (shape, spacing or a non-finite value).
+    #[error("invalid geoid grid: {0}")]
+    InvalidGrid(String),
 }
 
 #[cfg(test)]
