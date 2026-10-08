@@ -310,6 +310,24 @@ Geoid interpolation is already implemented (`core::height::grid`: regular
 lat/lon grids + bilinear interpolation, out-of-coverage fails closed). Phase 3
 only has to load the real EGM96 / CGG2013 grids (finding 12).
 
+**Preset parameterised patterns (started 2026-10-08).** The planner offers
+trajectory presets instead of only hand-placed waypoints. `core::survey`
+generates them as pure geometry and returns `PatternPlan` (AMSL
+`PlannedWaypoint`s + a `seq -> line` table for post-flight segmentation):
+
+- `SurveyPattern` — parallel-line sweep clipped to a convex polygon:
+  `line_azimuth_deg`, `line_spacing_m`, optional `tie_spacing_m` +
+  `tie_azimuth_deg` (perpendicular tie lines), `lead_in_m`/`lead_out_m`,
+  `alternate` (serpentine vs unidirectional), `altitude_amsl_m`, `speed_mps`.
+- `CloverleafPattern` — N-petal rose (`petals` even >= 4, `radius_m`,
+  `samples_per_petal`, `start_heading_deg`) for magnetometer calibration.
+- Projection is a local tangent plane (`survey::LocalProjection`); UTM 10 lands
+  with the `geo`-crate clipping in WS-C. Non-convex polygons are rejected
+  (fail closed) until then.
+
+The remaining Phase 3 work is the frontend preset UI (parameter form → generate
+→ insert as a block) and DEM draping.
+
 **Acceptance**: regenerating waypoints from the same archive is point-for-point
 identical; on rugged terrain the SITL flight (requires Gazebo) deviates from
 the target AGL by < 2 m; over-limit climb rates are detected and warned.

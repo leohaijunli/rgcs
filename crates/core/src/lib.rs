@@ -15,6 +15,7 @@ pub mod mavlink;
 pub mod mission;
 pub mod plan;
 pub mod rtk;
+pub mod survey;
 pub mod telemetry;
 
 pub use commands::{CommandError, CommandEvent, CommandResult, CommandService, CommandSession};
@@ -26,4 +27,5 @@ pub use mavlink::heartbeat::{HeartbeatMonitor, HeartbeatStatus};
 pub use mavlink::router::{MessageRoute, RoutedEvents};
 pub use mission::{MissionIds, MissionService, MissionServiceError, MissionServiceEvent};
 pub use plan::{FramePolicy, PlanError, PlannedMission, PlannedWaypoint};
+pub use survey::{CloverleafPattern, PatternPlan, SurveyPattern};
 pub use telemetry::{GlobalPositionInt, TelemetrySnapshot};

@@ -3,6 +3,33 @@
 Snapshot of the current session (issues.md backlog clearance). Issue statuses
 live in `issues.md`; keep both in sync when a task lands.
 
+## Latest landing — preset parameterised patterns (`core::survey`)
+
+New `crates/core/src/survey` generates complete trajectories from parameters,
+so the planner can offer presets rather than only hand-placed waypoints:
+
+- `SurveyPattern` — parallel-line sweep clipped to a convex polygon, with
+  optional perpendicular **tie lines**, lead-in/lead-out and an alternating
+  (serpentine) option; `speed_mps` prepends a `DO_CHANGE_SPEED`.
+- `CloverleafPattern` — N-petal rose (`petals` even >= 4) for calibration
+  flights; generates a closed, smooth path for magnetometer calibration.
+- `PatternPlan` carries AMSL `PlannedWaypoint`s plus a `PatternLine`
+  (`seq` range + kind + length) table for post-flight line segmentation.
+- `survey::LocalProjection` is a dependency-free local tangent-plane projection
+  (sub-metre over a survey block); UTM 10 lands with the `geo`-crate clipper in
+  WS-C. Non-convex polygons fail closed (`SurveyError::NonConvexPolygon`).
+
+Tests (10): clipped lengths, tie-line counts, serpentine reversal, speed
+prepend + line-table shift, non-convex/parameter rejection, cloverleaf closure
+and radius bound, projection round trip. ts-rs bindings exported and copied to
+`frontend/src/generated-types/`.
+
+Verified: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
+`cargo test -p maggcs-core --lib` (163 passed), `cargo deny check`.
+
+Next: the frontend preset UI (parameter form → generate → insert as a
+read-only block), then DEM draping.
+
 ## Latest landing — frontend migrated onto the planned (AMSL) model
 
 The mission store now holds planned waypoints in absolute AMSL
