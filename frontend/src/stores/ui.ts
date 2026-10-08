@@ -4,6 +4,8 @@ export type View = 'planning' | 'flight' | 'data'
 export type Theme = 'dark' | 'light'
 export type DrawerId = 'missions' | 'vehicles' | 'layers' | null
 export type DockTab = 'profile' | 'qc' | 'log'
+/** Active map tool. `add` places a new waypoint on click (planning view only). */
+export type MapTool = 'select' | 'add'
 
 export interface ViewConfig {
   /** Drawer section opened by default when switching to this view. */
@@ -30,6 +32,8 @@ interface UiState {
   map3d: boolean
   /** Last known map-camera centre in degrees, used as the default new-waypoint spot. */
   mapCenter: { lat: number; lon: number } | null
+  /** Active map tool; `Esc` and leaving the planning view reset it to `select`. */
+  mapTool: MapTool
   dashboardOpen: boolean
   qcOpen: boolean
   setView: (v: View) => void
@@ -44,6 +48,7 @@ interface UiState {
   setFollow: (follow: boolean) => void
   toggleMap3d: () => void
   setMapCenter: (c: { lat: number; lon: number }) => void
+  setMapTool: (tool: MapTool) => void
   setDashboardOpen: (open: boolean) => void
   setQcOpen: (open: boolean) => void
 }
@@ -81,6 +86,7 @@ export const useUiStore = create<UiState>((set) => ({
   follow: true,
   map3d: true,
   mapCenter: null,
+  mapTool: 'select',
   dashboardOpen: false,
   qcOpen: false,
   setView: (view) =>
@@ -88,6 +94,8 @@ export const useUiStore = create<UiState>((set) => ({
       view,
       drawer: VIEW_CONFIG[view].drawer,
       rightOpen: !narrowScreen(),
+      // Editing tools belong to the planning view (finding 18).
+      ...(view === 'planning' ? {} : { mapTool: 'select' as const }),
     })),
   setTheme: (theme) => {
     applyTheme(theme)
@@ -103,6 +111,7 @@ export const useUiStore = create<UiState>((set) => ({
   setFollow: (follow) => set({ follow }),
   toggleMap3d: () => set((s) => ({ map3d: !s.map3d })),
   setMapCenter: (mapCenter) => set({ mapCenter }),
+  setMapTool: (mapTool) => set({ mapTool }),
   setDashboardOpen: (dashboardOpen) => set({ dashboardOpen }),
   setQcOpen: (qcOpen) => set({ qcOpen }),
 }))

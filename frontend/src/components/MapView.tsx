@@ -1,15 +1,20 @@
 import { useEffect, useMemo, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useCesiumViewer } from '../hooks/useCesiumViewer'
 import { compileWaypoints } from '../mission/compile'
 import { orderedMissionItems } from '../mission/planfile'
 import { useMissionStore } from '../stores/mission'
 import { useTelemetryStore } from '../stores/telemetry'
+import { useUiStore } from '../stores/ui'
 import MapToolbar from './MapToolbar'
 
 /** Composition shell: viewer lifecycle + store wiring + chrome (issues.md #29). */
 export default function MapView() {
+  const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
   const { initError, setSnapshot, setMission, goHome, lookNorth } = useCesiumViewer(containerRef)
+  const mapTool = useUiStore((s) => s.mapTool)
+  const view = useUiStore((s) => s.view)
 
   // Telemetry updates: drone position, trail, camera follow.
   const snapshot = useTelemetryStore((s) => s.snapshot)
@@ -55,6 +60,11 @@ export default function MapView() {
     <div className="relative h-full w-full">
       <div ref={containerRef} className="h-full w-full" />
       <MapToolbar onGoHome={goHome} onToggleMeasure={() => undefined} onNorth={lookNorth} />
+      {view === 'planning' && mapTool === 'add' && (
+        <div className="pointer-events-none absolute left-1/2 top-3 -translate-x-1/2 rounded border border-line bg-panel/85 px-3 py-1 text-xs text-ink shadow-lg">
+          {t('map.addHint')}
+        </div>
+      )}
     </div>
   )
 }

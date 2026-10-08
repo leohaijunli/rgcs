@@ -3,6 +3,29 @@
 Snapshot of the current session (issues.md backlog clearance). Issue statuses
 live in `issues.md`; keep both in sync when a task lands.
 
+## Latest landing — map click-to-add waypoints (WS-G part 1)
+
+The planning map can now create waypoints directly (finding 13):
+
+- `stores/ui.ts`: `mapTool: 'select' | 'add'`; `setMapTool`; `Esc` and leaving
+  the planning view reset it to `select`.
+- `cesium/waypoints.ts::installMapTools` (renamed from `installWaypointDrag`)
+  handles both tools in one `ScreenSpaceEventHandler`: select/drag as before,
+  plus add — a press/release <= 3 px picks the ground and appends a waypoint
+  while a drag pans the camera (finding 17), and a ghost point follows the
+  cursor (`entities.ts::createGhostPoint`). The canvas shows a crosshair while
+  the tool is active.
+- `stores/mission.ts::addWaypointAt` inherits the previous waypoint's AMSL
+  altitude (falls back to home + 50 m).
+- `MapToolbar` gains an Add-waypoint button (planning view only) and a hint bar
+  shows "Click the map to add a waypoint · Esc to finish".
+
+Still open in WS-G: polygon tool, midpoint insert handles, context menu,
+coordinate entry, measure, snapping, profile linkage, touch targets.
+
+Verified: frontend typecheck/colors/contrast/i18n/planfile/build,
+`cargo test -p maggcs-app`, `scripts/desktop-smoke.sh` (53% bright, PASS).
+
 ## Latest landing — preset pattern UI (planning view)
 
 `PlanningPanel` now embeds a `PatternPanel` (Presets): pick Survey sweep or

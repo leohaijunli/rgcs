@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { compileWaypoints } from '../../mission/compile'
+import { compileWaypoints, DEFAULT_ALT_AGL_M } from '../../mission/compile'
 import { exportPlanFile, importPlanFile, orderedMissionItems } from '../../mission/planfile'
 import PatternPanel from './PatternPanel'
 import { useLinkStore } from '../../stores/link'
@@ -9,9 +9,6 @@ import { useMissionStore, type AltitudeMode } from '../../stores/mission'
 import type { PlannedWaypoint } from '../../generated-types/PlannedWaypoint'
 
 const MODES: AltitudeMode[] = ['relative', 'amsl', 'agl']
-
-/** Default clearance above home for a new waypoint when none is selected. */
-const DEFAULT_ALT_AGL_M = 50
 
 export default function PlanningPanel() {
   const { t } = useTranslation()

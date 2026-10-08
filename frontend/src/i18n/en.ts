@@ -176,6 +176,8 @@ export default {
     home: 'Go home',
     measure: 'Measure',
     north: 'North up',
+    addWaypoint: 'Add waypoints (click the map)',
+    addHint: 'Click the map to add a waypoint · Esc to finish',
   },
   settings: {
     menu: 'Settings',

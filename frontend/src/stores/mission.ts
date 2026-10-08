@@ -12,7 +12,12 @@ import type { MissionFrame } from '../generated-types/MissionFrame'
 import type { PatternLine } from '../generated-types/PatternLine'
 import type { PatternPlan } from '../generated-types/PatternPlan'
 import type { PlannedWaypoint } from '../generated-types/PlannedWaypoint'
-import { compileWaypoints, makeWaypoint, waypointFromItem } from '../mission/compile'
+import {
+  compileWaypoints,
+  DEFAULT_ALT_AGL_M,
+  makeWaypoint,
+  waypointFromItem,
+} from '../mission/compile'
 import { orderedMissionItems } from '../mission/planfile'
 import { itemsHash } from '../mission/hash'
 import type { PlanBlock, PlanImport, QgcPlan } from '../mission/planfile'
@@ -79,6 +84,8 @@ interface MissionState {
   updatePosition: (seq: number, latDeg: number, lonDeg: number) => void
   updateAltitude: (seq: number, amslM: number) => void
   addWaypoint: (latDeg: number, lonDeg: number, amslM: number) => void
+  /** Add a waypoint from a map click, inheriting the previous altitude. */
+  addWaypointAt: (latDeg: number, lonDeg: number) => void
   removeWaypoint: (seq: number) => void
   moveWaypoint: (from: number, to: number) => void
   /** Append a generated pattern's waypoints and show its line table. */
@@ -164,6 +171,22 @@ export const useMissionStore = create<MissionState>((set, get) => ({
   addWaypoint: (latDeg, lonDeg, amslM) =>
     set((s) => {
       const waypoints = [...s.waypoints, makeWaypoint(latDeg, lonDeg, amslM)]
+      return {
+        waypoints,
+        selectedSeq: waypoints.length - 1,
+        dirty: true,
+        fcMatches: null,
+        lastPattern: null,
+      }
+    }),
+
+  addWaypointAt: (latDeg, lonDeg) =>
+    set((s) => {
+      // Inherit the last waypoint's altitude so a clicked line stays level
+      // (WS-G G3); fall back to a default clearance above home.
+      const last = s.waypoints[s.waypoints.length - 1]
+      const amsl = last ? last.altitude.meters : (s.home?.[2] ?? 0) + DEFAULT_ALT_AGL_M
+      const waypoints = [...s.waypoints, makeWaypoint(latDeg, lonDeg, amsl)]
       return {
         waypoints,
         selectedSeq: waypoints.length - 1,

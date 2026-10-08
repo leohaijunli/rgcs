@@ -1,47 +1,71 @@
-// Screen-space waypoint dragging for the planning view (issues.md #29,
-// findings 14/15/17/18).
+// Map tools for the planning view: select/drag a waypoint, or add one by
+// clicking the map (issues.md #29, findings 13/14/15/17/18).
 //
-// A drag updates an on-screen preview only and commits to the mission store
+// Select: a press on a waypoint previews on MOUSE_MOVE and commits to the store
 // exactly once, on release, so one drag is one undo entry and one dirty
-// transition. A press/release that never moves beyond the click threshold is a
-// selection, not a move. Camera rotate/translate are disabled for the duration
-// of the gesture and restored by a shared `finish()` that is also wired to the
-// window's `pointerup`/`blur` and `Escape`, so releasing outside the canvas can
-// never leave the camera locked. The handler is inert outside the planning view.
+// transition. A press/release that never moves beyond the click threshold
+// selects instead of moving.
+//
+// Add: a click (press/release <= threshold) picks the ground point and appends a
+// waypoint; dragging pans the camera and adds nothing. Hovering shows a ghost
+// point at the picked ground.
+//
+// Camera rotate/translate are disabled for the duration of a *select* drag and
+// restored by a shared `finish()`, also wired to the window's
+// `pointerup`/`blur` and `Escape`, so releasing outside the canvas can never
+// leave the camera locked. Escape also returns to the select tool. The handler
+// is inert outside the planning view.
 
 import * as Cesium from 'cesium'
 import { useMissionStore } from '../stores/mission'
+import { useUiStore } from '../stores/ui'
+import type { MapTool } from '../stores/ui'
 import { pickLatLon } from './pick'
 
 /** Press/release displacement at or below this (px) counts as a click, not a drag. */
 export const CLICK_DRAG_THRESHOLD_PX = 3
 
-export interface WaypointDragOptions {
+/** A ground point under the cursor, in degrees. */
+export interface GroundPoint {
+  lat: number
+  lon: number
+}
+
+export interface MapToolOptions {
   /** Whether editing is allowed right now (the planning view). Default: always. */
   enabled?: () => boolean
+  /** Active tool. Default: always `select`. */
+  tool?: () => MapTool
   /** Move the on-screen point/line without touching the store (called per move). */
   onPreview?: (seq: number, lat: number, lon: number) => void
   /** A press/release inside the click threshold selects the waypoint. */
   onSelect?: (seq: number) => void
+  /** A click with the add tool places a waypoint here. */
+  onAdd?: (lat: number, lon: number) => void
+  /** Ghost-point preview while hovering with the add tool; `null` in the sky. */
+  onHover?: (ground: GroundPoint | null) => void
 }
 
 /**
- * Install the drag handler on `viewer`. Returns the handler; call `destroy()`
- * on teardown (it also removes the window-level safety listeners).
+ * Install the map tool handler on `viewer`. Returns the handler; call
+ * `destroy()` on teardown (it also removes the window-level safety listeners).
  */
-export function installWaypointDrag(
+export function installMapTools(
   viewer: Cesium.Viewer,
-  opts: WaypointDragOptions = {},
+  opts: MapToolOptions = {},
 ): Cesium.ScreenSpaceEventHandler {
   const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas)
   const controller = viewer.scene.screenSpaceCameraController
 
   let pendingSeq = -1
   let dragging = false
+  let pressing = false
   let start: Cesium.Cartesian2 | null = null
+  let lastMouse: Cesium.Cartesian2 | null = null
   let lastGround: { lat: number; lon: number } | null = null
 
   const enabled = () => (opts.enabled ? opts.enabled() : true)
+  const tool = (): MapTool => (opts.tool ? opts.tool() : 'select')
 
   const restoreCamera = () => {
     controller.enableRotate = true
@@ -51,14 +75,19 @@ export function installWaypointDrag(
   const reset = () => {
     pendingSeq = -1
     dragging = false
+    pressing = false
     start = null
     lastGround = null
     restoreCamera()
+    opts.onHover?.(null)
   }
 
-  /** Commit a completed gesture (idempotent: safe to call from canvas + window). */
+  /** Commit a completed select gesture (idempotent across canvas + window). */
   const finish = () => {
-    if (pendingSeq < 0) return
+    if (pendingSeq < 0) {
+      pressing = false
+      return
+    }
     const seq = pendingSeq
     const moved = dragging
     const ground = lastGround
@@ -72,16 +101,36 @@ export function installWaypointDrag(
     }
   }
 
+  /** Commit a completed add click (idempotent across canvas + window). */
+  const finishAdd = () => {
+    if (!pressing) return
+    const at = pressPosition()
+    const moved =
+      start && at ? Cesium.Cartesian2.distance(start, at) > CLICK_DRAG_THRESHOLD_PX : false
+    pressing = false
+    start = null
+    if (moved || !at) return
+    const ground = pickLatLon(viewer, at)
+    if (ground) opts.onAdd?.(ground.lat, ground.lon)
+  }
+
+  const pressPosition = (): Cesium.Cartesian2 | null => lastMouse ?? start
+
   handler.setInputAction(
     (click: Cesium.ScreenSpaceEventHandler.PositionedEvent) => {
       if (!enabled()) return
+      start = Cesium.Cartesian2.clone(click.position)
+      lastMouse = Cesium.Cartesian2.clone(click.position)
+      if (tool() === 'add') {
+        pressing = true
+        return
+      }
       const picked = viewer.scene.pick(click.position)
       const entity = Cesium.defined(picked) ? (picked.id as Cesium.Entity) : undefined
       const seq = Number.parseInt(entity?.id ? String(entity.id).replace(/^wp-/, '') : '', 10)
       if (Number.isNaN(seq)) return
       pendingSeq = seq
       dragging = false
-      start = Cesium.Cartesian2.clone(click.position)
       lastGround = null
       controller.enableRotate = false
       controller.enableTranslate = false
@@ -91,7 +140,22 @@ export function installWaypointDrag(
 
   handler.setInputAction(
     (movement: Cesium.ScreenSpaceEventHandler.MotionEvent) => {
-      if (pendingSeq < 0) return
+      lastMouse = Cesium.Cartesian2.clone(movement.endPosition)
+      const active = tool()
+      if (pressing && active === 'add') {
+        // Moving past the threshold turns the click into a camera pan.
+        if (start && Cesium.Cartesian2.distance(start, movement.endPosition) > CLICK_DRAG_THRESHOLD_PX) {
+          pressing = false
+        }
+        return
+      }
+      if (pendingSeq < 0) {
+        if (active === 'add') {
+          const ground = pickLatLon(viewer, movement.endPosition)
+          opts.onHover?.(ground ? { lat: ground.lat, lon: ground.lon } : null)
+        }
+        return
+      }
       if (!dragging && start) {
         if (Cesium.Cartesian2.distance(start, movement.endPosition) <= CLICK_DRAG_THRESHOLD_PX) {
           return
@@ -106,14 +170,22 @@ export function installWaypointDrag(
     Cesium.ScreenSpaceEventType.MOUSE_MOVE,
   )
 
-  handler.setInputAction(() => finish(), Cesium.ScreenSpaceEventType.LEFT_UP)
+  handler.setInputAction(() => {
+    if (pressing) finishAdd()
+    else finish()
+  }, Cesium.ScreenSpaceEventType.LEFT_UP)
 
   // A gesture can end off-canvas (or the window can lose focus mid-drag); the
   // window listeners make sure the camera is always restored (finding 15).
-  const onWindowPointerUp = () => finish()
+  const onWindowPointerUp = () => {
+    if (pressing) finishAdd()
+    else finish()
+  }
   const onWindowBlur = () => reset()
   const onKeyDown = (e: KeyboardEvent) => {
-    if (e.key === 'Escape') reset()
+    if (e.key !== 'Escape') return
+    reset()
+    useUiStore.getState().setMapTool('select')
   }
   window.addEventListener('pointerup', onWindowPointerUp)
   window.addEventListener('blur', onWindowBlur)

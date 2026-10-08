@@ -19,6 +19,9 @@ import type { AltitudeMode } from '../stores/mission'
 /** The working datum: AMSL as reported by PX4 (ADR-006). */
 export const AMSL_EGM96 = 'AMSL_EGM96' as const
 
+/** Default clearance above home for a new waypoint when none is selected. */
+export const DEFAULT_ALT_AGL_M = 50
+
 /** Wire frame each UI altitude mode compiles to. */
 export const FRAME_BY_MODE: Record<AltitudeMode, MissionFrame> = {
   relative: 'global_relative_alt_int',

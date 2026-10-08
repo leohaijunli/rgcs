@@ -10,12 +10,14 @@ import 'cesium/Build/Cesium/Widgets/widgets.css'
 import { createViewer } from '../cesium/scene'
 import {
   createDroneLayer,
+  createGhostPoint,
   disposeWaypointLayer,
   previewWaypoint,
   renderWaypoints,
+  setGhostPoint,
 } from '../cesium/entities'
-import type { DroneLayer, WaypointLayer } from '../cesium/entities'
-import { installWaypointDrag } from '../cesium/waypoints'
+import type { DroneLayer, GhostPoint, WaypointLayer } from '../cesium/entities'
+import { installMapTools } from '../cesium/waypoints'
 import { createFollowController } from '../cesium/follow'
 import type { FollowController } from '../cesium/follow'
 import {
@@ -56,6 +58,7 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
   const tickRef = useRef(0)
   const wpLayerRef = useRef<WaypointLayer | null>(null)
   const wpHandlerRef = useRef<Cesium.ScreenSpaceEventHandler | null>(null)
+  const ghostRef = useRef<GhostPoint | null>(null)
   const wpItemsRef = useRef<MissionItem[]>([])
 
   useEffect(() => {
@@ -77,14 +80,19 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
       usePrefsStore.getState().initialPosition,
     )
     droneRef.current = layer
-    wpHandlerRef.current = installWaypointDrag(viewer, {
+    const ghost = createGhostPoint(viewer)
+    ghostRef.current = ghost
+    wpHandlerRef.current = installMapTools(viewer, {
       // Waypoints are only editable in the planning view (finding 18).
       enabled: () => useUiStore.getState().view === 'planning',
+      tool: () => useUiStore.getState().mapTool,
       onPreview: (seq, lat, lon) => {
         const layer = wpLayerRef.current
         if (layer) previewWaypoint(layer, wpItemsRef.current, seq, lat, lon)
       },
       onSelect: (seq) => useMissionStore.getState().select(seq),
+      onAdd: (lat, lon) => useMissionStore.getState().addWaypointAt(lat, lon),
+      onHover: (ground) => setGhostPoint(ghost, ground),
     })
     const follow = createFollowController(viewer, layer.dronePosition)
     follow.attach()
@@ -114,6 +122,7 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
       wpHandlerRef.current = null
       disposeWaypointLayer(viewer, wpLayerRef.current)
       wpLayerRef.current = null
+      ghostRef.current = null
       viewer.destroy()
       viewerRef.current = null
       droneRef.current = null
@@ -122,6 +131,18 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
       predictPos.current = []
     }
   }, [containerRef])
+
+  // Map tool cursor: crosshair while adding, hidden ghost otherwise.
+  const mapTool = useUiStore((s) => s.mapTool)
+  const view = useUiStore((s) => s.view)
+  useEffect(() => {
+    const viewer = viewerRef.current
+    if (!viewer) return
+    const editing = view === 'planning'
+    viewer.scene.canvas.style.cursor = editing && mapTool === 'add' ? 'crosshair' : ''
+    if (editing && mapTool === 'add') return
+    if (ghostRef.current) setGhostPoint(ghostRef.current, null)
+  }, [mapTool, view])
 
   // Follow mode / 2D-3D mode.
   const map3d = useUiStore((s) => s.map3d)

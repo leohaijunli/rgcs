@@ -189,3 +189,35 @@ export function previewWaypoint(
     )
   }
 }
+
+/** A temporary point under the cursor while the add tool is active. */
+export interface GhostPoint {
+  entity: Cesium.Entity
+}
+
+/** Create the hidden hover marker for the add-waypoint tool. */
+export function createGhostPoint(viewer: Cesium.Viewer): GhostPoint {
+  const accent = Cesium.Color.fromCssColorString(cssVar('--mg-accent'))
+  const entity = viewer.entities.add({
+    show: false,
+    point: {
+      pixelSize: 10,
+      color: accent.withAlpha(0.5),
+      outlineColor: Cesium.Color.WHITE,
+      outlineWidth: 1,
+    },
+  })
+  return { entity }
+}
+
+/** Position the hover marker, or hide it for `null` (cursor over the sky). */
+export function setGhostPoint(ghost: GhostPoint, ground: LatLonLike | null): void {
+  if (!ground) {
+    ghost.entity.show = false
+    return
+  }
+  ghost.entity.position = new Cesium.ConstantPositionProperty(
+    Cesium.Cartesian3.fromDegrees(ground.lon, ground.lat, 0),
+  )
+  ghost.entity.show = true
+}

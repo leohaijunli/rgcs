@@ -1,4 +1,4 @@
-import { Compass, Crosshair, Gauge, House, LineChart, Move3d, Ruler } from 'lucide-react'
+import { Compass, Crosshair, Gauge, House, LineChart, Move3d, Plus, Ruler } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useTelemetryStore } from '../stores/telemetry'
 import { useUiStore } from '../stores/ui'
@@ -14,6 +14,9 @@ export default function MapToolbar({ onGoHome, onToggleMeasure, onNorth }: Props
   const { t } = useTranslation()
   const map3d = useUiStore((s) => s.map3d)
   const toggleMap3d = useUiStore((s) => s.toggleMap3d)
+  const view = useUiStore((s) => s.view)
+  const mapTool = useUiStore((s) => s.mapTool)
+  const setMapTool = useUiStore((s) => s.setMapTool)
   const follow = useUiStore((s) => s.follow)
   const toggleFollow = useUiStore((s) => s.toggleFollow)
   const setDashboardOpen = useUiStore((s) => s.setDashboardOpen)
@@ -22,6 +25,14 @@ export default function MapToolbar({ onGoHome, onToggleMeasure, onNorth }: Props
 
   return (
     <div className="absolute right-3 top-3 flex flex-col gap-1.5 rounded border border-line bg-panel/85 p-1.5 shadow-lg">
+      {view === 'planning' && (
+        <ToolButton
+          title={t('map.addWaypoint')}
+          active={mapTool === 'add'}
+          onClick={() => setMapTool(mapTool === 'add' ? 'select' : 'add')}
+          icon={Plus}
+        />
+      )}
       <ToolButton
         title={t('map.dashboard')}
         active={false}

@@ -315,6 +315,9 @@ trajectory presets instead of only hand-placed waypoints. `core::survey`
 generates them as pure geometry and returns `PatternPlan` (AMSL
 `PlannedWaypoint`s + a `seq -> line` table for post-flight segmentation):
 
+- Map interaction (started): select/drag and **click-to-add** waypoints with a
+  ghost point, crosshair cursor and `Esc` to finish (WS-G G1/G2). Polygon tool,
+  midpoint insert, context menu and coordinate entry are still open.
 - `SurveyPattern` — parallel-line sweep clipped to a convex polygon:
   `line_azimuth_deg`, `line_spacing_m`, optional `tie_spacing_m` +
   `tie_azimuth_deg` (perpendicular tie lines), `lead_in_m`/`lead_out_m`,
