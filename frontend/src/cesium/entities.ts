@@ -72,12 +72,17 @@ export interface DroneLayer {
  * Add the static layers. The drone is hidden until the first fix: the map has
  * no terrain provider, so an untagged placeholder would sit in the air above
  * the ellipsoid ground.
+ *
+ * `homeAmslM` is the ground-plane altitude everything is drawn against: the
+ * plan is rendered in AMSL (`MapView.toDisplayItems`), so HOME and the drop
+ * line stand at HOME's AMSL and the vehicle is placed at `HOME + relative_alt`.
  */
 export function createDroneLayer(
   viewer: Cesium.Viewer,
   trailPos: () => Cesium.Cartesian3[],
   predictPos: () => Cesium.Cartesian3[],
   initial: LatLonLike = { lat: HOME_LAT, lon: HOME_LON },
+  homeAmslM = 0,
 ): DroneLayer {
   const accent = Cesium.Color.fromCssColorString(cssVar('--mg-accent'))
   const ok = Cesium.Color.fromCssColorString(cssVar('--mg-ok'))
@@ -107,21 +112,21 @@ export function createDroneLayer(
       fillColor: Cesium.Color.WHITE,
     },
   })
-  // Ground drop line: from the vehicle straight down to the ellipsoid, which is
-  // the ground plane the map draws everything else on while there is no DEM.
-  // Hidden until the first fix and when the vehicle is on the ground.
+  // Ground drop line: from the vehicle straight down to the ground plane the
+  // plan is drawn on (HOME's AMSL altitude while there is no DEM). Hidden until
+  // the first fix and when the vehicle is on the ground.
   const dropLine = viewer.entities.add({
     show: false,
     polyline: {
       positions: Cesium.Cartesian3.fromDegreesArrayHeights([
         initial.lon,
         initial.lat,
-        0,
+        homeAmslM,
         initial.lon,
         initial.lat,
-        0,
+        homeAmslM,
       ]),
-      width: 2,
+      width: 3,
       material: new Cesium.PolylineDashMaterialProperty({
         color: warn.withAlpha(0.9),
         dashLength: 12,
@@ -130,6 +135,7 @@ export function createDroneLayer(
   })
   const dropLabel = viewer.entities.add({
     show: false,
+    position: Cesium.Cartesian3.fromDegrees(initial.lon, initial.lat, homeAmslM),
     label: {
       text: '',
       font: '11px sans-serif',
@@ -157,7 +163,7 @@ export function createDroneLayer(
     },
   })
   const home = viewer.entities.add({
-    position: Cesium.Cartesian3.fromDegrees(initial.lon, initial.lat, 0),
+    position: Cesium.Cartesian3.fromDegrees(initial.lon, initial.lat, homeAmslM),
     ellipse: {
       semiMajorAxis: 12,
       semiMinorAxis: 12,
@@ -179,15 +185,21 @@ export function createDroneLayer(
 const DROP_MIN_AGL_M = 1.5
 
 /**
- * Point the AGL drop line straight down from the vehicle to the ground and
- * label it with the height above ground.
+ * Point the AGL drop line straight down from the vehicle to the ground plane
+ * and label it with the height above ground.
+ *
+ * Both heights are in the same datum the plan is drawn in (AMSL): `topM` is
+ * the vehicle's altitude, `bottomM` the ground-plane altitude (HOME's AMSL
+ * until a DEM exists), so the line ends exactly where the height sticks stand.
  */
 export function updateDropLine(
   drop: DropLayer,
   lonDeg: number,
   latDeg: number,
-  aglM: number,
+  topM: number,
+  bottomM: number,
 ): void {
+  const aglM = topM - bottomM
   const visible = Number.isFinite(aglM) && aglM >= DROP_MIN_AGL_M
   drop.line.show = visible
   drop.label.show = visible
@@ -195,11 +207,11 @@ export function updateDropLine(
   const polyline = drop.line.polyline
   if (polyline) {
     polyline.positions = new Cesium.ConstantProperty(
-      Cesium.Cartesian3.fromDegreesArrayHeights([lonDeg, latDeg, aglM, lonDeg, latDeg, 0]),
+      Cesium.Cartesian3.fromDegreesArrayHeights([lonDeg, latDeg, topM, lonDeg, latDeg, bottomM]),
     )
   }
   drop.label.position = new Cesium.ConstantPositionProperty(
-    Cesium.Cartesian3.fromDegrees(lonDeg, latDeg, 0),
+    Cesium.Cartesian3.fromDegrees(lonDeg, latDeg, bottomM),
   )
   if (drop.label.label) {
     drop.label.label.text = new Cesium.ConstantProperty(
@@ -274,7 +286,7 @@ export function renderWaypoints(
           polyline: {
             positions: [
               Cesium.Cartesian3.fromDegrees(degFromMavInt(item.y), degFromMavInt(item.x), run.base),
-              Cesium.Cartesian3.fromDegrees(degFromMavInt(item.y), degFromMavInt(item.x), run.top + 5),
+              Cesium.Cartesian3.fromDegrees(degFromMavInt(item.y), degFromMavInt(item.x), run.top),
             ],
             width: 1,
             material: muted.withAlpha(0.7),
@@ -292,7 +304,7 @@ export function renderWaypoints(
     const entity = viewer.entities.add({
       polyline: {
         positions: run.items.map((it) =>
-          Cesium.Cartesian3.fromDegrees(degFromMavInt(it.y), degFromMavInt(it.x), it.z + 5),
+          Cesium.Cartesian3.fromDegrees(degFromMavInt(it.y), degFromMavInt(it.x), it.z),
         ),
         width: run.kind === 'tie' ? 3 : 2,
         material: new Cesium.PolylineGlowMaterialProperty({
@@ -310,7 +322,7 @@ export function renderWaypoints(
     const position = Cesium.Cartesian3.fromDegrees(
       degFromMavInt(it.y),
       degFromMavInt(it.x),
-      it.z + 5,
+      it.z,
     )
     // A selected waypoint gets a white halo ring on top of a larger marker:
     // recolouring alone is invisible when the whole plan already shares the
@@ -368,7 +380,7 @@ export function previewWaypoint(
   if (!entity) return
   const item = items.find((it) => it.seq === seq)
   if (!item) return
-  const height = item.z + 5
+  const height = item.z
   entity.position = new Cesium.ConstantPositionProperty(
     Cesium.Cartesian3.fromDegrees(lonDeg, latDeg, height),
   )
@@ -407,14 +419,17 @@ export function createGhostPoint(viewer: Cesium.Viewer): GhostPoint {
   return { entity }
 }
 
-/** Position the hover marker, or hide it for `null` (cursor over the sky). */
-export function setGhostPoint(ghost: GhostPoint, ground: LatLonLike | null): void {
+/**
+ * Position the hover marker on the ground plane the plan is drawn on, or hide
+ * it for `null` (cursor over the sky).
+ */
+export function setGhostPoint(ghost: GhostPoint, ground: LatLonLike | null, groundM = 0): void {
   if (!ground) {
     ghost.entity.show = false
     return
   }
   ghost.entity.position = new Cesium.ConstantPositionProperty(
-    Cesium.Cartesian3.fromDegrees(ground.lon, ground.lat, 0),
+    Cesium.Cartesian3.fromDegrees(ground.lon, ground.lat, groundM),
   )
   ghost.entity.show = true
 }

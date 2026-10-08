@@ -73,6 +73,7 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
   const wpHandlerRef = useRef<Cesium.ScreenSpaceEventHandler | null>(null)
   const ghostRef = useRef<GhostPoint | null>(null)
   const wpItemsRef = useRef<MissionItem[]>([])
+  const homeAmslRef = useRef(0)
 
   useEffect(() => {
     const container = containerRef.current
@@ -91,6 +92,7 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
       () => trailPos.current,
       () => predictPos.current,
       usePrefsStore.getState().initialPosition,
+      useMissionStore.getState().home?.[2] ?? 0,
     )
     droneRef.current = layer
     const ghost = createGhostPoint(viewer)
@@ -105,7 +107,7 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
       },
       onSelect: (seq) => useMissionStore.getState().select(seq),
       onAdd: (lat, lon) => useMissionStore.getState().addWaypointAt(lat, lon),
-      onHover: (ground) => setGhostPoint(ghost, ground),
+      onHover: (ground) => setGhostPoint(ghost, ground, homeAmslRef.current),
     })
     const follow = createFollowController(viewer, layer.dronePosition)
     follow.attach()
@@ -145,6 +147,22 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
     }
   }, [containerRef])
 
+  // Keep the scene's ground plane (and the HOME marker on it) in step with the
+  // store's home altitude: the plan is drawn in AMSL, so the vehicle and the
+  // drop line need the same reference to sit on the drawn path.
+  const home = useMissionStore((s) => s.home)
+  useEffect(() => {
+    const amsl = home?.[2] ?? 0
+    homeAmslRef.current = amsl
+    const layer = droneRef.current
+    const viewer = viewerRef.current
+    if (layer && viewer && home) {
+      layer.home.position = new Cesium.ConstantPositionProperty(
+        Cesium.Cartesian3.fromDegrees(home[1], home[0], amsl),
+      )
+    }
+  }, [home])
+
   // Map tool cursor: crosshair while adding, hidden ghost otherwise.
   const mapTool = useUiStore((s) => s.mapTool)
   const view = useUiStore((s) => s.view)
@@ -171,11 +189,15 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
     const pos = snapshot?.global_position
     if (!layer || !pos) return
 
-    // Render height above the home ground, not AMSL: the map has no terrain
-    // provider, so the home marker sits on the ellipsoid. Using relative_alt
-    // keeps a landed vehicle on the ground instead of floating by the site's
-    // MSL elevation. Switch back to MSL once a DEM/terrain provider lands.
-    const cart = Cesium.Cartesian3.fromDegrees(pos.longitude_deg, pos.latitude_deg, pos.relative_alt_m)
+    // Render the vehicle in the same frame the plan is drawn in (AMSL): the
+    // waypoints, their labels and the height sticks are AMSL
+    // (MapView.toDisplayItems), so a marker placed at PX4's relative_alt would
+    // hang below the drawn path by the site's MSL elevation. Adding HOME's AMSL
+    // puts the marker exactly on the path at the planned clearance. (Once a
+    // DEM/terrain provider lands this becomes ellipsoid height + geoid.)
+    const homeAmsl = homeAmslRef.current
+    const droneAmsl = homeAmsl + pos.relative_alt_m
+    const cart = Cesium.Cartesian3.fromDegrees(pos.longitude_deg, pos.latitude_deg, droneAmsl)
 
     // Attitude straight from the MAVLink ATTITUDE message; fall back to the
     // reported heading until the first attitude sample arrives. The marker is a
@@ -197,9 +219,10 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
       ),
     )
     layer.drone.show = true
-    // Straight down to the ground, labelled with the height above it, so the
-    // clearance is visible in the scene and not only in the HUD (issues.md #40).
-    updateDropLine(layer.drop, pos.longitude_deg, pos.latitude_deg, pos.relative_alt_m)
+    // Straight down to the ground plane, labelled with the height above it, so
+    // the clearance is visible in the scene and not only in the HUD
+    // (issues.md #40). Same AMSL datum as the vehicle marker above.
+    updateDropLine(layer.drop, pos.longitude_deg, pos.latitude_deg, droneAmsl, homeAmsl)
 
     // Rebuild the forward projection from the live fix so the segment already
     // flown disappears and only the predicted track ahead is drawn.
