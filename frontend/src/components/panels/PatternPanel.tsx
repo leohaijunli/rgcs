@@ -222,8 +222,16 @@ export default function PatternPanel() {
       )}
       {error && <div className="mt-1 text-[11px] text-error">{t('plan.pattern.failed', { message: error })}</div>}
       {lineCounts && (
-        <div className="mt-1 text-[11px] text-ok">
-          {t('plan.pattern.lines', lineCounts)}
+        <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-[11px]">
+          <span className="text-accent">
+            {t('plan.pattern.legend.survey')} {lineCounts.survey}
+          </span>
+          <span className="text-warn">
+            {t('plan.pattern.legend.tie')} {lineCounts.tie}
+          </span>
+          <span className="text-mag">
+            {t('plan.pattern.legend.cal')} {lineCounts.cal}
+          </span>
         </div>
       )}
     </div>

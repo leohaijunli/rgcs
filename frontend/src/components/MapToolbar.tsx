@@ -1,4 +1,14 @@
-import { Compass, Crosshair, Gauge, House, LineChart, Move3d, Plus, Ruler } from 'lucide-react'
+import {
+  ArrowUpDown,
+  Compass,
+  Crosshair,
+  Gauge,
+  House,
+  LineChart,
+  Move3d,
+  Plus,
+  Ruler,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useTelemetryStore } from '../stores/telemetry'
 import { useUiStore } from '../stores/ui'
@@ -22,6 +32,8 @@ export default function MapToolbar({ onGoHome, onToggleMeasure, onNorth }: Props
   const setDashboardOpen = useUiStore((s) => s.setDashboardOpen)
   const setQcOpen = useUiStore((s) => s.setQcOpen)
   const pos = useTelemetryStore((s) => s.snapshot?.global_position ?? null)
+  const showHeights = useUiStore((s) => s.showHeights)
+  const toggleHeights = useUiStore((s) => s.toggleHeights)
 
   return (
     <div className="absolute right-3 top-3 flex flex-col gap-1.5 rounded border border-line bg-panel/85 p-1.5 shadow-lg">
@@ -50,6 +62,12 @@ export default function MapToolbar({ onGoHome, onToggleMeasure, onNorth }: Props
         active={map3d}
         onClick={toggleMap3d}
         icon={Move3d}
+      />
+      <ToolButton
+        title={t('map.heights')}
+        active={showHeights}
+        onClick={toggleHeights}
+        icon={ArrowUpDown}
       />
       <ToolButton title={t('map.follow')} active={follow} onClick={toggleFollow} icon={Crosshair} />
       <ToolButton title={t('map.home')} onClick={onGoHome} icon={House} />

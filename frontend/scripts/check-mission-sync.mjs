@@ -129,6 +129,27 @@ await check('upload clears the unsaved warning and reports in-sync (finding 30)'
   eq(status(), 'synced', 'status')
 })
 
+await check('a read-back at wire precision is not a false mismatch', async () => {
+  // `z` is an f32 on the wire (MISSION_ITEM_INT.z / core::MissionItem), so a
+  // plan whose altitude is not f32-exact must still read as in sync after the
+  // FC echoes it back narrowed (issues.md #38).
+  reset()
+  useMissionStore.getState().addWaypointAt(48.6493, -123.3982)
+  useMissionStore.getState().updateAltitude(0, 80.123456789)
+  const uploaded = useMissionStore.getState().flyable()
+  eq(uploaded[0].z, Math.fround(80.123456789), 'the compiled plan is already f32')
+
+  await useMissionStore.getState().upload()
+  event('upload', 'completed')
+  const echoed = uploaded.map((i) => ({
+    ...i,
+    z: Math.fround(i.z),
+    params: i.params.map(Math.fround),
+  }))
+  useMissionStore.getState().handlePlan(echoed)
+  eq(status(), 'synced', 'status')
+})
+
 await check('editing after a sync reads as unsaved, not unsynced', async () => {
   reset()
   useMissionStore.getState().addWaypointAt(48.6493, -123.3982)

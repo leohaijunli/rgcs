@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import PlanningPanel from './panels/PlanningPanel'
+import MissionProgressCard from './panels/MissionProgressCard'
 import { useLinkStore } from '../stores/link'
 import { useTelemetryStore } from '../stores/telemetry'
 import { useUiStore, VIEW_CONFIG } from '../stores/ui'
@@ -51,6 +52,7 @@ function FlightInspector() {
 
   return (
     <div className="space-y-2">
+      <MissionProgressCard />
       <Card
         title={t('panels.telemetry')}
         rows={[

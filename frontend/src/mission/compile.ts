@@ -117,6 +117,18 @@ export function amslToFrame(amslM: number, frame: MissionFrame, homeAmslM: numbe
   }
 }
 
+/**
+ * Narrow a value to the precision MAVLink actually carries.
+ *
+ * `MissionItem.z`/`params` are `f32` in `core::mission::MissionItem`, so the
+ * value that reaches the FC is `fround(v)`. Keeping the local copy at f64 made
+ * the post-upload read-back compare `80.123456789` with `80.12346` and report a
+ * false "FC mission differs from the uploaded plan" (issues.md #38).
+ */
+function wire(v: number): number {
+  return Math.fround(v)
+}
+
 /** Normalise a wire params array to the 4-tuple the model uses. */
 function params4(params: readonly number[]): [number, number, number, number] {
   const out: [number, number, number, number] = [0, 0, 0, 0]
@@ -145,14 +157,30 @@ export function compileWaypoints(
       seq,
       frame: itemFrame,
       command: wp.command,
-      params: Array.from(params4(wp.params)),
+      params: Array.from(params4(wp.params), wire),
       x: Math.round(wp.position.latitude_deg * 1e7),
       y: Math.round(wp.position.longitude_deg * 1e7),
-      z: coordinate ? amslToFrame(wp.altitude.meters, frame, homeAmslM) : wp.altitude.meters,
+      z: wire(coordinate ? amslToFrame(wp.altitude.meters, frame, homeAmslM) : wp.altitude.meters),
       autocontinue: wp.autocontinue,
       current: seq === 0,
     }
   })
+}
+
+/**
+ * Wire items with `z` expressed as AMSL, for drawing on the map.
+ *
+ * The map is drawn in a global frame, but the plan may be compiled to the
+ * relative (or terrain) frame, where `z` is only an offset from HOME; drawing
+ * those numbers straight away put the path at the wrong height. Command items
+ * are left alone — they have no position (`mission/lineKinds.ts` skips them).
+ */
+export function toDisplayItems(items: MissionItem[], homeAmslM: number): MissionItem[] {
+  return items.map((item) =>
+    item.frame === 'global_int' || item.frame === 'mission'
+      ? item
+      : { ...item, frame: 'global_int', z: frameToAmsl(item.z, item.frame, homeAmslM) },
+  )
 }
 
 /** Convert a wire item (FC download or QGC import) to a planned AMSL waypoint. */

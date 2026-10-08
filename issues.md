@@ -335,6 +335,53 @@
 
 ---
 
+### #35 [P2][frontend] Tie lines look like spacing lines; the Layers panel is decorative
+**状态**：✅ 已完成（工作区改动，未提交）
+- 现象（操作员报告）：sweep 预设生成后，测线（spacing line）与 tie line 是同一条颜色的折线，无法分辨；左侧 Layers 面板是四个写死的 ON/OFF，点了没有任何效果，"not useful at all"。
+- 修复：
+  - 新增 `frontend/src/mission/lineKinds.ts`（`kindsBySeq`/`splitRuns`/`heightRuns`，纯函数）：把 `PatternLine` 表摊平成 `seq -> kind`，再把航迹按同色连续段（run）切分。
+  - `cesium/entities.ts::renderWaypoints` 改为**每段一条折线**：survey = accent，tie = warn（宽度 3），calibration = mag，未分类 = ok；`MapView` 传入 `kindsBySeq(lastPattern.lines)`，因此 tie line 与相邻测线一定异色。图例见 `plan.pattern.legend.*`。
+  - `components/Drawer.tsx::LayersSection` 重写：只列地图真实拥有的两个图层（OSM 影像、离线经纬网）并接线到 `stores/ui.ts::showImagery/showGrid` → `useCesiumViewer::setLayers` → `scene.ts::applyLayerVisibility`；DTM/DSM 归入 "Not loaded yet — arrives with the DEM (Phase 3)"，不再假装是开关。
+  - `MissionsSection` 同步重写为真实数据（航迹条数、同步状态、当前航点、pattern 行表），不再是写死的 "Waypoint 1..3"。
+- 验收：`check:planfile` 新增 4 个用例覆盖 `kindsBySeq`/`splitRuns`（tie 段不与 survey 段合并、空 kind 段分开）；`npm run typecheck` 通过。
+
+### #36 [P2][frontend] No height visualization per waypoint
+**状态**：✅ 已完成（工作区改动，未提交）
+- 现象（操作员报告）：三维地图上只能看到航迹的水平形状，看不出哪个航点更高，"the height should have a way to visualize for each waypoint"。
+- 修复：
+  - `lineKinds.ts::heightRuns`：给出每个航点的竖直段。初版以本航迹最低航点为基线，后按操作员要求改为**画到地面**（HOME 的 AMSL 高度；无 home 时退回最低航点），见 #39。
+  - `entities.ts::renderWaypoints` 新增 `{ heights?: boolean }`：每个航点画一根 muted 色竖直杆 + `seq · N m` 高度标签；低于 `HEIGHT_EPSILON_M = 0.25` 的杆不画（整条航迹等高时不产生噪音）。
+  - `MapToolbar` 增加高度显示开关（`stores/ui.ts::showHeights`，`map.heights`）。
+  - `compile.ts::toDisplayItems` 把 relative/terrain 帧的 `z` 换算成 AMSL 再交给地图，否则相对高度会被画在错误的高度上。
+- 验收：`npm run typecheck`、`check:colors`（颜色全部取 CSS token）、`npm run build` 通过；`MapView` 传入 AMSL 后的航迹高度与 `waypoints[].altitude.meters` 一致。
+
+### #37 [P1][frontend] The waypoint list says nothing while flying
+**状态**：✅ 已完成（工作区改动，未提交）
+- 现象（操作员报告）：飞行时打开 Missions / Properties，看到的是编辑用的航点坐标表，与"现在飞到哪、下一个还有多远"无关；航点列表永远把第 0 个标成 CURRENT。
+- 修复：
+  - 新增 `frontend/src/mission/geo.ts`（haversine 距离、初始方位）与 `frontend/src/mission/progress.ts`（`missionProgress`、`formatDistance`、`formatDuration`、`progressItemsOf`）：按 FC 的 `MISSION_CURRENT`（目标航点）算出已飞/剩余航点数、到目标距离与方位、目标高度、剩余航程、进度比例，以及按当前地速估算的 ETA。没有 `MISSION_CURRENT` 或没有位置解时降级为航迹自身统计，不显示虚假距离。
+  - 新增 `hooks/useMissionProgress.ts` 与 `components/panels/MissionProgressCard.tsx`：飞行视图的 Properties 面板顶部显示进度卡（Active WP n/N、To WP 距离·方位、Target alt、Still to fly、ETA、进度条）；`Drawer.tsx::FlightMissionSection` 在飞行视图改列**航点进度表**（seq、pattern 类别、AMSL 高度，当前航点高亮，点击选中），不再列 pattern 行表。
+  - `PlanningPanel` 的航点列表：CURRENT 徽标改用 `currentSeq`（不再恒为 seq 0）；有位置解时每行显示到该航点的直线距离；`Set current` 按钮对任意选中航点可用。
+- 验收：`npm run check:progress`（新增，16 个场景：已知球面几何、卡盘方位、无 MISSION_CURRENT/无解/未知 seq/非连续 seq/空航迹、ETA 与格式化）；`frontend` typecheck/colors/contrast/i18n/planfile/mission-sync/coords/build 全通过；`cargo fmt --check`、`clippy -D warnings`、`cargo test -p maggcs-core --lib`（167）、`cargo test -p maggcs-app`、`cargo deny check` 通过。
+- 备注：`check:planfile`/`check:mission-sync`/`check:coords`/`check:progress` 之前只在本地跑，已加入 `.github/workflows/ci.yml`。
+
+### #38 [P1][frontend] Upload reports "FC mission differs from the uploaded plan" for a plan the FC holds
+**状态**：✅ 已完成（工作区改动，未提交）
+- 现象（操作员报告）：上传成功后，面板回读校验仍报红字 "FC mission differs from the uploaded plan"。
+- 根因：`MissionItem.z` 与 `params` 在模型/线路上是 **f32**（`core::mission::MissionItem` 是 `Vec<f32>`/`f32`），但前端 `compile.ts` 用 f64 生成这些值。回读比较用 `itemsHash` 做**精确** JSON 相等，于是本地 `80.123456789` 与 FC 原样回传的 `80.12346`（f32 展开）不等，每次上传都误报不一致。触发条件是高度不是 f32 精确值（例如由导入 `.plan` 的 home 高度 + 50 m 生成的预设轨迹）。
+- 修复：把比较与生成都收敛到线路精度——`compile.ts::wire()` 用 `Math.fround` 把 `z`/`params` 落到 f32（本地计划即为将要发出的值），`hash.ts::itemsHash` 对 `params`/`z` 同样取 `Math.fround`（覆盖从 `.plan` 导入的 f64 复杂块子项）。
+- 验收：`check:mission-sync` 新增用例 "a read-back at wire precision is not a false mismatch"——先断言编译结果的 `z` 已是 f32，再用 f32 回读走完 upload→completed→handlePlan，状态必须是 `synced`；16 个场景全通过。
+
+### #39 [P2][frontend] Selecting a waypoint does not show it on the map; height sticks float
+**状态**：✅ 已完成（工作区改动，未提交）
+- 现象（操作员报告）：在航点列表里选中一项，地图上对应的航点看不出来；另外高度竖线只画到本航迹最低点，不是画到地面。
+- 修复：
+  - `entities.ts::renderWaypoints`：选中航点加一圈白色 halo（`pixelSize 26`、透明填充、描边 3）并把点放大到 16，避免整条 survey 航迹同色时"换色也看不出来"。
+  - 列表点击改用 `stores/mission.ts::focus(seq)`（= 选中 + 一次性请求地图取景）；`useCesiumViewer` 消费 `focusSeq` 后自动清空，因此**地图点选不会反过来移动相机**，只有列表点击会飞到该航点（`FOCUS_HEIGHT_M = 600`，0.8 s）。
+  - 高度竖线改为**从地面画到航点**：`lineKinds.ts::heightRuns(items, groundM)` 的 `groundM` 取 HOME 的 AMSL 高度（没有 DEM 前与 AGL 模式同一假设），无 home 时退回本航迹最低点；判空改用 `Math.abs`，因此低于 home 的航点也会画出向下的杆。
+  - 顺带修掉一个回归：折线改成 "每段一色" 后 `layer.line` 不再存在，拖拽预览只移动了点、不更新折线。`WaypointLayer` 改为记录 `runs: {entity, seqs}[]`，`previewWaypoint` 重画包含该 seq 的那一段。
+- 验收：`check:planfile` 新增用例覆盖 `heightRuns(items, groundM)`（落地基准 + 各自净空，9 个用例全通过）；`npm run typecheck`、`check:colors`、`check:contrast`、`npm run build` 通过。
+
 ## 待核实项（先验证再决定是否开 issue）
 - `mavlink` crate 0.17 的 UDP 监听是否设置 `SO_REUSEADDR`；`udpin` 的回复地址行为（抓包确认）。
 - `DO_PAUSE_CONTINUE` 在 PX4 v1.17 的实际语义。现状（2026-10-07）：Pause/Continue 已按 MAVLink 规范接入（param1 = 0 暂停 / 1 继续，`send_command("pause"|"continue")`，见 `crates/app-tauri/src/commands.rs::named_command`，含 3 个单测）；PX4 v1.17 是否支持、以及参数语义仍需 SITL 抓包确认——不支持时 FC 回 NACK，UI 会显示 "Not supported by the FC"。

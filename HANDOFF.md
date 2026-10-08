@@ -3,6 +3,53 @@
 Snapshot of the current session (issues.md backlog clearance). Issue statuses
 live in `issues.md`; keep both in sync when a task lands.
 
+## Latest landing — flight progress, line colours, heights, wire-precision sync
+
+Five operator reports, all in the map/plan/mission readout (issues.md #35-#39):
+
+- **Tie vs spacing lines are now visibly different** and the height of every
+  waypoint can be read off the map. `mission/lineKinds.ts` (`kindsBySeq`,
+  `splitRuns`, `heightRuns`) turns `PatternLine[]` into per-seq kinds; the map
+  draws one polyline per same-kind run (survey = accent, tie = warn width 3,
+  calibration = mag) and, with the heights toggle on, a muted stick **from the
+  ground (HOME AMSL) up to the waypoint** plus a `seq · N m` label.
+- **The Layers panel does something**: the two layers the map really has (OSM
+  imagery, offline grid) toggle through `stores/ui.ts` →
+  `useCesiumViewer::setLayers` → `scene.ts::applyLayerVisibility`; DTM/DSM are
+  listed as "arrives with the DEM (Phase 3)" instead of pretending to be
+  switches. The Missions drawer shows the real plan (count, sync status,
+  current WP, pattern lines) instead of three hardcoded rows.
+- **The waypoint list means something while flying** (#37): `mission/geo.ts`
+  (haversine + bearing) and `mission/progress.ts` (`missionProgress`, with
+  `formatDistance`/`formatDuration`) turn `MISSION_CURRENT` + the latest fix
+  into active-WP index, distance/bearing to it, target altitude, remaining path
+  and ETA. `panels/MissionProgressCard.tsx` renders it in the flight inspector
+  and in the drawer's flight list; the planning list marks the FC's actual
+  current waypoint (it used to badge seq 0) and shows each waypoint's distance
+  from the vehicle.
+- **Selecting a waypoint shows it on the map** (#39): a white halo rings the
+  selected point, and list clicks call `focus(seq)` — a one-shot store request
+  the Cesium layer consumes by flying to the waypoint, so a map pick never
+  moves the camera. Fixed alongside it: the drag preview still updated a
+  `layer.line` that no longer exists after the per-run polylines landed;
+  `WaypointLayer.runs` now records each run's seqs and is redrawn on preview.
+- **"FC mission differs from the uploaded plan" was a false alarm** (#38): `z`
+  and `params` are **f32** on the wire (`core::MissionItem` is `Vec<f32>`/`f32`)
+  but the frontend compiled f64, and `itemsHash` compared exactly — so any
+  altitude that is not f32-exact (an imported HOME + 50 m, say) mismatched on
+  every read-back. `compile.ts::wire()` and `hash.ts` now narrow with
+  `Math.fround`.
+
+New guard: `npm run check:progress` (16 scenarios: sphere geometry, cardinal
+bearings, no-MISSION_CURRENT / no-fix / unknown-seq / empty plan, ETA and
+formatting). `check:planfile`, `check:mission-sync` (16), `check:coords` and
+`check:progress` are now wired into CI, where before only typecheck/i18n ran.
+
+Verified: frontend typecheck/colors/contrast/i18n/planfile/mission-sync/coords/
+progress/build; `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
+`cargo test -p maggcs-core --lib` (167), `cargo test -p maggcs-app`,
+`cargo deny check`, `scripts/desktop-smoke.sh` (PASS, window paints).
+
 ## Latest landing — command items are sent as MAV_FRAME_MISSION
 
 The operator's upload of a generated sweep failed with

@@ -34,6 +34,12 @@ interface UiState {
   mapCenter: { lat: number; lon: number } | null
   /** Active map tool; `Esc` and leaving the planning view reset it to `select`. */
   mapTool: MapTool
+  /** Draw a height stick and an altitude label on every map waypoint. */
+  showHeights: boolean
+  /** OSM imagery layer on top of the offline grid. */
+  showImagery: boolean
+  /** Offline graticule base layer. */
+  showGrid: boolean
   dashboardOpen: boolean
   qcOpen: boolean
   setView: (v: View) => void
@@ -49,6 +55,9 @@ interface UiState {
   toggleMap3d: () => void
   setMapCenter: (c: { lat: number; lon: number }) => void
   setMapTool: (tool: MapTool) => void
+  toggleHeights: () => void
+  toggleImagery: () => void
+  toggleGrid: () => void
   setDashboardOpen: (open: boolean) => void
   setQcOpen: (open: boolean) => void
 }
@@ -87,6 +96,9 @@ export const useUiStore = create<UiState>((set) => ({
   map3d: true,
   mapCenter: null,
   mapTool: 'select',
+  showHeights: false,
+  showImagery: true,
+  showGrid: true,
   dashboardOpen: false,
   qcOpen: false,
   setView: (view) =>
@@ -112,6 +124,9 @@ export const useUiStore = create<UiState>((set) => ({
   toggleMap3d: () => set((s) => ({ map3d: !s.map3d })),
   setMapCenter: (mapCenter) => set({ mapCenter }),
   setMapTool: (mapTool) => set({ mapTool }),
+  toggleHeights: () => set((s) => ({ showHeights: !s.showHeights })),
+  toggleImagery: () => set((s) => ({ showImagery: !s.showImagery })),
+  toggleGrid: () => set((s) => ({ showGrid: !s.showGrid })),
   setDashboardOpen: (dashboardOpen) => set({ dashboardOpen }),
   setQcOpen: (qcOpen) => set({ qcOpen }),
 }))

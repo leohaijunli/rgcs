@@ -84,7 +84,18 @@ interface MissionState {
   home: [number, number, number] | null
   /** Last inserted preset pattern (cleared by any waypoint edit). */
   lastPattern: InsertedPattern | null
+  /** Waypoint the FC is flying now, from MISSION_CURRENT (0-based). */
+  currentSeq: number | null
+  /**
+   * Waypoint the operator asked the map to frame (set by a list click). The
+   * Cesium layer consumes it and clears it, so the request is one-shot and a
+   * map pick never moves the camera under the user (issues.md #37).
+   */
+  focusSeq: number | null
   select: (seq: number | null) => void
+  /** Select a waypoint *and* bring it into view on the map. */
+  focus: (seq: number) => void
+  clearFocus: () => void
   setWaypoints: (waypoints: PlannedWaypoint[]) => void
   setAltitudeMode: (mode: AltitudeMode) => void
   updatePosition: (seq: number, latDeg: number, lonDeg: number) => void
@@ -143,8 +154,14 @@ export const useMissionStore = create<MissionState>((set, get) => ({
   blocks: [],
   home: null,
   lastPattern: null,
+  currentSeq: null,
+  focusSeq: null,
 
   select: (seq) => set({ selectedSeq: seq }),
+
+  focus: (seq) => set({ selectedSeq: seq, focusSeq: seq }),
+
+  clearFocus: () => set({ focusSeq: null }),
 
   setWaypoints: (waypoints) =>
     set((s) => ({
@@ -266,6 +283,8 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       home: null,
       lastPattern: null,
       selectedSeq: null,
+      currentSeq: null,
+      focusSeq: null,
       dirty: false,
       fcMatches: null,
       lastSyncedHash: null,
@@ -363,6 +382,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
             ? 'downloading'
             : s.syncState
       const patch: Partial<MissionState> = { lastEvent: e, busy, syncState }
+      if (e.kind === 'current_changed') patch.currentSeq = e.seq
       if (e.kind === 'failed') {
         // A failed operation ends any read-back too: without this a lost
         // `mission_plan` left `verifying` set and swallowed the next download.
@@ -400,7 +420,9 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       }
       const anchor = homeAmsl(s.home)
       const mode = items.length > 0 ? modeFromFrame(items[0].frame) : null
+      const current = items.findIndex((it) => it.current)
       return {
+        currentSeq: current >= 0 ? current : null,
         waypoints: items.map((it) => waypointFromItem(it, anchor)),
         blocks: [],
         planBase: null,
@@ -470,6 +492,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       blocks: [],
       home: null,
       lastPattern: null,
+      focusSeq: null,
     }),
 }))
 

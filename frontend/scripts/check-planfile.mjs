@@ -262,6 +262,62 @@ check('a command item exports as MAV_FRAME_MISSION', () => {
   eq(out.mission.items[0].frame, 2, 'frame 2 in the .plan')
 })
 
+console.log('pattern line colouring (issues.md #35):')
+
+const { kindsBySeq, splitRuns, heightRuns } = await bundle('mission/lineKinds.ts')
+
+check('the line table maps seq ranges to kinds', () => {
+  const kinds = kindsBySeq([
+    { id: 1, kind: 'survey', start_seq: 0, end_seq: 2, length_m: 10 },
+    { id: 1, kind: 'tie', start_seq: 3, end_seq: 3, length_m: 10 },
+    { id: 2, kind: 'survey', start_seq: 4, end_seq: 5, length_m: 10 },
+  ])
+  eq(kinds.get(0), 'survey', 'seq 0')
+  eq(kinds.get(2), 'survey', 'seq 2')
+  eq(kinds.get(3), 'tie', 'seq 3')
+  eq(kinds.get(4), 'survey', 'seq 4')
+  eq(kinds.get(9), undefined, 'outside the table')
+})
+
+check('runs never merge different kinds', () => {
+  const items = [0, 1, 2, 3, 4, 5].map((seq) => ({ seq }))
+  const kinds = kindsBySeq([
+    { id: 1, kind: 'survey', start_seq: 0, end_seq: 2, length_m: 1 },
+    { id: 1, kind: 'tie', start_seq: 3, end_seq: 3, length_m: 1 },
+    { id: 2, kind: 'survey', start_seq: 4, end_seq: 5, length_m: 1 },
+  ])
+  const runs = splitRuns(items, kinds)
+  eq(runs.length, 3, 'three runs')
+  eq(runs.map((r) => r.kind).join(','), 'survey,tie,survey', 'kinds in order')
+  eq(runs.map((r) => r.items.length).join(','), '3,1,2', 'sizes')
+})
+
+check('unclassified waypoints form their own run', () => {
+  const items = [0, 1, 2].map((seq) => ({ seq }))
+  const runs = splitRuns(items, kindsBySeq([]))
+  eq(runs.length, 1, 'one run')
+  eq(runs[0].kind, null, 'no kind')
+})
+
+check('without a ground anchor heights use the lowest waypoint', () => {
+  const runs = heightRuns([
+    { seq: 0, z: 130 },
+    { seq: 1, z: 145 },
+    { seq: 2, z: 130 },
+  ])
+  eq(runs[0].base, 130, 'base')
+  eq(runs[1].top - runs[1].base, 15, 'climb')
+  eq(runs[2].top - runs[2].base, 0, 'level waypoint')
+})
+
+check('a ground anchor stands every stick on the ground (issues.md #36)', () => {
+  const runs = heightRuns([{ seq: 0, z: 130 }, { seq: 1, z: 145 }], 100)
+  eq(runs[0].base, 100, 'base')
+  eq(runs[0].top, 130, 'top')
+  eq(runs[0].top - runs[0].base, 30, 'clearance of the lower waypoint')
+  eq(runs[1].top - runs[1].base, 45, 'clearance of the higher waypoint')
+})
+
 console.log('patterns (TS side):')
 
 check('rectangle preset spans the requested size', () => {

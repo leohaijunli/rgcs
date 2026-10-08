@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { compileWaypoints, DEFAULT_ALT_AGL_M } from '../../mission/compile'
+import { commandUsesCoordinate, compileWaypoints, DEFAULT_ALT_AGL_M } from '../../mission/compile'
 import { exportPlanFile, importPlanFile, orderedMissionItems } from '../../mission/planfile'
+import { formatDms, parseCoordinates } from '../../mission/coords'
+import { formatDistance } from '../../mission/progress'
+import { haversineM } from '../../mission/geo'
 import { planSyncStatus, type PlanSyncStatus } from '../../mission/sync'
 import PatternPanel from './PatternPanel'
 import { useLinkStore } from '../../stores/link'
 import { useUiStore } from '../../stores/ui'
 import { useMissionStore, type AltitudeMode } from '../../stores/mission'
+import { useTelemetryStore } from '../../stores/telemetry'
 import type { PlannedWaypoint } from '../../generated-types/PlannedWaypoint'
 
 const MODES: AltitudeMode[] = ['relative', 'amsl', 'agl']
@@ -39,10 +43,12 @@ export default function PlanningPanel() {
   const home = useMissionStore((s) => s.home)
   const blocks = useMissionStore((s) => s.blocks)
   const lastSyncedHash = useMissionStore((s) => s.lastSyncedHash)
+  const currentSeq = useMissionStore((s) => s.currentSeq)
   const verifying = useMissionStore((s) => s.verifying)
-  const select = useMissionStore((s) => s.select)
+  const focus = useMissionStore((s) => s.focus)
   const setAltitudeMode = useMissionStore((s) => s.setAltitudeMode)
   const addWaypoint = useMissionStore((s) => s.addWaypoint)
+  const addWaypointAt = useMissionStore((s) => s.addWaypointAt)
   const removeWaypoint = useMissionStore((s) => s.removeWaypoint)
   const moveWaypoint = useMissionStore((s) => s.moveWaypoint)
   const upload = useMissionStore((s) => s.upload)
@@ -54,9 +60,13 @@ export default function PlanningPanel() {
   const [dragSeq, setDragSeq] = useState<number | null>(null)
   const [importNotice, setImportNotice] = useState<string[]>([])
   const [confirmClearPlan, setConfirmClearPlan] = useState(false)
+  const [coordText, setCoordText] = useState('')
   const confirmTimer = useRef<number | undefined>(undefined)
   useEffect(() => () => window.clearTimeout(confirmTimer.current), [])
   const mapCenter = useUiStore((s) => s.mapCenter)
+  // Latest fix, so each row can show how far that waypoint is from the vehicle
+  // (issues.md #37 — the list is otherwise just coordinates).
+  const pos = useTelemetryStore((s) => s.snapshot?.global_position ?? null)
   const homeAmsl = home?.[2] ?? 0
 
   // Compiled items + complex-item children, in the order they will be flown.
@@ -114,6 +124,15 @@ export default function PlanningPanel() {
     clearPlan()
   }
 
+  // Coordinate entry (WS-G G2): a handheld GPS or an RTK base report is typed
+  // or pasted here, so a position does not have to be eyeballed on the map.
+  const coords = coordText.trim() === '' ? null : parseCoordinates(coordText)
+  const submitCoords = () => {
+    if (!coords?.ok) return
+    addWaypointAt(coords.value.lat, coords.value.lon)
+    setCoordText('')
+  }
+
   const sync = planSyncStatus({
     itemCount: flyable.length,
     dirty,
@@ -161,7 +180,7 @@ export default function PlanningPanel() {
                   onDragStart={() => setDragSeq(idx)}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={() => onDrop(idx)}
-                  onClick={() => select(idx)}
+                  onClick={() => focus(idx)}
                   className={`flex cursor-pointer items-center gap-2 rounded border px-2 py-1.5 text-sm transition-colors ${
                     idx === selectedSeq
                       ? 'border-accent bg-accent/10'
@@ -169,15 +188,40 @@ export default function PlanningPanel() {
                   }`}
                 >
                   <span className="mono w-6 shrink-0 text-right text-muted">{idx}</span>
-                  <span className="mono min-w-0 flex-1 truncate">
-                    {t('plan.lat')} {wp.position.latitude_deg.toFixed(6)}
-                    <span className="text-muted"> · </span>
-                    {t('plan.lon')} {wp.position.longitude_deg.toFixed(6)}
-                  </span>
-                  <span className="mono shrink-0 text-muted">
-                    {wp.altitude.meters.toFixed(1)} m
-                  </span>
-                  {idx === 0 ? (
+                  {commandUsesCoordinate(wp.command) ? (
+                    <>
+                      <span className="mono min-w-0 flex-1 truncate">
+                        {t('plan.lat')} {wp.position.latitude_deg.toFixed(6)}
+                        <span className="text-muted"> · </span>
+                        {t('plan.lon')} {wp.position.longitude_deg.toFixed(6)}
+                      </span>
+                      <span className="shrink-0 text-right">
+                        <span className="mono block text-muted">
+                          {wp.altitude.meters.toFixed(1)} m
+                        </span>
+                        {pos && (
+                          <span className="mono block text-[10px] text-muted">
+                            {formatDistance(
+                              haversineM(
+                                {
+                                  latitude_deg: pos.latitude_deg,
+                                  longitude_deg: pos.longitude_deg,
+                                },
+                                wp.position,
+                              ),
+                            )}
+                          </span>
+                        )}
+                      </span>
+                    </>
+                  ) : (
+                    // A command item (DO_*, CONDITION_*, RTL) has no position;
+                    // its arguments are the four command parameters.
+                    <span className="mono min-w-0 flex-1 truncate text-muted">
+                      {t('plan.commandOnly', { command: wp.command })}
+                    </span>
+                  )}
+                  {idx === currentSeq ? (
                     <span className="shrink-0 rounded bg-ok/20 px-1 text-[10px] text-ok">
                       {t('plan.current')}
                     </span>
@@ -219,6 +263,36 @@ export default function PlanningPanel() {
           {verifying ? t('plan.sync.verifying') : t(`plan.sync.${sync}`)}
         </div>
       )}
+
+      <div className="panel rounded p-2">
+        <div className="mb-1.5 text-xs uppercase tracking-wide text-muted">
+          {t('plan.coord.title')}
+        </div>
+        <div className="flex items-center gap-1.5">
+          <input
+            value={coordText}
+            onChange={(e) => setCoordText(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && submitCoords()}
+            placeholder={t('plan.coord.placeholder')}
+            aria-label={t('plan.coord.title')}
+            className="mono touch-target min-w-0 flex-1 rounded border border-line bg-canvas px-1.5 py-1 text-sm text-ink"
+          />
+          <button
+            disabled={!coords?.ok}
+            onClick={submitCoords}
+            className="touch-target rounded-md border border-line bg-panel px-2 text-sm hover:bg-canvas disabled:opacity-40"
+          >
+            {t('plan.coord.add')}
+          </button>
+        </div>
+        {coords && !coords.ok ? (
+          <div className="mt-1 text-[11px] text-error">{t(`plan.coord.error.${coords.error}`)}</div>
+        ) : coords?.ok ? (
+          <div className="mono mt-1 truncate text-[11px] text-muted">
+            {formatDms(coords.value.lat, 'lat')} · {formatDms(coords.value.lon, 'lon')}
+          </div>
+        ) : null}
+      </div>
 
       <div className="grid grid-cols-2 gap-1.5">
         <button
@@ -314,6 +388,7 @@ function ItemEditor({ seq, waypoint }: { seq: number; waypoint: PlannedWaypoint 
   const updatePosition = useMissionStore((s) => s.updatePosition)
   const updateAltitude = useMissionStore((s) => s.updateAltitude)
   const setCurrent = useMissionStore((s) => s.setCurrent)
+  const coordinate = commandUsesCoordinate(waypoint.command)
 
   return (
     <div className="panel rounded p-2 text-sm">
@@ -321,7 +396,12 @@ function ItemEditor({ seq, waypoint }: { seq: number; waypoint: PlannedWaypoint 
         {t('plan.properties')} · WP {seq}
       </div>
       <div className="space-y-1.5">
-        <label className="flex items-center gap-2">
+        {!coordinate ? (
+          <div className="text-xs text-muted">
+            {t('plan.commandOnly', { command: waypoint.command })}
+          </div>
+        ) : null}
+        <label className={`flex items-center gap-2 ${coordinate ? '' : 'hidden'}`}>
           <span className="w-10 shrink-0 text-muted">Lat</span>
           <input
             type="number"
@@ -333,7 +413,7 @@ function ItemEditor({ seq, waypoint }: { seq: number; waypoint: PlannedWaypoint 
             className="mono w-full rounded border border-line bg-canvas px-1.5 py-1"
           />
         </label>
-        <label className="flex items-center gap-2">
+        <label className={`flex items-center gap-2 ${coordinate ? '' : 'hidden'}`}>
           <span className="w-10 shrink-0 text-muted">Lon</span>
           <input
             type="number"
@@ -345,7 +425,7 @@ function ItemEditor({ seq, waypoint }: { seq: number; waypoint: PlannedWaypoint 
             className="mono w-full rounded border border-line bg-canvas px-1.5 py-1"
           />
         </label>
-        <label className="flex items-center gap-2">
+        <label className={`flex items-center gap-2 ${coordinate ? '' : 'hidden'}`}>
           <span className="w-10 shrink-0 text-muted">Alt</span>
           <input
             type="number"
@@ -360,14 +440,12 @@ function ItemEditor({ seq, waypoint }: { seq: number; waypoint: PlannedWaypoint 
           <span className="text-muted">{t('plan.command')}</span>
           <span className="mono">{waypoint.command === 16 ? 'NAV_WAYPOINT' : waypoint.command}</span>
         </div>
-        {seq === 0 ? (
-          <button
-            onClick={() => void setCurrent(seq)}
-            className="w-full rounded border border-line bg-panel px-2 py-1 text-xs hover:bg-canvas"
-          >
-            {t('plan.goTo')}
-          </button>
-        ) : null}
+        <button
+          onClick={() => void setCurrent(seq)}
+          className="w-full rounded border border-line bg-panel px-2 py-1 text-xs hover:bg-canvas"
+        >
+          {t('plan.goTo')}
+        </button>
       </div>
     </div>
   )

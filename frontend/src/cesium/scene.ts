@@ -57,3 +57,21 @@ export function createViewer(
   })
   return viewer
 }
+
+/**
+ * Show or hide the two base layers created by [`createViewer`].
+ *
+ * Layer 0 is the offline graticule, layer 1 the OSM imagery on top of it; the
+ * Layers panel toggles them so the operator can fall back to the grid when the
+ * tile server is unreachable (or read the graticule under the imagery).
+ */
+export function applyLayerVisibility(
+  viewer: Cesium.Viewer,
+  showImagery: boolean,
+  showGrid: boolean,
+): void {
+  const grid = viewer.imageryLayers.get(0)
+  const imagery = viewer.imageryLayers.get(1)
+  if (grid) grid.show = showGrid
+  if (imagery) imagery.show = showImagery
+}

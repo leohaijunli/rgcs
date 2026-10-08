@@ -70,6 +70,12 @@ jobs:
       - run: npm run check:contrast
       # 0.6: every t('...') key must exist, so the UI never shows raw keys.
       - run: npm run check:i18n
+      # Pure-module guards: .plan interop, upload/download state machine,
+      # coordinate entry and the flight-progress maths.
+      - run: npm run check:planfile
+      - run: npm run check:mission-sync
+      - run: npm run check:coords
+      - run: npm run check:progress
       - run: npm run build
 
   windows-build:

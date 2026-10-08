@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import * as Cesium from 'cesium'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
-import { createViewer } from '../cesium/scene'
+import { applyLayerVisibility, createViewer } from '../cesium/scene'
 import {
   createDroneLayer,
   createGhostPoint,
@@ -16,11 +16,18 @@ import {
   renderWaypoints,
   setGhostPoint,
 } from '../cesium/entities'
-import type { DroneLayer, GhostPoint, WaypointLayer } from '../cesium/entities'
+import type {
+  DroneLayer,
+  GhostPoint,
+  WaypointLayer,
+  WaypointRenderOptions,
+} from '../cesium/entities'
 import { installMapTools } from '../cesium/waypoints'
 import { createFollowController } from '../cesium/follow'
 import type { FollowController } from '../cesium/follow'
 import {
+  FOCUS_FLIGHT_S,
+  FOCUS_HEIGHT_M,
   PREDICT_HORIZON_S,
   PREDICT_MIN_GROUNDSPEED_M_S,
   PREDICT_STEP_S,
@@ -31,7 +38,7 @@ import {
 import { groundSpeedMps, projectAhead, uavOrientation } from '../cesium/uav'
 import { usePrefsStore } from '../desktop/prefs'
 import { useUiStore } from '../stores/ui'
-import { useMissionStore } from '../stores/mission'
+import { degFromMavInt, useMissionStore } from '../stores/mission'
 import type { MissionItem } from '../generated-types/MissionItem'
 import type { TelemetrySnapshot } from '../generated-types/TelemetrySnapshot'
 
@@ -41,7 +48,12 @@ export interface CesiumViewerHandle {
   /** Apply a telemetry snapshot: marker, attitude, trail and projection. */
   setSnapshot(snapshot: TelemetrySnapshot | null): void
   /** Re-render the mission waypoint layer. */
-  setMission(items: MissionItem[], selectedSeq: number | null): void
+  setLayers(showImagery: boolean, showGrid: boolean): void
+  setMission(
+    items: MissionItem[],
+    selectedSeq: number | null,
+    opts?: WaypointRenderOptions,
+  ): void
   /** Frame the home area and stop following. */
   goHome(): void
   /** Rotate the camera to north-up (no-op in 2D) and stop following. */
@@ -201,13 +213,20 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
     }
   }, [])
 
-  const setMission = useCallback((items: MissionItem[], selectedSeq: number | null) => {
-    wpItemsRef.current = items
-    const viewer = viewerRef.current
-    if (!viewer) return
-    disposeWaypointLayer(viewer, wpLayerRef.current)
-    wpLayerRef.current = renderWaypoints(viewer, items, selectedSeq)
-  }, [])
+  const setMission = useCallback(
+    (
+      items: MissionItem[],
+      selectedSeq: number | null,
+      opts: WaypointRenderOptions = {},
+    ) => {
+      wpItemsRef.current = items
+      const viewer = viewerRef.current
+      if (!viewer) return
+      disposeWaypointLayer(viewer, wpLayerRef.current)
+      wpLayerRef.current = renderWaypoints(viewer, items, selectedSeq, opts)
+    },
+    [],
+  )
 
   const goHome = useCallback(() => {
     const viewer = viewerRef.current
@@ -235,5 +254,32 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
     })
   }, [])
 
-  return { initError, setSnapshot, setMission, goHome, lookNorth }
+  // Frame a waypoint the operator picked from a list. One-shot: the request is
+  // cleared as soon as it is served, so camera control stays with the operator
+  // (a map pick selects but never moves the view).
+  const focusSeq = useMissionStore((s) => s.focusSeq)
+  useEffect(() => {
+    if (focusSeq === null) return
+    const viewer = viewerRef.current
+    const item = wpItemsRef.current.find((it) => it.seq === focusSeq)
+    useMissionStore.getState().clearFocus()
+    if (!viewer || !item || item.frame === 'mission') return
+    useUiStore.getState().setFollow(false)
+    viewer.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(
+        degFromMavInt(item.y),
+        degFromMavInt(item.x),
+        item.z + FOCUS_HEIGHT_M,
+      ),
+      duration: FOCUS_FLIGHT_S,
+    })
+  }, [focusSeq])
+
+  const setLayers = useCallback((showImagery: boolean, showGrid: boolean) => {
+    const viewer = viewerRef.current
+    if (!viewer) return
+    applyLayerVisibility(viewer, showImagery, showGrid)
+  }, [])
+
+  return { initError, setSnapshot, setMission, setLayers, goHome, lookNorth }
 }

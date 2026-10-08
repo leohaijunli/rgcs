@@ -14,6 +14,8 @@
     "check:i18n": "node scripts/check-i18n.mjs",
     "check:planfile": "node scripts/check-planfile.mjs",
     "check:mission-sync": "node scripts/check-mission-sync.mjs",
+    "check:coords": "node scripts/check-coords.mjs",
+    "check:progress": "node scripts/check-progress.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

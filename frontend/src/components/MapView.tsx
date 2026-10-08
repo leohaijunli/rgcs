@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useCesiumViewer } from '../hooks/useCesiumViewer'
-import { compileWaypoints } from '../mission/compile'
+import { compileWaypoints, toDisplayItems } from '../mission/compile'
+import { kindsBySeq } from '../mission/lineKinds'
 import { orderedMissionItems } from '../mission/planfile'
 import { useMissionStore } from '../stores/mission'
 import { useTelemetryStore } from '../stores/telemetry'
@@ -12,7 +13,8 @@ import MapToolbar from './MapToolbar'
 export default function MapView() {
   const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
-  const { initError, setSnapshot, setMission, goHome, lookNorth } = useCesiumViewer(containerRef)
+  const { initError, setSnapshot, setMission, setLayers, goHome, lookNorth } =
+    useCesiumViewer(containerRef)
   const mapTool = useUiStore((s) => s.mapTool)
   const view = useUiStore((s) => s.view)
 
@@ -32,18 +34,38 @@ export default function MapView() {
   const blocks = useMissionStore((s) => s.blocks)
   const planBase = useMissionStore((s) => s.planBase)
   const selectedSeq = useMissionStore((s) => s.selectedSeq)
+  const lastPattern = useMissionStore((s) => s.lastPattern)
+  const showHeights = useUiStore((s) => s.showHeights)
   const missionItems = useMemo(
     () =>
-      orderedMissionItems(
-        compileWaypoints(waypoints, altitudeMode, home?.[2] ?? 0),
-        blocks,
-        planBase ?? undefined,
+      // Drawn in AMSL: in the relative/terrain modes the compiled `z` is only
+      // an offset from HOME, which would place the path at the wrong height.
+      toDisplayItems(
+        orderedMissionItems(
+          compileWaypoints(waypoints, altitudeMode, home?.[2] ?? 0),
+          blocks,
+          planBase ?? undefined,
+        ),
+        home?.[2] ?? 0,
       ),
     [waypoints, altitudeMode, home, blocks, planBase],
   )
+  const showImagery = useUiStore((s) => s.showImagery)
+  const showGrid = useUiStore((s) => s.showGrid)
   useEffect(() => {
-    setMission(missionItems, selectedSeq)
-  }, [missionItems, selectedSeq, setMission])
+    setLayers(showImagery, showGrid)
+  }, [showImagery, showGrid, setLayers])
+
+  const kinds = useMemo(() => kindsBySeq(lastPattern?.lines ?? []), [lastPattern])
+  useEffect(() => {
+    setMission(missionItems, selectedSeq, {
+      kinds,
+      heights: showHeights,
+      // Stand the height sticks on the ground: HOME's AMSL altitude until a
+      // DEM exists (WS-D), same assumption the AGL mode makes.
+      groundM: home?.[2] ?? null,
+    })
+  }, [missionItems, selectedSeq, kinds, showHeights, home, setMission])
 
   if (initError) {
     return (

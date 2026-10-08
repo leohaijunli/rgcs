@@ -36,3 +36,8 @@ export const FOLLOW_PITCH_DEG = -35
 // Passing `yaw - 90` puts the nose back on the reported heading.
 export const UAV_MODEL_URI = '/model/scene-static.gltf'
 export const UAV_MODEL_NOSE_YAW_OFFSET_DEG = -90
+
+/** Camera stand-off when framing a waypoint picked from a list, metres. */
+export const FOCUS_HEIGHT_M = 600
+/** Seconds for the frame-the-selected-waypoint flight. */
+export const FOCUS_FLIGHT_S = 0.8
