@@ -12,6 +12,7 @@
     "check:colors": "bash scripts/check-colors.sh",
     "check:contrast": "node scripts/check-contrast.mjs",
     "check:i18n": "node scripts/check-i18n.mjs",
+    "check:planfile": "node scripts/check-planfile.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

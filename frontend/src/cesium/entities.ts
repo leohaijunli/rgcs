@@ -158,3 +158,34 @@ export function renderWaypoints(
   })
   return layer
 }
+
+/**
+ * Move one rendered waypoint and its line vertex to a new position without
+ * touching the mission store. Used for the live drag preview so a drag commits
+ * once, on release (finding 14).
+ */
+export function previewWaypoint(
+  layer: WaypointLayer,
+  items: MissionItem[],
+  seq: number,
+  latDeg: number,
+  lonDeg: number,
+): void {
+  const entity = layer.points.get(seq)
+  if (!entity) return
+  const item = items.find((it) => it.seq === seq)
+  if (!item) return
+  const height = item.z + 5
+  entity.position = new Cesium.ConstantPositionProperty(
+    Cesium.Cartesian3.fromDegrees(lonDeg, latDeg, height),
+  )
+  if (layer.line?.polyline) {
+    layer.line.polyline.positions = new Cesium.ConstantProperty(
+      items.map((it) =>
+        it.seq === seq
+          ? Cesium.Cartesian3.fromDegrees(lonDeg, latDeg, height)
+          : Cesium.Cartesian3.fromDegrees(degFromMavInt(it.y), degFromMavInt(it.x), it.z + 5),
+      ),
+    )
+  }
+}

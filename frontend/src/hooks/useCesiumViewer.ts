@@ -8,7 +8,12 @@ import type { RefObject } from 'react'
 import * as Cesium from 'cesium'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
 import { createViewer } from '../cesium/scene'
-import { createDroneLayer, disposeWaypointLayer, renderWaypoints } from '../cesium/entities'
+import {
+  createDroneLayer,
+  disposeWaypointLayer,
+  previewWaypoint,
+  renderWaypoints,
+} from '../cesium/entities'
 import type { DroneLayer, WaypointLayer } from '../cesium/entities'
 import { installWaypointDrag } from '../cesium/waypoints'
 import { createFollowController } from '../cesium/follow'
@@ -24,6 +29,7 @@ import {
 import { groundSpeedMps, projectAhead, uavOrientation } from '../cesium/uav'
 import { usePrefsStore } from '../desktop/prefs'
 import { useUiStore } from '../stores/ui'
+import { useMissionStore } from '../stores/mission'
 import type { MissionItem } from '../generated-types/MissionItem'
 import type { TelemetrySnapshot } from '../generated-types/TelemetrySnapshot'
 
@@ -36,6 +42,8 @@ export interface CesiumViewerHandle {
   setMission(items: MissionItem[], selectedSeq: number | null): void
   /** Frame the home area and stop following. */
   goHome(): void
+  /** Rotate the camera to north-up (no-op in 2D) and stop following. */
+  lookNorth(): void
 }
 
 export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>): CesiumViewerHandle {
@@ -48,6 +56,7 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
   const tickRef = useRef(0)
   const wpLayerRef = useRef<WaypointLayer | null>(null)
   const wpHandlerRef = useRef<Cesium.ScreenSpaceEventHandler | null>(null)
+  const wpItemsRef = useRef<MissionItem[]>([])
 
   useEffect(() => {
     const container = containerRef.current
@@ -68,7 +77,15 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
       usePrefsStore.getState().initialPosition,
     )
     droneRef.current = layer
-    wpHandlerRef.current = installWaypointDrag(viewer)
+    wpHandlerRef.current = installWaypointDrag(viewer, {
+      // Waypoints are only editable in the planning view (finding 18).
+      enabled: () => useUiStore.getState().view === 'planning',
+      onPreview: (seq, lat, lon) => {
+        const layer = wpLayerRef.current
+        if (layer) previewWaypoint(layer, wpItemsRef.current, seq, lat, lon)
+      },
+      onSelect: (seq) => useMissionStore.getState().select(seq),
+    })
     const follow = createFollowController(viewer, layer.dronePosition)
     follow.attach()
     followRef.current = follow
@@ -164,6 +181,7 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
   }, [])
 
   const setMission = useCallback((items: MissionItem[], selectedSeq: number | null) => {
+    wpItemsRef.current = items
     const viewer = viewerRef.current
     if (!viewer) return
     disposeWaypointLayer(viewer, wpLayerRef.current)
@@ -180,5 +198,21 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
     viewer.camera.flyTo({ destination: Cesium.Cartesian3.fromDegrees(home.lon, home.lat, 12000) })
   }, [])
 
-  return { initError, setSnapshot, setMission, goHome }
+  const lookNorth = useCallback(() => {
+    const viewer = viewerRef.current
+    if (!viewer) return
+    // North-up is a 3D orientation; in 2D the camera heading is fixed anyway.
+    if (viewer.scene.mode !== Cesium.SceneMode.SCENE3D) return
+    useUiStore.getState().setFollow(false)
+    viewer.camera.setView({
+      destination: viewer.camera.positionWC,
+      orientation: {
+        heading: 0,
+        pitch: viewer.camera.pitch,
+        roll: viewer.camera.roll,
+      },
+    })
+  }, [])
+
+  return { initError, setSnapshot, setMission, goHome, lookNorth }
 }

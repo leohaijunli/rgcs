@@ -5,7 +5,10 @@ import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import type { MissionItem } from '../generated-types/MissionItem'
 import type { MissionFrame } from '../generated-types/MissionFrame'
-import type { PlanImport, QgcPlan } from '../mission/planfile'
+import { orderedMissionItems } from '../mission/planfile'
+import { convertAltitudeZ } from '../mission/altitude'
+import { itemsHash } from '../mission/hash'
+import type { PlanBlock, PlanImport, QgcPlan } from '../mission/planfile'
 
 export type AltitudeMode = 'relative' | 'amsl' | 'agl'
 
@@ -42,11 +45,13 @@ interface MissionState {
   verifying: boolean
   /** Original imported `.plan`, kept so export can write back unknown fields. */
   planBase: QgcPlan | null
+  /** Complex items (Survey, ...) kept opaque and read-only (issues.md #12). */
+  blocks: PlanBlock[]
   /** `plannedHomePosition` from the imported plan, if any. */
   home: [number, number, number] | null
   select: (seq: number | null) => void
   setItems: (items: MissionItem[]) => void
-  setAltitudeMode: (mode: AltitudeMode) => void
+  setAltitudeMode: (mode: AltitudeMode, opts?: { convert?: boolean }) => void
   updateItem: (seq: number, patch: Partial<MissionItem>) => void
   addWaypoint: (latDeg: number, lonDeg: number, altM: number) => void
   removeWaypoint: (seq: number) => void
@@ -57,6 +62,8 @@ interface MissionState {
   setCurrent: (seq: number) => Promise<void>
   handleEvent: (e: MissionEventPayload) => void
   handlePlan: (items: MissionItem[]) => void
+  /** Editable items plus complex-item children, in flyable order. */
+  flyable: () => MissionItem[]
   applyImport: (result: PlanImport) => void
   verifyFc: () => Promise<void>
   reset: () => void
@@ -66,22 +73,7 @@ function resequence(items: MissionItem[]): MissionItem[] {
   return items.map((it, i) => ({ ...it, seq: i }))
 }
 
-/** Structural hash used to compare a plan with what the FC reports. */
-export function itemsHash(items: MissionItem[]): string {
-  return JSON.stringify(
-    items.map((i) => [
-      i.seq,
-      i.frame,
-      i.command,
-      i.params,
-      i.x,
-      i.y,
-      i.z,
-      i.autocontinue,
-      i.current,
-    ]),
-  )
-}
+export { itemsHash } from '../mission/hash'
 
 function useSelection(items: MissionItem[], selectedSeq: number | null): number | null {
   if (selectedSeq === null) return null
@@ -100,6 +92,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
   fcMatches: null,
   verifying: false,
   planBase: null,
+  blocks: [],
   home: null,
 
   select: (seq) => set({ selectedSeq: seq }),
@@ -112,7 +105,20 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       fcMatches: null,
     })),
 
-  setAltitudeMode: (mode) => set({ altitudeMode: mode }),
+  setAltitudeMode: (mode, opts) =>
+    set((s) => {
+      if (mode === s.altitudeMode) return s
+      // Complex-item children keep the frame stored in the file, so only the
+      // editable items can be converted here (finding 1).
+      if (!opts?.convert || s.items.length === 0) return { altitudeMode: mode }
+      const anchor = { homeAmslM: s.home?.[2] ?? 0 }
+      const items = s.items.map((it) => ({
+        ...it,
+        z: convertAltitudeZ(it.z, s.altitudeMode, mode, anchor),
+        frame: FRAME_BY_MODE[mode],
+      }))
+      return { altitudeMode: mode, items, dirty: true, fcMatches: null }
+    }),
 
   updateItem: (seq, patch) =>
     set((s) => ({
@@ -123,8 +129,11 @@ export const useMissionStore = create<MissionState>((set, get) => ({
 
   addWaypoint: (latDeg, lonDeg, altM) =>
     set((s) => {
+      // Continue past every existing seq so a new item never shares an id with
+      // an imported complex-item child (which uses a high synthetic seq base).
+      const nextSeq = s.items.reduce((m, it) => Math.max(m, it.seq + 1), 0)
       const item: MissionItem = {
-        seq: s.items.length,
+        seq: nextSeq,
         frame: FRAME_BY_MODE[s.altitudeMode],
         command: 16, // MAV_CMD_NAV_WAYPOINT
         params: [0, 0, 0, 0],
@@ -161,7 +170,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
     }),
 
   upload: async () => {
-    const { items } = get()
+    const items = get().flyable()
     if (items.length === 0) return
     set({ busy: true, syncState: 'uploading', fcMatches: null })
     try {
@@ -247,7 +256,9 @@ export const useMissionStore = create<MissionState>((set, get) => ({
         // We believe the FC now holds exactly our plan; confirm with a
         // read-back download (issues.md #15).
         patch.dirty = false
-        patch.lastSyncedHash = itemsHash(s.items)
+        patch.lastSyncedHash = itemsHash(
+          orderedMissionItems(s.items, s.blocks, s.planBase ?? undefined),
+        )
         patch.fcMatches = true
       }
       return patch
@@ -268,6 +279,8 @@ export const useMissionStore = create<MissionState>((set, get) => ({
           }
         : {
             items,
+            blocks: [],
+            planBase: null,
             dirty: false,
             lastSyncedHash: itemsHash(items),
             fcMatches: true,
@@ -286,8 +299,14 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       dirty: true,
       fcMatches: null,
       planBase: result.base,
+      blocks: result.blocks,
       home: result.home,
     })),
+
+  flyable: () => {
+    const s = get()
+    return orderedMissionItems(s.items, s.blocks, s.planBase ?? undefined)
+  },
 
   verifyFc: async () => {
     if (!get().lastSyncedHash) return
@@ -311,6 +330,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       fcMatches: null,
       verifying: false,
       planBase: null,
+      blocks: [],
       home: null,
     }),
 }))

@@ -6,9 +6,11 @@ import { useUiStore } from '../stores/ui'
 interface Props {
   onGoHome: () => void
   onToggleMeasure: () => void
+  /** Rotate the camera to north-up (planning map). */
+  onNorth: () => void
 }
 
-export default function MapToolbar({ onGoHome, onToggleMeasure }: Props) {
+export default function MapToolbar({ onGoHome, onToggleMeasure, onNorth }: Props) {
   const { t } = useTranslation()
   const map3d = useUiStore((s) => s.map3d)
   const toggleMap3d = useUiStore((s) => s.toggleMap3d)
@@ -41,7 +43,7 @@ export default function MapToolbar({ onGoHome, onToggleMeasure }: Props) {
       <ToolButton title={t('map.follow')} active={follow} onClick={toggleFollow} icon={Crosshair} />
       <ToolButton title={t('map.home')} onClick={onGoHome} icon={House} />
       <ToolButton title={t('map.measure')} onClick={onToggleMeasure} icon={Ruler} />
-      <ToolButton title={t('map.north')} onClick={() => undefined} icon={Compass} />
+      <ToolButton title={t('map.north')} onClick={onNorth} icon={Compass} />
       {pos && (
         <div className="mono border-t border-line px-2 py-1 text-[10px] leading-tight text-muted">
           {pos.latitude_deg.toFixed(5)}

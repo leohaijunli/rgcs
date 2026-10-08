@@ -139,6 +139,7 @@
 - 验收：用包含 Survey 复杂项的真实 `.plan` 样本（放入 `testdata/`）导入不崩溃且有明确提示。
 - 实现：`qgcToItem` 拆成面向 `coordinate` 的 `simpleToItem`（缺坐标返回 `null`）；`parsePlan` 处理 `ComplexItem`：有 `simpleItems` 则展开其子项，否则计入 `unsupported`（标签如 `Survey #1`）并在 UI 提示。`importPlanFile` 返回 `PlanImport{items,mode,home,base,unsupported}`。
 - 验证：新增 `testdata/qgc-survey.plan`（SimpleItem + 带 `simpleItems` 的 Survey），用 esbuild+Node 跑 `parsePlan`/`buildPlan`——3 航点、无 unsupported；去掉子项后报 `Survey #1` 且不崩溃。
+- 升级（improve_plan finding 3）：Survey 不再被压平成普通航点，改为不透明 `PlanBlock`（`raw` 原样写回、子项只读、合成 seq 防冲突）；`orderedMissionItems` 按 `base.mission.items` 还原飞行顺序；上传/地图/导出都用该顺序。`npm run check:planfile` 断言 Survey 往返字节一致、`doJumpId` 不变。
 
 ### #13 [P1][frontend] `.plan` export is not faithful
 **状态**：✅ 已完成（工作区改动，未提交）
@@ -148,6 +149,7 @@
 - 验收：`.plan` 导入→导出→再导入，结构化比较无差异（忽略格式化）；用 QGC 实际打开验证（待核实）。
 - 实现：导入时保存整份 `base` 文档，导出时 `structuredClone` 后写回未知字段（`geoFence`/`rallyPoints`/`cruiseSpeed`/`firmwareType`/`vehicleType`…）；`plannedHomePosition` 单独建模（`home`）；`doJumpId` 从 1 递增。前端 store 保存 `planBase`/`home` 供导出复用。
 - 验证：Node 检查确认 geoFence/rallyPoints/cruiseSpeed/firmwareType/home 透传，`doJumpId=[1,2,3]`，导入→导出→再导入 items/home 完全一致。（QGC 实机打开仍待人工核实。）
+- 升级（improve_plan findings 3/4/5）：复杂项原样保留后续导出；`null` 参数在导入时归零（Rust `f32` 不再拒绝真实 QGC 文件）；同步哈希去掉 `seq`/`current`，避免下载回读误报不一致。
 
 ### #14 [P1][frontend] Add-waypoint button inserts at ~(0°, 0°) when nothing is selected
 **状态**：✅ 已完成（工作区改动，未提交）

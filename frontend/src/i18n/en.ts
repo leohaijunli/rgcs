@@ -84,6 +84,17 @@ export default {
       amsl: 'AMSL',
       agl: 'AGL',
     },
+    modeSwitch: {
+      title: 'Convert {{count}} waypoints from {{from}} to {{to}}?',
+      hint: 'Their altitudes are re-expressed so the physical height is unchanged. Home / ground anchor: {{m}} m AMSL.',
+      convert: 'Convert',
+      keep: 'Keep numbers',
+      cancel: 'Cancel',
+    },
+    complex: {
+      label: '{{type}} · {{count}} waypoints',
+      readOnly: 'Read-only',
+    },
     op: {
       upload: 'Uploading',
       download: 'Downloading',

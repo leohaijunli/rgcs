@@ -3,6 +3,42 @@
 Snapshot of the current session (issues.md backlog clearance). Issue statuses
 live in `issues.md`; keep both in sync when a task lands.
 
+## Latest landing — improve_plan findings 1/3/4/5/14–19
+
+Hardening of the Phase 1 planning path from `improve_plan.md` (verified
+findings). Finding 12 (`core::height` has no `GeoidModel` implementation) is a
+WS-D project needing EGM96/CGG2013 grid data + ADR-013 and is left for Phase 3.
+
+- **finding 3/4/5, lossless `.plan` (WS-A5)**: `mission/planfile.ts` keeps QGC
+  complex items (Survey, …) as opaque `PlanBlock`s (`raw` written back
+  verbatim) instead of flattening them; `orderedMissionItems()` derives the
+  flyable order from `base.mission.items`; child waypoints get a synthetic
+  `seq` base (`BLOCK_SEQ_BASE`) so map/selection ids never collide; unset
+  (`null`) params are coerced to 0; `mission/hash.ts::itemsHash` drops `seq` and
+  `current`. `stores/mission.ts` carries `blocks` and uploads the flyable
+  order; `PlanningPanel` shows blocks as read-only rows and exports them.
+- **finding 1, datum-aware mode switch**: new `mission/altitude.ts` converts
+  `z` between relative/AMSL/AGL (anchor = `plannedHomePosition` AMSL; ground
+  assumed flat at the home altitude until a DEM lands, WS-D). Switching the
+  mode with items present now shows a confirm bar (Convert / Keep numbers /
+  Cancel) instead of silently reinterpreting `z`.
+- **finding 14/15/17/18, drag + safety**: `cesium/waypoints.ts` previews on
+  `MOUSE_MOVE` and commits once on release (one undo entry, one `dirty`), a
+  press/release ≤ 3 px (`CLICK_DRAG_THRESHOLD_PX`) selects instead of moving,
+  and camera rotate/translate are restored from a shared `finish()` also wired
+  to `window` `pointerup`/`blur` and `Escape`. Editing is gated to the planning
+  view (`enabled: () => ui.view === 'planning'`).
+- **finding 16, terrain-aware pick**: new `cesium/pick.ts::pickLatLon` uses
+  `globe.pick` when a real terrain provider is loaded, else `pickEllipsoid`;
+  returns `null` for the sky.
+- **finding 19, North**: `MapToolbar`'s compass now calls
+  `useCesiumViewer.lookNorth()` (3D only, stops follow first).
+
+Verified: `frontend` typecheck/colors/contrast/i18n + new
+`npm run check:planfile` (esbuild+Node: Survey round-trips byte-identical,
+null params, hash identity, datum round-trips) + `npm run build`;
+`cargo test -p maggcs-app`; `scripts/desktop-smoke.sh` (53% bright, PASS).
+
 ## Latest landing — Settings -> Vehicle: initial vehicle position
 
 `Settings -> Vehicle` edits the initial vehicle position (lat/lon), persisted in

@@ -269,6 +269,14 @@ import/export and RTL are in place; Pause/Continue is wired to
 handling still needs SITL confirmation (see issues.md). The acceptance runs
 against the fake FC; a live SITL pass is the remaining gap.
 
+Planning hardening (improve_plan findings, 2026-10-07): QGC complex items
+(Survey, …) now round-trip losslessly as opaque blocks
+(`npm run check:planfile`), switching the altitude mode converts existing
+items between datums (`mission/altitude.ts`), and map editing uses a
+terrain-aware pick with one-commit drags gated to the planning view
+(`cesium/{pick,waypoints}.ts`). Datum conversions assume flat ground at the
+home altitude until a DEM/geoid lands (Phase 3 / finding 12).
+
 ### Phase 2: RTK base station and RTCM forwarding
 
 Tasks and acceptance in Section 8. Independent of terrain; can be developed in

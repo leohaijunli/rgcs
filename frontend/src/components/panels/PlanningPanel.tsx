@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { importPlanFile, exportPlanFile } from '../../mission/planfile'
+import { exportPlanFile, importPlanFile, orderedMissionItems } from '../../mission/planfile'
 import { useLinkStore } from '../../stores/link'
 import { useUiStore } from '../../stores/ui'
 import { useMissionStore, degFromMavInt, type AltitudeMode } from '../../stores/mission'
@@ -22,6 +22,7 @@ export default function PlanningPanel() {
   const fcMatches = useMissionStore((s) => s.fcMatches)
   const planBase = useMissionStore((s) => s.planBase)
   const home = useMissionStore((s) => s.home)
+  const blocks = useMissionStore((s) => s.blocks)
   const select = useMissionStore((s) => s.select)
   const setAltitudeMode = useMissionStore((s) => s.setAltitudeMode)
   const addWaypoint = useMissionStore((s) => s.addWaypoint)
@@ -34,7 +35,26 @@ export default function PlanningPanel() {
   const selected = selectedSeq !== null ? items.find((it) => it.seq === selectedSeq) ?? null : null
   const [dragSeq, setDragSeq] = useState<number | null>(null)
   const [importNotice, setImportNotice] = useState<string[]>([])
+  const [pendingMode, setPendingMode] = useState<AltitudeMode | null>(null)
   const mapCenter = useUiStore((s) => s.mapCenter)
+  // Editable items + complex-item children, in the order they will be flown.
+  const flyable = orderedMissionItems(items, blocks, planBase ?? undefined)
+
+  const homeAmsl = home?.[2] ?? 0
+
+  const onModeClick = (mode: AltitudeMode) => {
+    if (mode === altitudeMode) return
+    if (items.length === 0) {
+      setAltitudeMode(mode)
+      return
+    }
+    setPendingMode(mode)
+  }
+
+  const applyPendingMode = (convert: boolean) => {
+    if (pendingMode) setAltitudeMode(pendingMode, { convert })
+    setPendingMode(null)
+  }
 
   const onDrop = (targetSeq: number) => {
     if (dragSeq === null || dragSeq === targetSeq) return
@@ -50,7 +70,7 @@ export default function PlanningPanel() {
   }
 
   const onExport = async () => {
-    await exportPlanFile(items, altitudeMode, { base: planBase ?? undefined, home })
+    await exportPlanFile(items, altitudeMode, { base: planBase ?? undefined, home, blocks })
   }
 
   // Default a new waypoint to the selected item, else the map centre; both in
@@ -70,7 +90,7 @@ export default function PlanningPanel() {
           {MODES.map((m) => (
             <button
               key={m}
-              onClick={() => setAltitudeMode(m)}
+              onClick={() => onModeClick(m)}
               className={`flex-1 rounded px-1 py-1 transition-colors ${
                 altitudeMode === m
                   ? 'bg-accent text-canvas'
@@ -81,15 +101,49 @@ export default function PlanningPanel() {
             </button>
           ))}
         </div>
+        {pendingMode && (
+          <div className="mt-2 space-y-1.5 rounded border border-warn bg-warn/10 p-2 text-xs">
+            <div className="text-warn">
+              {t('plan.modeSwitch.title', {
+                count: items.length,
+                from: t(`plan.mode.${altitudeMode}`),
+                to: t(`plan.mode.${pendingMode}`),
+              })}
+            </div>
+            <div className="text-muted">
+              {t('plan.modeSwitch.hint', { m: homeAmsl.toFixed(0) })}
+            </div>
+            <div className="flex gap-1.5">
+              <button
+                onClick={() => applyPendingMode(true)}
+                className="flex-1 rounded border border-warn bg-warn px-2 py-1 text-canvas"
+              >
+                {t('plan.modeSwitch.convert')}
+              </button>
+              <button
+                onClick={() => applyPendingMode(false)}
+                className="flex-1 rounded border border-line bg-panel px-2 py-1"
+              >
+                {t('plan.modeSwitch.keep')}
+              </button>
+              <button
+                onClick={() => setPendingMode(null)}
+                className="flex-1 rounded border border-line bg-panel px-2 py-1"
+              >
+                {t('plan.modeSwitch.cancel')}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="min-h-0 flex-1">
         <div className="mb-1.5 flex items-center justify-between px-1">
           <span className="text-xs uppercase tracking-wide text-muted">
-            {t('plan.items')} · {items.length}
+            {t('plan.items')} · {flyable.length}
           </span>
         </div>
-        {items.length === 0 ? (
+        {flyable.length === 0 ? (
           <div className="panel rounded p-3 text-xs text-muted">{t('plan.empty')}</div>
         ) : (
           <ul className="space-y-1">
@@ -119,6 +173,22 @@ export default function PlanningPanel() {
                       {t('plan.current')}
                     </span>
                   ) : null}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        {blocks.length > 0 && (
+          <ul className="mt-1 space-y-1">
+            {blocks.map((b) => (
+              <li key={`block-${b.index}`}>
+                <div className="flex items-center gap-2 rounded border border-dashed border-line bg-canvas/60 px-2 py-1.5 text-sm text-muted">
+                  <span className="shrink-0 rounded bg-canvas px-1 text-[10px] uppercase tracking-wide">
+                    {t('plan.complex.readOnly')}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">
+                    {t('plan.complex.label', { type: b.type, count: b.children.length })}
+                  </span>
                 </div>
               </li>
             ))}
@@ -158,7 +228,7 @@ export default function PlanningPanel() {
 
       <div className="grid grid-cols-3 gap-1.5">
         <button
-          disabled={!connected || busy || items.length === 0}
+          disabled={!connected || busy || flyable.length === 0}
           onClick={() => void upload()}
           className="rounded-md bg-accent px-2 py-1.5 text-sm text-canvas disabled:opacity-40"
         >
@@ -188,7 +258,7 @@ export default function PlanningPanel() {
           {t('plan.import')}
         </button>
         <button
-          disabled={items.length === 0}
+          disabled={flyable.length === 0}
           onClick={() => void onExport()}
           className="rounded-md border border-line bg-panel px-2 py-1.5 text-sm hover:bg-canvas disabled:opacity-40"
         >
