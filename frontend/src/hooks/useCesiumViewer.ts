@@ -14,8 +14,6 @@ import { installWaypointDrag } from '../cesium/waypoints'
 import { createFollowController } from '../cesium/follow'
 import type { FollowController } from '../cesium/follow'
 import {
-  HOME_LAT,
-  HOME_LON,
   PREDICT_HORIZON_S,
   PREDICT_MIN_GROUNDSPEED_M_S,
   PREDICT_STEP_S,
@@ -24,6 +22,7 @@ import {
   UAV_MODEL_NOSE_YAW_OFFSET_DEG,
 } from '../cesium/constants'
 import { groundSpeedMps, projectAhead, uavOrientation } from '../cesium/uav'
+import { usePrefsStore } from '../desktop/prefs'
 import { useUiStore } from '../stores/ui'
 import type { MissionItem } from '../generated-types/MissionItem'
 import type { TelemetrySnapshot } from '../generated-types/TelemetrySnapshot'
@@ -56,13 +55,18 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
 
     let viewer: Cesium.Viewer
     try {
-      viewer = createViewer(container)
+      viewer = createViewer(container, usePrefsStore.getState().initialPosition)
     } catch (e) {
       setInitError(e instanceof Error ? e.message : String(e))
       return
     }
 
-    const layer = createDroneLayer(viewer, () => trailPos.current, () => predictPos.current)
+    const layer = createDroneLayer(
+      viewer,
+      () => trailPos.current,
+      () => predictPos.current,
+      usePrefsStore.getState().initialPosition,
+    )
     droneRef.current = layer
     wpHandlerRef.current = installWaypointDrag(viewer)
     const follow = createFollowController(viewer, layer.dronePosition)
@@ -172,7 +176,8 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
     // Home is a wide overview, so stop following or the next frame re-centres.
     useUiStore.getState().setFollow(false)
     viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY)
-    viewer.camera.flyTo({ destination: Cesium.Cartesian3.fromDegrees(HOME_LON, HOME_LAT, 12000) })
+    const home = usePrefsStore.getState().initialPosition
+    viewer.camera.flyTo({ destination: Cesium.Cartesian3.fromDegrees(home.lon, home.lat, 12000) })
   }, [])
 
   return { initError, setSnapshot, setMission, goHome }

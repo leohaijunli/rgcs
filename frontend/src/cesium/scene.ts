@@ -5,6 +5,12 @@ import * as Cesium from 'cesium'
 import { cssVar } from '../design-system/theme'
 import { HOME_LAT, HOME_LON } from './constants'
 
+/** Initial camera / HOME position in degrees. */
+interface LatLonLike {
+  lat: number
+  lon: number
+}
+
 /** Fail loudly instead of showing a black map if the webview has no WebGL. */
 export function assertWebGl(): void {
   const probe = document.createElement('canvas')
@@ -18,7 +24,10 @@ export function assertWebGl(): void {
  * imagery stacked on top (real map when online, grid fallback when offline),
  * then frame the home area. Throws if WebGL is unavailable.
  */
-export function createViewer(container: HTMLElement): Cesium.Viewer {
+export function createViewer(
+  container: HTMLElement,
+  initial: LatLonLike = { lat: HOME_LAT, lon: HOME_LON },
+): Cesium.Viewer {
   assertWebGl()
 
   const grid = new Cesium.GridImageryProvider({
@@ -44,7 +53,7 @@ export function createViewer(container: HTMLElement): Cesium.Viewer {
   })
   viewer.imageryLayers.addImageryProvider(osm, 1)
   viewer.camera.setView({
-    destination: Cesium.Cartesian3.fromDegrees(HOME_LON, HOME_LAT, 12000),
+    destination: Cesium.Cartesian3.fromDegrees(initial.lon, initial.lat, 12000),
   })
   return viewer
 }

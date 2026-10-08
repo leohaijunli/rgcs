@@ -156,6 +156,7 @@ export default {
     linkStatus: 'Link status',
     tab: {
       connection: 'Connection',
+      vehicle: 'Vehicle',
       appearance: 'Appearance',
       logs: 'Logs',
       devices: 'Devices',
@@ -166,6 +167,15 @@ export default {
       listening: 'Listening, no data yet',
       noFc: 'Data, no FC heartbeat',
       online: 'FC online',
+    },
+    initialPosition: {
+      title: 'Initial vehicle position',
+      hint: 'Used for the mock feed, the HOME marker and the initial camera until a vehicle reports its own fix. Leave it at the default for the SITL/survey area.',
+      latitude: 'Latitude (°)',
+      longitude: 'Longitude (°)',
+      useMapCenter: 'Use map centre',
+      invalidLatitude: 'Enter a latitude between -90 and 90',
+      invalidLongitude: 'Enter a longitude between -180 and 180',
     },
     lastPacket: 'Last packet',
     never: 'No data yet',

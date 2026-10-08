@@ -9,6 +9,12 @@ import { degFromMavInt } from '../stores/mission'
 import type { MissionItem } from '../generated-types/MissionItem'
 import { HOME_LAT, HOME_LON, UAV_MODEL_URI } from './constants'
 
+/** Initial position (degrees) for the placeholder fix and the HOME marker. */
+interface LatLonLike {
+  lat: number
+  lon: number
+}
+
 /** The fixed drone/trail/predict/home layer, created once per viewer. */
 export interface DroneLayer {
   drone: Cesium.Entity
@@ -29,13 +35,14 @@ export function createDroneLayer(
   viewer: Cesium.Viewer,
   trailPos: () => Cesium.Cartesian3[],
   predictPos: () => Cesium.Cartesian3[],
+  initial: LatLonLike = { lat: HOME_LAT, lon: HOME_LON },
 ): DroneLayer {
   const accent = Cesium.Color.fromCssColorString(cssVar('--mg-accent'))
   const ok = Cesium.Color.fromCssColorString(cssVar('--mg-ok'))
   const warn = Cesium.Color.fromCssColorString(cssVar('--mg-warn'))
 
   const dronePosition = new Cesium.ConstantPositionProperty(
-    Cesium.Cartesian3.fromDegrees(HOME_LON, HOME_LAT, 0),
+    Cesium.Cartesian3.fromDegrees(initial.lon, initial.lat, 0),
   )
   const droneOrientation = new Cesium.ConstantProperty(Cesium.Quaternion.IDENTITY)
   const drone = viewer.entities.add({
@@ -75,7 +82,7 @@ export function createDroneLayer(
     },
   })
   const home = viewer.entities.add({
-    position: Cesium.Cartesian3.fromDegrees(HOME_LON, HOME_LAT, 0),
+    position: Cesium.Cartesian3.fromDegrees(initial.lon, initial.lat, 0),
     ellipse: {
       semiMajorAxis: 12,
       semiMinorAxis: 12,

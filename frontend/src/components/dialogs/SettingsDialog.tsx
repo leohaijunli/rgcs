@@ -15,7 +15,11 @@ import {
   type EndpointDraft,
   type EndpointKind,
 } from '../../desktop/endpoint'
-import { usePrefsStore } from '../../desktop/prefs'
+import {
+  isValidLatitude,
+  isValidLongitude,
+  usePrefsStore,
+} from '../../desktop/prefs'
 import { useDevicesStore } from '../../stores/devices'
 import { useLinkStore } from '../../stores/link'
 import { useTelemetryStore } from '../../stores/telemetry'
@@ -25,7 +29,7 @@ import { hasInboundPackets, lastPacketAgeMs, linkLevel, linkLevelTone } from '..
 const APP_VERSION = '0.1.0'
 const KINDS: EndpointKind[] = ['udpin', 'udpout', 'tcpin', 'tcpout', 'serial']
 
-export type SettingsTab = 'connection' | 'appearance' | 'logs' | 'devices' | 'about'
+export type SettingsTab = 'connection' | 'vehicle' | 'appearance' | 'logs' | 'devices' | 'about'
 
 const TONE_TEXT: Record<string, string> = {
   ok: 'text-ok',
@@ -75,7 +79,7 @@ export default function SettingsDialog({
             className="flex min-h-0 flex-1"
           >
             <Tabs.List className="flex w-40 shrink-0 flex-col gap-0.5 border-r border-line p-2">
-              {(['connection', 'appearance', 'logs', 'devices', 'about'] as const).map((id) => (
+              {(['connection', 'vehicle', 'appearance', 'logs', 'devices', 'about'] as const).map((id) => (
                 <Tabs.Trigger
                   key={id}
                   value={id}
@@ -89,6 +93,9 @@ export default function SettingsDialog({
             <div className="min-h-0 flex-1 overflow-y-auto p-4">
               <Tabs.Content value="connection">
                 <ConnectionTab />
+              </Tabs.Content>
+              <Tabs.Content value="vehicle">
+                <VehicleTab />
               </Tabs.Content>
               <Tabs.Content value="appearance">
                 <AppearanceTab theme={theme} setTheme={setTheme} />
@@ -324,6 +331,94 @@ function ConnectionTab() {
       >
         {confirmShutdown ? t('settings.shutdownConfirm') : t('settings.shutdown')}
       </button>
+    </div>
+  )
+}
+
+/** Six-decimal text, so the input round-trips the stored value exactly. */
+function formatDeg(deg: number): string {
+  return deg.toFixed(6)
+}
+
+/**
+ * Initial vehicle position (mock feed origin, HOME marker and initial camera
+ * until a live fix arrives). Committed on blur/Enter, only when both fields
+ * are valid lat/lon.
+ */
+function VehicleTab() {
+  const { t } = useTranslation()
+  const saved = usePrefsStore((s) => s.initialPosition)
+  const setInitialPosition = usePrefsStore((s) => s.setInitialPosition)
+  const mapCenter = useUiStore((s) => s.mapCenter)
+  const [lat, setLat] = useState(() => formatDeg(saved.lat))
+  const [lon, setLon] = useState(() => formatDeg(saved.lon))
+
+  const latValue = Number(lat)
+  const lonValue = Number(lon)
+  const latError =
+    lat.trim() === '' || !isValidLatitude(latValue)
+      ? t('settings.initialPosition.invalidLatitude')
+      : null
+  const lonError =
+    lon.trim() === '' || !isValidLongitude(lonValue)
+      ? t('settings.initialPosition.invalidLongitude')
+      : null
+
+  const commit = () => {
+    if (latError || lonError) return
+    setInitialPosition({ lat: latValue, lon: lonValue })
+  }
+
+  const useMapCenter = () => {
+    if (!mapCenter) return
+    setLat(formatDeg(mapCenter.lat))
+    setLon(formatDeg(mapCenter.lon))
+    setInitialPosition({ lat: mapCenter.lat, lon: mapCenter.lon })
+  }
+
+  const field =
+    'mono touch-target mt-1 w-full rounded border border-line bg-canvas px-2 py-1 text-sm text-ink'
+
+  return (
+    <div className="text-sm">
+      <div className="mb-1 text-xs text-muted">{t('settings.initialPosition.title')}</div>
+      <div className="mb-3 text-xs text-muted">{t('settings.initialPosition.hint')}</div>
+      <div className="grid grid-cols-2 gap-3">
+        <label className="block">
+          <span className="text-xs text-muted">{t('settings.initialPosition.latitude')}</span>
+          <input
+            value={lat}
+            inputMode="decimal"
+            onChange={(e) => setLat(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => e.key === 'Enter' && commit()}
+            className={field}
+          />
+          <FieldError message={latError} />
+        </label>
+        <label className="block">
+          <span className="text-xs text-muted">{t('settings.initialPosition.longitude')}</span>
+          <input
+            value={lon}
+            inputMode="decimal"
+            onChange={(e) => setLon(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => e.key === 'Enter' && commit()}
+            className={field}
+          />
+          <FieldError message={lonError} />
+        </label>
+      </div>
+      <button
+        onClick={useMapCenter}
+        disabled={!mapCenter}
+        className="touch-target mt-3 h-11 rounded border border-line px-4 text-muted hover:text-ink disabled:opacity-50"
+      >
+        {t('settings.initialPosition.useMapCenter')}
+      </button>
+      <div className="mono mt-3 text-xs text-muted">
+        {formatDeg(saved.lat)}, {formatDeg(saved.lon)}
+      </div>
     </div>
   )
 }

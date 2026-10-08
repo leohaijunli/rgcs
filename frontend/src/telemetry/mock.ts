@@ -4,19 +4,21 @@
 
 import type { TelemetrySnapshot } from '../generated-types/TelemetrySnapshot'
 import { useTelemetryStore } from '../stores/telemetry'
-
-const HOME_LAT = 48.6493
-const HOME_LON = -123.3982
+import { usePrefsStore, type LatLon } from '../desktop/prefs'
 
 /** Tick period of the mock feed, in seconds. */
 const TICK_S = 0.25
 const M_PER_DEG_LAT = 111_320
 
-/** Position on the mock's flight path at tick `t`. */
-function pathAt(t: number) {
+/**
+ * Position on the mock's flight path at tick `t`, around the operator's
+ * initial-position setting (Settings -> Vehicle); the feed follows the setting
+ * live, so editing it moves the simulated aircraft.
+ */
+function pathAt(t: number, origin: LatLon) {
   return {
-    lat: HOME_LAT + 0.004 * Math.sin(t / 40),
-    lon: HOME_LON + 0.006 * Math.cos(t / 50),
+    lat: origin.lat + 0.004 * Math.sin(t / 40),
+    lon: origin.lon + 0.006 * Math.cos(t / 50),
     alt: 100 + 8 * Math.sin(t / 60),
   }
 }
@@ -27,12 +29,13 @@ export function startMockFeed(): number {
   let t = 0
   const id = window.setInterval(() => {
     t += 1
-    const { lat, lon, alt } = pathAt(t)
+    const origin = usePrefsStore.getState().initialPosition
+    const { lat, lon, alt } = pathAt(t, origin)
 
     // NED velocity derived from the path itself. The map dead-reckons the
     // marker and draws the forward projection from this, so a velocity that
     // disagrees with the trajectory would make the marker lag and jump.
-    const ahead = pathAt(t + 1)
+    const ahead = pathAt(t + 1, origin)
     const mPerDegLon = M_PER_DEG_LAT * Math.cos((lat * Math.PI) / 180)
     const vn = ((ahead.lat - lat) * M_PER_DEG_LAT) / TICK_S
     const ve = ((ahead.lon - lon) * mPerDegLon) / TICK_S

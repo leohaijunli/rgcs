@@ -1,6 +1,7 @@
 // Cesium map constants shared by the scene and the vehicle rendering.
 
-/** Home position (Comox Valley, BC) used for the initial camera and HOME fix. */
+/** Default initial position (Sidney, BC) for the camera, HOME fix and mock
+ *  feed; operators override it in Settings -> Vehicle (`desktop/prefs.ts`). */
 export const HOME_LAT = 48.6493
 export const HOME_LON = -123.3982
 

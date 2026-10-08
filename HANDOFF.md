@@ -3,6 +3,25 @@
 Snapshot of the current session (issues.md backlog clearance). Issue statuses
 live in `issues.md`; keep both in sync when a task lands.
 
+## Latest landing — Settings -> Vehicle: initial vehicle position
+
+`Settings -> Vehicle` edits the initial vehicle position (lat/lon), persisted in
+`localStorage` (`maggcs.initialPosition`, default 48.6493/-123.3982 from
+`cesium/constants.ts`). It drives the mock feed origin, the HOME marker and the
+initial camera, and `goHome()` flies back to it. Out-of-range input is refused
+with an inline error, and `Use map centre` copies the current map centre.
+
+- Code: `desktop/prefs.ts` (state + validation), `cesium/scene.ts`,
+  `cesium/entities.ts`, `hooks/useCesiumViewer.ts` (camera, HOME, go-home),
+  `telemetry/mock.ts` (mock origin), `components/dialogs/SettingsDialog.tsx`.
+- Verified with Playwright against `frontend/dist`: invalid latitude is
+  rejected without persisting, a valid position persists and survives a
+  reload, no console errors. Screenshots:
+  `frontend/screenshots/dark-settings-vehicle-{1920x1080,1366x768}.png` and
+  `...-invalid-1920x1080.png`.
+- Rebuild `frontend/dist` *and* the app before relaunching: the Tauri binary
+  embeds the frontend at compile time.
+
 ## Latest landing — issues.md backlog cleared
 
 The whole `issues.md` backlog (P0 #1–#9, P1 #10–#17, P2 #18–#26, P3 #27–#32)
