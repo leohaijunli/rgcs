@@ -14,4 +14,4 @@ pub use protocol::{MissionEvent, MissionOperation, MissionProtocol};
 pub use service::{
     MissionCommand, MissionIds, MissionService, MissionServiceError, MissionServiceEvent,
 };
-pub use types::{Mission, MissionFrame, MissionItem};
+pub use types::{command_uses_coordinate, Mission, MissionFrame, MissionItem};

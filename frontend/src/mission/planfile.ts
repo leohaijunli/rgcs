@@ -85,6 +85,7 @@ const FALLBACK_HOME: [number, number, number] = [48.6493, -123.3982, 5]
 const BLOCK_SEQ_BASE = 1_000_000
 
 const MAV_FRAME_TO_QGC: Record<MissionFrame, number> = {
+  mission: 2,
   local_ned: 1,
   local_enu: 4,
   global_int: 5,
@@ -99,6 +100,7 @@ const QGC_FRAME_TO_MAV: Record<number, MissionFrame> = {
   // INT frame we actually exchange (issues.md #11).
   0: 'global_int',
   1: 'local_ned',
+  2: 'mission',
   3: 'global_relative_alt_int',
   4: 'local_enu',
   5: 'global_int',
@@ -136,15 +138,24 @@ function finiteOrZero(value: unknown): number {
 
 /** Convert one QGC simple item, or `null` if it carries no usable coordinate. */
 function simpleToItem(raw: QgcItem, seq: number): MissionItem | null {
-  if (!isCoordinate(raw.coordinate)) return null
-  const [lat, lon, alt] = raw.coordinate
+  const frame = QGC_FRAME_TO_MAV[raw.frame] ?? 'global_relative_alt_int'
+  // A command item (`MAV_FRAME_MISSION`) carries its arguments in P1..P4 and
+  // has no position; QGC writes no coordinate for those, so default it to the
+  // equator instead of dropping the item as unsupported (issues.md #34).
+  const coordinate: [number, number, number] | null = isCoordinate(raw.coordinate)
+    ? raw.coordinate
+    : frame === 'mission'
+      ? [0, 0, 0]
+      : null
+  if (coordinate === null) return null
+  const [lat, lon, alt] = coordinate
   // Only P1..P4 are modelled; P5/P6/P7 are the coordinate fields and live in
   // `x`/`y`/`z` (issues.md #10).
   const params = (raw.params ?? []).slice(0, 4).map(finiteOrZero)
   while (params.length < 4) params.push(0)
   return {
     seq,
-    frame: QGC_FRAME_TO_MAV[raw.frame] ?? 'global_relative_alt_int',
+    frame,
     command: raw.command,
     params,
     x: Math.round(lat * 1e7),
@@ -188,7 +199,11 @@ export function parsePlan(json: string): PlanImport {
   const unsupported: string[] = []
 
   ;(mission.items ?? []).forEach((raw, i) => {
-    if (isCoordinate(raw.coordinate)) {
+    // A *command* item (`MAV_FRAME_MISSION`) carries no coordinate but is still
+    // a simple item: its arguments are P1..P4 (issues.md #34), so it must not
+    // be mistaken for a complex item such as a Survey.
+    const command = QGC_FRAME_TO_MAV[raw.frame] === 'mission'
+    if (isCoordinate(raw.coordinate) || command) {
       const item = simpleToItem(raw, items.length)
       if (item) items.push(item)
       else unsupported.push(labelOf(raw, i))
@@ -236,10 +251,10 @@ export function parsePlan(json: string): PlanImport {
   }
 }
 
+/** Home to write when a plan declares none: the first item with a position. */
 function deriveHome(items: MissionItem[]): [number, number, number] {
-  if (items.length > 0) {
-    return [items[0].x / 1e7, items[0].y / 1e7, items[0].z]
-  }
+  const anchor = items.find((item) => item.frame !== 'mission')
+  if (anchor) return [anchor.x / 1e7, anchor.y / 1e7, anchor.z]
   return FALLBACK_HOME
 }
 

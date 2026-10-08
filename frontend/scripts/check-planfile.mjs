@@ -50,7 +50,9 @@ async function bundle(entry) {
 
 const { parsePlan, buildPlan, orderedMissionItems } = await bundle('mission/planfile.ts')
 const { itemsHash } = await bundle('mission/hash.ts')
-const { compileWaypoints, frameToAmsl, waypointFromItem } = await bundle('mission/compile.ts')
+const { compileWaypoints, commandUsesCoordinate, frameToAmsl, waypointFromItem } = await bundle(
+  'mission/compile.ts',
+)
 const { rectanglePolygon, defaultSweep, defaultCloverleaf } = await bundle('mission/patterns.ts')
 
 const failures = []
@@ -198,6 +200,66 @@ check('wire item round-trips back to AMSL', () => {
 check('frameToAmsl is the inverse of the compile offset', () => {
   eq(frameToAmsl(30, 'global_relative_alt_int', 100), 130, 'relative -> AMSL')
   eq(frameToAmsl(130, 'global_int', 100), 130, 'absolute is identity')
+})
+
+console.log('command items (issues.md #34):')
+
+check('only coordinate commands carry a global frame', () => {
+  for (const command of [16, 21, 22, 17, 19, 82, 84, 85, 5001, 5100]) {
+    assert(commandUsesCoordinate(command), `${command} carries a point`)
+  }
+  for (const command of [20, 93, 112, 178, 300, 401]) {
+    assert(!commandUsesCoordinate(command), `${command} is a command item`)
+  }
+})
+
+check('a DO_CHANGE_SPEED compiles to MAV_FRAME_MISSION in every mode', () => {
+  const speed = { ...planned(48.6493, -123.3982, 130), command: 178 }
+  for (const mode of ['relative', 'amsl', 'agl']) {
+    const items = compileWaypoints([speed, ...plan], mode, home)
+    eq(items[0].frame, 'mission', `frame in ${mode}`)
+    eq(items[0].z, 130, `z is not re-datumed in ${mode}`)
+    eq(items[1].frame, compileWaypoints(plan, mode, home)[0].frame, `waypoint frame in ${mode}`)
+  }
+})
+
+check('a command item round-trips through the model unchanged', () => {
+  const speed = { ...planned(0, 0, 0), command: 178, params: [1, 5, -1, 0] }
+  const item = compileWaypoints([speed], 'relative', home)[0]
+  const back = waypointFromItem(item, home)
+  eq(back.command, 178, 'command')
+  eq(back.altitude.meters, 0, 'z is untouched by the datum')
+  eq(back.params[1], 5, 'params')
+})
+
+check('a QGC command item without a coordinate is imported, not dropped', () => {
+  const plan = {
+    fileType: 'Plan',
+    version: 1,
+    mission: {
+      items: [
+        {
+          autoContinue: true,
+          command: 178,
+          doJumpId: 1,
+          frame: 2,
+          params: [1, 5, -1, 0, 0, 0, 0],
+          type: 'SimpleItem',
+        },
+      ],
+    },
+  }
+  const imp = parsePlan(JSON.stringify(plan))
+  eq(imp.items.length, 1, 'imported')
+  eq(imp.items[0].frame, 'mission', 'frame')
+  eq(imp.items[0].params[1], 5, 'speed kept')
+  eq(imp.unsupported.length, 0, 'nothing skipped')
+})
+
+check('a command item exports as MAV_FRAME_MISSION', () => {
+  const items = compileWaypoints([{ ...planned(0, 0, 0), command: 178 }], 'relative', home)
+  const out = JSON.parse(buildPlan(items, 'relative'))
+  eq(out.mission.items[0].frame, 2, 'frame 2 in the .plan')
 })
 
 console.log('patterns (TS side):')

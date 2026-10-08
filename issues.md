@@ -320,6 +320,21 @@
 
 ---
 
+### #34 [P0][core/frontend] Upload fails with `mission ack denied (type 3)` on a plan with a DO item
+**状态**：✅ 已完成（工作区改动，未提交）
+- 现象（操作员报告）：生成 sweep 预设后点 Upload，出现 `Mission failed: mission ack denied (type 3)`，整条任务被拒。
+- 定位：`type 3 = MAV_MISSION_UNSUPPORTED`。对照本机 PX4 v1.17 源码 `src/modules/mavlink/mavlink_mission.cpp::parse_mavlink_mission_item`：带全局坐标系的帧只接受一个**命令白名单**（NAV_WAYPOINT / LAND / TAKEOFF / LOITER_* / VTOL / FENCE_* / RALLY / ROI / SET_HOME…），其余命令（`DO_*`、`CONDITION_*`、`NAV_RETURN_TO_LAUNCH`、`NAV_DELAY`）必须用 `MAV_FRAME_MISSION`(2) 发送，参数放在 P1..P4；否则走 `default:` 直接返回 `MAV_MISSION_UNSUPPORTED`。我们的 `compile` 把**每个**航点都编译成当前高度模式帧，而 `core::survey` 的 sweep 在 `speed_mps` 存在时会在首位插入 `DO_CHANGE_SPEED`（默认 5 m/s，即每次 Generate 都有），于是 PX4 拒绝整条上传。
+- 修复：
+  - `core::mission::command_uses_coordinate`（+ 前端镜像 `mission/compile.ts::commandUsesCoordinate`）给出白名单；`MissionFrame` 新增 `Mission`（`MAV_FRAME_MISSION`，`from_mav`/`to_mav` 双向映射，之前下载含 DO 项的 QGC/PX4 任务会因 `UnsupportedFrame` 整条失败）。
+  - `PlannedMission::compile` / `compileWaypoints`：非坐标命令一律编译为 `mission` 帧，且 `z` 不做基准换算（命令项的参数不是高度）；坐标项照旧跟随模式帧。
+  - `core::survey` 不再把扫描高度复制到 `DO_CHANGE_SPEED` 项。
+  - `.plan` 互操作：`frame 2 ↔ mission`；没有 `coordinate` 的 `MAV_FRAME_MISSION` 项不再被误判为 ComplexItem 丢弃；`deriveHome` 跳过命令项（避免 home=(0,0,0)）。
+  - 面板把命令项显示为 “Command item · MAV_CMD 178”，不再显示经纬高。
+- 验收：`cargo test -p maggcs-core --lib`（167 passed，含 `command_items_compile_to_the_mission_frame`、`coordinate_commands_are_classified_like_px4`、`mission_frame_round_trips`）；`check:planfile` 新增 5 个命令项用例（三种模式帧、模型往返、QGC 导入、导出 frame=2）。
+- 待办（同一根因的另一半）：AGL 模式编译到 `GLOBAL_TERRAIN_ALT_INT`(11)，PX4 同样不接受（会回 `type 2 UNSUPPORTED_FRAME`）——按 ADR-005/WS-D 由地面站做地形跟随，等 DEM 落地后改为相对帧 + AGL 偏移。
+
+---
+
 ## 待核实项（先验证再决定是否开 issue）
 - `mavlink` crate 0.17 的 UDP 监听是否设置 `SO_REUSEADDR`；`udpin` 的回复地址行为（抓包确认）。
 - `DO_PAUSE_CONTINUE` 在 PX4 v1.17 的实际语义。现状（2026-10-07）：Pause/Continue 已按 MAVLink 规范接入（param1 = 0 暂停 / 1 继续，`send_command("pause"|"continue")`，见 `crates/app-tauri/src/commands.rs::named_command`，含 3 个单测）；PX4 v1.17 是否支持、以及参数语义仍需 SITL 抓包确认——不支持时 FC 回 NACK，UI 会显示 "Not supported by the FC"。

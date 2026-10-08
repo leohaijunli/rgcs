@@ -151,8 +151,10 @@ fn finish(
             wp.altitude = Height::new(crate::height::HeightDatum::AmslEgm96, 0.0);
             wp
         });
+        // The command item carries no coordinate: it compiles to
+        // `MAV_FRAME_MISSION`, so its altitude stays zero rather than inheriting
+        // the survey height (issues.md #34).
         let mut item = PlannedWaypoint::waypoint(reference.position, 0.0);
-        item.altitude = reference.altitude;
         item.command = CMD_DO_CHANGE_SPEED;
         item.params = [1.0, speed, -1.0, 0.0]; // groundspeed, m/s, no throttle
         waypoints.insert(0, item);

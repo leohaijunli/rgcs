@@ -15,7 +15,7 @@ pub use error::PlanError;
 pub use types::{FramePolicy, GeoPoint, PlanBlock, PlanMeta, PlannedMission, PlannedWaypoint};
 
 use crate::height::HeightDatum;
-use crate::mission::{MissionFrame, MissionItem};
+use crate::mission::{command_uses_coordinate, MissionFrame, MissionItem};
 
 /// Largest waypoint count expressible as a MAVLink `u16` sequence number.
 const MAX_ITEMS: usize = u16::MAX as usize;
@@ -37,6 +37,11 @@ impl PlannedMission {
     /// computed from [`PlannedMission::home`]. Complex-item blocks are
     /// provenance only and do not appear here: their geometry already lives in
     /// `waypoints` (the frontend expands QGC `simpleItems` on import).
+    ///
+    /// Commands that are not flown as a coordinate (a `DO_*`, `CONDITION_*`,
+    /// `NAV_RETURN_TO_LAUNCH`, ...) compile to [`MissionFrame::Mission`]
+    /// whatever `policy` says, because flight controllers only accept a global
+    /// frame for the commands in [`command_uses_coordinate`] (issues.md #34).
     ///
     /// # Errors
     ///
@@ -81,13 +86,27 @@ impl PlannedMission {
                 datum: wp.altitude.datum(),
             });
         }
-        let z = match policy {
-            FramePolicy::GlobalInt => wp.altitude.meters(),
-            FramePolicy::GlobalRelativeAltInt => wp.altitude.meters() - home_amsl,
+        // A command item carries its arguments in `param1..param4`; its `z` is
+        // a command argument, not an altitude, so it is never re-datumed
+        // (DO_SET_HOME, the one command here that uses the coordinate, takes it
+        // as an absolute position, matching QGroundControl).
+        let coordinate = command_uses_coordinate(wp.command);
+        let frame = if coordinate {
+            policy.frame()
+        } else {
+            MissionFrame::Mission
+        };
+        let z = if !coordinate {
+            wp.altitude.meters()
+        } else {
+            match policy {
+                FramePolicy::GlobalInt => wp.altitude.meters(),
+                FramePolicy::GlobalRelativeAltInt => wp.altitude.meters() - home_amsl,
+            }
         };
         Ok(MissionItem {
             seq,
-            frame: policy.frame(),
+            frame,
             command: wp.command,
             params: wp.params.to_vec(),
             x: (wp.position.latitude_deg * 1e7).round() as i32,
@@ -201,5 +220,50 @@ mod tests {
             FramePolicy::GlobalRelativeAltInt.frame(),
             MissionFrame::GlobalRelativeAltInt
         );
+    }
+
+    /// A command item must never carry a global frame: PX4 answers
+    /// `MAV_MISSION_UNSUPPORTED` (issues.md #34).
+    #[test]
+    fn command_items_compile_to_the_mission_frame() {
+        let mut mission = sample();
+        let mut speed = PlannedWaypoint::waypoint(GeoPoint::new(48.6493, -123.3982), 0.0);
+        speed.command = 178; // MAV_CMD_DO_CHANGE_SPEED
+        speed.params = [1.0, 5.0, -1.0, 0.0];
+        mission.waypoints.insert(0, speed);
+        let mut loiter = PlannedWaypoint::waypoint(GeoPoint::new(48.65, -123.397), 180.0);
+        loiter.command = 20; // MAV_CMD_NAV_RETURN_TO_LAUNCH
+        mission.waypoints.push(loiter);
+
+        for policy in [FramePolicy::GlobalInt, FramePolicy::GlobalRelativeAltInt] {
+            let items = mission.compile(policy).expect("compile");
+            assert_eq!(items[0].frame, MissionFrame::Mission, "speed item");
+            assert_eq!(items[0].z, 0.0, "command z is not re-datumed");
+            assert_eq!(items[0].command, 178);
+            assert_eq!(
+                items.last().expect("last").frame,
+                MissionFrame::Mission,
+                "rtl"
+            );
+            assert_eq!(items[1].frame, policy.frame(), "waypoint keeps the policy");
+            let expected = match policy {
+                FramePolicy::GlobalInt => 130.0,
+                FramePolicy::GlobalRelativeAltInt => 30.0, // 130 - home
+            };
+            assert_eq!(items[1].z, expected, "{policy:?} waypoint z");
+        }
+    }
+
+    #[test]
+    fn coordinate_commands_are_classified_like_px4() {
+        for command in [16, 21, 22, 17, 19, 82, 84, 85, 5001, 5100] {
+            assert!(
+                command_uses_coordinate(command),
+                "{command} carries a point"
+            );
+        }
+        for command in [20, 93, 178, 179 + 1, 112, 113 + 1, 300, 400 + 1] {
+            assert!(!command_uses_coordinate(command), "{command} is a command");
+        }
     }
 }

@@ -6,5 +6,11 @@
  * Only the integer (`*_INT`) global frames are modelled: a mission item is
  * always exchanged as `MISSION_ITEM_INT`, so keeping both the INT and
  * non-INT spelling made download→upload round trips lossy (issues.md #11).
+ *
+ * [`MissionFrame::Mission`] (`MAV_FRAME_MISSION`) is not a coordinate system:
+ * it marks a *command* item, whose arguments are `param1..param4` (issues.md
+ * #34). Autopilots only accept a global frame for the commands listed in
+ * [`command_uses_coordinate`]; a `DO_CHANGE_SPEED` sent on
+ * `GLOBAL_RELATIVE_ALT_INT` is answered with `MAV_MISSION_UNSUPPORTED`.
  */
-export type MissionFrame = "global_int" | "global_relative_alt_int" | "global_terrain_alt_int" | "local_ned" | "local_enu" | "local_offset_ned" | "body_ned";
+export type MissionFrame = "mission" | "global_int" | "global_relative_alt_int" | "global_terrain_alt_int" | "local_ned" | "local_enu" | "local_offset_ned" | "body_ned";

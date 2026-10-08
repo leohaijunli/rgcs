@@ -22,6 +22,44 @@ export const AMSL_EGM96 = 'AMSL_EGM96' as const
 /** Default clearance above home for a new waypoint when none is selected. */
 export const DEFAULT_ALT_AGL_M = 50
 
+/**
+ * Whether `command` is flown as a coordinate item, or as a `MAV_FRAME_MISSION`
+ * command item whose arguments are the four command parameters.
+ *
+ * Mirrors `core::mission::command_uses_coordinate` (PX4's
+ * `parse_mavlink_mission_item` split, which is also how QGroundControl writes
+ * `.plan` files). A command outside this list must not carry a global frame:
+ * PX4 rejects the whole upload with `MAV_MISSION_UNSUPPORTED` (issues.md #34).
+ */
+const COORDINATE_COMMANDS: readonly number[] = [
+  16, // NAV_WAYPOINT
+  17, // NAV_LOITER_UNLIM
+  18, // NAV_LOITER_TURNS
+  19, // NAV_LOITER_TIME
+  21, // NAV_LAND
+  22, // NAV_TAKEOFF
+  31, // NAV_LOITER_TO_ALT
+  82, // NAV_SPLINE_WAYPOINT
+  84, // NAV_VTOL_TAKEOFF
+  85, // NAV_VTOL_LAND
+  80, // NAV_ROI
+  113, // CONDITION_GATE
+  179, // DO_SET_HOME
+  195, // DO_SET_ROI_LOCATION
+  201, // DO_SET_ROI
+  400, // COMPONENT_ARM_DISARM
+  4501, // NAV_FENCE_RETURN_POINT
+  5001, // NAV_FENCE_POLYGON_VERTEX_INCLUSION
+  5002, // NAV_FENCE_POLYGON_VERTEX_EXCLUSION
+  5003, // NAV_FENCE_CIRCLE_INCLUSION
+  5004, // NAV_FENCE_CIRCLE_EXCLUSION
+  5100, // NAV_RALLY_POINT
+]
+
+export function commandUsesCoordinate(command: number): boolean {
+  return COORDINATE_COMMANDS.includes(command)
+}
+
 /** Wire frame each UI altitude mode compiles to. */
 export const FRAME_BY_MODE: Record<AltitudeMode, MissionFrame> = {
   relative: 'global_relative_alt_int',
@@ -54,6 +92,9 @@ export function frameToAmsl(z: number, frame: MissionFrame, homeAmslM: number): 
     case 'global_terrain_alt_int':
       // No DEM yet: the ground is assumed flat at the home altitude (WS-D).
       return z + homeAmslM
+    case 'mission':
+      // A command item: `z` is a command argument, not an altitude.
+      return z
     default:
       // Local frames are not convertible without the home/local origin; treat
       // the value as AMSL rather than dropping it.
@@ -69,6 +110,8 @@ export function amslToFrame(amslM: number, frame: MissionFrame, homeAmslM: numbe
     case 'global_relative_alt_int':
     case 'global_terrain_alt_int':
       return amslM - homeAmslM
+    case 'mission':
+      return amslM
     default:
       return amslM
   }
@@ -85,7 +128,9 @@ function params4(params: readonly number[]): [number, number, number, number] {
  * Compile planned waypoints to wire items under `mode`.
  *
  * `seq` is the array index (the relative frame is computed from `homeAmslM`),
- * matching `core::plan::PlannedMission::compile`.
+ * matching `core::plan::PlannedMission::compile`. Command items (see
+ * [`commandUsesCoordinate`]) keep their stored `z`: it is a command argument,
+ * not an altitude, so it is never re-datumed.
  */
 export function compileWaypoints(
   waypoints: PlannedWaypoint[],
@@ -93,17 +138,21 @@ export function compileWaypoints(
   homeAmslM: number,
 ): MissionItem[] {
   const frame = FRAME_BY_MODE[mode]
-  return waypoints.map((wp, seq) => ({
-    seq,
-    frame,
-    command: wp.command,
-    params: Array.from(params4(wp.params)),
-    x: Math.round(wp.position.latitude_deg * 1e7),
-    y: Math.round(wp.position.longitude_deg * 1e7),
-    z: amslToFrame(wp.altitude.meters, frame, homeAmslM),
-    autocontinue: wp.autocontinue,
-    current: seq === 0,
-  }))
+  return waypoints.map((wp, seq) => {
+    const coordinate = commandUsesCoordinate(wp.command)
+    const itemFrame = coordinate ? frame : ('mission' as MissionFrame)
+    return {
+      seq,
+      frame: itemFrame,
+      command: wp.command,
+      params: Array.from(params4(wp.params)),
+      x: Math.round(wp.position.latitude_deg * 1e7),
+      y: Math.round(wp.position.longitude_deg * 1e7),
+      z: coordinate ? amslToFrame(wp.altitude.meters, frame, homeAmslM) : wp.altitude.meters,
+      autocontinue: wp.autocontinue,
+      current: seq === 0,
+    }
+  })
 }
 
 /** Convert a wire item (FC download or QGC import) to a planned AMSL waypoint. */

@@ -1055,6 +1055,7 @@ mod tests {
         // Issue #11: every supported frame must round-trip; an unknown frame is
         // an error rather than a silent fallback to `Global`.
         let frames = [
+            MissionFrame::Mission,
             MissionFrame::GlobalInt,
             MissionFrame::GlobalRelativeAltInt,
             MissionFrame::GlobalTerrainAltInt,
@@ -1067,7 +1068,7 @@ mod tests {
             assert_eq!(MissionFrame::from_mav(f.to_mav()).unwrap(), f, "{f:?}");
         }
         assert!(matches!(
-            MissionFrame::from_mav(::mavlink::common::MavFrame::MAV_FRAME_MISSION),
+            MissionFrame::from_mav(::mavlink::common::MavFrame::MAV_FRAME_BODY_FRD),
             Err(MissionError::UnsupportedFrame(_))
         ));
     }
@@ -1085,7 +1086,7 @@ mod tests {
             }),
         );
         let mut raw = mission_item_to_mav(FC_SYS, FC_COMP, &mk_item(0, 48.0, -123.0, 50.0));
-        raw.frame = ::mavlink::common::MavFrame::MAV_FRAME_MISSION;
+        raw.frame = ::mavlink::common::MavFrame::MAV_FRAME_BODY_FRD;
         let (events, _frames) = p.handle(&fc_header(), &M::MISSION_ITEM_INT(raw));
         assert!(matches!(
             events[0],

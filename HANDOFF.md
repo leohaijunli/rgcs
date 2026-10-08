@@ -3,6 +3,31 @@
 Snapshot of the current session (issues.md backlog clearance). Issue statuses
 live in `issues.md`; keep both in sync when a task lands.
 
+## Latest landing — command items are sent as MAV_FRAME_MISSION
+
+The operator's upload of a generated sweep failed with
+`mission ack denied (type 3)` — PX4's `MAV_MISSION_UNSUPPORTED` (issues.md #34).
+
+- Root cause: `compile` gave **every** item the mode's global frame, but PX4
+  (`mavlink_mission.cpp::parse_mavlink_mission_item`) only accepts a global
+  frame for a whitelist of commands; `DO_CHANGE_SPEED` — which the sweep preset
+  inserts at seq 0 whenever `speed_mps` is set — must be `MAV_FRAME_MISSION`.
+- `core::mission::command_uses_coordinate` + the TS mirror
+  `compile.ts::commandUsesCoordinate` hold the list; `MissionFrame` gained
+  `Mission` (`MAV_FRAME_MISSION`), which also makes a *download* of a plan with
+  DO items work (frame 2 used to be `UnsupportedFrame`).
+- Non-coordinate commands compile to the mission frame and keep their stored
+  `z` (a command argument, not an altitude). `.plan` interop maps frame 2,
+  imports coordinate-less command items instead of dropping them, and no longer
+  derives HOME from a command item.
+- Still open, same root cause: AGL mode compiles to `GLOBAL_TERRAIN_ALT_INT`,
+  which PX4 also rejects — terrain following belongs to the ground station
+  (ADR-005/WS-D).
+
+Verified: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
+`cargo test -p maggcs-core --lib` (167), frontend
+typecheck/colors/contrast/i18n/planfile/mission-sync/coords.
+
 ## Latest landing — mission sync state, local Clear plan, pattern replace
 
 The operator reported that clicking Upload kept showing "Unsaved changes — not
