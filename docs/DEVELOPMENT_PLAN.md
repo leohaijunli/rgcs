@@ -325,8 +325,10 @@ generates them as pure geometry and returns `PatternPlan` (AMSL
   with the `geo`-crate clipping in WS-C. Non-convex polygons are rejected
   (fail closed) until then.
 
-The remaining Phase 3 work is the frontend preset UI (parameter form → generate
-→ insert as a block) and DEM draping.
+The preset UI is wired (`PlanningPanel` -> `PatternPanel`: choose sweep or
+cloverleaf, edit parameters, Generate appends the geometry to the plan). The
+sweep polygon is a rectangle around the map centre until the polygon tool
+(WS-G) lands; DEM draping is the remaining Phase 3 work.
 
 **Acceptance**: regenerating waypoints from the same archive is point-for-point
 identical; on rugged terrain the SITL flight (requires Gazebo) deviates from

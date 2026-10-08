@@ -8,6 +8,7 @@ use maggcs_core::mavlink::connection::{spawn_connection, LinkStatus};
 use maggcs_core::mavlink::{ConnectionConfig, Endpoint};
 use maggcs_core::mission::service::MissionIds;
 use maggcs_core::mission::types::MissionItem;
+use maggcs_core::survey::{CloverleafPattern, PatternPlan, SurveyPattern};
 use maggcs_core::telemetry::hub::{TelemetryHub, DEFAULT_PUSH_HZ};
 use maggcs_core::telemetry::{TelemetrySnapshot, VehicleId};
 use serde::Serialize;
@@ -200,6 +201,21 @@ pub async fn mission_clear(state: State<'_, AppState>) -> Result<(), String> {
 pub async fn mission_set_current(state: State<'_, AppState>, seq: u16) -> Result<(), String> {
     let mission = state.mission().ok_or_else(|| "not connected".to_string())?;
     mission.set_current(seq).await.map_err(|e| e.to_string())
+}
+
+/// Generate a parameterised survey sweep (optionally with tie lines).
+///
+/// Pure geometry: no link is required. The result is appended to the plan as
+/// editable waypoints.
+#[tauri::command]
+pub fn survey_generate_sweep(pattern: SurveyPattern) -> Result<PatternPlan, String> {
+    pattern.generate().map_err(|e| e.to_string())
+}
+
+/// Generate a parameterised cloverleaf calibration manoeuvre.
+#[tauri::command]
+pub fn survey_generate_cloverleaf(pattern: CloverleafPattern) -> Result<PatternPlan, String> {
+    pattern.generate().map_err(|e| e.to_string())
 }
 
 /// Named vehicle command.

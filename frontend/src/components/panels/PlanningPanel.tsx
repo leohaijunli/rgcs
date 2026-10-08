@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { compileWaypoints } from '../../mission/compile'
 import { exportPlanFile, importPlanFile, orderedMissionItems } from '../../mission/planfile'
+import PatternPanel from './PatternPanel'
 import { useLinkStore } from '../../stores/link'
 import { useUiStore } from '../../stores/ui'
 import { useMissionStore, type AltitudeMode } from '../../stores/mission'
@@ -104,6 +105,8 @@ export default function PlanningPanel() {
           ))}
         </div>
       </div>
+
+      <PatternPanel />
 
       <div className="min-h-0 flex-1 overflow-auto">
         <div className="mb-1.5 flex items-center justify-between px-1">

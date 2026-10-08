@@ -9,6 +9,8 @@ import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import type { MissionItem } from '../generated-types/MissionItem'
 import type { MissionFrame } from '../generated-types/MissionFrame'
+import type { PatternLine } from '../generated-types/PatternLine'
+import type { PatternPlan } from '../generated-types/PatternPlan'
 import type { PlannedWaypoint } from '../generated-types/PlannedWaypoint'
 import { compileWaypoints, makeWaypoint, waypointFromItem } from '../mission/compile'
 import { orderedMissionItems } from '../mission/planfile'
@@ -16,6 +18,12 @@ import { itemsHash } from '../mission/hash'
 import type { PlanBlock, PlanImport, QgcPlan } from '../mission/planfile'
 
 export type AltitudeMode = 'relative' | 'amsl' | 'agl'
+
+/** The most recently inserted preset pattern, for the line readout. */
+export interface InsertedPattern {
+  label: string
+  lines: PatternLine[]
+}
 
 /** Payload of the backend `mission` event. */
 export interface MissionEventPayload {
@@ -63,6 +71,8 @@ interface MissionState {
   blocks: PlanBlock[]
   /** `plannedHomePosition` from the imported plan, if any. */
   home: [number, number, number] | null
+  /** Last inserted preset pattern (cleared by any waypoint edit). */
+  lastPattern: InsertedPattern | null
   select: (seq: number | null) => void
   setWaypoints: (waypoints: PlannedWaypoint[]) => void
   setAltitudeMode: (mode: AltitudeMode) => void
@@ -71,6 +81,8 @@ interface MissionState {
   addWaypoint: (latDeg: number, lonDeg: number, amslM: number) => void
   removeWaypoint: (seq: number) => void
   moveWaypoint: (from: number, to: number) => void
+  /** Append a generated pattern's waypoints and show its line table. */
+  insertPattern: (plan: PatternPlan, label: string) => void
   upload: () => Promise<void>
   download: () => Promise<void>
   clear: () => Promise<void>
@@ -112,6 +124,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
   planBase: null,
   blocks: [],
   home: null,
+  lastPattern: null,
 
   select: (seq) => set({ selectedSeq: seq }),
 
@@ -121,6 +134,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       selectedSeq: useSelection(waypoints.length, s.selectedSeq),
       dirty: true,
       fcMatches: null,
+      lastPattern: null,
     })),
 
   setAltitudeMode: (mode) => set({ altitudeMode: mode }),
@@ -134,6 +148,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       ),
       dirty: true,
       fcMatches: null,
+      lastPattern: null,
     })),
 
   updateAltitude: (seq, amslM) =>
@@ -143,6 +158,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       ),
       dirty: true,
       fcMatches: null,
+      lastPattern: null,
     })),
 
   addWaypoint: (latDeg, lonDeg, amslM) =>
@@ -153,6 +169,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
         selectedSeq: waypoints.length - 1,
         dirty: true,
         fcMatches: null,
+        lastPattern: null,
       }
     }),
 
@@ -162,6 +179,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       selectedSeq: null,
       dirty: true,
       fcMatches: null,
+      lastPattern: null,
     })),
 
   moveWaypoint: (from, to) =>
@@ -175,8 +193,25 @@ export const useMissionStore = create<MissionState>((set, get) => ({
         selectedSeq: useSelection(waypoints.length, s.selectedSeq),
         dirty: true,
         fcMatches: null,
+        lastPattern: null,
       }
     }),
+
+  insertPattern: (plan, label) =>
+    set((s) => ({
+      waypoints: [...s.waypoints, ...plan.waypoints],
+      lastPattern: {
+        label,
+        lines: plan.lines.map((line) => ({
+          ...line,
+          start_seq: line.start_seq + s.waypoints.length,
+          end_seq: line.end_seq + s.waypoints.length,
+        })),
+      },
+      selectedSeq: null,
+      dirty: true,
+      fcMatches: null,
+    })),
 
   upload: async () => {
     const items = get().flyable()
@@ -296,6 +331,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
         waypoints: items.map((it) => waypointFromItem(it, anchor)),
         blocks: [],
         planBase: null,
+        lastPattern: null,
         ...(mode ? { altitudeMode: mode } : {}),
         dirty: false,
         lastSyncedHash: itemsHash(items),
@@ -359,6 +395,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       planBase: null,
       blocks: [],
       home: null,
+      lastPattern: null,
     }),
 }))
 

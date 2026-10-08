@@ -29,6 +29,8 @@ pub fn run() {
             commands::mission_download,
             commands::mission_clear,
             commands::mission_set_current,
+            commands::survey_generate_sweep,
+            commands::survey_generate_cloverleaf,
             commands::send_command
         ])
         .run(tauri::generate_context!())

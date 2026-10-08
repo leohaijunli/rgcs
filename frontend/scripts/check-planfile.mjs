@@ -51,6 +51,7 @@ async function bundle(entry) {
 const { parsePlan, buildPlan, orderedMissionItems } = await bundle('mission/planfile.ts')
 const { itemsHash } = await bundle('mission/hash.ts')
 const { compileWaypoints, frameToAmsl, waypointFromItem } = await bundle('mission/compile.ts')
+const { rectanglePolygon, defaultSweep, defaultCloverleaf } = await bundle('mission/patterns.ts')
 
 const failures = []
 function check(name, fn) {
@@ -197,6 +198,31 @@ check('wire item round-trips back to AMSL', () => {
 check('frameToAmsl is the inverse of the compile offset', () => {
   eq(frameToAmsl(30, 'global_relative_alt_int', 100), 130, 'relative -> AMSL')
   eq(frameToAmsl(130, 'global_int', 100), 130, 'absolute is identity')
+})
+
+console.log('patterns (TS side):')
+
+check('rectangle preset spans the requested size', () => {
+  const center = { latitude_deg: 48, longitude_deg: -123 }
+  const r = rectanglePolygon(center, 1000, 600)
+  eq(r.length, 4, 'four corners')
+  const R = 6378137
+  const d2r = Math.PI / 180
+  const eastSpan = (r[1].longitude_deg - r[0].longitude_deg) * d2r * R * Math.cos(48 * d2r)
+  const northSpan = (r[3].latitude_deg - r[0].latitude_deg) * d2r * R
+  assert(Math.abs(eastSpan - 1000) < 0.01, `east span ${eastSpan}`)
+  assert(Math.abs(northSpan - 600) < 0.01, `north span ${northSpan}`)
+})
+
+check('pattern defaults are usable', () => {
+  const center = { latitude_deg: 48, longitude_deg: -123 }
+  const sweep = defaultSweep(center, 150)
+  eq(sweep.polygon.length, 4, 'sweep polygon')
+  assert(sweep.line_spacing_m > 0, 'spacing')
+  eq(sweep.altitude_amsl_m, 150, 'sweep altitude')
+  const clover = defaultCloverleaf(center, 150)
+  eq(clover.petals, 4, 'petals')
+  eq(clover.center.latitude_deg, 48, 'centre')
 })
 
 if (failures.length > 0) {

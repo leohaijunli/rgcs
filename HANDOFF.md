@@ -3,6 +3,27 @@
 Snapshot of the current session (issues.md backlog clearance). Issue statuses
 live in `issues.md`; keep both in sync when a task lands.
 
+## Latest landing — preset pattern UI (planning view)
+
+`PlanningPanel` now embeds a `PatternPanel` (Presets): pick Survey sweep or
+Cloverleaf, edit the parameters, and Generate appends the geometry to the plan.
+
+- Tauri commands `survey_generate_sweep` / `survey_generate_cloverleaf`
+  (`crates/app-tauri/src/commands.rs`) call `core::survey`; pure geometry, no
+  link required.
+- `frontend/src/mission/patterns.ts`: typed `invoke` wrappers, a rectangle
+  builder (mirrors `core::survey::LocalProjection`) and default parameters.
+- The sweep's polygon is a rectangle around the current map centre (the polygon
+  tool is WS-G); move the map before generating.
+- `stores/mission.ts`: `insertPattern(plan, label)` appends the generated
+  waypoints and keeps the `seq -> line` table for the readout (cleared by any
+  edit).
+- `check:planfile` now covers the TS rectangle/defaults as well.
+
+Verified: frontend typecheck/colors/contrast/i18n/planfile/build, `cargo fmt`,
+`cargo clippy --all-targets -- -D warnings`, `cargo test -p maggcs-app`,
+`scripts/desktop-smoke.sh` (54% bright, PASS).
+
 ## Latest landing — preset parameterised patterns (`core::survey`)
 
 New `crates/core/src/survey` generates complete trajectories from parameters,
