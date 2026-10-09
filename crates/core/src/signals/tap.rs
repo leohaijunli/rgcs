@@ -124,13 +124,22 @@ pub async fn run_tap(
     stats: Arc<Mutex<TapStats>>,
 ) {
     let mut mapper = TimestampMapper::default();
+    // Host time axis: milliseconds since the tap started. (`received_at` is an
+    // `Instant`, so `.elapsed()` would be ~0 for every message.)
+    let epoch = std::time::Instant::now();
     loop {
         match events.recv().await {
             Ok(ConnectionEvent::Message(env)) => {
-                handle_message(&env, &subs, &catalog, &mut mapper, &tx, &stats);
+                handle_message(&env, &subs, &catalog, &mut mapper, epoch, &tx, &stats);
             }
             Ok(_) => continue, // lifecycle events pass through but carry no samples
-            Err(_) => break,   // lagged or closed; the caller re-subscribes
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                // The shared bus overflowed (PX4 streams a lot): count the
+                // loss and keep going instead of killing the tap for good.
+                stats.lock().expect("stats lock").dropped += n;
+                continue;
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
         }
     }
 }
@@ -140,6 +149,7 @@ fn handle_message(
     subs: &Subscriptions,
     catalog: &Arc<Mutex<SignalCatalog>>,
     mapper: &mut TimestampMapper,
+    epoch: std::time::Instant,
     tx: &mpsc::Sender<SignalSample>,
     stats: &Arc<Mutex<TapStats>>,
 ) {
@@ -147,7 +157,7 @@ fn handle_message(
     let Ok(extraction) = extract::extract(&env.message) else {
         return;
     };
-    let rx_ms = env.received_at.elapsed().as_secs_f64() * 1000.0;
+    let rx_ms = env.received_at.saturating_duration_since(epoch).as_secs_f64() * 1000.0;
     let t_ms = fc_ms(&extraction)
         .map(|fc| mapper.map(fc, rx_ms))
         .unwrap_or(rx_ms);

@@ -6,11 +6,11 @@
 // P7: run/pause, window duration, clear, cursor, CSV export, axis linking, a
 // properties panelainer, workspace save/loadasiato and SET_MESSAGE_INTERVAL rate control.
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import uPlot from 'uplot'
 import { invoke, Channel } from '@tauri-apps/api/core'
 import { makeProcessor, magnitudeSpectrum, type AlgorithmInfo } from './dsp'
-import { isTauri, mockCatalog, mockSamples, signalKey } from './mock'
+import { isTauri, mockCatalog, mockSamples, msgName, signalKey } from './mock'
 import type { CatalogEntry } from '../generated-types/CatalogEntry'
 import type { SignalId } from '../generated-types/SignalId'
 import type { TraceSample } from '../generated-types/TraceSample'
@@ -73,6 +73,11 @@ export function InspectorApp() {
   const [selected, setSelected] = useState<string | null>(null)
   const [axisLink, setAxisLink] = useState(false)
 
+  const pausedRef = useRef(paused)
+  pausedRef.current = paused
+  const windowRef = useRef(windowSec)
+  windowRef.current = windowSec
+
   const buffers = useRef<Map<string, Buffer>>(new Map())
   const plots = useRef<Map<string, uPlot>>(new Map())
   const plotHosts = useRef<Map<string, HTMLDivElement>>(new Map())
@@ -104,7 +109,7 @@ export function InspectorApp() {
     loadWorkspace()
     if (!tauri) {
       const id = setInterval(() => {
-        if (paused) return
+        if (pausedRef.current) return
         const now = performance.now() / 1000
         for (const s of mockSamples(now)) {
           const key = signalKey(s.id)
@@ -113,6 +118,7 @@ export function InspectorApp() {
           b.raw.push(s.value)
           b.filtered.push(NaN)
           buffers.current.set(key, b)
+          trimBuffer(b, windowRef.current)
         }
         bump()
       }, 10)
@@ -122,15 +128,19 @@ export function InspectorApp() {
     let disposed = false
     const channel = new Channel<FramePayload>()
     const onMessage = (frame: FramePayload) => {
-      if (paused) return
+      if (pausedRef.current) return
+      const touched = new Set<Buffer>()
       for (const s of frame.samples) {
         const key = signalKey(s.id)
         const b = buffers.current.get(key) ?? { t: [], raw: [], filtered: [] }
+        // serde_json writes NaN as null; turn it back into NaN (a gap in uPlot).
         b.t.push(s.t_ms)
-        b.raw.push(s.raw)
-        b.filtered.push(s.filtered)
+        b.raw.push(s.raw ?? NaN)
+        b.filtered.push(s.filtered ?? NaN)
         buffers.current.set(key, b)
+        touched.add(b)
       }
+      for (const b of touched) trimBuffer(b, windowRef.current)
       bump()
     }
     channel.onmessage = onMessage
@@ -150,7 +160,7 @@ export function InspectorApp() {
       void invoke('inspector_disconnect')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tauri, paused, bump])
+  }, [tauri, bump])
 
   // Push the trace set (signals + their pipelines) to the Rust session. The
   // session resets the filter for a changed trace, so clear its filtered
@@ -214,6 +224,7 @@ export function InspectorApp() {
           height: 180,
           legend: { show: true },
           cursor,
+          scales: { x: { time: false } },
           axes: [
             { stroke: MUTED(), grid: { stroke: MUTED(), width: 1, dash: [2, 4] } },
             { stroke: MUTED() },
@@ -248,11 +259,13 @@ export function InspectorApp() {
       const raw = b.raw
       const filt = tauri ? b.filtered : mirrorFilter(raw, cfg, fs)
       const data: Float64Array[] = [
-        Float64Array.from(b.t),
-        Float64Array.from(raw),
-        Float64Array.from(filt),
+        Float64Array.from(b.t, (v) => v / 1000),
+        Float64Array.from(raw, (v) => (Number.isFinite(v) ? v : NaN)),
+        Float64Array.from(filt, (v) => (Number.isFinite(v) ? v : NaN)),
       ]
       plot.setData(data as uPlot.AlignedData)
+      const tEnd = data[0][data[0].length - 1]
+      if (tEnd > 0) plot.setScale('x', { min: tEnd - windowRef.current, max: tEnd })
     }
   }, [version, checked, filterBy, tauri])
 
@@ -324,23 +337,7 @@ export function InspectorApp() {
         </span>
       </div>
 
-      <div className="signal-list">
-        <div style={{ marginBottom: 6, fontWeight: 600 }}>Signals</div>
-        {catalog.length === 0 && <div style={{ color: 'var(--mg-muted)' }}>Waiting for data…</div>}
-        {catalog.map((c) => {
-          const key = signalKey(c.signal)
-          return (
-            <label key={key}>
-              <input type="checkbox" checked={checked.has(key)} onChange={() => toggle(key)} />
-              <span className="mono">{key}</span>
-              <span className="msg">
-                {' '}
-                {c.rate_hz.toFixed(0)} Hz · {c.last_value.toFixed(1)}
-              </span>
-            </label>
-          )
-        })}
-      </div>
+      <SignalBrowser catalog={catalog} checked={checked} onToggle={toggle} />
 
       <div className="plot-grid">
         {[...checked].map((key) => (
@@ -414,11 +411,128 @@ export function InspectorApp() {
   )
 }
 
+/** Left panel: catalog grouped by message with a search box and collapsible
+ * groups. Grouping makes the tree usable with PX4's hundreds of fields. */
+function SignalBrowser({
+  catalog,
+  checked,
+  onToggle,
+}: {
+  catalog: CatalogEntry[]
+  checked: Set<string>
+  onToggle: (key: string) => void
+}) {
+  const [query, setQuery] = useState('')
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
+  const q = query.trim().toLowerCase()
+
+  const groups = useMemo(() => {
+    const byMsg = new Map<string, CatalogEntry[]>()
+    for (const c of catalog) {
+      const name = msgName(c.signal.message_id)
+      const arr = byMsg.get(name) ?? []
+      arr.push(c)
+      byMsg.set(name, arr)
+    }
+    const rows = [...byMsg.entries()].map(([name, entries]) => ({
+      name,
+      entries: entries.sort((a, b) => a.signal.field.localeCompare(b.signal.field)),
+    }))
+    rows.sort((a, b) => a.name.localeCompare(b.name))
+    return rows
+  }, [catalog])
+
+  const visible = useMemo(() => {
+    if (!q) return groups
+    return groups
+      .map((g) => ({
+        ...g,
+        entries: g.entries.filter(
+          (c) => c.signal.field.toLowerCase().includes(q) || g.name.toLowerCase().includes(q),
+        ),
+      }))
+      .filter((g) => g.entries.length > 0)
+  }, [groups, q])
+
+  const toggleGroup = (name: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev)
+      if (next.has(name)) next.delete(name)
+      else next.add(name)
+      return next
+    })
+
+  return (
+    <div className="signal-list">
+      <div style={{ marginBottom: 6, fontWeight: 600 }}>Signals</div>
+      <input
+        className="signal-search"
+        placeholder="Search…"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+      />
+      {catalog.length === 0 && <div style={{ color: 'var(--mg-muted)' }}>Waiting for data…</div>}
+      {visible.map((g) => {
+        const isCollapsed = collapsed.has(g.name)
+        const rateSum = g.entries.reduce((s, c) => s + (Number.isFinite(c.rate_hz) ? c.rate_hz : 0), 0)
+        return (
+          <div className="signal-group" key={g.name}>
+            <div className="signal-group-head" onClick={() => toggleGroup(g.name)}>
+              <span className={isCollapsed ? 'caret caret-closed' : 'caret'} />
+              <span>{g.name}</span>
+              <span className="msg">
+                {g.entries.length} · {fmt(rateSum, 0)} Hz
+              </span>
+            </div>
+            {!isCollapsed &&
+              g.entries.map((c) => {
+                const key = signalKey(c.signal)
+                return (
+                  <label key={key}>
+                    <input type="checkbox" checked={checked.has(key)} onChange={() => onToggle(key)} />
+                    <span className="mono">{c.signal.field}</span>
+                    <span className="msg">
+                      {' '}
+                      {fmt(c.rate_hz, 0)} Hz · {fmt(c.last_value, 1)}
+                    </span>
+                  </label>
+                )
+              })}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 /** Filter a raw buffer with the TS mirror (browser mock mode only). */
 function mirrorFilter(raw: number[], cfg: FilterCfg | undefined, fs: number): number[] {
   if (!cfg || cfg.algo === 'none') return new Array(raw.length).fill(NaN)
   const proc = makeProcessor(cfg.algo, cfg.params, fs)
   return raw.map((v) => proc.process(v))
+}
+
+/** Number formatter that tolerates null/NaN (serde_json turns NaN into null). */
+function fmt(v: number | null | undefined, digits: number): string {
+  return typeof v === 'number' && Number.isFinite(v) ? v.toFixed(digits) : '—'
+}
+
+/** Drop samples older than the window (relative to the newest sample), but
+ * never below the FFT window (1024 samples) so the spectrum still has data
+ * at short window lengths / low stream rates. */
+function trimBuffer(b: Buffer, windowSec: number): void {
+  const n = b.t.length
+  if (n < 2) return
+  const keep = Math.max(1024, Math.ceil((windowSec * 1000) / 10))
+  const maxDrop = Math.max(0, n - keep)
+  const cutoff = b.t[n - 1] - windowSec * 1000
+  let k = 0
+  while (k < maxDrop && b.t[k] < cutoff) k++
+  if (k > 0) {
+    b.t.splice(0, k)
+    b.raw.splice(0, k)
+    b.filtered.splice(0, k)
+  }
 }
 
 function estimateFs(b: Buffer): number {
@@ -472,7 +586,7 @@ function PropertiesPanel({
         <dt>Message</dt>
         <dd>{entry ? `msg ${messageId}` : `msg ${messageId} (not seen yet)`}</dd>
         <dt>Rate</dt>
-        <dd>{entry ? `${entry.rate_hz.toFixed(1)} Hz` : '—'}</dd>
+        <dd>{entry ? `${fmt(entry.rate_hz, 1)} Hz` : '—'}</dd>
         <dt>Est. fs</dt>
         <dd>{fs > 0 ? `${fs.toFixed(1)} Hz` : '—'}</dd>
         <dt>Samples</dt>
@@ -510,39 +624,67 @@ function PropertiesPanel({
   )
 }
 
+/** FFT view: one persistent uPlot instance (created on mount, destroyed on
+ * unmount) updated via setData — the old inline-ref version created a new
+ * chart on every 30 Hz render and leaked DOM. */
 function SpectrumView({ data, label }: { data: { bins: number[]; peakFreqHz: number; fs: number; deltaF: number } | null; label: string }) {
+  const hostRef = useRef<HTMLDivElement | null>(null)
+  const plotRef = useRef<uPlot | null>(null)
+  const [ready, setReady] = useState(false)
+
+  const setHost = useCallback((el: HTMLDivElement | null) => {
+    hostRef.current = el
+    if (el) {
+      if (!plotRef.current) {
+        plotRef.current = new uPlot(
+          {
+            width: el.clientWidth,
+            height: 120,
+            legend: { show: false },
+            axes: [{ stroke: MUTED() }, { stroke: MUTED() }],
+            series: [
+              { label: 'Hz', stroke: 'transparent' },
+              { label: 'mag', stroke: token('--mg-mag') },
+            ],
+          },
+          [[], []],
+          el,
+        )
+        setReady(true)
+      }
+    } else {
+      plotRef.current?.destroy()
+      plotRef.current = null
+      setReady(false)
+    }
+  }, [])
+
+  useEffect(() => () => {
+    plotRef.current?.destroy()
+    plotRef.current = null
+  }, [])
+
+  useEffect(() => {
+    const plot = plotRef.current
+    if (!plot || !data || data.bins.length === 0) return
+    const n = data.bins.length
+    const nyquist = data.fs / 2
+    const maxBin = Math.min(n - 1, Math.ceil(nyquist / data.deltaF) || n - 1)
+    const x = new Array<number>(maxBin)
+    const y = new Array<number>(maxBin)
+    for (let i = 0; i < maxBin; i++) {
+      x[i] = i * data.deltaF
+      y[i] = data.bins[i]
+    }
+    plot.setData([x, y] as uPlot.AlignedData)
+  }, [data])
+
   if (!data) return <div className="peak-note">{label}: need 1024 samples for FFT</div>
-  const n = data.bins.length
-  const nyquist = data.fs / 2
-  const maxBin = Math.min(n - 1, Math.ceil(nyquist / data.deltaF) || n - 1)
-  const x = new Array<number>(maxBin)
-  const y = new Array<number>(maxBin)
-  for (let i = 0; i < maxBin; i++) {
-    x[i] = i * data.deltaF
-    y[i] = data.bins[i]
-  }
   return (
     <div style={{ fontSize: 11, color: 'var(--mg-muted)', marginTop: 2 }}>
       peak {data.peakFreqHz.toFixed(1)} Hz · fs {data.fs.toFixed(0)} Hz · Δf {data.deltaF.toFixed(2)} Hz
-      <div ref={(el) => el && renderSpectrum(el, x, y)} className="chart" />
+      <div ref={setHost} className="chart" />
+      {!ready && <div className="peak-note">allocating chart…</div>}
     </div>
   )
-}
-
-function renderSpectrum(host: HTMLDivElement, x: number[], y: number[]): void {
-  const chart = new uPlot(
-    {
-      width: host.clientWidth,
-      height: 120,
-      legend: { show: false },
-      axes: [{ stroke: MUTED() }, { stroke: MUTED() }],
-      series: [
-        { label: 'Hz', stroke: 'transparent' },
-        { label: 'mag', stroke: token('--mg-mag') },
-      ],
-    },
-    [x, y],
-    host,
-  )
-  void chart
 }

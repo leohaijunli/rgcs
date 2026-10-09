@@ -52,7 +52,9 @@ impl SignalCatalog {
             rate_hz: 0.0,
             last_at: None,
         });
-        e.last_value = value;
+        if value.is_finite() {
+            e.last_value = value;
+        }
         match e.last_at {
             None => e.rate_hz = 0.0,
             Some(at) => {

@@ -1,0 +1,252 @@
+diff -ruN '--exclude=node_modules' '--exclude=target' orig/rgcs-main/crates/app-tauri/src/inspector_service.rs rgcs-main/crates/app-tauri/src/inspector_service.rs
+--- orig/rgcs-main/crates/app-tauri/src/inspector_service.rs	2026-10-09 21:58:00.000000000 +0000
++++ rgcs-main/crates/app-tauri/src/inspector_service.rs	2026-10-09 22:00:40.183227336 +0000
+@@ -47,7 +47,7 @@
+     /// The window's channel, registered by `inspector_connect`.
+     frame: Arc<PMutex<Option<Channel<SampleFrame>>>>,
+     /// Set while a tap+batcher pair is running for the current link.
+-    tap_running: PMutex<bool>,
++    tap_running: Arc<PMutex<bool>>,
+ }
+ 
+ impl AppState {
+@@ -75,7 +75,12 @@
+         let frame = inspector.frame.clone();
+         let (tx, rx) = mpsc::channel(SAMPLE_CHANNEL_CAP);
+ 
+-        tauri::async_runtime::spawn(run_tap(events, subs, catalog, tx, stats));
++        let running = inspector.tap_running.clone();
++        tauri::async_runtime::spawn(async move {
++            run_tap(events, subs, catalog, tx, stats).await;
++            // Link gone: allow a re-attach on the next connect.
++            *running.lock() = false;
++        });
+         tauri::async_runtime::spawn(batch_loop(rx, session, frame));
+     }
+ 
+@@ -123,7 +128,7 @@
+             }
+             match tokio::time::timeout(remaining, rx.recv()).await {
+                 Ok(Some(sample)) => batch.extend(session.lock().ingest(&sample)),
+-                Ok(None) => break, // tap ended
++                Ok(None) => return, // tap ended: stop (don't spin on a closed channel)
+                 Err(_) => break,   // window elapsed: flush
+             }
+         }
+diff -ruN '--exclude=node_modules' '--exclude=target' orig/rgcs-main/crates/core/src/signals/catalog.rs rgcs-main/crates/core/src/signals/catalog.rs
+--- orig/rgcs-main/crates/core/src/signals/catalog.rs	2026-10-09 21:58:00.000000000 +0000
++++ rgcs-main/crates/core/src/signals/catalog.rs	2026-10-09 22:00:40.182717708 +0000
+@@ -52,7 +52,9 @@
+             rate_hz: 0.0,
+             last_at: None,
+         });
+-        e.last_value = value;
++        if value.is_finite() {
++            e.last_value = value;
++        }
+         match e.last_at {
+             None => e.rate_hz = 0.0,
+             Some(at) => {
+diff -ruN '--exclude=node_modules' '--exclude=target' orig/rgcs-main/crates/core/src/signals/tap.rs rgcs-main/crates/core/src/signals/tap.rs
+--- orig/rgcs-main/crates/core/src/signals/tap.rs	2026-10-09 21:58:00.000000000 +0000
++++ rgcs-main/crates/core/src/signals/tap.rs	2026-10-09 22:00:40.182501577 +0000
+@@ -124,13 +124,22 @@
+     stats: Arc<Mutex<TapStats>>,
+ ) {
+     let mut mapper = TimestampMapper::default();
++    // Host time axis: milliseconds since the tap started. (`received_at` is an
++    // `Instant`, so `.elapsed()` would be ~0 for every message.)
++    let epoch = std::time::Instant::now();
+     loop {
+         match events.recv().await {
+             Ok(ConnectionEvent::Message(env)) => {
+-                handle_message(&env, &subs, &catalog, &mut mapper, &tx, &stats);
++                handle_message(&env, &subs, &catalog, &mut mapper, epoch, &tx, &stats);
+             }
+             Ok(_) => continue, // lifecycle events pass through but carry no samples
+-            Err(_) => break,   // lagged or closed; the caller re-subscribes
++            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
++                // The shared bus overflowed (PX4 streams a lot): count the
++                // loss and keep going instead of killing the tap for good.
++                stats.lock().expect("stats lock").dropped += n;
++                continue;
++            }
++            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+         }
+     }
+ }
+@@ -140,6 +149,7 @@
+     subs: &Subscriptions,
+     catalog: &Arc<Mutex<SignalCatalog>>,
+     mapper: &mut TimestampMapper,
++    epoch: std::time::Instant,
+     tx: &mpsc::Sender<SignalSample>,
+     stats: &Arc<Mutex<TapStats>>,
+ ) {
+@@ -147,7 +157,7 @@
+     let Ok(extraction) = extract::extract(&env.message) else {
+         return;
+     };
+-    let rx_ms = env.received_at.elapsed().as_secs_f64() * 1000.0;
++    let rx_ms = env.received_at.saturating_duration_since(epoch).as_secs_f64() * 1000.0;
+     let t_ms = fc_ms(&extraction)
+         .map(|fc| mapper.map(fc, rx_ms))
+         .unwrap_or(rx_ms);
+diff -ruN '--exclude=node_modules' '--exclude=target' orig/rgcs-main/frontend/src/inspector/InspectorApp.tsx rgcs-main/frontend/src/inspector/InspectorApp.tsx
+--- orig/rgcs-main/frontend/src/inspector/InspectorApp.tsx	2026-10-09 21:58:00.000000000 +0000
++++ rgcs-main/frontend/src/inspector/InspectorApp.tsx	2026-10-09 22:00:52.853802003 +0000
+@@ -73,6 +73,11 @@
+   const [selected, setSelected] = useState<string | null>(null)
+   const [axisLink, setAxisLink] = useState(false)
+ 
++  const pausedRef = useRef(paused)
++  pausedRef.current = paused
++  const windowRef = useRef(windowSec)
++  windowRef.current = windowSec
++
+   const buffers = useRef<Map<string, Buffer>>(new Map())
+   const plots = useRef<Map<string, uPlot>>(new Map())
+   const plotHosts = useRef<Map<string, HTMLDivElement>>(new Map())
+@@ -104,7 +109,7 @@
+     loadWorkspace()
+     if (!tauri) {
+       const id = setInterval(() => {
+-        if (paused) return
++        if (pausedRef.current) return
+         const now = performance.now() / 1000
+         for (const s of mockSamples(now)) {
+           const key = signalKey(s.id)
+@@ -113,6 +118,7 @@
+           b.raw.push(s.value)
+           b.filtered.push(NaN)
+           buffers.current.set(key, b)
++          trimBuffer(b, windowRef.current)
+         }
+         bump()
+       }, 10)
+@@ -122,15 +128,19 @@
+     let disposed = false
+     const channel = new Channel<FramePayload>()
+     const onMessage = (frame: FramePayload) => {
+-      if (paused) return
++      if (pausedRef.current) return
++      const touched = new Set<Buffer>()
+       for (const s of frame.samples) {
+         const key = signalKey(s.id)
+         const b = buffers.current.get(key) ?? { t: [], raw: [], filtered: [] }
++        // serde_json writes NaN as null; turn it back into NaN (a gap in uPlot).
+         b.t.push(s.t_ms)
+-        b.raw.push(s.raw)
+-        b.filtered.push(s.filtered)
++        b.raw.push(s.raw ?? NaN)
++        b.filtered.push(s.filtered ?? NaN)
+         buffers.current.set(key, b)
++        touched.add(b)
+       }
++      for (const b of touched) trimBuffer(b, windowRef.current)
+       bump()
+     }
+     channel.onmessage = onMessage
+@@ -150,7 +160,7 @@
+       void invoke('inspector_disconnect')
+     }
+     // eslint-disable-next-line react-hooks/exhaustive-deps
+-  }, [tauri, paused, bump])
++  }, [tauri, bump])
+ 
+   // Push the trace set (signals + their pipelines) to the Rust session. The
+   // session resets the filter for a changed trace, so clear its filtered
+@@ -214,6 +224,7 @@
+           height: 180,
+           legend: { show: true },
+           cursor,
++          scales: { x: { time: false } },
+           axes: [
+             { stroke: MUTED(), grid: { stroke: MUTED(), width: 1, dash: [2, 4] } },
+             { stroke: MUTED() },
+@@ -248,11 +259,13 @@
+       const raw = b.raw
+       const filt = tauri ? b.filtered : mirrorFilter(raw, cfg, fs)
+       const data: Float64Array[] = [
+-        Float64Array.from(b.t),
+-        Float64Array.from(raw),
+-        Float64Array.from(filt),
++        Float64Array.from(b.t, (v) => v / 1000),
++        Float64Array.from(raw, (v) => (Number.isFinite(v) ? v : NaN)),
++        Float64Array.from(filt, (v) => (Number.isFinite(v) ? v : NaN)),
+       ]
+       plot.setData(data as uPlot.AlignedData)
++      const tEnd = data[0][data[0].length - 1]
++      if (tEnd > 0) plot.setScale('x', { min: tEnd - windowRef.current, max: tEnd })
+     }
+   }, [version, checked, filterBy, tauri])
+ 
+@@ -335,7 +348,7 @@
+               <span className="mono">{key}</span>
+               <span className="msg">
+                 {' '}
+-                {c.rate_hz.toFixed(0)} Hz · {c.last_value.toFixed(1)}
++                {fmt(c.rate_hz, 0)} Hz · {fmt(c.last_value, 1)}
+               </span>
+             </label>
+           )
+@@ -421,6 +434,25 @@
+   return raw.map((v) => proc.process(v))
+ }
+ 
++/** Number formatter that tolerates null/NaN (serde_json turns NaN into null). */
++function fmt(v: number | null | undefined, digits: number): string {
++  return typeof v === 'number' && Number.isFinite(v) ? v.toFixed(digits) : '—'
++}
++
++/** Drop samples older than the window (relative to the newest sample). */
++function trimBuffer(b: Buffer, windowSec: number): void {
++  const n = b.t.length
++  if (n < 2) return
++  const cutoff = b.t[n - 1] - windowSec * 1000
++  let k = 0
++  while (k < n && b.t[k] < cutoff) k++
++  if (k > 0) {
++    b.t.splice(0, k)
++    b.raw.splice(0, k)
++    b.filtered.splice(0, k)
++  }
++}
++
+ function estimateFs(b: Buffer): number {
+   if (b.t.length < 2) return 100
+   const dt = (b.t[b.t.length - 1] - b.t[0]) / (b.t.length - 1)
+@@ -472,7 +504,7 @@
+         <dt>Message</dt>
+         <dd>{entry ? `msg ${messageId}` : `msg ${messageId} (not seen yet)`}</dd>
+         <dt>Rate</dt>
+-        <dd>{entry ? `${entry.rate_hz.toFixed(1)} Hz` : '—'}</dd>
++        <dd>{entry ? `${fmt(entry.rate_hz, 1)} Hz` : '—'}</dd>
+         <dt>Est. fs</dt>
+         <dd>{fs > 0 ? `${fs.toFixed(1)} Hz` : '—'}</dd>
+         <dt>Samples</dt>
+diff -ruN '--exclude=node_modules' '--exclude=target' orig/rgcs-main/frontend/src/inspector/main.tsx rgcs-main/frontend/src/inspector/main.tsx
+--- orig/rgcs-main/frontend/src/inspector/main.tsx	2026-10-09 21:58:00.000000000 +0000
++++ rgcs-main/frontend/src/inspector/main.tsx	2026-10-09 22:00:58.403284370 +0000
+@@ -5,10 +5,19 @@
+ import React from 'react'
+ import { createRoot } from 'react-dom/client'
+ import { InspectorApp } from './InspectorApp'
++import ErrorBoundary from '../components/ErrorBoundary'
+ 
+ const root = createRoot(document.getElementById('root') as HTMLElement)
+ root.render(
+   <React.StrictMode>
+-    <InspectorApp />
++    <ErrorBoundary
++      fallback={(e) => (
++        <pre style={{ padding: 16, color: 'var(--mg-ink)', whiteSpace: 'pre-wrap' }}>
++          Signal Inspector crashed: {e.message}
++        </pre>
++      )}
++    >
++      <InspectorApp />
++    </ErrorBoundary>
+   </React.StrictMode>,
+ )
+\ No newline at end of file

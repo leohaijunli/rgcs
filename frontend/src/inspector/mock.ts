@@ -20,7 +20,32 @@ const SIGS: MockSignal[] = [
   { id: 'zmag', signal: { system_id: 1, component_id: 1, message_id: 105, field: 'zmag' }, base: 42000, amp: 90, freqHz: 0.3 },
 ]
 
-const MESSAGE_NAMES: Record<number, string> = { 30: 'ATTITUDE', 105: 'HIGHRES_IMU' }
+/** PX4/MAVLink message names for the signal browser group headers. Only the
+ * ids PX4 commonly streams are listed; anything else falls back to `msg <id>`.
+ * S2 will replace this map with `message_name` from the Rust catalog. */
+const MESSAGE_NAMES: Record<number, string> = {
+  0: 'HEARTBEAT',
+  1: 'SYS_STATUS',
+  22: 'NAMED_VALUE_FLOAT',
+  24: 'GPS_RAW_INT',
+  30: 'ATTITUDE',
+  32: 'LOCAL_POSITION_NED',
+  33: 'GLOBAL_POSITION_INT',
+  65: 'RC_CHANNELS',
+  74: 'VFR_HUD',
+  105: 'HIGHRES_IMU',
+  129: 'ALTITUDE',
+  132: 'ESTIMATOR_STATUS',
+  147: 'BATTERY_STATUS',
+  250: 'DEBUG_VECT',
+  251: 'DEBUG_FLOAT',
+  254: 'DEBUG',
+}
+
+/** Display name for a message id (group header in the signal browser). */
+export function msgName(messageId: number): string {
+  return MESSAGE_NAMES[messageId] ?? `msg ${messageId}`
+}
 
 export function mockCatalog(): { signal: MockSignal['signal']; last_value: number; rate_hz: number; last_seen_ms: number }[] {
   return SIGS.map((s) => ({ signal: s.signal, last_value: s.base, rate_hz: 100, last_seen_ms: 0 }))

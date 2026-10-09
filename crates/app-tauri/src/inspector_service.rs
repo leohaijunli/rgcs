@@ -47,7 +47,7 @@ pub struct InspectorState {
     /// The window's channel, registered by `inspector_connect`.
     frame: Arc<PMutex<Option<Channel<SampleFrame>>>>,
     /// Set while a tap+batcher pair is running for the current link.
-    tap_running: PMutex<bool>,
+    tap_running: Arc<PMutex<bool>>,
 }
 
 impl AppState {
@@ -75,7 +75,12 @@ impl AppState {
         let frame = inspector.frame.clone();
         let (tx, rx) = mpsc::channel(SAMPLE_CHANNEL_CAP);
 
-        tauri::async_runtime::spawn(run_tap(events, subs, catalog, tx, stats));
+        let running = inspector.tap_running.clone();
+        tauri::async_runtime::spawn(async move {
+            run_tap(events, subs, catalog, tx, stats).await;
+            // Link gone: allow a re-attach on the next connect.
+            *running.lock() = false;
+        });
         tauri::async_runtime::spawn(batch_loop(rx, session, frame));
     }
 
@@ -123,7 +128,7 @@ async fn batch_loop(
             }
             match tokio::time::timeout(remaining, rx.recv()).await {
                 Ok(Some(sample)) => batch.extend(session.lock().ingest(&sample)),
-                Ok(None) => break, // tap ended
+                Ok(None) => return, // tap ended: stop (don't spin on a closed channel)
                 Err(_) => break,   // window elapsed: flush
             }
         }

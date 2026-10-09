@@ -194,6 +194,13 @@ impl From<&MavlinkError> for LinkFailure {
     }
 }
 
+/// Whether a read error only affects the one frame just read (a decode
+/// failure) as opposed to the transport itself. Decode failures leave the byte
+/// stream intact, so the worker keeps the link and reads on.
+fn is_recoverable_read_error(e: &::mavlink::error::MessageReadError) -> bool {
+    matches!(e, ::mavlink::error::MessageReadError::Parse(_))
+}
+
 /// Events emitted by the connection worker.
 #[derive(Debug, Clone)]
 pub enum ConnectionEvent {
@@ -418,6 +425,7 @@ async fn run_worker(
         // each loop iteration would be reset by any inbound frame, so the
         // FC heartbeat could never time out while other traffic flowed;
         // polling the monitor on a short fixed tick keeps the deadline real.
+        let mut skipped_frames: u64 = 0;
         let mut watchdog = tokio::time::interval(HEARTBEAT_WATCHDOG_TICK);
         watchdog.tick().await;
         // GCS heartbeat so PX4 sees us as a live link partner (ADR-003,
@@ -444,6 +452,18 @@ async fn run_worker(
                                 let _ = events.send(ConnectionEvent::HeartbeatRestored);
                             }
                         }
+                    }
+                    // One undecodable frame (e.g. PX4 v1.17 sends
+                    // CURRENT_EVENT_SEQUENCE with flags = 0, which mavlink 0.17's
+                    // non-bitmask `MavEventCurrentSequenceFlags` rejects) must not
+                    // tear the link down. The frame was already consumed from the
+                    // stream, so skip it and read the next one.
+                    Err(e) if is_recoverable_read_error(&e) => {
+                        skipped_frames = skipped_frames.saturating_add(1);
+                        if skipped_frames == 1 {
+                            eprintln!("mavlink: skipping undecodable frame: {e}");
+                        }
+                        continue 'connected;
                     }
                     Err(e) => {
                         let _ = events.send(ConnectionEvent::LinkError(LinkFailure::from(
@@ -520,6 +540,23 @@ async fn run_worker(
 
 #[cfg(test)]
 mod tests {
+    use super::is_recoverable_read_error;
+    use ::mavlink::error::{MessageReadError, ParserError};
+
+    #[test]
+    fn decode_failures_are_recoverable_but_io_is_not() {
+        // PX4 v1.17 CURRENT_EVENT_SEQUENCE with flags = 0.
+        let invalid_enum = MessageReadError::Parse(ParserError::InvalidEnum {
+            enum_type: "MavEventCurrentSequenceFlags",
+            value: 0,
+        });
+        assert!(is_recoverable_read_error(&invalid_enum));
+        let unknown = MessageReadError::Parse(ParserError::UnknownMessage { id: 99_999 });
+        assert!(is_recoverable_read_error(&unknown));
+        let io = MessageReadError::Io(std::io::Error::from(std::io::ErrorKind::BrokenPipe));
+        assert!(!is_recoverable_read_error(&io));
+    }
+
     use super::*;
 
     #[test]

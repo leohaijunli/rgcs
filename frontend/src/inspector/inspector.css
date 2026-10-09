@@ -60,9 +60,52 @@ body,
   font-size: 12px;
 }
 
+.signal-list .signal-search {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 6px;
+  padding: 4px 6px;
+  background: var(--mg-bg);
+  color: var(--mg-ink);
+  border: 1px solid var(--mg-border);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.signal-group {
+  margin-bottom: 4px;
+}
+
+.signal-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.signal-group-head:hover {
+  background: var(--mg-bg-raised);
+}
+
+.signal-group-head .caret {
+  width: 0;
+  height: 0;
+  border-left: 5px solid var(--mg-muted);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 0.1s;
+}
+
+.signal-group-head .caret-closed {
+  transform: rotate(-90deg);
+}
+
 .signal-list label {
   display: block;
-  padding: 3px 4px;
+  padding: 2px 4px 2px 18px;
   border-radius: 4px;
   cursor: pointer;
 }
