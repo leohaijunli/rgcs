@@ -16,6 +16,7 @@ pub mod mavlink;
 pub mod mission;
 pub mod plan;
 pub mod rtk;
+pub mod signals;
 pub mod survey;
 pub mod telemetry;
 
