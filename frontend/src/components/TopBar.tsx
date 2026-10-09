@@ -1,10 +1,12 @@
-import { Settings } from 'lucide-react'
+import { Activity, Settings } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { invoke } from '@tauri-apps/api/core'
 import { useDevicesStore } from '../stores/devices'
 import { useLinkStore } from '../stores/link'
 import { useTelemetryStore } from '../stores/telemetry'
 import { useUiStore, type View } from '../stores/ui'
+import { isTauri } from '../inspector/mock'
 import { fcStatusLabel } from '../util/linkLabel'
 import { hasInboundPackets, linkLevel, linkLevelTone } from '../util/linkLevel'
 import { modeLabel } from '../util/modeLabel'
@@ -72,6 +74,14 @@ export default function TopBar() {
     setSettingsTab('connection')
     setSettingsOpen(true)
   }
+
+  const openInspector = () => {
+    if (isTauri()) {
+      void invoke('inspector_open')
+    } else {
+      window.open('inspector.html', '_blank')
+    }
+  }
   const level = linkLevel(link, hasInboundPackets(fieldAges))
 
   const armed = heartbeat?.base_mode.safety_armed === true
@@ -137,6 +147,14 @@ export default function TopBar() {
           tone={devices.length ? 'ok' : 'off'}
         />
 
+        <button
+          aria-label={t('inspector.open')}
+          title={t('inspector.open')}
+          onClick={openInspector}
+          className="flex h-11 w-11 items-center justify-center rounded border border-line bg-canvas text-muted hover:text-ink"
+        >
+          <Activity size={16} />
+        </button>
         <button
           aria-label={t('settings.menu')}
           onClick={() => setSettingsOpen(true)}

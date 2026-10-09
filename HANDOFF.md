@@ -3,6 +3,47 @@
 Snapshot of the current session (issues.md backlog clearance). Issue statuses
 live in `issues.md`; keep both in sync when a task lands.
 
+## Latest landing — Signal Inspector P0–P7 follow-ups closed
+
+The four remaining Signal Inspector gaps (`docs/signal-inspector-plan.md` P7
+row + HANDOFF "Not yet done") are now closed:
+
+- **`core::inspector::session` (ADR-015)**: a `Session` holds the trace set
+  (`TraceConfig { signal, pipeline, analyzer }`), each trace runs its own
+  `Pipeline` (+ optional FFT analyzer) in Rust. `set_traces` upserts and keeps
+  the running filter state when the config is unchanged ("热更新,尽量不丢
+  状态"); `ingest` routes a sample, applies the chain, detects gaps
+  (`GAP_FACTOR × 标称 dt`) by resetting + emitting a `NaN` break, and estimates
+  per-trace fs by EMA (reconfigures on drift past 5 %). `Pipeline` now keeps
+  per-stage parameters. 15 new unit tests; ts-rs bindings (`AlgoConfig`,
+  `TraceConfig`, `TraceSample`) exported and copied to `frontend/src/
+  generated-types/`.
+- **IPC + frontend**: `inspector_subscribe` became `inspector_set_traces`
+  (sends the trace set; the tap subscribes to the session's signal union), and
+  the ~30 Hz frames now carry `TraceSample { id, t_ms, raw, filtered }` — the
+  filtered trace is computed in Rust, not the frontend. `InspectorApp.tsx`
+  buffers raw+filtered, drops the stale filtered history when a filter
+  changes (the line restarts like SDI), and keeps the TS DSP mirror only for
+  the browser mock preview and the FFT view. The mock signal tree now actually
+  populates (`mockCatalog()`).
+- **P7 UI**: axis linking (`uPlot cursor.sync` key + toolbar toggle), a
+  properties panel for the selected signal (message/rate/est-fs/samples, the
+  stream-rate control and remove), workspace save/load (`localStorage`
+  `maggcs.inspector.workspace`, auto-restored on open), and a per-message
+  stream-rate select backed by the new `set_message_interval` command
+  (`MAV_CMD_SET_MESSAGE_INTERVAL`, 0 = default, -1 = disabled, µs intervals).
+- **Entry button**: the TopBar now has a Signal-inspector button that opens
+  (or focuses) the singleton window in Tauri, or `inspector.html` in a new tab
+  in browser mode.
+- **`testdata/dsp/`**: `tools/gen_dsp_golden.py` regenerated the SciPy golden
+  vectors (biquad coefficients, frequency response, FFT sine peak).
+
+Verified: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
+`cargo test -p maggcs-core --lib` (225), `cargo test -p maggcs-app` (11 + 4
+CSP), frontend typecheck/colors/contrast/i18n/build (both entries). The
+`command_service_integration` flake (UDP port contention, HANDOFF tooling
+notes) passed on retry.
+
 ## Latest landing — Signal Inspector P0–P7
 
 The whole Signal Inspector (`docs/signal-inspector-plan.md`) is implemented
@@ -33,10 +74,9 @@ through P7 and the flight-plan optimization (B1–B4, A1, A2) is complete:
   polygon vertex is visible from the first click, right-click deletes a
   polygon vertex, and the boundary readout has a Clear button (pushed earlier).
 
-Not yet done (P7 follow-ups): axis linking, property panel, workspace
-save/load, `SET_MESSAGE_INTERVAL` rate control, and a `core::inspector::session`
-so the filter pipeline runs in Rust for every trace (the frontend currently
-uses the TS mirror).
+Not yet done (next): a true `core::inspector::session` analyzer path wired into
+the UI (the FFT view still uses the TS mirror), axis-linked FFT views, and
+multi-trace plots (multiple signals per plot).
 
 Verified: cargo fmt --check, clippy -D warnings, 209 core lib tests, 10 app
 lib tests + 4 CSP tests, frontend typecheck/i18n/polygon/planfile/mission-sync/

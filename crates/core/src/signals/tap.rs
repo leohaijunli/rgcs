@@ -144,11 +144,6 @@ fn handle_message(
     stats: &Arc<Mutex<TapStats>>,
 ) {
     let message_id = env.message.message_id();
-    let message_ids = subs.message_ids();
-    let active = subs.is_active();
-    if !message_ids.contains(&message_id) {
-        return; // nothing subscribed on this message type: drop by id
-    }
     let Ok(extraction) = extract::extract(&env.message) else {
         return;
     };
@@ -156,6 +151,8 @@ fn handle_message(
     let t_ms = fc_ms(&extraction)
         .map(|fc| mapper.map(fc, rx_ms))
         .unwrap_or(rx_ms);
+    // The catalog fills for every seen message, subscribed or not, so the
+    // signal tree is populated before anything is checked (plan §4).
     {
         let mut cat = catalog.lock().expect("catalog lock");
         for field in &extraction.fields {
@@ -168,7 +165,12 @@ fn handle_message(
             cat.observe(&id, field.value, env.received_at);
         }
     }
-    if !active {
+    stats.lock().expect("stats lock").messages += 1;
+    if !subs.is_active() {
+        return;
+    }
+    let message_ids = subs.message_ids();
+    if !message_ids.contains(&message_id) {
         return;
     }
     for signal in extraction.signals(env.system_id(), env.component_id(), message_id) {
@@ -198,7 +200,6 @@ fn handle_message(
             }
         }
     }
-    stats.lock().expect("stats lock").messages += 1;
 }
 
 /// The FC timestamp in milliseconds, from `time_boot_ms` or `time_usec`.
@@ -307,6 +308,51 @@ mod tests {
             "rate {}",
             roll.rate_hz
         );
+    }
+
+    #[tokio::test]
+    async fn catalog_fills_for_unsubscribed_messages_while_window_open() {
+        // The window is open but nothing is checked yet: the signal tree must
+        // still populate so the user can pick a signal (plan §4).
+        let (bus_tx, bus_rx) = tokio::sync::broadcast::channel(64);
+        let events = RoutedEvents::new(bus_rx, MessageRoute::all());
+        let subs = Subscriptions::new();
+        subs.acquire(); // window open
+        let catalog = Arc::new(Mutex::new(SignalCatalog::new()));
+        let stats = Arc::new(Mutex::new(TapStats::default()));
+        let (tx, mut rx) = mpsc::channel(SAMPLE_CHANNEL_CAP);
+
+        let tap = tokio::spawn(run_tap(
+            events,
+            subs.clone(),
+            catalog.clone(),
+            tx,
+            stats.clone(),
+        ));
+
+        bus_tx
+            .send(ConnectionEvent::Message(Box::new(envelope(
+                0,
+                attitude(0, 0.1),
+            ))))
+            .unwrap();
+        bus_tx
+            .send(ConnectionEvent::Message(Box::new(envelope(
+                1,
+                attitude(10, 0.2),
+            ))))
+            .unwrap();
+        drop(bus_tx);
+        tokio::time::sleep(Duration::from_millis(30)).await;
+
+        assert_eq!(
+            catalog.lock().unwrap().len(),
+            7,
+            "all ATTITUDE fields are visible before any subscription"
+        );
+        assert!(rx.try_recv().is_err(), "no samples without a subscription");
+        drop(rx);
+        tap.await.unwrap();
     }
 
     #[tokio::test]

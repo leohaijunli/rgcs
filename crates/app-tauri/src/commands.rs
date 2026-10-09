@@ -279,6 +279,39 @@ const PAUSE_CONTINUE_PAUSE: f32 = 0.0;
 /// `MAV_CMD_DO_PAUSE_CONTINUE` param1: continue.
 const PAUSE_CONTINUE_RESUME: f32 = 1.0;
 
+/// Map a stream-rate request to `MAV_CMD_SET_MESSAGE_INTERVAL` parameters.
+///
+/// `interval_us` is already in microseconds; the special values 0 (default)
+/// and -1 (disable) pass through unchanged.
+fn set_message_interval_params(message_id: u32, interval_us: i32) -> [f32; 7] {
+    let mut params = [0.0f32; 7];
+    params[0] = message_id as f32;
+    params[1] = interval_us as f32;
+    params
+}
+
+/// Request the FC to stream a message at a fixed rate (Signal Inspector P7).
+///
+/// `interval_us` is the MAVLink interval in microseconds: 0 restores the
+/// default rate, -1 disables the message, and any positive value sets it
+/// (e.g. 1_000_000 / 50 = 20_000 for 50 Hz). The command goes through the
+/// command service, so the ack/rejection arrives on the `"command"` event.
+#[tauri::command]
+pub async fn set_message_interval(
+    message_id: u32,
+    interval_us: i32,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let service = state.command().ok_or_else(|| "not connected".to_string())?;
+    service
+        .send(
+            MavCmd::MAV_CMD_SET_MESSAGE_INTERVAL,
+            set_message_interval_params(message_id, interval_us),
+        )
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Map a UI command name to its MAVLink command and parameters.
 fn named_command(name: &str) -> Result<(MavCmd, [f32; 7]), String> {
     let mut params = [0.0f32; 7];
@@ -301,6 +334,11 @@ fn named_command(name: &str) -> Result<(MavCmd, [f32; 7]), String> {
 mod tests {
     use super::*;
 
+    /// `MAV_CMD_SET_MESSAGE_INTERVAL` param2: the requested interval in
+    /// microseconds (0 = the message's default stream rate, -1 = disabled).
+    const SET_MESSAGE_INTERVAL_DEFAULT_US: i32 = 0;
+    const SET_MESSAGE_INTERVAL_DISABLED_US: i32 = -1;
+
     #[test]
     fn rtl_maps_to_return_to_launch() {
         let (command, params) = named_command("rtl").expect("rtl");
@@ -322,6 +360,28 @@ mod tests {
     #[test]
     fn unknown_name_is_rejected() {
         assert!(named_command("banana").is_err());
+    }
+
+    #[test]
+    fn set_message_interval_maps_id_and_interval() {
+        let p = set_message_interval_params(30, 20_000);
+        assert_eq!(p[0], 30.0, "param1 is the message id");
+        assert_eq!(p[1], 20_000.0, "param2 is the interval in microseconds");
+        assert_eq!(p[2..], [0.0; 5], "no other parameters");
+
+        let on = set_message_interval_params(30, 1_000_000 / 50);
+        assert_eq!(on[1], 20_000.0, "50 Hz = 20 ms = 20 000 us");
+
+        assert_eq!(
+            set_message_interval_params(30, SET_MESSAGE_INTERVAL_DEFAULT_US)[1],
+            0.0,
+            "0 restores the default rate"
+        );
+        assert_eq!(
+            set_message_interval_params(30, SET_MESSAGE_INTERVAL_DISABLED_US)[1],
+            -1.0,
+            "-1 disables the message"
+        );
     }
 
     #[test]

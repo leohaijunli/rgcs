@@ -12,6 +12,7 @@ pub mod commands;
 pub mod devices;
 pub mod dsp;
 pub mod height;
+pub mod inspector;
 pub mod mavlink;
 pub mod mission;
 pub mod plan;

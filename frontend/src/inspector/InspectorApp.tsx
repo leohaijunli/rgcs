@@ -1,30 +1,50 @@
 // Signal Inspector (plan §6, ADR-016): a separate window that buffers the raw
-// signal stream into ring buffers and renders uPlot time plots with optional
-// filtered traces (P5) and a spectrum view (P6), plus SDI-style controls (P7:
-// run/pause, window duration, clear, cursor, CSV export).
+// signal stream into ring buffers and renders uPlot time plots with raw +
+// filtered traces. In Tauri mode the filter pipeline runs in Rust
+// (`core::inspector::session`, ADR-015) and the frames carry the filtered
+// values; in browser mock mode a TS mirror of `core::dsp` previews the filters.
+// P7: run/pause, window duration, clear, cursor, CSV export, axis linking, a
+// properties panelainer, workspace save/loadasiato and SET_MESSAGE_INTERVAL rate control.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import uPlot from 'uplot'
 import { invoke, Channel } from '@tauri-apps/api/core'
 import { makeProcessor, magnitudeSpectrum, type AlgorithmInfo } from './dsp'
 import { isTauri, mockCatalog, mockSamples, signalKey } from './mock'
-import type { SignalSample } from '../generated-types/SignalSample'
 import type { CatalogEntry } from '../generated-types/CatalogEntry'
+import type { SignalId } from '../generated-types/SignalId'
+import type { TraceSample } from '../generated-types/TraceSample'
 
 interface FramePayload {
   seq: number
-  samples: SignalSample[]
+  samples: TraceSample[]
+}
+
+interface FilterCfg {
+  algo: string
+  params: Record<string, number>
 }
 
 interface Buffer {
   t: number[]
-  x: number[]
+  raw: number[]
+  filtered: number[]
 }
+
+interface Workspace {
+  windowSec: number
+  checked: string[]
+  filterBy: Record<string, FilterCfg>
+  axisLink: boolean
+}
+
+const WS_KEY = 'maggcs.inspector.workspace'
+const SYNC_KEY = 'maggcs-inspector'
 
 function token(name: string): string {
   const cached = cssVarCache.get(name)
   if (cached) return cached
-  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#22d3ee'
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim() || 'cyan'
   cssVarCache.set(name, v)
   return v
 }
@@ -32,40 +52,71 @@ const cssVarCache = new Map<string, string>()
 const ACCENT = () => token('--mg-accent')
 const MUTED = () => token('--mg-muted')
 
+/** Resolve a signal-key to its wire SignalId (fallback for a not-yet-seen signal). */
+function signalFor(key: string, catalog: CatalogEntry[]): SignalId {
+  const entry = catalog.find((c) => signalKey(c.signal) === key)
+  return entry
+    ? entry.signal
+    : { system_id: 1, component_id: 1, message_id: 30, field: key.split('.').pop() ?? key }
+}
+
 export function InspectorApp() {
   const tauri = isTauri()
   const [catalog, setCatalog] = useState<CatalogEntry[]>([])
   const [algorithms, setAlgorithms] = useState<AlgorithmInfo[]>([])
   const [checked, setChecked] = useState<Set<string>>(new Set())
+  const [filterBy, setFilterBy] = useState<Record<string, FilterCfg>>({})
   const [paused, setPaused] = useState(false)
   const [windowSec, setWindowSec] = useState(30)
   const [version, setVersion] = useState(0)
   const [spectrumFor, setSpectrumFor] = useState<string | null>(null)
-  const [filterBy, setFilterBy] = useState<Record<string, { algo: string; params: Record<string, number> }>>({})
+  const [selected, setSelected] = useState<string | null>(null)
+  const [axisLink, setAxisLink] = useState(false)
 
   const buffers = useRef<Map<string, Buffer>>(new Map())
   const plots = useRef<Map<string, uPlot>>(new Map())
-  const processors = useRef<Map<string, ReturnType<typeof makeProcessor>>>(new Map())
   const plotHosts = useRef<Map<string, HTMLDivElement>>(new Map())
 
   const bump = useCallback(() => setVersion((v) => v + 1), [])
 
+  // Workspace save/load (P7): the checked set, filters, window and axis link.
+  const saveWorkspace = useCallback(() => {
+    const ws: Workspace = { windowSec, checked: [...checked], filterBy, axisLink }
+    localStorage.setItem(WS_KEY, JSON.stringify(ws))
+  }, [windowSec, checked, filterBy, axisLink])
+
+  const loadWorkspace = useCallback(() => {
+    const raw = localStorage.getItem(WS_KEY)
+    if (!raw) return
+    try {
+      const ws = JSON.parse(raw) as Workspace
+      if (typeof ws.windowSec === 'number') setWindowSec(ws.windowSec)
+      if (Array.isArray(ws.checked)) setChecked(new Set(ws.checked))
+      if (ws.filterBy && typeof ws.filterBy === 'object') setFilterBy(ws.filterBy)
+      setAxisLink(Boolean(ws.axisLink))
+    } catch {
+      // Corrupt workspace: keep the defaults.
+    }
+  }, [])
+
   // Data source: the Tauri channel when running in the app, the mock otherwise.
   useEffect(() => {
+    loadWorkspace()
     if (!tauri) {
       const id = setInterval(() => {
         if (paused) return
         const now = performance.now() / 1000
         for (const s of mockSamples(now)) {
           const key = signalKey(s.id)
-          const b = buffers.current.get(key) ?? { t: [], x: [] }
+          const b = buffers.current.get(key) ?? { t: [], raw: [], filtered: [] }
           b.t.push(s.t_ms)
-          b.x.push(s.value)
+          b.raw.push(s.value)
+          b.filtered.push(NaN)
           buffers.current.set(key, b)
         }
         bump()
       }, 10)
-      void mockCatalog
+      setCatalog(mockCatalog())
       return () => clearInterval(id)
     }
     let disposed = false
@@ -74,9 +125,10 @@ export function InspectorApp() {
       if (paused) return
       for (const s of frame.samples) {
         const key = signalKey(s.id)
-        const b = buffers.current.get(key) ?? { t: [], x: [] }
+        const b = buffers.current.get(key) ?? { t: [], raw: [], filtered: [] }
         b.t.push(s.t_ms)
-        b.x.push(s.value)
+        b.raw.push(s.raw)
+        b.filtered.push(s.filtered)
         buffers.current.set(key, b)
       }
       bump()
@@ -97,23 +149,30 @@ export function InspectorApp() {
       disposed = true
       void invoke('inspector_disconnect')
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tauri, paused, bump])
 
-  // Push the union of checked signals to the tap's subscription set.
+  // Push the trace set (signals + their pipelines) to the Rust session. The
+  // session resets the filter for a changed trace, so clear its filtered
+  // buffer: the filtered line restarts at the next sample (SDI behavior).
   useEffect(() => {
     if (!tauri) return
-    if (checked.size === 0) {
-      void invoke('inspector_subscribe', { signals: [] })
-      return
+    const traces: Array<{ signal: SignalId; pipeline: { algorithm: string; params: [string, number][] }[]; analyzer: null }> = []
+    for (const key of checked) {
+      const cfg = filterBy[key]
+      const pipeline =
+        cfg && cfg.algo !== 'none'
+          ? [{ algorithm: cfg.algo, params: Object.entries(cfg.params) as [string, number][] }]
+          : []
+      traces.push({ signal: signalFor(key, catalog), pipeline, analyzer: null })
     }
-    const signals = [...checked].map((key) => {
-      const entry = catalog.find((c) => signalKey(c.signal) === key)
-      return entry
-        ? entry.signal
-        : { system_id: 1, component_id: 1, message_id: 30, field: key.split('.').pop() ?? key }
-    })
-    void invoke('inspector_subscribe', { signals })
-  }, [checked, tauri, catalog])
+    void invoke('inspector_set_traces', { traces }).catch(() => undefined)
+  }, [checked, filterBy, tauri, catalog])
+
+  // On a filter change, drop the stale filtered history so the trace restarts.
+  useEffect(() => {
+    for (const b of buffers.current.values()) b.filtered = []
+  }, [filterBy, tauri])
 
   // Refresh the catalog periodically so the tree fills as signals arrive.
   useEffect(() => {
@@ -134,46 +193,49 @@ export function InspectorApp() {
     for (const [key, b] of buffers.current) {
       if (b.t.length > keep) {
         b.t = b.t.slice(-keep)
-        b.x = b.x.slice(-keep)
+        b.raw = b.raw.slice(-keep)
+        b.filtered = b.filtered.slice(-keep)
         buffers.current.set(key, b)
       }
     }
   }, [windowSec])
 
-  // Render/update the checked plots.
+  // Create/destroy the checked plots. Rebuilt when axis linking toggles so the
+  // cursor sync key applies (uPlot has no runtime setter for it).
   useEffect(() => {
-    // Create plots for newly checked signals.
     for (const key of checked) {
       if (plots.current.has(key)) continue
       const host = plotHosts.current.get(key)
       if (!host) continue
+      const cursor = axisLink ? { show: true, sync: { key: SYNC_KEY } } : { show: true }
       const plot = new uPlot(
         {
           width: host.clientWidth,
           height: 180,
           legend: { show: true },
-          cursor: { show: true },
-          axes: [{ stroke: MUTED(), grid: { stroke: 'rgba(255,255,255,0.06)' } }, { stroke: MUTED() }],
+          cursor,
+          axes: [
+            { stroke: MUTED(), grid: { stroke: MUTED(), width: 1, dash: [2, 4] } },
+            { stroke: MUTED() },
+          ],
           series: [
             { label: 't', stroke: 'transparent' },
             { label: 'raw', stroke: ACCENT() },
-            { label: 'filtered', stroke: '#22c55e', width: 2 },
+            { label: 'filtered', stroke: token('--mg-ok'), width: 2 },
           ],
         },
-        [[], []],
+        [[], [], []],
         host,
       )
       plots.current.set(key, plot)
     }
-    // Drop plots for unchecked signals.
     for (const key of [...plots.current.keys()]) {
       if (!checked.has(key)) {
         plots.current.get(key)?.destroy()
         plots.current.delete(key)
-        processors.current.delete(key)
       }
     }
-  }, [checked])
+  }, [checked, axisLink])
 
   // Feed data into the plots whenever new samples arrive or filters change.
   useEffect(() => {
@@ -182,20 +244,17 @@ export function InspectorApp() {
       const b = buffers.current.get(key)
       if (!plot || !b || b.t.length < 2) continue
       const cfg = filterBy[key]
-      let proc: ReturnType<typeof makeProcessor> | null = null
-      if (cfg && cfg.algo !== 'none') {
-        proc = processors.current.get(key) ?? makeProcessor(cfg.algo, cfg.params, estimateFs(b))
-        processors.current.set(key, proc)
-        proc.configure(cfg.params, estimateFs(b))
-      }
-      const raw = b.x
-      const filt = proc ? raw.map((v) => proc!.process(v)) : []
-      const data: Float64Array[] = [Float64Array.from(b.t), Float64Array.from(b.x)]
-      if (proc) data.push(Float64Array.from(filt))
-      else data.push(new Float64Array(b.t.length).fill(NaN))
+      const fs = estimateFs(b)
+      const raw = b.raw
+      const filt = tauri ? b.filtered : mirrorFilter(raw, cfg, fs)
+      const data: Float64Array[] = [
+        Float64Array.from(b.t),
+        Float64Array.from(raw),
+        Float64Array.from(filt),
+      ]
       plot.setData(data as uPlot.AlignedData)
     }
-  }, [version, checked, filterBy])
+  }, [version, checked, filterBy, tauri])
 
   useEffect(() => {
     for (const plot of plots.current.values()) plot.redraw()
@@ -216,9 +275,11 @@ export function InspectorApp() {
   }
 
   const exportCsv = () => {
-    const rows: string[] = ['t_ms,key,value']
+    const rows: string[] = ['t_ms,key,raw,filtered']
     for (const [key, b] of buffers.current) {
-      for (let i = 0; i < b.t.length; i++) rows.push(`${b.t[i].toFixed(1)},${key},${b.x[i]}`)
+      for (let i = 0; i < b.t.length; i++) {
+        rows.push(`${b.t[i].toFixed(1)},${key},${b.raw[i]},${b.filtered[i] ?? ''}`)
+      }
     }
     const blob = new Blob([rows.join('\n')], { type: 'text/csv' })
     const url = URL.createObjectURL(blob)
@@ -233,7 +294,7 @@ export function InspectorApp() {
     const b = buffers.current.get(key)
     if (!b) return null
     const n = 1024
-    const recent = b.x.slice(-n)
+    const recent = b.raw.slice(-n)
     if (recent.length < n) return null
     const fs = estimateFs(b)
     const s = magnitudeSpectrum(recent, fs)
@@ -251,10 +312,16 @@ export function InspectorApp() {
           <option value={30}>30 s</option>
           <option value={60}>60 s</option>
         </select>
-        <button onClick={() => setChecked((p) => new Set(p))}>Clear</button>
+        <button className={axisLink ? 'active' : ''} onClick={() => setAxisLink(!axisLink)}>
+          Link axes
+        </button>
         <button onClick={clearAll}>Clear data</button>
         <button onClick={exportCsv}>Export CSV</button>
-        <span style={{ marginLeft: 'auto', color: 'var(--mg-muted)', fontSize: 11 }}>Signal Inspector{tauri ? '' : ' · mock'}</span>
+        <button onClick={saveWorkspace}>Save</button>
+        <button onClick={loadWorkspace}>Load</button>
+        <span style={{ marginLeft: 'auto', color: 'var(--mg-muted)', fontSize: 11 }}>
+          Signal Inspector{tauri ? '' : ' · mock'}
+        </span>
       </div>
 
       <div className="signal-list">
@@ -279,7 +346,9 @@ export function InspectorApp() {
         {[...checked].map((key) => (
           <div className="plot" key={key}>
             <div className="plot-head">
-              <span className="title">{key}</span>
+              <span className={`title ${selected === key ? 'selected' : ''}`} onClick={() => setSelected(key)}>
+                {key}
+              </span>
               <select
                 value={filterBy[key]?.algo ?? 'none'}
                 onChange={(e) => {
@@ -332,14 +401,113 @@ export function InspectorApp() {
           </div>
         ))}
       </div>
+
+      <PropertiesPanel
+        selected={selected}
+        catalog={catalog}
+        buffer={selected ? buffers.current.get(selected) : undefined}
+        filterBy={selected ? filterBy[selected] : undefined}
+        tauri={tauri}
+        onRemove={() => selected && toggle(selected)}
+      />
     </div>
   )
+}
+
+/** Filter a raw buffer with the TS mirror (browser mock mode only). */
+function mirrorFilter(raw: number[], cfg: FilterCfg | undefined, fs: number): number[] {
+  if (!cfg || cfg.algo === 'none') return new Array(raw.length).fill(NaN)
+  const proc = makeProcessor(cfg.algo, cfg.params, fs)
+  return raw.map((v) => proc.process(v))
 }
 
 function estimateFs(b: Buffer): number {
   if (b.t.length < 2) return 100
   const dt = (b.t[b.t.length - 1] - b.t[0]) / (b.t.length - 1)
   return dt > 0 ? 1000 / dt : 100
+}
+
+/** SET_MESSAGE_INTERVAL options (0 = default rate, -1 = disable). */
+const RATE_OPTIONS: Array<{ label: string; intervalUs: number }> = [
+  { label: 'Default', intervalUs: 0 },
+  { label: '50 Hz', intervalUs: 20_000 },
+  { label: '100 Hz', intervalUs: 10_000 },
+  { label: '200 Hz', intervalUs: 5_000 },
+  { label: '500 Hz', intervalUs: 2_000 },
+  { label: 'Disable', intervalUs: -1 },
+]
+
+function PropertiesPanel({
+  selected,
+  catalog,
+  buffer,
+  filterBy,
+  tauri,
+  onRemove,
+}: {
+  selected: string | null
+  catalog: CatalogEntry[]
+  buffer: Buffer | undefined
+  filterBy: FilterCfg | undefined
+  tauri: boolean
+  onRemove: () => void
+}) {
+  if (!selected) {
+    return (
+      <aside className="properties">
+        <div className="prop-title">Properties</div>
+        <div style={{ color: 'var(--mg-muted)', fontSize: 12 }}>No signal selected — click a plot title.</div>
+      </aside>
+    )
+  }
+  const entry = catalog.find((c) => signalKey(c.signal) === selected)
+  const fs = buffer ? estimateFs(buffer) : 0
+  const messageId = entry?.signal.message_id ?? 30
+  return (
+    <aside className="properties">
+      <div className="prop-title">Properties</div>
+      <dl>
+        <dt>Signal</dt>
+        <dd className="mono">{selected}</dd>
+        <dt>Message</dt>
+        <dd>{entry ? `msg ${messageId}` : `msg ${messageId} (not seen yet)`}</dd>
+        <dt>Rate</dt>
+        <dd>{entry ? `${entry.rate_hz.toFixed(1)} Hz` : '—'}</dd>
+        <dt>Est. fs</dt>
+        <dd>{fs > 0 ? `${fs.toFixed(1)} Hz` : '—'}</dd>
+        <dt>Samples</dt>
+        <dd>{buffer ? buffer.t.length : 0}</dd>
+      </dl>
+      <div className="prop-row">
+        <label htmlFor="inspector-rate">Stream rate</label>
+        <select
+          id="inspector-rate"
+          disabled={!tauri}
+          defaultValue="0"
+          onChange={(e) => {
+            const intervalUs = Number(e.target.value)
+            if (tauri) {
+              void invoke('set_message_interval', { messageId, intervalUs }).catch(() => undefined)
+            }
+          }}
+        >
+          {RATE_OPTIONS.map((o) => (
+            <option key={o.intervalUs} value={o.intervalUs}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        {!tauri && <div className="hint">Needs a link (mock data).</div>}
+      </div>
+      <div className="prop-row">
+        <label>Filter</label>
+        <span className="mono">{filterBy && filterBy.algo !== 'none' ? filterBy.algo : 'raw'}</span>
+      </div>
+      <button className="remove" onClick={onRemove}>
+        Remove trace
+      </button>
+    </aside>
+  )
 }
 
 function SpectrumView({ data, label }: { data: { bins: number[]; peakFreqHz: number; fs: number; deltaF: number } | null; label: string }) {
@@ -370,7 +538,7 @@ function renderSpectrum(host: HTMLDivElement, x: number[], y: number[]): void {
       axes: [{ stroke: MUTED() }, { stroke: MUTED() }],
       series: [
         { label: 'Hz', stroke: 'transparent' },
-        { label: 'mag', stroke: '#c084fc' },
+        { label: 'mag', stroke: token('--mg-mag') },
       ],
     },
     [x, y],

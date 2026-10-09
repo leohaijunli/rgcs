@@ -34,11 +34,12 @@ pub fn run() {
             commands::survey_generate_sweep,
             commands::survey_generate_cloverleaf,
             commands::send_command,
+            commands::set_message_interval,
             inspector_service::inspector_open,
             inspector_service::inspector_close,
             inspector_service::inspector_connect,
             inspector_service::inspector_disconnect,
-            inspector_service::inspector_subscribe,
+            inspector_service::inspector_set_traces,
             inspector_service::inspector_catalog,
             inspector_service::inspector_list_algorithms
         ])

@@ -14,7 +14,7 @@ body,
 
 .inspector-grid {
   display: grid;
-  grid-template-columns: 220px 1fr;
+  grid-template-columns: 220px 1fr 240px;
   grid-template-rows: 40px 1fr;
   height: 100%;
 }
@@ -34,7 +34,9 @@ body,
 .toolbar select,
 .plot button,
 .plot select,
-.signal-list button {
+.signal-list button,
+.properties button,
+.properties select {
   background: var(--mg-bg);
   color: var(--mg-ink);
   border: 1px solid var(--mg-border);
@@ -102,6 +104,63 @@ body,
   font-family: var(--mg-font-mono);
   font-size: 11px;
   color: var(--mg-muted);
+  cursor: pointer;
+}
+
+.plot .plot-head .title.selected {
+  color: var(--mg-accent);
+}
+
+.properties {
+  grid-column: 3;
+  overflow: auto;
+  border-left: 1px solid var(--mg-border);
+  padding: 10px;
+  font-size: 12px;
+}
+
+.properties .prop-title {
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.properties dl {
+  margin: 0 0 10px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 10px;
+}
+
+.properties dt {
+  color: var(--mg-muted);
+}
+
+.properties dd {
+  margin: 0;
+  text-align: right;
+}
+
+.properties .prop-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.properties .prop-row label {
+  color: var(--mg-muted);
+  font-size: 11px;
+}
+
+.properties .hint {
+  color: var(--mg-muted);
+  font-size: 11px;
+}
+
+.properties .remove {
+  margin-top: 4px;
+  border: 1px solid var(--mg-error);
+  color: var(--mg-error);
 }
 
 .plot .chart {

@@ -30,10 +30,10 @@ export const FOLLOW_RANGE_M = 250
 export const FOLLOW_PITCH_DEG = -35
 
 // Shipped airframe (see `model/README.md` at the repo root). Cesium maps the
-// asset's glTF axes onto the body frame as +X -> north (+Y), +Y -> up,
-// +Z -> east (+X), so the nose (the camera gimbal, glTF +Z) lies on the body's
-// +X axis, 90 degrees clockwise of the +Y axis `uavQuaternion` calls the nose.
-// Passing `yaw - 90` puts the nose back on the reported heading.
+// asset's glTF axes so the nose (the camera gimbal, glTF +Z) lies on the
+// body's +X axis. `uavQuaternion` rotates about +Z by -yaw, which leaves the
+// +X nose 90 degrees clockwise of north when yaw is 0; passing `yaw - 90`
+// puts the nose back on the reported heading.
 export const UAV_MODEL_URI = '/model/scene-static.gltf'
 export const UAV_MODEL_NOSE_YAW_OFFSET_DEG = -90
 

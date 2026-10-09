@@ -11,11 +11,13 @@ export function groundSpeedMps(pos: GlobalPositionInt): number {
 }
 
 /**
- * Attitude quaternion in the vehicle's local east-north-up frame. The body
- * frame is +X = right wing, +Y = nose, +Z = up, so a compass yaw rotates about
- * -Z, nose-up pitch about +X, and right-wing-down roll about +Y. Cesium maps
- * the asset's glTF +X here, so an asset whose nose is glTF +Z needs
- * `UAV_MODEL_NOSE_YAW_OFFSET_DEG` to re-align the heading.
+ * Attitude quaternion in the vehicle's local east-north-up frame. After
+ * Cesium's default glTF axis correction (asset up = glTF +Y, forward = glTF
+ * +Z) the model's nose lies along the local **+X** axis, so the body frame is
+ * +X = nose, +Y = wing, +Z = up. MAVLink ATTITUDE is a NED rotation: roll is
+ * about the forward/nose axis (+X), pitch about the lateral/wing axis (+Y),
+ * and yaw about the up/down axis (+Z/−Z). An asset whose nose is glTF +Z
+ * additionally needs `UAV_MODEL_NOSE_YAW_OFFSET_DEG` to re-align the heading.
  */
 export function uavQuaternion(
   yawDeg: number,
@@ -28,12 +30,12 @@ export function uavQuaternion(
     new Cesium.Quaternion(),
   )
   const pitch = Cesium.Quaternion.fromAxisAngle(
-    Cesium.Cartesian3.UNIT_X,
+    Cesium.Cartesian3.UNIT_Y,
     Cesium.Math.toRadians(pitchDeg),
     new Cesium.Quaternion(),
   )
   const roll = Cesium.Quaternion.fromAxisAngle(
-    Cesium.Cartesian3.UNIT_Y,
+    Cesium.Cartesian3.UNIT_X,
     Cesium.Math.toRadians(rollDeg),
     new Cesium.Quaternion(),
   )

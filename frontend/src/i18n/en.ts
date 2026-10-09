@@ -8,6 +8,9 @@ export default {
     flight: 'Flight',
     data: 'Data',
   },
+  inspector: {
+    open: 'Signal inspector',
+  },
   link: {
     fc: 'FC',
     rtk: 'RTK',

@@ -1,6 +1,6 @@
 # MagGCS 实时信号监视器(Signal Inspector)实施方案
 
-> 状态:已实现 P0–P7(2026-10-09)。ADR 编号按实际占用改为 **ADR-015(DSP 放 core)**、**ADR-016(独立窗口 + Channel)**,而非草案中的 009/010。
+> 状态:已实现 P0–P7(2026-10-09),P7 后续项(轴联动、属性面板、工作区保存/加载、`SET_MESSAGE_INTERVAL` 调速、`core::inspector::session`、主界面入口按钮)于 2026-10-09 补齐。ADR 编号按实际占用改为 **ADR-015(DSP 放 core)**、**ADR-016(独立窗口 + Channel)**,而非草案中的 009/010。
 
 ## 1. 需求
 
@@ -186,7 +186,7 @@ pub struct AlgorithmDescriptor {      // 自描述:前端据此自动生成参�
 | P4 | 前端:信号浏览器、Plot 网格、原始曲线、暂停、窗口时长、+Plot | **已完成**。浏览器 mock 数据源可截图;实时曲线 |
 | P5 | 滤波链 UI(参数表单自动生成)、多 Trace 叠加、热更新 | **已完成**。TS DSP 镜像(lpf2/hpf2/movavg/detrend)与原始曲线同框叠加;参数热更新 |
 | P6 | FFT 分析器 + 频谱视图(峰值标注、fs/Δf/Nyquist) | **已完成**。峰值频率、fs、Δf 显示 |
-| P7 | SDI 式增强:光标、轴联动、属性面板、布局预设、工作区保存/加载、录制导出 CSV、`SET_MESSAGE_INTERVAL` 调速 | **已完成**:运行/暂停、窗口时长、清空、导出 CSV、uPlot 光标。**未做**:轴联动、属性面板、工作区保存、`SET_MESSAGE_INTERVAL` 调速(列作后续) |
+| P7 | SDI 式增强:光标、轴联动、属性面板、布局预设、工作区保存/加载、录制导出 CSV、`SET_MESSAGE_INTERVAL` 调速 | **已完成**。运行/暂停、窗口时长、清空、导出 CSV、uPlot 光标、轴联动(`cursor.sync`)、属性面板(选中信号详情 + 流速率)、工作区保存/加载(localStorage)、`SET_MESSAGE_INTERVAL`(命令 `set_message_interval`,MAVLink 消息 id/µs)。另:P7 后续 `core::inspector::session` 已落地,滤波链在 Rust 按 trace 运行(ADR-015);前端 TS 镜像(`inspector/dsp.ts`)仅用于浏览器 mock 预览与 FFT 视图 |
 
 每个后端模块附单元测试或 SITL 脚本;前端任务附截图(`scripts/screenshot.mjs` 基线)与手动验证步骤。
 
