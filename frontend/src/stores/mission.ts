@@ -7,6 +7,7 @@
 
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
+import type { GeoPoint } from '../generated-types/GeoPoint'
 import type { MissionItem } from '../generated-types/MissionItem'
 import type { PatternLine } from '../generated-types/PatternLine'
 import type { PatternPlan } from '../generated-types/PatternPlan'
@@ -28,12 +29,15 @@ export type AltitudeMode = 'relative' | 'amsl' | 'agl'
  * The most recently inserted preset pattern, for the line readout and for
  * re-generating: while it is set the trailing `count` waypoints are exactly the
  * block it produced, so Generate replaces them instead of appending a duplicate.
- * Any manual edit clears it.
+ * Any manual edit clears it. `center` remembers where the pattern was placed so
+ * re-generating after a view switch does not silently follow the new map centre.
  */
 export interface InsertedPattern {
   label: string
   count: number
   lines: PatternLine[]
+  /** Centre the pattern was generated from (cloverleaf centre / rectangle centre). */
+  center: GeoPoint | null
 }
 
 /** Payload of the backend `mission` event. */
@@ -92,7 +96,7 @@ interface MissionState {
   removeWaypoint: (seq: number) => void
   moveWaypoint: (from: number, to: number) => void
   /** Append a generated pattern's waypoints and show its line table. */
-  insertPattern: (plan: PatternPlan, label: string) => void
+  insertPattern: (plan: PatternPlan, label: string, center?: GeoPoint | null) => void
   upload: () => Promise<void>
   download: () => Promise<void>
   /** Clear the mission *on the flight controller* (link required). */
@@ -234,7 +238,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       }
     }),
 
-  insertPattern: (plan, label) =>
+  insertPattern: (plan, label, center) =>
     set((s) => {
       // Generate replaces the previous preset block rather than stacking a
       // second copy of the trajectory. `lastPattern` is cleared by every manual
@@ -254,6 +258,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
             start_seq: line.start_seq + kept.length,
             end_seq: line.end_seq + kept.length,
           })),
+          center: center ?? null,
         },
         selectedSeq: null,
         dirty: true,

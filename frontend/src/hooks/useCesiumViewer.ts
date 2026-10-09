@@ -41,6 +41,7 @@ import {
   UAV_MODEL_NOSE_YAW_OFFSET_DEG,
 } from '../cesium/constants'
 import { groundSpeedMps, projectAhead, uavOrientation } from '../cesium/uav'
+import { DEFAULT_ALT_AGL_M } from '../mission/compile'
 import { usePrefsStore } from '../desktop/prefs'
 import { usePolygonStore } from '../stores/polygon'
 import { useUiStore } from '../stores/ui'
@@ -115,7 +116,15 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
       },
       onSelect: (seq) => useMissionStore.getState().select(seq),
       onAdd: (lat, lon) => useMissionStore.getState().addWaypointAt(lat, lon),
-      onHover: (ground) => setGhostPoint(ghost, ground, homeAmslRef.current),
+      onHover: (ground) => {
+        // Preview the new waypoint where it will land: at the inherited
+        // altitude (last waypoint, else home + default AGL), so the click
+        // placement matches the rendered point even from a tilted camera.
+        const st = useMissionStore.getState()
+        const last = st.waypoints[st.waypoints.length - 1]
+        const topM = last ? last.altitude.meters : homeAmslRef.current + DEFAULT_ALT_AGL_M
+        setGhostPoint(ghost, ground, topM, homeAmslRef.current)
+      },
     })
     const follow = createFollowController(viewer, layer.dronePosition)
     follow.attach()
@@ -194,7 +203,7 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
     const editing = view === 'planning'
     viewer.scene.canvas.style.cursor = editing && mapTool === 'add' ? 'crosshair' : ''
     if (editing && mapTool === 'add') return
-    if (ghostRef.current) setGhostPoint(ghostRef.current, null)
+    if (ghostRef.current) setGhostPoint(ghostRef.current, null, 0, 0)
   }, [mapTool, view])
 
   // Follow mode / 2D-3D mode.

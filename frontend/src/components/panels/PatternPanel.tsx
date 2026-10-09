@@ -1,7 +1,7 @@
 // Preset parameterised patterns: build the parameters, call `core::survey`
 // through the Tauri commands, and append the generated waypoints to the plan.
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   defaultCloverleaf,
@@ -44,9 +44,16 @@ export default function PatternPanel() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const center = mapCenter
-    ? { latitude_deg: mapCenter.lat, longitude_deg: mapCenter.lon }
-    : null
+  // A pinned centre (lat/lon inputs or "Use map centre"), so a generated
+  // pattern stays where it was even if the map moves. Follows the last
+  // generated pattern's centre across view switches.
+  const [center, setCenter] = useState<GeoPoint | null>(null)
+  useEffect(() => {
+    if (lastPattern?.center) setCenter(lastPattern.center)
+  }, [lastPattern?.center])
+  // The pinned centre, or the live map centre until one is pinned.
+  const effectiveCenter: GeoPoint | null =
+    center ?? (mapCenter ? { latitude_deg: mapCenter.lat, longitude_deg: mapCenter.lon } : null)
   const polygonVertices = usePolygonStore((s) => s.vertices)
   const polygonClosed = usePolygonStore((s) => s.closed)
   const polygonBad = polygonClosed && selfIntersects(polygonVertices)
@@ -61,7 +68,7 @@ export default function PatternPanel() {
       if (kind === 'sweep') {
         let boundary: GeoPoint[]
         if (usePolygonBoundary) boundary = polygonVertices
-        else if (center) boundary = rectanglePolygon(center, size.width, size.height)
+        else if (effectiveCenter) boundary = rectanglePolygon(effectiveCenter, size.width, size.height)
         else return
         const params: SurveyPattern = {
           ...sweep,
@@ -70,16 +77,16 @@ export default function PatternPanel() {
           speed_mps: sweep.speed_mps && sweep.speed_mps > 0 ? sweep.speed_mps : null,
         }
         const plan = await generateSweep(params)
-        insertPattern(plan, t('plan.pattern.kind.sweep'))
+        insertPattern(plan, t('plan.pattern.kind.sweep'), effectiveCenter)
       } else {
-        if (!center) return
+        if (!effectiveCenter) return
         const params: CloverleafPattern = {
           ...clover,
-          center,
+          center: effectiveCenter,
           speed_mps: clover.speed_mps && clover.speed_mps > 0 ? clover.speed_mps : null,
         }
         const plan = await generateCloverleaf(params)
-        insertPattern(plan, t('plan.pattern.kind.cloverleaf'))
+        insertPattern(plan, t('plan.pattern.kind.cloverleaf'), effectiveCenter)
       }
     } catch (e) {
       setError(String(e))
@@ -115,11 +122,29 @@ export default function PatternPanel() {
         ))}
       </div>
 
-      <div className="mb-1.5 truncate text-[11px] text-muted">
-        {t('plan.pattern.center')}{' '}
-        <span className="mono">
-          {center ? `${center.latitude_deg.toFixed(5)}, ${center.longitude_deg.toFixed(5)}` : '—'}
-        </span>
+      <div className="mb-1.5 grid grid-cols-2 items-end gap-1.5">
+        <Num
+          label={t('plan.pattern.lat')}
+          value={effectiveCenter?.latitude_deg ?? 0}
+          onChange={(v) =>
+            setCenter({ latitude_deg: v, longitude_deg: effectiveCenter?.longitude_deg ?? 0 })
+          }
+        />
+        <Num
+          label={t('plan.pattern.lon')}
+          value={effectiveCenter?.longitude_deg ?? 0}
+          onChange={(v) =>
+            setCenter({ latitude_deg: effectiveCenter?.latitude_deg ?? 0, longitude_deg: v })
+          }
+        />
+        <button
+          onClick={() => {
+            if (mapCenter) setCenter({ latitude_deg: mapCenter.lat, longitude_deg: mapCenter.lon })
+          }}
+          className="col-span-2 rounded border border-line bg-canvas px-2 py-1 text-[11px] text-ink hover:bg-panel"
+        >
+          {t('plan.pattern.useMapCentre')}
+        </button>
       </div>
 
       {kind === 'sweep' ? (
@@ -229,14 +254,14 @@ export default function PatternPanel() {
           ) : (
             <span className="text-muted">
               {t('plan.pattern.useRectangle')}
-              {!center && ` · ${t('plan.pattern.noCenter')}`}
+              {!effectiveCenter && ` · ${t('plan.pattern.noCenter')}`}
             </span>
           )}
         </div>
       )}
 
       <button
-        disabled={busy || (!center && !usePolygonBoundary) || polygonBad}
+        disabled={busy || (!effectiveCenter && !usePolygonBoundary) || polygonBad}
         onClick={() => void onGenerate()}
         title={lastPattern ? t('plan.pattern.replaces') : undefined}
         className="mt-2 w-full rounded-md border border-line bg-panel px-2 py-1.5 text-sm hover:bg-canvas disabled:opacity-40"
@@ -244,7 +269,7 @@ export default function PatternPanel() {
         {lastPattern ? t('plan.pattern.regenerate') : t('plan.pattern.generate')}
       </button>
 
-      {!center && !usePolygonBoundary && (
+      {!effectiveCenter && !usePolygonBoundary && (
         <div className="mt-1 text-[11px] text-warn">{t('plan.pattern.polygonHint')}</div>
       )}
       {lastPattern && (

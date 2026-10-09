@@ -395,7 +395,7 @@ export function previewWaypoint(
         if (s === seq) return Cesium.Cartesian3.fromDegrees(lonDeg, latDeg, height)
         const it = items.find((i) => i.seq === s)
         if (!it) return Cesium.Cartesian3.fromDegrees(lonDeg, latDeg, height)
-        return Cesium.Cartesian3.fromDegrees(degFromMavInt(it.y), degFromMavInt(it.x), it.z + 5)
+        return Cesium.Cartesian3.fromDegrees(degFromMavInt(it.y), degFromMavInt(it.x), it.z)
       }),
     )
   }
@@ -403,12 +403,16 @@ export function previewWaypoint(
 
 /** A temporary point under the cursor while the add tool is active. */
 export interface GhostPoint {
+  /** The point itself, previewing the waypoint at its inherited altitude. */
   entity: Cesium.Entity
+  /** Ground stick from the clicked ground point up to the previewed altitude. */
+  stick: Cesium.Entity
 }
 
-/** Create the hidden hover marker for the add-waypoint tool. */
+/** Create the hidden hover marker plus its ground stick for the add tool. */
 export function createGhostPoint(viewer: Cesium.Viewer): GhostPoint {
   const accent = Cesium.Color.fromCssColorString(cssVar('--mg-accent'))
+  const muted = Cesium.Color.fromCssColorString(cssVar('--mg-muted'))
   const entity = viewer.entities.add({
     show: false,
     point: {
@@ -418,22 +422,52 @@ export function createGhostPoint(viewer: Cesium.Viewer): GhostPoint {
       outlineWidth: 1,
     },
   })
-  return { entity }
+  const stick = viewer.entities.add({
+    show: false,
+    polyline: {
+      positions: [],
+      width: 1,
+      material: muted.withAlpha(0.5),
+    },
+  })
+  return { entity, stick }
 }
 
 /**
- * Position the hover marker on the ground plane the plan is drawn on, or hide
- * it for `null` (cursor over the sky).
+ * Position the hover marker at the altitude a new waypoint would get (`topM`),
+ * with a ground stick down to the clicked ground plane (`bottomM`), so the
+ * preview and the placed waypoint coincide even from a tilted 3D camera.
+ * `null` hides it (cursor over the sky).
  */
-export function setGhostPoint(ghost: GhostPoint, ground: LatLonLike | null, groundM = 0): void {
+export function setGhostPoint(
+  ghost: GhostPoint,
+  ground: LatLonLike | null,
+  topM: number,
+  bottomM: number,
+): void {
   if (!ground) {
     ghost.entity.show = false
+    ghost.stick.show = false
     return
   }
   ghost.entity.position = new Cesium.ConstantPositionProperty(
-    Cesium.Cartesian3.fromDegrees(ground.lon, ground.lat, groundM),
+    Cesium.Cartesian3.fromDegrees(ground.lon, ground.lat, topM),
   )
   ghost.entity.show = true
+  const stick = ghost.stick.polyline
+  if (stick) {
+    stick.positions = new Cesium.ConstantProperty(
+      Cesium.Cartesian3.fromDegreesArrayHeights([
+        ground.lon,
+        ground.lat,
+        topM,
+        ground.lon,
+        ground.lat,
+        bottomM,
+      ]),
+    )
+  }
+  ghost.stick.show = true
 }
 
 /** Draft survey-boundary polygon: vertex markers (id `pg-<i>`) plus the edge. */
@@ -471,25 +505,14 @@ export function updatePolygonLayer(
 ): void {
   for (const e of layer.vertices) viewer.entities.remove(e)
   layer.vertices = []
-  if (vertices.length < 2) {
+  if (vertices.length === 0) {
     layer.boundary.show = false
     return
   }
   const accent = Cesium.Color.fromCssColorString(cssVar('--mg-accent'))
   const error = Cesium.Color.fromCssColorString(cssVar('--mg-error'))
-  const points = vertices.map((p) =>
-    Cesium.Cartesian3.fromDegrees(p.longitude_deg, p.latitude_deg, 0),
-  )
-  if (closed && vertices.length >= 3) points.push(Cesium.Cartesian3.clone(points[0]))
-  layer.boundary.show = true
-  const bad = closed && selfIntersects(vertices)
-  if (layer.boundary.polyline) {
-    layer.boundary.polyline.positions = new Cesium.ConstantProperty(points)
-    layer.boundary.polyline.material = new Cesium.PolylineGlowMaterialProperty({
-      glowPower: 0.2,
-      color: (bad ? error : accent).withAlpha(0.9),
-    })
-  }
+  // Vertex markers render from the first click on; the connecting edge needs
+  // at least two vertices, so a single-vertex draft stays visible.
   vertices.forEach((p, i) => {
     layer.vertices.push(
       viewer.entities.add({
@@ -504,6 +527,23 @@ export function updatePolygonLayer(
       }),
     )
   })
+  if (vertices.length < 2) {
+    layer.boundary.show = false
+    return
+  }
+  const points = vertices.map((p) =>
+    Cesium.Cartesian3.fromDegrees(p.longitude_deg, p.latitude_deg, 0),
+  )
+  if (closed && vertices.length >= 3) points.push(Cesium.Cartesian3.clone(points[0]))
+  layer.boundary.show = true
+  const bad = closed && selfIntersects(vertices)
+  if (layer.boundary.polyline) {
+    layer.boundary.polyline.positions = new Cesium.ConstantProperty(points)
+    layer.boundary.polyline.material = new Cesium.PolylineGlowMaterialProperty({
+      glowPower: 0.2,
+      color: (bad ? error : accent).withAlpha(0.9),
+    })
+  }
 }
 
 /** Remove the draft polygon from the viewer. */
