@@ -259,6 +259,18 @@ export function installMapTools(
     if (!st.closed && st.vertices.length >= 3) st.close()
   }, Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK)
 
+  // Right-click on a polygon vertex removes it (any other right-click is a no-op).
+  handler.setInputAction(
+    (click: Cesium.ScreenSpaceEventHandler.PositionedEvent) => {
+      if (tool() !== 'polygon' || !enabled()) return
+      const picked = viewer.scene.pick(click.position)
+      const entity = Cesium.defined(picked) ? (picked.id as Cesium.Entity) : undefined
+      const seq = Number.parseInt(entity?.id ? String(entity.id).replace(/^pg-/, '') : '', 10)
+      if (!Number.isNaN(seq)) usePolygonStore.getState().removeVertex(seq)
+    },
+    Cesium.ScreenSpaceEventType.RIGHT_CLICK,
+  )
+
   // A gesture can end off-canvas (or the window can lose focus mid-drag); the
   // window listeners make sure the camera is always restored (finding 15).
   const onWindowPointerUp = () => {

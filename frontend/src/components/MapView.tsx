@@ -108,11 +108,17 @@ export default function MapView() {
           <span className="mono">
             {t('map.polygonReadout', {
               count: polygonCount,
-              area: (areaHectares).toFixed(1),
+              area: areaHectares.toFixed(1),
               perimeter: Math.round(perimeter),
             })}
           </span>
           {polygonBad && <span className="font-medium">{t('map.polygonSelfIntersect')}</span>}
+          <button
+            onClick={() => usePolygonStore.getState().reset()}
+            className="pointer-events-auto rounded border border-line bg-canvas px-2 py-0.5 text-[11px] text-ink hover:bg-panel"
+          >
+            {t('map.polygonClear')}
+          </button>
         </div>
       )}
     </div>
