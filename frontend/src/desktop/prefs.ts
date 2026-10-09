@@ -2,6 +2,7 @@
 // addendum, task 0.8): the last endpoint, the auto-connect toggle and the
 // initial vehicle position survive a restart.
 
+import { invoke } from '@tauri-apps/api/core'
 import { create } from 'zustand'
 import { HOME_LAT, HOME_LON } from '../cesium/constants'
 import { DEFAULT_ENDPOINT } from './endpoint'
@@ -67,6 +68,22 @@ function write(key: string, value: string): void {
   }
 }
 
+function inTauri(): boolean {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+}
+
+/**
+ * Mirror the initial position to the SITL helper file (desktop shell only) so a
+ * headless PX4 SITL run spawns at the same location (Settings -> Vehicle).
+ * Non-fatal: the map settings still persist in `localStorage` regardless.
+ */
+export function syncSitlHome(position: LatLon): void {
+  if (!inTauri()) return
+  void invoke('set_sitl_home', { lat: position.lat, lon: position.lon }).catch(() => {
+    /* ignored: localStorage remains the source of truth for the UI */
+  })
+}
+
 interface PrefsState {
   endpoint: string
   autoConnect: boolean
@@ -92,6 +109,7 @@ export const usePrefsStore = create<PrefsState>((set) => ({
   setInitialPosition: (position) => {
     if (!isValidLatLon(position)) return
     write(POSITION_KEY, JSON.stringify(position))
+    syncSitlHome(position)
     set({ initialPosition: position })
   },
 }))

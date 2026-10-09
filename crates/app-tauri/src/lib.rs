@@ -25,6 +25,7 @@ pub fn run() {
             commands::link_status,
             commands::get_snapshot,
             commands::enumerate_devices,
+            commands::set_sitl_home,
             commands::mission_upload,
             commands::mission_download,
             commands::mission_clear,

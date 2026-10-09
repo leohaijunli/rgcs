@@ -336,6 +336,22 @@ Verified: `frontend` typecheck/colors/contrast/i18n + new
 null params, hash identity, datum round-trips) + `npm run build`;
 `cargo test -p maggcs-app`; `scripts/desktop-smoke.sh` (53% bright, PASS).
 
+## Latest landing — SITL spawns at the Settings -> Vehicle position
+
+The SITL world origin now follows the operator's Settings -> Vehicle initial
+position: the desktop shell mirrors `maggcs.initialPosition` into
+`sitl-home.json` in the app config dir (`~/.config/io.maggcs.desktop/`, or the
+Windows AppData dir under WSL2), and `scripts/sitl/sitl-home.sh` resolves it
+for PX4 (env overrides win, then the file, then the built-in Sidney BC default).
+The format is covered by a unit test (`commands::tests::sitl_home_file_round_trips`).
+
+- Code: `desktop/prefs.ts` (`syncSitlHome`), `desktop/bridge.ts` (sync on
+  startup), `crates/app-tauri/src/commands.rs` (`set_sitl_home`),
+  `scripts/sitl/sitl-home.sh`, `scripts/sitl/run_sitl_docker.sh`.
+- Verified: `cargo test -p maggcs-app` (10 passed), `npm run typecheck`,
+  and `bash scripts/sitl/sitl-home.sh` (default / env / file / corrupt-file
+  cases).
+
 ## Latest landing — Settings -> Vehicle: initial vehicle position
 
 `Settings -> Vehicle` edits the initial vehicle position (lat/lon), persisted in

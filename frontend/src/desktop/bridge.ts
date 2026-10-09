@@ -18,7 +18,7 @@ import type { MissionItem } from '../generated-types/MissionItem'
 import type { TelemetryError } from '../generated-types/TelemetryError'
 import type { MissionEventPayload } from '../stores/mission'
 import { reportConnectError } from './connect'
-import { usePrefsStore } from './prefs'
+import { syncSitlHome, usePrefsStore } from './prefs'
 import type { CommandEventPayload } from '../stores/command'
 import { useCommandStore } from '../stores/command'
 import { useDevicesStore } from '../stores/devices'
@@ -103,6 +103,9 @@ export function useTelemetryBridge() {
         // them (issue #4). The endpoint and the toggle are remembered across
         // restarts (Phase 0 addendum, task 0.8).
         const { endpoint, autoConnect } = usePrefsStore.getState()
+        // Keep the SITL helper file in step with a setting saved by an older
+        // build or on a fresh profile (Settings -> Vehicle).
+        syncSitlHome(usePrefsStore.getState().initialPosition)
         if (autoConnect) {
           await invoke('connect', { endpoint }).catch(reportConnectError)
         }

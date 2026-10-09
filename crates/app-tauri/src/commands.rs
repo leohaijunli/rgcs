@@ -1,5 +1,7 @@
 //! Tauri commands exposed to the React UI.
 
+use std::fs;
+use std::path::Path;
 use std::time::Duration;
 
 use ::mavlink::common::MavCmd;
@@ -12,7 +14,7 @@ use maggcs_core::survey::{CloverleafPattern, PatternPlan, SurveyPattern};
 use maggcs_core::telemetry::hub::{TelemetryHub, DEFAULT_PUSH_HZ};
 use maggcs_core::telemetry::{TelemetrySnapshot, VehicleId};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::command_service;
 use crate::mission_service;
@@ -172,6 +174,36 @@ pub fn enumerate_devices() -> Result<Vec<SerialDeviceInfo>, String> {
     manager.enumerate().map_err(|e| e.to_string())
 }
 
+/// SITL home file name inside the app config dir.
+const SITL_HOME_FILE: &str = "sitl-home.json";
+
+/// Write `{"lat":..,"lon":..}` into `dir/sitl-home.json`, creating `dir` first.
+///
+/// Split out of the command so the file format is unit-testable without a
+/// Tauri runtime. The SITL helper (`scripts/sitl/sitl-home.sh`) reads this file
+/// so PX4 spawns at the same location the operator set in Settings -> Vehicle.
+fn write_sitl_home_file(dir: &Path, lat: f64, lon: f64) -> std::io::Result<()> {
+    fs::create_dir_all(dir)?;
+    fs::write(dir.join(SITL_HOME_FILE), format!("{{\"lat\":{lat},\"lon\":{lon}}}\n"))
+}
+
+/// Persist the Settings -> Vehicle initial position for the SITL helper.
+///
+/// Mirrors the browser-side `localStorage` setting into the app config dir so a
+/// headless PX4 SITL run can spawn at the operator's chosen location. Non-fatal
+/// on the UI side: the map settings still persist regardless.
+#[tauri::command]
+pub async fn set_sitl_home(app: AppHandle, lat: f64, lon: f64) -> Result<(), String> {
+    if !lat.is_finite() || !lon.is_finite() {
+        return Err("initial position must be finite numbers".to_string());
+    }
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("cannot resolve app config dir: {e}"))?;
+    write_sitl_home_file(&dir, lat, lon).map_err(|e| e.to_string())
+}
+
 /// Start uploading a mission to the FC.
 #[tauri::command]
 pub async fn mission_upload(
@@ -287,5 +319,16 @@ mod tests {
     #[test]
     fn unknown_name_is_rejected() {
         assert!(named_command("banana").is_err());
+    }
+
+    #[test]
+    fn sitl_home_file_round_trips() {
+        let dir = std::env::temp_dir().join(format!("maggcs-sitl-home-{}", std::process::id()));
+        write_sitl_home_file(&dir, 48.6493, -123.3982).expect("write");
+        let raw = std::fs::read_to_string(dir.join(SITL_HOME_FILE)).expect("read");
+        let value: serde_json::Value = serde_json::from_str(&raw).expect("json");
+        assert_eq!(value["lat"], 48.6493);
+        assert_eq!(value["lon"], -123.3982);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

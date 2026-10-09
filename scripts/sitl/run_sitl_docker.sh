@@ -29,7 +29,8 @@
 #                   (build prints to the terminal and is saved to build.log)
 #               0 = default: detached/headless SITL with the pxh shell off
 #   PX4_HOME_LAT/PX4_HOME_LON/PX4_HOME_ALT
-#               SITL world origin (default: Sidney BC, Canada, ~5 m MSL)
+#               SITL world origin (default: MagGCS's Settings -> Vehicle initial
+#               position, else Sidney BC, Canada, ~5 m MSL)
 #
 # The GCS (MagGCS on Windows, or scripts/sitl/run_heartbeat_test.sh) connects
 # to udpin:0.0.0.0:14550. WSL2: use mirrored networking or the WSL IP
@@ -67,10 +68,13 @@ PX4_SIM_MODEL="${PX4_SIM_MODEL:-}"
 if [ "$PX4_SIM" = "none" ] && [ -z "$PX4_SIM_MODEL" ]; then
   PX4_SIM_MODEL="sihsim_quadx"
 fi
-# SITL world origin — default Sidney BC, Canada (survey site), ~5 m MSL.
-export PX4_HOME_LAT="${PX4_HOME_LAT:-48.6493}"
-export PX4_HOME_LON="${PX4_HOME_LON:--123.3982}"
-export PX4_HOME_ALT="${PX4_HOME_ALT:-5}"
+# SITL world origin — MagGCS's Settings -> Vehicle initial position when set,
+# else the PX4_HOME_* env vars, else Sidney BC, Canada (survey site), ~5 m MSL.
+# `sitl-home.sh` resolves and exports them; it only prints when run standalone.
+# shellcheck source=scripts/sitl/sitl-home.sh
+# shellcheck disable=SC1091
+source "$(dirname "$0")/sitl-home.sh"
+export PX4_HOME_LAT PX4_HOME_LON PX4_HOME_ALT
 
 if [ ! -d "$PX4_DIR" ]; then
   echo "PX4 source not found at $PX4_DIR (clone PX4-Autopilot first)" >&2
