@@ -156,6 +156,10 @@ export default {
       replaces: 'Replaces the last generated trajectory',
       failed: 'Pattern failed: {{message}}',
       lines: '{{survey}} survey · {{tie}} tie · {{cal}} cal',
+      usePolygon: 'Boundary: drawn polygon',
+      useRectangle: 'Boundary: rectangle around map centre',
+      boundarySelfIntersect: 'Boundary crosses itself — fix it before generating',
+      polygonHint: 'Draw the boundary on the map (polygon tool), or move the map and use a rectangle',
       legend: {
         survey: 'Survey',
         tie: 'Tie',

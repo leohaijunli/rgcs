@@ -38,18 +38,25 @@ do I sweep an irregular (concave) field?" The agreed decomposition (also in
 - **B1** `core::survey`: replace `clip_to_convex` with a simple-polygon (concave
   OK) line clipper that returns several segments per crossing line;
   `build_parallel_lines` emits one `PatternLine` per segment; drop the
-  convexity check and add `SurveyError::SelfIntersectingPolygon`.
+  convexity check and add `SurveyError::SelfIntersectingPolygon`. **Landed.**
 - **B2** golden-geometry tests (L-shape / U-shape: segments, lengths, line
-  table, fly order).
+  table, fly order). **Landed.**
 - **B3** polygon map tool (`stores/ui.ts` `mapTool: 'polygon'`,
   `cesium/tools/polygon.ts`): click vertices, double-click / first-vertex
   closes, drag vertices, self-intersection flagged, area/perimeter readout;
-  ADR-014 to be recorded.
-- **B4** `PatternPanel` generates the sweep from the drawn polygon.
+  ADR-014 to be recorded. **Landed** (`stores/polygon.ts`, the polygon branch
+  in `installMapTools`, the draft layer in `entities.ts`, `mission/polygon.ts`
+  + `npm run check:polygon`, the toolbar button, ADR-014).
+- **B4** `PatternPanel` generates the sweep from the drawn polygon. **Landed.**
 - **A1** `InsertedPattern` remembers centre + params; `PatternPanel` gains lat/lon
   centre inputs + "use map centre".
 - **A2** draggable centre handle on the map (cloverleaf `center`, sweep rectangle
   centre), regenerate preview; one drag = one commit.
+
+Manual verification for B3/B4 (Playwright or desktop): draw an L-shape in the
+planning view (polygon tool), drag a vertex, close it, watch the area/perimeter
+readout and the red boundary on self-intersection (Generate blocked), then
+Generate a sweep clipped to the drawn polygon.
 
 ## Latest landing — flight progress, line colours, heights, wire-precision sync
 

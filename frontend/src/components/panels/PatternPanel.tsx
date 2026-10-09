@@ -10,9 +10,12 @@ import {
   generateSweep,
   rectanglePolygon,
 } from '../../mission/patterns'
+import { selfIntersects } from '../../mission/polygon'
 import { useMissionStore } from '../../stores/mission'
+import { usePolygonStore } from '../../stores/polygon'
 import { useUiStore } from '../../stores/ui'
 import type { CloverleafPattern } from '../../generated-types/CloverleafPattern'
+import type { GeoPoint } from '../../generated-types/GeoPoint'
 import type { SurveyPattern } from '../../generated-types/SurveyPattern'
 
 type Kind = 'sweep' | 'cloverleaf'
@@ -44,22 +47,32 @@ export default function PatternPanel() {
   const center = mapCenter
     ? { latitude_deg: mapCenter.lat, longitude_deg: mapCenter.lon }
     : null
+  const polygonVertices = usePolygonStore((s) => s.vertices)
+  const polygonClosed = usePolygonStore((s) => s.closed)
+  const polygonBad = polygonClosed && selfIntersects(polygonVertices)
+  // A closed, valid polygon is the sweep boundary; otherwise fall back to the
+  // rectangle quick mode around the map centre.
+  const usePolygonBoundary = polygonClosed && !polygonBad
 
   const onGenerate = async () => {
-    if (!center) return
     setError(null)
     setBusy(true)
     try {
       if (kind === 'sweep') {
+        let boundary: GeoPoint[]
+        if (usePolygonBoundary) boundary = polygonVertices
+        else if (center) boundary = rectanglePolygon(center, size.width, size.height)
+        else return
         const params: SurveyPattern = {
           ...sweep,
-          polygon: rectanglePolygon(center, size.width, size.height),
+          polygon: boundary,
           tie_spacing_m: sweep.tie_spacing_m && sweep.tie_spacing_m > 0 ? sweep.tie_spacing_m : null,
           speed_mps: sweep.speed_mps && sweep.speed_mps > 0 ? sweep.speed_mps : null,
         }
         const plan = await generateSweep(params)
         insertPattern(plan, t('plan.pattern.kind.sweep'))
       } else {
+        if (!center) return
         const params: CloverleafPattern = {
           ...clover,
           center,
@@ -207,8 +220,23 @@ export default function PatternPanel() {
         </div>
       )}
 
+      {kind === 'sweep' && (
+        <div className="mt-1 mb-1 flex flex-col gap-0.5 text-[11px]">
+          {usePolygonBoundary ? (
+            <span className="text-accent">{t('plan.pattern.usePolygon')}</span>
+          ) : polygonClosed && polygonBad ? (
+            <span className="text-error">{t('plan.pattern.boundarySelfIntersect')}</span>
+          ) : (
+            <span className="text-muted">
+              {t('plan.pattern.useRectangle')}
+              {!center && ` · ${t('plan.pattern.noCenter')}`}
+            </span>
+          )}
+        </div>
+      )}
+
       <button
-        disabled={busy || !center}
+        disabled={busy || (!center && !usePolygonBoundary) || polygonBad}
         onClick={() => void onGenerate()}
         title={lastPattern ? t('plan.pattern.replaces') : undefined}
         className="mt-2 w-full rounded-md border border-line bg-panel px-2 py-1.5 text-sm hover:bg-canvas disabled:opacity-40"
@@ -216,7 +244,9 @@ export default function PatternPanel() {
         {lastPattern ? t('plan.pattern.regenerate') : t('plan.pattern.generate')}
       </button>
 
-      {!center && <div className="mt-1 text-[11px] text-warn">{t('plan.pattern.noCenter')}</div>}
+      {!center && !usePolygonBoundary && (
+        <div className="mt-1 text-[11px] text-warn">{t('plan.pattern.polygonHint')}</div>
+      )}
       {lastPattern && (
         <div className="mt-1 text-[11px] text-muted">{t('plan.pattern.replaces')}</div>
       )}
