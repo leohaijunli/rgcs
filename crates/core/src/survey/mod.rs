@@ -4,8 +4,8 @@
 //! flight plan instead of hand-placing waypoints:
 //!
 //! - [`SurveyPattern`] — a parallel-line sweep, optionally with perpendicular
-//!   tie lines, clipped to a convex polygon, with lead-in/lead-out and an
-//!   alternating (serpentine) option.
+//!   tie lines, clipped to a simple polygon (convex or concave), with
+//!   lead-in/lead-out and an alternating (serpentine) option.
 //! - [`CloverleafPattern`] — an N-petal rose for calibration flights.
 //!
 //! Generators are pure geometry and return [`PatternPlan`] (planned AMSL
@@ -122,21 +122,148 @@ mod tests {
     }
 
     #[test]
-    fn non_convex_polygon_is_rejected() {
+    fn concave_polygon_now_generates() {
         use crate::plan::GeoPoint;
         let dart = vec![
             GeoPoint::new(48.0, -123.0),
             GeoPoint::new(48.01, -123.0),
-            GeoPoint::new(48.005, -123.005), // inward notch -> reflex
+            GeoPoint::new(48.005, -123.005), // inward notch -> reflex vertex
             GeoPoint::new(48.01, -123.01),
             GeoPoint::new(48.0, -123.01),
         ];
         let mut pattern = sweep(false, None);
         pattern.polygon = dart;
+        // B1: non-convex polygons are no longer rejected — the clipper splits
+        // each crossing line at the reflex vertex.
+        let plan = pattern.generate().expect("concave polygons generate");
+        assert!(plan.waypoints.len() >= 4, "waypoints");
+        assert!(plan.lines.len() >= 2, "lines");
+    }
+
+    #[test]
+    fn self_intersecting_polygon_is_rejected() {
+        use crate::plan::GeoPoint;
+        // A bowtie: edges 0-1 and 2-3 cross.
+        let bowtie = vec![
+            GeoPoint::new(48.0, -123.0),
+            GeoPoint::new(48.01, -123.01),
+            GeoPoint::new(48.0, -123.01),
+            GeoPoint::new(48.01, -123.0),
+        ];
+        let mut pattern = sweep(false, None);
+        pattern.polygon = bowtie;
         assert_eq!(
             pattern.generate().unwrap_err(),
-            SurveyError::NonConvexPolygon
+            SurveyError::SelfIntersectingPolygon
         );
+    }
+
+    #[test]
+    fn degenerate_polygon_is_rejected() {
+        use crate::plan::GeoPoint;
+        let collinear = vec![
+            GeoPoint::new(48.0, -123.0),
+            GeoPoint::new(48.01, -123.0),
+            GeoPoint::new(48.02, -123.0),
+        ];
+        let mut pattern = sweep(false, None);
+        pattern.polygon = collinear;
+        assert_eq!(
+            pattern.generate().unwrap_err(),
+            SurveyError::DegeneratePolygon
+        );
+    }
+
+    /// Build a polygon from local (east, north) metre offsets around `origin`,
+    /// so the golden geometry tests are written in metres.
+    fn local_polygon(
+        origin: crate::plan::GeoPoint,
+        offsets: &[(f64, f64)],
+    ) -> Vec<crate::plan::GeoPoint> {
+        let projection = LocalProjection::new(origin);
+        offsets
+            .iter()
+            .map(|&(e, n)| projection.to_geo(e, n))
+            .collect()
+    }
+
+    #[test]
+    fn u_shape_vertical_sweep_skips_the_notch() {
+        // A 600x600 m square with a 200..400 m, 200..600 m notch cut from the
+        // top. Vertical lines at x = 0, 250, 500: x = 0 lies on the boundary
+        // (the left edge, flown), x = 250 sits in the notch (only the bottom
+        // strip), x = 500 spans the full height of the right wing.
+        let u = [
+            (0.0, 0.0),
+            (600.0, 0.0),
+            (600.0, 600.0),
+            (400.0, 600.0),
+            (400.0, 200.0),
+            (200.0, 200.0),
+            (200.0, 600.0),
+            (0.0, 600.0),
+        ];
+        let pattern = SurveyPattern {
+            polygon: local_polygon(crate::plan::GeoPoint::new(48.0, -123.0), &u),
+            line_azimuth_deg: 0.0,
+            line_spacing_m: 250.0,
+            tie_spacing_m: None,
+            tie_azimuth_deg: 90.0,
+            lead_in_m: 0.0,
+            lead_out_m: 0.0,
+            altitude_amsl_m: 150.0,
+            alternate: false,
+            speed_mps: None,
+        };
+        let plan = pattern.generate().expect("generate");
+        assert_eq!(plan.waypoints.len(), 6, "three lines x two endpoints");
+        assert_eq!(plan.lines.len(), 3, "lines");
+        assert_eq!(plan.lines[0].start_seq, 0, "fly order");
+        assert_eq!(plan.lines[1].start_seq, 2, "fly order");
+        assert_eq!(plan.lines[2].start_seq, 4, "fly order");
+        let mut lengths: Vec<f64> = plan.lines.iter().map(|l| l.length_m).collect();
+        lengths.sort_by(f64::total_cmp);
+        for (got, want) in lengths.iter().zip([200.0, 600.0, 600.0]) {
+            assert!((got - want).abs() < 1.0, "length {got} vs {want}");
+        }
+    }
+
+    #[test]
+    fn u_shape_horizontal_sweep_splits_the_notch_line() {
+        // The same U, swept horizontally (azimuth 90). The lines through the
+        // notch (y = 600 and y = 350) are cut into two disjoint segments — the
+        // left and right wings — each its own PatternLine; the line under the
+        // notch (y = 100) is one full-width segment.
+        let u = [
+            (0.0, 0.0),
+            (600.0, 0.0),
+            (600.0, 600.0),
+            (400.0, 600.0),
+            (400.0, 200.0),
+            (200.0, 200.0),
+            (200.0, 600.0),
+            (0.0, 600.0),
+        ];
+        let pattern = SurveyPattern {
+            polygon: local_polygon(crate::plan::GeoPoint::new(48.0, -123.0), &u),
+            line_azimuth_deg: 90.0,
+            line_spacing_m: 250.0,
+            tie_spacing_m: None,
+            tie_azimuth_deg: 0.0,
+            lead_in_m: 0.0,
+            lead_out_m: 0.0,
+            altitude_amsl_m: 150.0,
+            alternate: false,
+            speed_mps: None,
+        };
+        let plan = pattern.generate().expect("generate");
+        assert_eq!(plan.waypoints.len(), 10, "five lines x two endpoints");
+        assert_eq!(plan.lines.len(), 5, "the notch lines split into wings");
+        let mut lengths: Vec<f64> = plan.lines.iter().map(|l| l.length_m).collect();
+        lengths.sort_by(f64::total_cmp);
+        for (got, want) in lengths.iter().zip([200.0, 200.0, 200.0, 200.0, 600.0]) {
+            assert!((got - want).abs() < 1.0, "length {got} vs {want}");
+        }
     }
 
     #[test]

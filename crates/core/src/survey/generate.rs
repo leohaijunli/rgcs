@@ -207,7 +207,10 @@ fn build_parallel_lines(
     let mut index = 0usize;
     while offset <= max + 1e-9 {
         let origin = (across.0 * offset, across.1 * offset);
-        if let Some((t0, t1)) = clip_to_convex(&poly, origin, dir) {
+        // A concave polygon splits the line into several segments; each becomes
+        // its own PatternLine, so the tie/survey readout and the seq table stay
+        // per flown line even across a notch (B1).
+        for (t0, t1) in clip_to_polygon(&poly, origin, dir) {
             let mut start = (origin.0 + dir.0 * t0, origin.1 + dir.1 * t0);
             let mut end = (origin.0 + dir.0 * t1, origin.1 + dir.1 * t1);
             // Lead-in/out extend the line along its own direction.
@@ -244,37 +247,95 @@ fn build_parallel_lines(
     Ok(())
 }
 
-/// Clip the infinite line `origin + t * dir` to a convex CCW polygon, returning
-/// the `[t_min, t_max]` interval inside it.
-fn clip_to_convex(poly: &[Local], origin: Local, dir: Local) -> Option<(f64, f64)> {
-    let (mut t_min, mut t_max) = (f64::NEG_INFINITY, f64::INFINITY);
+/// Clip the infinite line `origin + t * dir` to a simple polygon (convex or
+/// concave), returning the `[t0, t1]` intervals of the parts inside it — a
+/// concave polygon can split the line into several disjoint segments.
+fn clip_to_polygon(poly: &[Local], origin: Local, dir: Local) -> Vec<(f64, f64)> {
+    // Collect the line parameter at every edge crossing (the standard
+    // parametric intersection: `t` along the line, `s` along the edge).
+    let mut ts: Vec<f64> = Vec::new();
     for i in 0..poly.len() {
         let a = poly[i];
         let b = poly[(i + 1) % poly.len()];
         let edge = (b.0 - a.0, b.1 - a.1);
-        // Left normal: the inside of a CCW polygon.
-        let normal = (-edge.1, edge.0);
-        let c = normal.0 * (origin.0 - a.0) + normal.1 * (origin.1 - a.1);
-        let denom = normal.0 * dir.0 + normal.1 * dir.1;
+        let denom = dir.0 * edge.1 - dir.1 * edge.0; // cross(dir, edge)
         if denom.abs() < 1e-12 {
-            if c < -1e-9 {
-                return None;
-            }
-            continue;
+            continue; // line parallel to the edge: no crossing to record
         }
-        let t = -c / denom;
-        if denom > 0.0 {
-            t_min = t_min.max(t);
-        } else {
-            t_max = t_max.min(t);
+        let w = (a.0 - origin.0, a.1 - origin.1);
+        let t = (w.0 * edge.1 - w.1 * edge.0) / denom;
+        let s = (w.0 * dir.1 - w.1 * dir.0) / denom;
+        // A sweep line exactly on an edge crosses its corners with `s` a
+        // float-error away from 0/1; accept a small margin and let the
+        // midpoint test decide (a near-miss corner ends up outside anyway).
+        if (-S_EPS..=1.0 + S_EPS).contains(&s) {
+            ts.push(t);
         }
     }
-    if t_min.is_finite() && t_max.is_finite() && t_min <= t_max {
-        Some((t_min, t_max))
-    } else {
-        None
+    ts.sort_by(f64::total_cmp);
+    // Merge crossings at the same point (a line through a vertex hits two
+    // edges); otherwise the midpoint test sees a zero-length interval.
+    let mut unique: Vec<f64> = Vec::with_capacity(ts.len());
+    for t in ts {
+        if unique
+            .last()
+            .is_none_or(|&last| (t - last).abs() > 1e-9 * t.abs().max(1.0))
+        {
+            unique.push(t);
+        }
     }
+    // The line alternates outside/inside at every crossing: an interval whose
+    // midpoint is inside the polygon is a clipped segment (even-odd rule).
+    let mut segments = Vec::new();
+    for w in unique.windows(2) {
+        let mid = (w[0] + w[1]) / 2.0;
+        let p = (origin.0 + dir.0 * mid, origin.1 + dir.1 * mid);
+        if point_in_polygon(poly, p) {
+            segments.push((w[0], w[1]));
+        }
+    }
+    segments
 }
+
+/// Even-odd point-in-polygon test (ray toward +x). Assumes a simple polygon.
+///
+/// A point exactly on an edge counts as inside, so a sweep line coincident with
+/// the polygon boundary is flown (matching the previous convex clipper), which
+/// keeps boundary lines in the plan.
+fn point_in_polygon(poly: &[Local], p: Local) -> bool {
+    // Distance from `p` to each segment; an on-edge point is inside.
+    for i in 0..poly.len() {
+        let a = poly[i];
+        let b = poly[(i + 1) % poly.len()];
+        let ab = (b.0 - a.0, b.1 - a.1);
+        let len2 = ab.0 * ab.0 + ab.1 * ab.1;
+        if len2 == 0.0 {
+            continue; // repeated consecutive vertex: nothing to measure
+        }
+        let t = (((p.0 - a.0) * ab.0 + (p.1 - a.1) * ab.1) / len2).clamp(0.0, 1.0);
+        let proj = (a.0 + t * ab.0 - p.0, a.1 + t * ab.1 - p.1);
+        if proj.0 * proj.0 + proj.1 * proj.1 <= ON_EDGE_EPS_M2 {
+            return true;
+        }
+    }
+    let mut inside = false;
+    for i in 0..poly.len() {
+        let a = poly[i];
+        let b = poly[(i + 1) % poly.len()];
+        // Count only edges that straddle the point's y (vertices are tested
+        // with the strict `>` so a point exactly on one side is unambiguous).
+        if (a.1 > p.1) != (b.1 > p.1) {
+            let x_cross = a.0 + (p.1 - a.1) * (b.0 - a.0) / (b.1 - a.1);
+            if p.0 < x_cross {
+                inside = !inside;
+            }
+        }
+    }
+    inside
+}
+
+/// On-edge tolerance for [`point_in_polygon`], in metres squared (~1 µm).
+const ON_EDGE_EPS_M2: f64 = 1e-12;
 
 /// Force a local polygon into counter-clockwise order.
 fn ensure_ccw(poly: &mut [Local]) {
@@ -308,35 +369,91 @@ fn validate_polygon(polygon: &[GeoPoint]) -> Result<(), SurveyError> {
             });
         }
     }
-    // Convexity: every consecutive cross product has the same sign.
-    let mut sign = 0i32;
-    for i in 0..polygon.len() {
-        let a = polygon[i];
-        let b = polygon[(i + 1) % polygon.len()];
-        let c = polygon[(i + 2) % polygon.len()];
-        let ab = (
-            b.latitude_deg - a.latitude_deg,
-            b.longitude_deg - a.longitude_deg,
-        );
-        let bc = (
-            c.latitude_deg - b.latitude_deg,
-            c.longitude_deg - b.longitude_deg,
-        );
-        let cross = ab.0 * bc.1 - ab.1 * bc.0;
-        if cross.abs() < 1e-15 {
-            continue; // collinear edges are allowed
-        }
-        let s = if cross > 0.0 { 1 } else { -1 };
-        if sign == 0 {
-            sign = s;
-        } else if sign != s {
-            return Err(SurveyError::NonConvexPolygon);
-        }
+    // Work in (lat, lon) as (x, y): orientation signs are scale-invariant, so
+    // the self-intersection and degenerate checks are valid in degrees.
+    let pts: Vec<Local> = polygon
+        .iter()
+        .map(|p| (p.latitude_deg, p.longitude_deg))
+        .collect();
+
+    // Reject degenerate (all-collinear) polygons: they enclose no area. The
+    // largest consecutive cross product bounds the "thickness" of the ring.
+    let mut max_cross = 0.0f64;
+    let mut max_len = 0.0f64;
+    for i in 0..pts.len() {
+        let a = pts[i];
+        let b = pts[(i + 1) % pts.len()];
+        let c = pts[(i + 2) % pts.len()];
+        max_cross = max_cross.max(orient(a, b, c).abs());
+        max_len = max_len.max((b.0 - a.0).hypot(b.1 - a.1));
     }
-    if sign == 0 {
-        return Err(SurveyError::NonConvexPolygon);
+    if max_cross <= max_len * max_len * 1e-12 {
+        return Err(SurveyError::DegeneratePolygon);
+    }
+
+    // Simplicity: no two non-adjacent edges may cross or touch. Adjacent edges
+    // (i,i+1) share a vertex by construction, as do the closing pair (n-1, 0).
+    for i in 0..pts.len() {
+        for j in i + 1..pts.len() {
+            if j == i + 1 || (i == 0 && j == pts.len() - 1) {
+                continue;
+            }
+            if segments_intersect(
+                pts[i],
+                pts[(i + 1) % pts.len()],
+                pts[j],
+                pts[(j + 1) % pts.len()],
+            ) {
+                return Err(SurveyError::SelfIntersectingPolygon);
+            }
+        }
     }
     Ok(())
+}
+
+/// Signed area of the triangle `a-b-c` (twice the oriented area).
+fn orient(a: Local, b: Local, c: Local) -> f64 {
+    (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0)
+}
+
+/// Collinearity/touch tolerance in degrees (≈ 1e-10 m at survey latitudes).
+const ORIENT_EPS: f64 = 1e-12;
+
+/// Edge-parameter margin for a crossing to count (see `clip_to_polygon`).
+const S_EPS: f64 = 1e-9;
+
+/// Whether `c` lies within the axis-aligned box of `a`..`b` (with tolerance).
+fn on_segment(a: Local, b: Local, c: Local) -> bool {
+    c.0 >= a.0.min(b.0) - ORIENT_EPS
+        && c.0 <= a.0.max(b.0) + ORIENT_EPS
+        && c.1 >= a.1.min(b.1) - ORIENT_EPS
+        && c.1 <= a.1.max(b.1) + ORIENT_EPS
+}
+
+/// Whether segments `a-b` and `c-d` intersect (properly or at an endpoint).
+fn segments_intersect(a: Local, b: Local, c: Local, d: Local) -> bool {
+    let o1 = orient(a, b, c);
+    let o2 = orient(a, b, d);
+    let o3 = orient(c, d, a);
+    let o4 = orient(c, d, b);
+    let proper = (o1 > ORIENT_EPS && o2 < -ORIENT_EPS) || (o1 < -ORIENT_EPS && o2 > ORIENT_EPS);
+    if proper && ((o3 > ORIENT_EPS && o4 < -ORIENT_EPS) || (o3 < -ORIENT_EPS && o4 > ORIENT_EPS)) {
+        return true; // proper crossing
+    }
+    // Touching/collinear cases (near-collinear counts as touching).
+    if o1.abs() <= ORIENT_EPS && on_segment(a, b, c) {
+        return true;
+    }
+    if o2.abs() <= ORIENT_EPS && on_segment(a, b, d) {
+        return true;
+    }
+    if o3.abs() <= ORIENT_EPS && on_segment(c, d, a) {
+        return true;
+    }
+    if o4.abs() <= ORIENT_EPS && on_segment(c, d, b) {
+        return true;
+    }
+    false
 }
 
 fn validate_spacing(spacing_m: f64) -> Result<(), SurveyError> {

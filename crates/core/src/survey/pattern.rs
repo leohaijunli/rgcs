@@ -64,14 +64,15 @@ impl PatternPlan {
 
 /// A parallel-line survey sweep, optionally with perpendicular tie lines.
 ///
-/// Lines are clipped to the polygon, so the flown extent is the polygon itself.
-/// `alternate` flies a serpentine (each line reversed) instead of returning to
-/// the start of every line; for magnetic data a unidirectional sweep can be
-/// preferable, so both are supported.
+/// Lines are clipped to the polygon, so the flown extent is the polygon itself;
+/// a concave polygon simply splits each crossing line into several segments,
+/// one `PatternLine` each. `alternate` flies a serpentine (each line reversed)
+/// instead of returning to the start of every line; for magnetic data a
+/// unidirectional sweep can be preferable, so both are supported.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct SurveyPattern {
-    /// Survey area; must be convex and simple (MVP line clipper).
+    /// Survey area; must be simple (self-intersecting polygons are rejected).
     pub polygon: Vec<GeoPoint>,
     /// Sweep direction, degrees clockwise from north.
     pub line_azimuth_deg: f64,

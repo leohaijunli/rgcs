@@ -9,9 +9,13 @@ pub enum SurveyError {
     #[error("polygon needs at least 3 vertices, got {0}")]
     PolygonTooFew(usize),
 
-    /// The MVP line clipper only handles convex, simple polygons.
-    #[error("polygon must be convex and simple")]
-    NonConvexPolygon,
+    /// Two non-adjacent edges cross or touch: the polygon is not simple.
+    #[error("polygon must be simple (no self-intersecting edges)")]
+    SelfIntersectingPolygon,
+
+    /// The polygon encloses no area (all vertices collinear or repeated).
+    #[error("polygon is degenerate (no area)")]
+    DegeneratePolygon,
 
     /// A vertex is not finite or is outside the valid latitude/longitude range.
     #[error("invalid polygon vertex ({lat}, {lon})")]
