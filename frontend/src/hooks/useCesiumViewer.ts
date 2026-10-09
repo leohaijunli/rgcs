@@ -11,15 +11,19 @@ import { applyLayerVisibility, createViewer } from '../cesium/scene'
 import {
   createDroneLayer,
   createGhostPoint,
+  createPolygonLayer,
+  disposePolygonLayer,
   disposeWaypointLayer,
   previewWaypoint,
   renderWaypoints,
   setGhostPoint,
   updateDropLine,
+  updatePolygonLayer,
 } from '../cesium/entities'
 import type {
   DroneLayer,
   GhostPoint,
+  PolygonLayer,
   WaypointLayer,
   WaypointRenderOptions,
 } from '../cesium/entities'
@@ -38,6 +42,7 @@ import {
 } from '../cesium/constants'
 import { groundSpeedMps, projectAhead, uavOrientation } from '../cesium/uav'
 import { usePrefsStore } from '../desktop/prefs'
+import { usePolygonStore } from '../stores/polygon'
 import { useUiStore } from '../stores/ui'
 import { degFromMavInt, useMissionStore } from '../stores/mission'
 import type { MissionItem } from '../generated-types/MissionItem'
@@ -74,6 +79,7 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
   const ghostRef = useRef<GhostPoint | null>(null)
   const wpItemsRef = useRef<MissionItem[]>([])
   const homeAmslRef = useRef(0)
+  const polygonLayerRef = useRef<PolygonLayer | null>(null)
 
   useEffect(() => {
     const container = containerRef.current
@@ -97,6 +103,8 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
     droneRef.current = layer
     const ghost = createGhostPoint(viewer)
     ghostRef.current = ghost
+    const polygonLayer = createPolygonLayer(viewer)
+    polygonLayerRef.current = polygonLayer
     wpHandlerRef.current = installMapTools(viewer, {
       // Waypoints are only editable in the planning view (finding 18).
       enabled: () => useUiStore.getState().view === 'planning',
@@ -137,6 +145,8 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
       wpHandlerRef.current = null
       disposeWaypointLayer(viewer, wpLayerRef.current)
       wpLayerRef.current = null
+      disposePolygonLayer(viewer, polygonLayerRef.current)
+      polygonLayerRef.current = null
       ghostRef.current = null
       viewer.destroy()
       viewerRef.current = null
@@ -166,6 +176,18 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
   // Map tool cursor: crosshair while adding, hidden ghost otherwise.
   const mapTool = useUiStore((s) => s.mapTool)
   const view = useUiStore((s) => s.view)
+
+  // Draft survey polygon: re-render the boundary and its vertices whenever the
+  // draft changes, only while the planning view is showing (view isolation).
+  const polygonVertices = usePolygonStore((s) => s.vertices)
+  const polygonClosed = usePolygonStore((s) => s.closed)
+  useEffect(() => {
+    const viewer = viewerRef.current
+    const layer = polygonLayerRef.current
+    if (!viewer || !layer) return
+    updatePolygonLayer(viewer, layer, view === 'planning' ? polygonVertices : [], polygonClosed)
+  }, [polygonVertices, polygonClosed, view])
+
   useEffect(() => {
     const viewer = viewerRef.current
     if (!viewer) return

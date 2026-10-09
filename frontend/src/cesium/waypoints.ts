@@ -17,7 +17,9 @@
 // is inert outside the planning view.
 
 import * as Cesium from 'cesium'
+import type { GeoPoint } from '../generated-types/GeoPoint'
 import { useMissionStore } from '../stores/mission'
+import { usePolygonStore } from '../stores/polygon'
 import { useUiStore } from '../stores/ui'
 import type { MapTool } from '../stores/ui'
 import { pickLatLon } from './pick'
@@ -30,6 +32,9 @@ export interface GroundPoint {
   lat: number
   lon: number
 }
+
+/** A click within this many pixels of the first polygon vertex closes it. */
+const POLYGON_CLOSE_PX = 12
 
 export interface MapToolOptions {
   /** Whether editing is allowed right now (the planning view). Default: always. */
@@ -63,6 +68,8 @@ export function installMapTools(
   let start: Cesium.Cartesian2 | null = null
   let lastMouse: Cesium.Cartesian2 | null = null
   let lastGround: { lat: number; lon: number } | null = null
+  /** Polygon vertex being dragged (`pg-<i>`), if the press landed on one. */
+  let polygonDragSeq: number | null = null
 
   const enabled = () => (opts.enabled ? opts.enabled() : true)
   const tool = (): MapTool => (opts.tool ? opts.tool() : 'select')
@@ -77,7 +84,9 @@ export function installMapTools(
     dragging = false
     pressing = false
     start = null
+    lastMouse = null
     lastGround = null
+    polygonDragSeq = null
     restoreCamera()
     opts.onHover?.(null)
   }
@@ -116,13 +125,60 @@ export function installMapTools(
 
   const pressPosition = (): Cesium.Cartesian2 | null => lastMouse ?? start
 
+  /** Whether `pos` is within [`POLYGON_CLOSE_PX`] of a polygon vertex on screen. */
+  const nearVertex = (pos: Cesium.Cartesian2, v: GeoPoint): boolean => {
+    const cart = Cesium.Cartesian3.fromDegrees(v.longitude_deg, v.latitude_deg, 0)
+    const screen = Cesium.SceneTransforms.worldToWindowCoordinates(viewer.scene, cart)
+    if (!screen) return false
+    return Cesium.Cartesian2.distance(screen, pos) <= POLYGON_CLOSE_PX
+  }
+
+  /**
+   * Commit a completed polygon gesture: a click adds a vertex, or closes the
+   * boundary when it lands on the first vertex. Idempotent across canvas +
+   * window (like `finishAdd`).
+   */
+  const finishPolygonClick = (at: Cesium.Cartesian2 | null) => {
+    if (!pressing) return
+    const moved =
+      start && at ? Cesium.Cartesian2.distance(start, at) > CLICK_DRAG_THRESHOLD_PX : false
+    pressing = false
+    start = null
+    polygonDragSeq = null
+    restoreCamera()
+    if (moved || !at) return
+    const ground = pickLatLon(viewer, at)
+    if (!ground) return
+    const st = usePolygonStore.getState()
+    if (st.closed) return
+    const first = st.vertices[0]
+    if (first && nearVertex(at, first)) st.close()
+    else st.addVertex({ latitude_deg: ground.lat, longitude_deg: ground.lon })
+  }
+
   handler.setInputAction(
     (click: Cesium.ScreenSpaceEventHandler.PositionedEvent) => {
       if (!enabled()) return
       start = Cesium.Cartesian2.clone(click.position)
       lastMouse = Cesium.Cartesian2.clone(click.position)
-      if (tool() === 'add') {
+      const active = tool()
+      if (active === 'add') {
         pressing = true
+        return
+      }
+      if (active === 'polygon') {
+        pressing = true
+        const picked = viewer.scene.pick(click.position)
+        const entity = Cesium.defined(picked) ? (picked.id as Cesium.Entity) : undefined
+        const seq = Number.parseInt(entity?.id ? String(entity.id).replace(/^pg-/, '') : '', 10)
+        if (!Number.isNaN(seq)) {
+          // Dragging a polygon vertex moves it; pressing empty ground pans.
+          polygonDragSeq = seq
+          controller.enableRotate = false
+          controller.enableTranslate = false
+        } else {
+          polygonDragSeq = null
+        }
         return
       }
       const picked = viewer.scene.pick(click.position)
@@ -149,6 +205,25 @@ export function installMapTools(
         }
         return
       }
+      if (active === 'polygon') {
+        if (pressing && polygonDragSeq !== null && start) {
+          // Dragging a vertex: past the threshold it starts moving.
+          if (Cesium.Cartesian2.distance(start, movement.endPosition) <= CLICK_DRAG_THRESHOLD_PX) return
+          const ground = pickLatLon(viewer, movement.endPosition)
+          if (ground) {
+            usePolygonStore.getState().moveVertex(polygonDragSeq, {
+              latitude_deg: ground.lat,
+              longitude_deg: ground.lon,
+            })
+          }
+          return
+        }
+        if (!pressing) {
+          const ground = pickLatLon(viewer, movement.endPosition)
+          opts.onHover?.(ground ? { lat: ground.lat, lon: ground.lon } : null)
+        }
+        return
+      }
       if (pendingSeq < 0) {
         if (active === 'add') {
           const ground = pickLatLon(viewer, movement.endPosition)
@@ -170,15 +245,25 @@ export function installMapTools(
     Cesium.ScreenSpaceEventType.MOUSE_MOVE,
   )
 
-  handler.setInputAction(() => {
-    if (pressing) finishAdd()
+  handler.setInputAction((click: Cesium.ScreenSpaceEventHandler.PositionedEvent) => {
+    if (tool() === 'polygon') {
+      finishPolygonClick(click.position)
+    } else if (pressing) finishAdd()
     else finish()
   }, Cesium.ScreenSpaceEventType.LEFT_UP)
+
+  // A double-click closes the boundary at the current vertex.
+  handler.setInputAction(() => {
+    if (tool() !== 'polygon' || !enabled()) return
+    const st = usePolygonStore.getState()
+    if (!st.closed && st.vertices.length >= 3) st.close()
+  }, Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK)
 
   // A gesture can end off-canvas (or the window can lose focus mid-drag); the
   // window listeners make sure the camera is always restored (finding 15).
   const onWindowPointerUp = () => {
-    if (pressing) finishAdd()
+    if (tool() === 'polygon') finishPolygonClick(lastMouse ?? start)
+    else if (pressing) finishAdd()
     else finish()
   }
   const onWindowBlur = () => reset()
@@ -186,6 +271,7 @@ export function installMapTools(
     if (e.key !== 'Escape') return
     reset()
     useUiStore.getState().setMapTool('select')
+    if (usePolygonStore.getState().vertices.length > 0) usePolygonStore.getState().reset()
   }
   window.addEventListener('pointerup', onWindowPointerUp)
   window.addEventListener('blur', onWindowBlur)

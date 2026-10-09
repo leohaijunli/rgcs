@@ -227,6 +227,11 @@ export default {
     heights: 'Waypoint heights (stick + label)',
     aglLabel: '{{value}} m AGL',
     addHint: 'Click the map to add a waypoint · Esc to finish',
+    drawPolygon: 'Survey boundary (draw a polygon)',
+    polygonHint: 'Click to add a vertex · click the first vertex or double-click to close · Esc to cancel',
+    polygonSelfIntersect: 'Boundary crosses itself — fix it before generating',
+    polygonReadout: '{{count}} vertices · {{area}} ha · {{perimeter}} m',
+    polygonClosed: 'Boundary closed · drag a vertex to adjust',
   },
   settings: {
     menu: 'Settings',

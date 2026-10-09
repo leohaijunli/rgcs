@@ -16,6 +16,7 @@
     "check:mission-sync": "node scripts/check-mission-sync.mjs",
     "check:coords": "node scripts/check-coords.mjs",
     "check:progress": "node scripts/check-progress.mjs",
+    "check:polygon": "node scripts/check-polygon.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

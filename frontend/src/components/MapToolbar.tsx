@@ -6,6 +6,7 @@ import {
   House,
   LineChart,
   Move3d,
+  PenTool,
   Plus,
   Ruler,
 } from 'lucide-react'
@@ -43,6 +44,14 @@ export default function MapToolbar({ onGoHome, onToggleMeasure, onNorth }: Props
           active={mapTool === 'add'}
           onClick={() => setMapTool(mapTool === 'add' ? 'select' : 'add')}
           icon={Plus}
+        />
+      )}
+      {view === 'planning' && (
+        <ToolButton
+          title={t('map.drawPolygon')}
+          active={mapTool === 'polygon'}
+          onClick={() => setMapTool(mapTool === 'polygon' ? 'select' : 'polygon')}
+          icon={PenTool}
         />
       )}
       <ToolButton

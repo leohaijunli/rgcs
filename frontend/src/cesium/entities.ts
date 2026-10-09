@@ -6,9 +6,11 @@ import * as Cesium from 'cesium'
 import { cssVar } from '../design-system/theme'
 import i18n from '../i18n'
 import { degFromMavInt } from '../stores/mission'
+import type { GeoPoint } from '../generated-types/GeoPoint'
 import type { MissionItem } from '../generated-types/MissionItem'
 import type { LineKind } from '../generated-types/LineKind'
 import { heightRuns, splitRuns, type KindBySeq } from '../mission/lineKinds'
+import { selfIntersects } from '../mission/polygon'
 import { HOME_LAT, HOME_LON, UAV_MODEL_URI } from './constants'
 
 /** Below this (m) a waypoint is level with the lowest one; no stick is drawn. */
@@ -432,4 +434,82 @@ export function setGhostPoint(ghost: GhostPoint, ground: LatLonLike | null, grou
     Cesium.Cartesian3.fromDegrees(ground.lon, ground.lat, groundM),
   )
   ghost.entity.show = true
+}
+
+/** Draft survey-boundary polygon: vertex markers (id `pg-<i>`) plus the edge. */
+export interface PolygonLayer {
+  vertices: Cesium.Entity[]
+  boundary: Cesium.Entity
+}
+
+/** Create the (hidden) boundary polyline and an empty vertex set. */
+export function createPolygonLayer(viewer: Cesium.Viewer): PolygonLayer {
+  const accent = Cesium.Color.fromCssColorString(cssVar('--mg-accent'))
+  const boundary = viewer.entities.add({
+    show: false,
+    polyline: {
+      positions: [],
+      width: 3,
+      material: new Cesium.PolylineGlowMaterialProperty({
+        glowPower: 0.2,
+        color: accent.withAlpha(0.9),
+      }),
+    },
+  })
+  return { vertices: [], boundary }
+}
+
+/**
+ * Rebuild the draft polygon: vertex markers, the connecting edge, and the
+ * error colour when it self-intersects. Pass an empty list to hide it.
+ */
+export function updatePolygonLayer(
+  viewer: Cesium.Viewer,
+  layer: PolygonLayer,
+  vertices: readonly GeoPoint[],
+  closed: boolean,
+): void {
+  for (const e of layer.vertices) viewer.entities.remove(e)
+  layer.vertices = []
+  if (vertices.length < 2) {
+    layer.boundary.show = false
+    return
+  }
+  const accent = Cesium.Color.fromCssColorString(cssVar('--mg-accent'))
+  const error = Cesium.Color.fromCssColorString(cssVar('--mg-error'))
+  const points = vertices.map((p) =>
+    Cesium.Cartesian3.fromDegrees(p.longitude_deg, p.latitude_deg, 0),
+  )
+  if (closed && vertices.length >= 3) points.push(Cesium.Cartesian3.clone(points[0]))
+  layer.boundary.show = true
+  const bad = closed && selfIntersects(vertices)
+  if (layer.boundary.polyline) {
+    layer.boundary.polyline.positions = new Cesium.ConstantProperty(points)
+    layer.boundary.polyline.material = new Cesium.PolylineGlowMaterialProperty({
+      glowPower: 0.2,
+      color: (bad ? error : accent).withAlpha(0.9),
+    })
+  }
+  vertices.forEach((p, i) => {
+    layer.vertices.push(
+      viewer.entities.add({
+        id: `pg-${i}`,
+        position: Cesium.Cartesian3.fromDegrees(p.longitude_deg, p.latitude_deg, 0),
+        point: {
+          pixelSize: i === 0 ? 12 : 9,
+          color: i === 0 ? Cesium.Color.WHITE : accent,
+          outlineColor: Cesium.Color.WHITE,
+          outlineWidth: 2,
+        },
+      }),
+    )
+  })
+}
+
+/** Remove the draft polygon from the viewer. */
+export function disposePolygonLayer(viewer: Cesium.Viewer, layer: PolygonLayer | null): void {
+  if (!layer) return
+  for (const e of layer.vertices) viewer.entities.remove(e)
+  layer.vertices = []
+  viewer.entities.remove(layer.boundary)
 }

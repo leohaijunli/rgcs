@@ -4,8 +4,9 @@ export type View = 'planning' | 'flight' | 'data'
 export type Theme = 'dark' | 'light'
 export type DrawerId = 'missions' | 'vehicles' | 'layers' | null
 export type DockTab = 'profile' | 'qc' | 'log'
-/** Active map tool. `add` places a new waypoint on click (planning view only). */
-export type MapTool = 'select' | 'add'
+/** Active map tool. `add` places a new waypoint on click; `polygon` draws a
+ * survey boundary (both planning view only). */
+export type MapTool = 'select' | 'add' | 'polygon'
 
 export interface ViewConfig {
   /** Drawer section opened by default when switching to this view. */
