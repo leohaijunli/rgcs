@@ -74,6 +74,9 @@ interface MissionState {
   home: [number, number, number] | null
   /** Last inserted preset pattern (cleared by any waypoint edit). */
   lastPattern: InsertedPattern | null
+  /** Pinned pattern centre (cloverleaf centre / rectangle centre), editable by
+   * the panel inputs or by dragging the map handle (A2). */
+  patternCenter: GeoPoint | null
   /** Waypoint the FC is flying now, from MISSION_CURRENT (0-based). */
   currentSeq: number | null
   /**
@@ -97,6 +100,8 @@ interface MissionState {
   moveWaypoint: (from: number, to: number) => void
   /** Append a generated pattern's waypoints and show its line table. */
   insertPattern: (plan: PatternPlan, label: string, center?: GeoPoint | null) => void
+  /** Pin or move the pattern centre (typed in the panel or dragged on the map). */
+  setPatternCenter: (center: GeoPoint | null) => void
   upload: () => Promise<void>
   download: () => Promise<void>
   /** Clear the mission *on the flight controller* (link required). */
@@ -144,6 +149,8 @@ export const useMissionStore = create<MissionState>((set, get) => ({
   blocks: [],
   home: null,
   lastPattern: null,
+  /** Pinned pattern centre (cloverleaf / sweep rectangle), editable on the map. */
+  patternCenter: null,
   currentSeq: null,
   focusSeq: null,
 
@@ -238,6 +245,8 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       }
     }),
 
+  setPatternCenter: (center) => set({ patternCenter: center }),
+
   insertPattern: (plan, label, center) =>
     set((s) => {
       // Generate replaces the previous preset block rather than stacking a
@@ -260,6 +269,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
           })),
           center: center ?? null,
         },
+        patternCenter: center ?? null,
         selectedSeq: null,
         dirty: true,
         fcMatches: null,
@@ -273,6 +283,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       planBase: null,
       home: null,
       lastPattern: null,
+      patternCenter: null,
       selectedSeq: null,
       currentSeq: null,
       focusSeq: null,
@@ -483,6 +494,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       blocks: [],
       home: null,
       lastPattern: null,
+      patternCenter: null,
       focusSeq: null,
     }),
 }))

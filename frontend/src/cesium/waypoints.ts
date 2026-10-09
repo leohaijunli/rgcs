@@ -70,6 +70,8 @@ export function installMapTools(
   let lastGround: { lat: number; lon: number } | null = null
   /** Polygon vertex being dragged (`pg-<i>`), if the press landed on one. */
   let polygonDragSeq: number | null = null
+  /** True while the pattern-centre handle is being dragged. */
+  let centerDrag = false
 
   const enabled = () => (opts.enabled ? opts.enabled() : true)
   const tool = (): MapTool => (opts.tool ? opts.tool() : 'select')
@@ -87,12 +89,19 @@ export function installMapTools(
     lastMouse = null
     lastGround = null
     polygonDragSeq = null
+    centerDrag = false
     restoreCamera()
     opts.onHover?.(null)
   }
 
   /** Commit a completed select gesture (idempotent across canvas + window). */
   const finish = () => {
+    if (centerDrag) {
+      // A pattern-centre drag ends here: the store already tracked the centre.
+      centerDrag = false
+      reset()
+      return
+    }
     if (pendingSeq < 0) {
       pressing = false
       return
@@ -183,7 +192,15 @@ export function installMapTools(
       }
       const picked = viewer.scene.pick(click.position)
       const entity = Cesium.defined(picked) ? (picked.id as Cesium.Entity) : undefined
-      const seq = Number.parseInt(entity?.id ? String(entity.id).replace(/^wp-/, '') : '', 10)
+      const entityId = entity?.id ? String(entity.id) : ''
+      if (entityId === 'pattern-center') {
+        // Dragging the pattern-centre handle moves the pinned centre.
+        centerDrag = true
+        controller.enableRotate = false
+        controller.enableTranslate = false
+        return
+      }
+      const seq = Number.parseInt(entityId.replace(/^wp-/, ''), 10)
       if (Number.isNaN(seq)) return
       pendingSeq = seq
       dragging = false
@@ -221,6 +238,19 @@ export function installMapTools(
         if (!pressing) {
           const ground = pickLatLon(viewer, movement.endPosition)
           opts.onHover?.(ground ? { lat: ground.lat, lon: ground.lon } : null)
+        }
+        return
+      }
+if (centerDrag) {
+        if (start && Cesium.Cartesian2.distance(start, movement.endPosition) <= CLICK_DRAG_THRESHOLD_PX) {
+          return
+        }
+        const ground = pickLatLon(viewer, movement.endPosition)
+        if (ground) {
+          useMissionStore.getState().setPatternCenter({
+            latitude_deg: ground.lat,
+            longitude_deg: ground.lon,
+          })
         }
         return
       }

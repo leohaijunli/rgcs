@@ -9,6 +9,7 @@ import * as Cesium from 'cesium'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
 import { applyLayerVisibility, createViewer } from '../cesium/scene'
 import {
+  createCenterHandle,
   createDroneLayer,
   createGhostPoint,
   createPolygonLayer,
@@ -17,10 +18,12 @@ import {
   previewWaypoint,
   renderWaypoints,
   setGhostPoint,
+  updateCenterHandle,
   updateDropLine,
   updatePolygonLayer,
 } from '../cesium/entities'
 import type {
+  CenterHandle,
   DroneLayer,
   GhostPoint,
   PolygonLayer,
@@ -81,6 +84,7 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
   const wpItemsRef = useRef<MissionItem[]>([])
   const homeAmslRef = useRef(0)
   const polygonLayerRef = useRef<PolygonLayer | null>(null)
+  const centerHandleRef = useRef<CenterHandle | null>(null)
 
   useEffect(() => {
     const container = containerRef.current
@@ -106,6 +110,8 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
     ghostRef.current = ghost
     const polygonLayer = createPolygonLayer(viewer)
     polygonLayerRef.current = polygonLayer
+    const centerHandle = createCenterHandle(viewer)
+    centerHandleRef.current = centerHandle
     wpHandlerRef.current = installMapTools(viewer, {
       // Waypoints are only editable in the planning view (finding 18).
       enabled: () => useUiStore.getState().view === 'planning',
@@ -156,6 +162,7 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
       wpLayerRef.current = null
       disposePolygonLayer(viewer, polygonLayerRef.current)
       polygonLayerRef.current = null
+      centerHandleRef.current = null
       ghostRef.current = null
       viewer.destroy()
       viewerRef.current = null
@@ -196,6 +203,14 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
     if (!viewer || !layer) return
     updatePolygonLayer(viewer, layer, view === 'planning' ? polygonVertices : [], polygonClosed)
   }, [polygonVertices, polygonClosed, view])
+
+  // Pinned pattern centre: render the draggable handle in the planning view.
+  const patternCenter = useMissionStore((s) => s.patternCenter)
+  useEffect(() => {
+    const handle = centerHandleRef.current
+    if (!handle) return
+    updateCenterHandle(handle, view === 'planning' ? patternCenter : null, homeAmslRef.current)
+  }, [patternCenter, view])
 
   useEffect(() => {
     const viewer = viewerRef.current

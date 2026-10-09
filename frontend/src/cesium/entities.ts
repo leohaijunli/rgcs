@@ -553,3 +553,47 @@ export function disposePolygonLayer(viewer: Cesium.Viewer, layer: PolygonLayer |
   layer.vertices = []
   viewer.entities.remove(layer.boundary)
 }
+
+/** Draggable centre marker for the last generated pattern (A2). */
+export interface CenterHandle {
+  entity: Cesium.Entity
+}
+
+/** Create the hidden pattern-centre handle (id `pattern-center`). */
+export function createCenterHandle(viewer: Cesium.Viewer): CenterHandle {
+  const accent = Cesium.Color.fromCssColorString(cssVar('--mg-accent'))
+  const entity = viewer.entities.add({
+    show: false,
+    id: 'pattern-center',
+    point: {
+      pixelSize: 12,
+      color: Cesium.Color.TRANSPARENT,
+      outlineColor: accent,
+      outlineWidth: 3,
+    },
+    label: {
+      text: i18n.t('map.patternCenter'),
+      font: '11px sans-serif',
+      pixelOffset: new Cesium.Cartesian2(0, -18),
+      fillColor: Cesium.Color.WHITE,
+      disableDepthTestDistance: Number.POSITIVE_INFINITY,
+    },
+  })
+  return { entity }
+}
+
+/** Position or hide the centre handle; it sits on the pattern's ground plane. */
+export function updateCenterHandle(
+  handle: CenterHandle,
+  center: GeoPoint | null,
+  groundM: number,
+): void {
+  if (!center) {
+    handle.entity.show = false
+    return
+  }
+  handle.entity.position = new Cesium.ConstantPositionProperty(
+    Cesium.Cartesian3.fromDegrees(center.longitude_deg, center.latitude_deg, groundM),
+  )
+  handle.entity.show = true
+}

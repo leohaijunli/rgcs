@@ -240,6 +240,7 @@ export default {
     polygonReadout: '{{count}} vertices · {{area}} ha · {{perimeter}} m',
     polygonClosed: 'Boundary closed · drag a vertex to adjust',
     polygonClear: 'Clear boundary',
+    patternCenter: 'Centre — drag to move',
   },
   settings: {
     menu: 'Settings',

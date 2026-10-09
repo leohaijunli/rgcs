@@ -49,9 +49,17 @@ do I sweep an irregular (concave) field?" The agreed decomposition (also in
   + `npm run check:polygon`, the toolbar button, ADR-014).
 - **B4** `PatternPanel` generates the sweep from the drawn polygon. **Landed.**
 - **A1** `InsertedPattern` remembers centre + params; `PatternPanel` gains lat/lon
-  centre inputs + "use map centre".
+  centre inputs + "use map centre". **Landed.**
 - **A2** draggable centre handle on the map (cloverleaf `center`, sweep rectangle
-  centre), regenerate preview; one drag = one commit.
+  centre), regenerate preview; one drag = one commit. **Landed.**
+
+Flight-plan optimization (B1–B4, A1, A2) is complete. The map add-tool ghost
+now previews the new waypoint at its inherited altitude with a ground stick
+(no more click-vs-placement offset in a tilted 3D camera), a single polygon
+vertex is visible from the first click, right-click removes a polygon vertex
+and the readout has a Clear boundary button. **Next: the Signal Inspector
+(`docs/signal-inspector-plan.md`) — deliver P0 signatures (Rust traits + TS
+types, ADR-009/010) for confirmation.**
 
 Manual verification for B3/B4 (Playwright or desktop): draw an L-shape in the
 planning view (polygon tool), drag a vertex, close it, watch the area/perimeter

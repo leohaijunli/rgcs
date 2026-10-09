@@ -1,7 +1,7 @@
 // Preset parameterised patterns: build the parameters, call `core::survey`
 // through the Tauri commands, and append the generated waypoints to the plan.
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   defaultCloverleaf,
@@ -44,14 +44,10 @@ export default function PatternPanel() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // A pinned centre (lat/lon inputs or "Use map centre"), so a generated
-  // pattern stays where it was even if the map moves. Follows the last
-  // generated pattern's centre across view switches.
-  const [center, setCenter] = useState<GeoPoint | null>(null)
-  useEffect(() => {
-    if (lastPattern?.center) setCenter(lastPattern.center)
-  }, [lastPattern?.center])
-  // The pinned centre, or the live map centre until one is pinned.
+  // A pinned centre (lat/lon inputs, "Use map centre", or the map drag handle),
+  // so a generated pattern stays where it was even if the map moves.
+  const center = useMissionStore((s) => s.patternCenter)
+  const setPatternCenter = useMissionStore((s) => s.setPatternCenter)
   const effectiveCenter: GeoPoint | null =
     center ?? (mapCenter ? { latitude_deg: mapCenter.lat, longitude_deg: mapCenter.lon } : null)
   const polygonVertices = usePolygonStore((s) => s.vertices)
@@ -127,19 +123,19 @@ export default function PatternPanel() {
           label={t('plan.pattern.lat')}
           value={effectiveCenter?.latitude_deg ?? 0}
           onChange={(v) =>
-            setCenter({ latitude_deg: v, longitude_deg: effectiveCenter?.longitude_deg ?? 0 })
+            setPatternCenter({ latitude_deg: v, longitude_deg: effectiveCenter?.longitude_deg ?? 0 })
           }
         />
         <Num
           label={t('plan.pattern.lon')}
           value={effectiveCenter?.longitude_deg ?? 0}
           onChange={(v) =>
-            setCenter({ latitude_deg: effectiveCenter?.latitude_deg ?? 0, longitude_deg: v })
+            setPatternCenter({ latitude_deg: effectiveCenter?.latitude_deg ?? 0, longitude_deg: v })
           }
         />
         <button
           onClick={() => {
-            if (mapCenter) setCenter({ latitude_deg: mapCenter.lat, longitude_deg: mapCenter.lon })
+            if (mapCenter) setPatternCenter({ latitude_deg: mapCenter.lat, longitude_deg: mapCenter.lon })
           }}
           className="col-span-2 rounded border border-line bg-canvas px-2 py-1 text-[11px] text-ink hover:bg-panel"
         >
