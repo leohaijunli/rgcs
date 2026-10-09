@@ -2,13 +2,14 @@
 
 > 范围:`core::signals` → `app-tauri/inspector_service.rs` → `frontend/src/inspector/*`
 > 日期:2026-10-09
-> 说明:静态评审。此后已逐步落实:前端补丁跑过 `tsc`;Rust 已 `cargo test`(signals 13 通过)与 `cargo build` 通过;PX4 6X 1.17 实机验证(见下"实机发现")。标注"待核实"的条目需先复现再修。
+> 说明:静态评审。此后已逐步落实:前端补丁跑过 `tsc`;Rust 已 `cargo test -p maggcs-core signals`(13 通过)与 `cargo build` 通过;PX4 6X 1.17 实机验证(见下"实机发现")。标注"待核实"的条目需先复现再修。
 
 ## 进度(2026-10-09 更新)
 
 - **S0 完成**:补丁验证(`cargo test -p maggcs-core signals` 13 通过、`cargo build` 通过)、P0-2 修(FFT 持久 uPlot + setData + destroy)、P0-3 修(`trimBuffer` 保底 1024 点)。未做:devtools 人工核对、SITL 实跑(有硬件可做)。
-- **实机发现(已修复)**:PX4 6X + 固件 1.17 连接时报 `InvalidEnum { MavEventCurrentSequenceFlags, value: 0 }`。根因:`CURRENT_EVENT_SEQUENCE.flags=0` 是正常值,但 mavlink 0.17 生成的 `MavEventCurrentSequenceFlags` 只有 `RESET=1`,无 0 变体;UDP 传输会静默丢弃坏帧,TCP/serial 会把错误浮上来。修复:`run_worker` 将单帧解析失败(InvalidEnum/InvalidFlag/UnknownMessage)视为可恢复,跳过该帧并计数(`is_recoverable_read_error`),不再断开重连。**已在实机验证**。附测试 `decode_failures_are_recoverable_but_io_is_not`。
+- **实机发现(已修复)**:PX4 6X + 固件 1.17 连接时报 `InvalidEnum { MavEventCurrentSequenceFlags, value: 0 }`。根因:`CURRENT_EVENT_SEQUENCE.flags=0` 是正常值,但 mavlink 0.17 生成的 `MavEventCurrentSequenceFlags` 只有 `RESET=1`,无 0 变体;UDP 传输会静默丢弃坏帧,TCP/serial 会把错误浮上来。修复:`run_worker` 将单帧解析失败(InvalidEnum/InvalidFlag/UnknownMessage)视为可恢复,跳过该帧并计数(`is_recoverable_read_error`),不再断开重连。**已在实机验证**。附测试 `decode_failures_are_recoverable_but_io_is_not`。**已随 `1929c79` 提交并推送**。
 - **信号浏览器分组(用户要求,原 S3 首项提前)**:左栏按消息分组、可折叠、带搜索,`msgName()` 提供 PX4 消息名映射(30/105/147/22/33/105 等,未知回退 `msg <id>`)。
+- **ADR-016 已对齐实现** (`5ccec12`):写入实际帧类型 `SampleFrame`/`TraceSample`、tap 生命周期细节、时间戳决策;新增 "Implementation notes" 记录待办缺口(P0-4/P0-5/P0-6)。
 - **S1 其余未开始**:窗口关闭清理、幂等 connect + 重连 attach(已确认 `commands.rs::connect` 不会重新 attach,是真实缺口)、TapStats 暴露、错误提示、每源时间映射。**S2–S5 未开始**。
 
 ---
@@ -65,7 +66,7 @@
 
 ### S0:验证补丁(约 0.5 天)
 
-- [x] `cargo test -p maggcs_core signals`、`cargo build`(通过:signals 13 passed、build 编译干净)
+- [x] `cargo test -p maggcs-core signals`、`cargo build`(通过:signals 13 passed、build 编译干净)
 - [ ] 打开 inspector 的 devtools,确认不再报错(需人工;mock 模式 Playwright 检查已 0 错)
 - [x] 修 P0-3:FFT 缓冲保底 1024 点(`trimBuffer` 保底 `max(1024, 窗口样本数)`)
 - [x] 修 P0-2:FFT 图改为持久的 uPlot 实例 + `setData`,卸载时 destroy(`SpectrumView`)
