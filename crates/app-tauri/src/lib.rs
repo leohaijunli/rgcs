@@ -6,6 +6,7 @@
 
 mod command_service;
 mod commands;
+mod inspector_service;
 mod mission_service;
 mod state;
 mod telemetry_pump;
@@ -32,7 +33,14 @@ pub fn run() {
             commands::mission_set_current,
             commands::survey_generate_sweep,
             commands::survey_generate_cloverleaf,
-            commands::send_command
+            commands::send_command,
+            inspector_service::inspector_open,
+            inspector_service::inspector_close,
+            inspector_service::inspector_connect,
+            inspector_service::inspector_disconnect,
+            inspector_service::inspector_subscribe,
+            inspector_service::inspector_catalog,
+            inspector_service::inspector_list_algorithms
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

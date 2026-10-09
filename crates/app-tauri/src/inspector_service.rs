@@ -1,0 +1,198 @@
+//! Signal Inspector service: attaches the `core::signals` tap to the live link,
+//! batches samples into frames, and forwards them to the inspector window over a
+//! Tauri channel (plan §4/§7, ADR-016). A thin adapter like
+//! `mission_service`/`command_service`: the tap, extractor and catalog live in
+//! `core`.
+
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
+use maggcs_core::mavlink::connection::ConnectionHandle;
+use maggcs_core::mavlink::router::MessageRoute;
+use maggcs_core::signals::catalog::{CatalogEntry, SignalCatalog};
+use maggcs_core::signals::tap::{run_tap, Subscriptions, TapStats, SAMPLE_CHANNEL_CAP};
+use maggcs_core::signals::{SignalId, SignalSample};
+use parking_lot::Mutex as PMutex;
+use serde::Serialize;
+use std::sync::Mutex;
+use tauri::ipc::Channel;
+use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
+use tokio::sync::mpsc;
+
+use crate::state::AppState;
+
+/// Batch window between channel frames (~30 Hz).
+const FRAME_INTERVAL_MS: u64 = 33;
+
+static FRAME_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// One batched frame pushed to the inspector window at ~30 Hz.
+#[derive(Debug, Clone, Serialize)]
+pub struct SampleFrame {
+    pub seq: u64,
+    pub samples: Vec<SignalSample>,
+}
+
+/// Shared inspector state held in [`AppState`] (not on the link, so the plot
+/// configuration survives reconnects, ADR-016).
+#[derive(Default)]
+pub struct InspectorState {
+    pub subs: Subscriptions,
+    pub catalog: Arc<Mutex<SignalCatalog>>,
+    pub stats: Arc<Mutex<TapStats>>,
+    /// The window's channel, registered by `inspector_connect`.
+    frame: Arc<PMutex<Option<Channel<SampleFrame>>>>,
+    /// Set while a tap+batcher pair is running for the current link.
+    tap_running: PMutex<bool>,
+}
+
+impl AppState {
+    pub fn inspector(&self) -> &InspectorState {
+        &self.inspector
+    }
+
+    /// Attach the tap to a link and start the batcher (idempotent per link).
+    pub fn attach_inspector(&self, handle: ConnectionHandle) {
+        let inspector = self.inspector();
+        if *inspector.tap_running.lock() {
+            return;
+        }
+        *inspector.tap_running.lock() = true;
+
+        let events = handle.subscribe_route(MessageRoute::all());
+        let subs = inspector.subs.clone();
+        let catalog = inspector.catalog.clone();
+        let stats = inspector.stats.clone();
+        let frame = inspector.frame.clone();
+        let (tx, rx) = mpsc::channel(SAMPLE_CHANNEL_CAP);
+
+        tauri::async_runtime::spawn(run_tap(events, subs, catalog, tx, stats));
+        tauri::async_runtime::spawn(batch_loop(rx, frame));
+    }
+
+    /// Register the window's channel and start producing samples.
+    pub fn inspector_connect(&self, handle: ConnectionHandle, channel: Channel<SampleFrame>) {
+        let inspector = self.inspector();
+        *inspector.frame.lock() = Some(channel);
+        inspector.subs.acquire();
+        self.attach_inspector(handle);
+    }
+
+    /// The window closed: stop producing samples and drop the channel.
+    pub fn inspector_disconnect(&self) {
+        let inspector = self.inspector();
+        inspector.subs.release();
+        inspector.subs.clear();
+        *inspector.frame.lock() = None;
+    }
+
+    /// Current catalog for the signal tree.
+    pub fn inspector_catalog(&self) -> Vec<CatalogEntry> {
+        self.inspector()
+            .catalog
+            .lock()
+            .expect("catalog lock")
+            .snapshot(std::time::Instant::now())
+    }
+}
+
+/// Collect samples for ~33 ms, then push one [`SampleFrame`].
+async fn batch_loop(
+    mut rx: mpsc::Receiver<SignalSample>,
+    frame: Arc<PMutex<Option<Channel<SampleFrame>>>>,
+) {
+    loop {
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(FRAME_INTERVAL_MS);
+        let mut batch: Vec<SignalSample> = Vec::new();
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            match tokio::time::timeout(remaining, rx.recv()).await {
+                Ok(Some(sample)) => batch.push(sample),
+                Ok(None) => break, // tap ended
+                Err(_) => break,   // window elapsed: flush
+            }
+        }
+        if batch.is_empty() {
+            continue;
+        }
+        let Some(channel) = frame.lock().clone() else {
+            continue;
+        };
+        let frame = SampleFrame {
+            seq: FRAME_SEQ.fetch_add(1, Ordering::Relaxed),
+            samples: batch,
+        };
+        let _ = channel.send(frame);
+    }
+}
+
+/// Open the inspector window, or focus it if it already exists.
+#[tauri::command]
+pub fn inspector_open(app: AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("inspector") {
+        let _ = win.show();
+        let _ = win.set_focus();
+        return Ok(());
+    }
+    WebviewWindowBuilder::new(&app, "inspector", WebviewUrl::App("inspector.html".into()))
+        .title("Signal Inspector")
+        .inner_size(1280.0, 800.0)
+        .min_inner_size(800.0, 480.0)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Close the inspector window and detach the tap.
+#[tauri::command]
+pub fn inspector_close(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    state.inspector_disconnect();
+    if let Some(win) = app.get_webview_window("inspector") {
+        let _ = win.close();
+    }
+    Ok(())
+}
+
+/// Register the window's sample channel and start the tap.
+#[tauri::command]
+pub async fn inspector_connect(
+    state: State<'_, AppState>,
+    channel: Channel<SampleFrame>,
+) -> Result<(), String> {
+    let handle = state.connection().ok_or("no link")?;
+    state.inspector_connect(handle, channel);
+    Ok(())
+}
+
+/// Stop streaming into this window (the window itself stays open).
+#[tauri::command]
+pub fn inspector_disconnect(state: State<'_, AppState>) -> Result<(), String> {
+    state.inspector_disconnect();
+    Ok(())
+}
+
+/// The subscribed signal set (the union of the plots' traces).
+#[tauri::command]
+pub fn inspector_subscribe(
+    state: State<'_, AppState>,
+    signals: Vec<SignalId>,
+) -> Result<(), String> {
+    state.inspector().subs.set(signals.into_iter().collect());
+    Ok(())
+}
+
+/// The current catalog, for the signal tree.
+#[tauri::command]
+pub fn inspector_catalog(state: State<'_, AppState>) -> Result<Vec<CatalogEntry>, String> {
+    Ok(state.inspector_catalog())
+}
+
+/// Every algorithm the frontend can attach to a trace, with its parameter form.
+#[tauri::command]
+pub fn inspector_list_algorithms() -> Result<Vec<maggcs_core::dsp::AlgorithmInfo>, String> {
+    Ok(maggcs_core::dsp::list_algorithms())
+}

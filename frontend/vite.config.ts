@@ -45,5 +45,13 @@ export default defineConfig({
   build: {
     target: 'es2021',
     chunkSizeWarningLimit: 2048,
+    // Second entry: the Signal Inspector runs in its own OS window without
+    // Cesium (ADR-016).
+    rollupOptions: {
+      input: {
+        main: 'index.html',
+        inspector: 'inspector.html',
+      },
+    },
   },
 })

@@ -1,0 +1,121 @@
+/* Signal Inspector window: reuses the design tokens via the shared stylesheet. */
+@import '../design-system/index.css';
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--mg-bg);
+  color: var(--mg-ink);
+  font-family: var(--mg-font-sans);
+}
+
+.inspector-grid {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  grid-template-rows: 40px 1fr;
+  height: 100%;
+}
+
+.toolbar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--mg-border);
+  background: var(--mg-bg-raised);
+  font-size: 12px;
+}
+
+.toolbar button,
+.toolbar select,
+.plot button,
+.plot select,
+.signal-list button {
+  background: var(--mg-bg);
+  color: var(--mg-ink);
+  border: 1px solid var(--mg-border);
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.toolbar button.active {
+  background: var(--mg-accent);
+  color: var(--mg-accent-ink);
+  border-color: var(--mg-accent);
+}
+
+.signal-list {
+  grid-column: 1;
+  overflow: auto;
+  border-right: 1px solid var(--mg-border);
+  padding: 8px;
+  font-size: 12px;
+}
+
+.signal-list label {
+  display: block;
+  padding: 3px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.signal-list label:hover {
+  background: var(--mg-bg-raised);
+}
+
+.signal-list .msg {
+  color: var(--mg-muted);
+  font-size: 11px;
+}
+
+.plot-grid {
+  grid-column: 2;
+  overflow: auto;
+  padding: 8px;
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.plot {
+  border: 1px solid var(--mg-border);
+  border-radius: 6px;
+  background: var(--mg-bg-raised);
+  padding: 4px;
+}
+
+.plot .plot-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 2px 4px;
+}
+
+.plot .plot-head .title {
+  font-family: var(--mg-font-mono);
+  font-size: 11px;
+  color: var(--mg-muted);
+}
+
+.plot .chart {
+  width: 100%;
+  height: 180px;
+}
+
+.peak-note {
+  color: var(--mg-warn);
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.uplot {
+  width: 100%;
+  height: 180px;
+}

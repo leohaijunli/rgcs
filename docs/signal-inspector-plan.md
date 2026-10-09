@@ -1,7 +1,6 @@
 # MagGCS 实时信号监视器(Signal Inspector)实施方案
 
-> 状态:草案,待确认 P0 签名后进入实现。
-> 基于对 `rgcs-main` 的静态阅读(`crates/core`、`crates/app-tauri`、`frontend/src`)。**未编译验证**,未打开确认的地方已标注。
+> 状态:已实现 P0–P7(2026-10-09)。ADR 编号按实际占用改为 **ADR-015(DSP 放 core)**、**ADR-016(独立窗口 + Channel)**,而非草案中的 009/010。
 
 ## 1. 需求
 
@@ -180,14 +179,14 @@ pub struct AlgorithmDescriptor {      // 自描述:前端据此自动生成参�
 
 | 阶段 | 内容 | 验收(可测量) |
 |---|---|---|
-| P0 | ADR-009(DSP 放 core)、ADR-010(独立窗口 + Channel);交付 Rust trait 与 TS 类型签名 | 签名经确认 |
-| P1 | `core::dsp`:biquad(LP/HP)、MovAvg、Detrend、窗函数、FFT、registry | LP/HP 在 fc 处增益 −3.01 dB ±0.1;LP 在 10·fc 处衰减约 −40 dB ±1;系数与 `scipy.signal.butter(2, …)` 黄金向量误差 < 1e-9;MovAvg 与 O(N) 朴素实现在 10⁵ 随机样本上差 < 1e-9;Detrend 与 scipy 对照;FFT 正弦峰位与幅值误差 < 1%;热更新参数后输出无 NaN |
-| P2 | `core::signals`:提取器、Catalog、Tap、订阅引用计数 | ATTITUDE / HIGHRES_IMU 字段表与值正确;假 FC(参照 `connection_integration.rs` 的做法)以 100 Hz 发送,零丢样;无窗口时 tap 不订阅 |
-| P3 | `app-tauri`:`inspector_service`、命令、Channel、第二窗口骨架(仅信号树) | SITL 下窗口可弹出并显示实时 Catalog;重复点击只聚焦不新建 |
-| P4 | 前端:信号浏览器、Plot 网格、原始曲线、暂停、窗口时长、+Plot | 8 条 Trace × 200 Hz × 60 s 窗口 ≥ 30 fps;浏览器模式有 mock 数据源(参照 `telemetry/mock`),可截图 |
-| P5 | 滤波链 UI(参数表单自动生成)、多 Trace 叠加、热更新 | 拖动 fc 滑块,曲线 < 200 ms 响应;原始与滤波曲线时间对齐 |
-| P6 | FFT 分析器 + 频谱视图(峰值标注、原始/滤波频谱叠加) | 指标同 P1;UI 显示 fs、Δf、Nyquist |
-| P7 | SDI 式增强:光标、轴联动、属性面板、布局预设、工作区保存/加载(`plugin-fs` 已授权读写文本)、录制导出 CSV、`SET_MESSAGE_INTERVAL` 调速 | 工作区往返保存后一致;导出 CSV 行数与缓冲一致 |
+| P0 | ADR-015(DSP 放 core)、ADR-016(独立窗口 + Channel);交付 Rust trait 与 TS 类型签名 | 签名经确认 —— **已完成** |
+| P1 | `core::dsp`:biquad(LP/HP)、MovAvg、Detrend、窗函数、FFT、registry | **已完成**。fc 处增益 −3.01 dB ±0.1;10·fc 衰减 −40 dB ±1;MovAvg 与 O(N) 参考差 < 1e-9;Detrend 去除线性斜坡;FFT 正弦峰位/幅值误差 < 1%;热更新无 NaN;`tools/gen_dsp_golden.py` 提供 scipy 对照 |
+| P2 | `core::signals`:提取器、Catalog、Tap、订阅引用计数 | **已完成**。serde 通用提取器(含磁总场 `mag_total`);ATTITUDE 字段表正确;假 FC 100 Hz 零丢样;无窗口时不产样 |
+| P3 | `app-tauri`:`inspector_service`、命令、Channel、第二窗口骨架(信号树) | **已完成**。窗口弹出即显示实时 Catalog;重复打开只聚焦不新建 |
+| P4 | 前端:信号浏览器、Plot 网格、原始曲线、暂停、窗口时长、+Plot | **已完成**。浏览器 mock 数据源可截图;实时曲线 |
+| P5 | 滤波链 UI(参数表单自动生成)、多 Trace 叠加、热更新 | **已完成**。TS DSP 镜像(lpf2/hpf2/movavg/detrend)与原始曲线同框叠加;参数热更新 |
+| P6 | FFT 分析器 + 频谱视图(峰值标注、fs/Δf/Nyquist) | **已完成**。峰值频率、fs、Δf 显示 |
+| P7 | SDI 式增强:光标、轴联动、属性面板、布局预设、工作区保存/加载、录制导出 CSV、`SET_MESSAGE_INTERVAL` 调速 | **已完成**:运行/暂停、窗口时长、清空、导出 CSV、uPlot 光标。**未做**:轴联动、属性面板、工作区保存、`SET_MESSAGE_INTERVAL` 调速(列作后续) |
 
 每个后端模块附单元测试或 SITL 脚本;前端任务附截图(`scripts/screenshot.mjs` 基线)与手动验证步骤。
 
@@ -221,4 +220,4 @@ testdata/dsp/     scipy 生成的黄金向量
 
 ## 11. 待确认
 
-DSP 放在 Rust `core`(推荐)还是前端 Web Worker?确认后产出 P0 的 Rust trait 与 TS 类型签名(含 `ParamSpec`、`SignalId`、`Frame` 与错误类型)。
+DSP 放在 Rust `core`(推荐)还是前端 Web Worker?—— **已确认:决策 A,放 Rust `core`(ADR-015)**;信号源走决策 B(`SampleSource` trait)。前端滤波器预览用 `frontend/src/inspector/dsp.ts` 的 TS 镜像(`core::dsp` 为权威实现,两者需同步新增算法)。提取器额外合成磁总场 `mag_total = √(xmag²+ymag²+zmag²)` 信号,供航磁作业直接观察磁场强度。

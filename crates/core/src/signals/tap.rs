@@ -60,6 +60,11 @@ impl Subscriptions {
         *self.ids.lock().expect("subscription lock") = ids;
     }
 
+    /// Drop every subscription (the window closed; the tap id-checks nothing).
+    pub fn clear(&self) {
+        self.ids.lock().expect("subscription lock").clear();
+    }
+
     pub fn contains(&self, id: &SignalId) -> bool {
         self.ids.lock().expect("subscription lock").contains(id)
     }

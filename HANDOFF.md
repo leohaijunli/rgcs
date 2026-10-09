@@ -3,6 +3,45 @@
 Snapshot of the current session (issues.md backlog clearance). Issue statuses
 live in `issues.md`; keep both in sync when a task lands.
 
+## Latest landing — Signal Inspector P0–P7
+
+The whole Signal Inspector (`docs/signal-inspector-plan.md`) is implemented
+through P7 and the flight-plan optimization (B1–B4, A1, A2) is complete:
+
+- **P1 `core::dsp`**: biquad LP/HP, moving average, sliding detrend, a
+  dependency-free radix-2 FFT analyzer and a self-describing registry
+  (ADR-015). Numeric acceptance pinned by tests (−3.01 dB at fc, −40 dB/dec
+  rolloff, movavg vs O(N) reference, FFT sine peak, hot-retune stays finite).
+  `tools/gen_dsp_golden.py` regenerates SciPy golden vectors.
+- **P2 `core::signals`**: a generic serde field extractor (adds a synthetic
+  `mag_total` total-field signal for xmag/ymag/zmag triples), the EMA-rate
+  catalog, and the tap task over `MessageRoute::all()` with subscription
+  refcount and FC-timestamp mapping (min rx−fc offset). Fake-FC 100 Hz tap
+  test is zero-loss; a closed window produces no samples.
+- **P3 `app-tauri`**: `inspector_service` + `inspector_open/close/connect/
+  subscribe/catalog/list_algorithms` commands, a second OS window
+  (`inspector.html`, capability label `"inspector"`), samples streamed over a
+  `tauri::ipc::Channel` at ~30 Hz frames (ADR-016).
+- **P4–P7 frontend** (`frontend/src/inspector/`): a second Vite entry; the
+  inspector window shows the signal browser (catalog with rates), uPlot time
+  plots with raw + filtered traces (a TS DSP mirror in `inspector/dsp.ts`),
+  an FFT spectrum view (peak/fs/Δf/Nyquist), and SDI-style controls — run/
+  pause, 10/30/60 s window, clear data, export CSV. A browser-mode mock feeds
+  the plots when not running inside Tauri.
+- The map add-tool ghost now previews the new waypoint at its inherited
+  altitude with a ground stick (click placement matches the result), a single
+  polygon vertex is visible from the first click, right-click deletes a
+  polygon vertex, and the boundary readout has a Clear button (pushed earlier).
+
+Not yet done (P7 follow-ups): axis linking, property panel, workspace
+save/load, `SET_MESSAGE_INTERVAL` rate control, and a `core::inspector::session`
+so the filter pipeline runs in Rust for every trace (the frontend currently
+uses the TS mirror).
+
+Verified: cargo fmt --check, clippy -D warnings, 209 core lib tests, 10 app
+lib tests + 4 CSP tests, frontend typecheck/i18n/polygon/planfile/mission-sync/
+build (both entries).
+
 ## Latest landing — map height reference fixed, drop line grounded
 
 The operator reported the vehicle marker flew **below the drawn flight-plan

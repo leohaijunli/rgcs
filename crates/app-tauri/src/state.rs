@@ -15,6 +15,8 @@ use maggcs_core::telemetry::hub::TelemetryHub;
 use maggcs_core::CommandService;
 use parking_lot::Mutex;
 
+use crate::inspector_service::InspectorState;
+
 /// Stable identifier for one connection/vehicle session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LinkId(u64);
@@ -53,6 +55,8 @@ struct AppInner {
 #[derive(Default)]
 pub struct AppState {
     inner: Mutex<AppInner>,
+    /// Signal Inspector tap/catalog/batcher (survives link swaps, ADR-016).
+    pub inspector: InspectorState,
     /// Held for the whole duration of a `connect`/`disconnect` command so the
     /// link swap is atomic with respect to other commands (issues.md #21).
     ops: tokio::sync::Mutex<()>,
@@ -105,6 +109,11 @@ impl AppState {
     /// Cloned command service of the primary link, if any.
     pub fn command(&self) -> Option<CommandService> {
         self.with_primary(|l| l.command.clone())
+    }
+
+    /// The connection handle of the primary link, if any.
+    pub fn connection(&self) -> Option<ConnectionHandle> {
+        self.with_primary(|l| l.connection.clone())
     }
 
     /// Latest link status published by the pump.
