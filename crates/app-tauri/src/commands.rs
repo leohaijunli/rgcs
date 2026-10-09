@@ -184,7 +184,10 @@ const SITL_HOME_FILE: &str = "sitl-home.json";
 /// so PX4 spawns at the same location the operator set in Settings -> Vehicle.
 fn write_sitl_home_file(dir: &Path, lat: f64, lon: f64) -> std::io::Result<()> {
     fs::create_dir_all(dir)?;
-    fs::write(dir.join(SITL_HOME_FILE), format!("{{\"lat\":{lat},\"lon\":{lon}}}\n"))
+    fs::write(
+        dir.join(SITL_HOME_FILE),
+        format!("{{\"lat\":{lat},\"lon\":{lon}}}\n"),
+    )
 }
 
 /// Persist the Settings -> Vehicle initial position for the SITL helper.
