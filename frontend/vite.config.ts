@@ -51,6 +51,7 @@ export default defineConfig({
       input: {
         main: 'index.html',
         inspector: 'inspector.html',
+        actuator: 'actuator.html',
       },
     },
   },

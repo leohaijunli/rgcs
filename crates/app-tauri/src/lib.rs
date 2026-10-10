@@ -4,6 +4,7 @@
 //! Tauri process, telemetry/link events are pushed to the React frontend via
 //! Tauri events, and commands let the UI control the link.
 
+mod actuator_service;
 mod command_service;
 mod commands;
 mod inspector_service;
@@ -35,6 +36,9 @@ pub fn run() {
             commands::survey_generate_cloverleaf,
             commands::send_command,
             commands::set_message_interval,
+            actuator_service::actuator_open,
+            actuator_service::actuator_close,
+            actuator_service::actuator_status,
             inspector_service::inspector_open,
             inspector_service::inspector_close,
             inspector_service::inspector_connect,

@@ -9,6 +9,10 @@ export default {
   inspector: {
     open: 'Signal inspector',
   },
+  tools: {
+    popover: 'Tools',
+    motorTest: 'Motor test',
+  },
   link: {
     fc: 'FC',
     rtk: 'RTK',

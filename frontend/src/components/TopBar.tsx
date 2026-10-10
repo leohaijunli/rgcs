@@ -1,5 +1,5 @@
-import { LineChart, Settings } from 'lucide-react'
-import { useState } from 'react'
+import { ChevronDown, Gauge, LineChart, Settings } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { invoke } from '@tauri-apps/api/core'
 import { useTelemetryStore } from '../stores/telemetry'
@@ -77,6 +77,14 @@ export default function TopBar() {
     }
   }
 
+  const openMotorTest = () => {
+    if (isTauri()) {
+      void invoke('actuator_open')
+    } else {
+      window.open('actuator.html', '_blank')
+    }
+  }
+
   const armed = heartbeat?.base_mode.safety_armed === true
   const mode = modeLabel(t, heartbeat)
   const rtk = gps?.fix_type ?? null
@@ -128,15 +136,9 @@ export default function TopBar() {
         <Pill label={t('link.batt')} value={batteryText} tone={batteryTone} />
         <LinkPopover onOpenSettings={openConnection} />
 
-        <button
-          aria-label={t('inspector.open')}
-          title={t('inspector.open')}
-          onClick={openInspector}
-          className="flex h-11 items-center gap-1.5 rounded border border-line bg-canvas px-2.5 text-muted hover:text-ink"
-        >
-          <LineChart size={16} />
-          <span className="hidden text-xs xl:inline">{t('inspector.open')}</span>
-        </button>
+        {/* Tools ▾ groups the window launchers (motor-test plan §2.2-10) so
+         * the TopBar stays pills + two icons. */}
+        <ToolsPopover onInspector={openInspector} onMotorTest={openMotorTest} />
         <button
           aria-label={t('settings.menu')}
           onClick={() => setSettingsOpen(true)}
@@ -168,4 +170,72 @@ function fixKey(fix: string): string {
     PPP: 'ppp',
   }
   return map[fix] ?? 'noGps'
+}
+
+/** Tools ▾: the window launchers, one popover (motor-test plan §5). */
+function ToolsPopover({
+  onInspector,
+  onMotorTest,
+}: {
+  onInspector: () => void
+  onMotorTest: () => void
+}) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: PointerEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false)
+    window.addEventListener('pointerdown', onDown)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('pointerdown', onDown)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        aria-label={t('tools.popover')}
+        title={t('tools.popover')}
+        className={`flex h-11 items-center gap-1.5 rounded border border-line px-2.5 ${
+          open ? 'bg-panel text-ink' : 'bg-canvas text-muted hover:text-ink'
+        }`}
+      >
+        <Gauge size={16} />
+        <span className="hidden text-xs xl:inline">{t('tools.popover')}</span>
+        <ChevronDown size={12} />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-50 mt-1 w-52 rounded border border-line bg-panel p-1 shadow-2xl">
+          <button
+            onClick={() => {
+              setOpen(false)
+              onInspector()
+            }}
+            className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-sm text-ink hover:bg-canvas"
+          >
+            <LineChart size={14} />
+            {t('inspector.open')}
+          </button>
+          <button
+            onClick={() => {
+              setOpen(false)
+              onMotorTest()
+            }}
+            className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-sm text-ink hover:bg-canvas"
+          >
+            <Gauge size={14} />
+            {t('tools.motorTest')}
+          </button>
+        </div>
+      )}
+    </div>
+  )
 }
