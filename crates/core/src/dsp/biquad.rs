@@ -33,6 +33,10 @@ pub struct Biquad {
     a2: f64,
     x1: f64,
     x2: f64,
+    /// Last finite input, used to re-seed the state on a live retune.
+    last_x: f64,
+    /// False until the first finite sample seeds the state (step init).
+    primed: bool,
 }
 
 /// The transfer function evaluated on the unit circle: `|H(e^{j2π f/fs})|`.
@@ -86,6 +90,8 @@ fn design(kind: BiquadKind, fc_hz: f64, q: f64, fs: f64) -> Result<Biquad, DspEr
         a2,
         x1: 0.0,
         x2: 0.0,
+        last_x: 0.0,
+        primed: false,
     })
 }
 
@@ -110,8 +116,17 @@ impl Processor for Biquad {
         if self.sig == (fc, q) {
             return Ok(()); // unchanged: keep running state
         }
-        let redesigned = design(self.kind, fc, q, fs_hz)?;
-        // Redesign keeps the delay-line state so a live retune does not click.
+        let mut redesigned = design(self.kind, fc, q, fs_hz)?;
+        // A live retune must not restart the curve from zero, and carrying
+        // the raw delay line shifts its meaning under the new coefficients
+        // (a several-percent transient on a DC-offset signal). Instead,
+        // re-seed the state at the last input under the *new* coefficients:
+        // the output stays on the signal.
+        if self.primed {
+            redesigned.x1 = (1.0 - redesigned.b0) * self.last_x;
+            redesigned.x2 = (redesigned.b2 - redesigned.a2) * self.last_x;
+            redesigned.primed = true;
+        }
         *self = redesigned;
         Ok(())
     }
@@ -119,9 +134,30 @@ impl Processor for Biquad {
     fn reset(&mut self) {
         self.x1 = 0.0;
         self.x2 = 0.0;
+        self.last_x = 0.0;
+        self.primed = false;
     }
 
     fn process(&mut self, x: f64) -> f64 {
+        // A gap invalidates the running state: pass it through and re-prime
+        // from the next finite sample, instead of letting NaN poison the
+        // delay line forever.
+        if !x.is_finite() {
+            self.x1 = 0.0;
+            self.x2 = 0.0;
+            self.primed = false;
+            return x;
+        }
+        self.last_x = x;
+        // Step initialization: the first sample seeds the delay line as if
+        // the input had sat at that value forever, so the filtered curve
+        // starts *at* the signal instead of ramping up from zero (operator
+        // report: a 22 000 nT mag bias took seconds to converge).
+        if !self.primed {
+            self.x1 = (1.0 - self.b0) * x;
+            self.x2 = (self.b2 - self.a2) * x;
+            self.primed = true;
+        }
         // Direct Form II Transposed.
         let y = self.b0 * x + self.x1;
         self.x1 = self.b1 * x - self.a1 * y + self.x2;
@@ -295,5 +331,69 @@ mod tests {
             }
             assert!(out.is_finite(), "output went NaN at sample {i}");
         }
+    }
+
+    #[test]
+    fn first_output_starts_at_the_signal_not_zero() {
+        // Operator report: a filtered mag trace ramped from 0 toward the
+        // 22 000 nT bias for seconds. Step init must make the very first
+        // filtered sample equal the raw value, for both kinds.
+        let fs = 100.0;
+        for kind in [BiquadKind::LowPass, BiquadKind::HighPass] {
+            let mut b = Biquad::new(kind, 5.0, std::f64::consts::FRAC_1_SQRT_2, fs).unwrap();
+            let y0 = b.process(22_000.0);
+            assert!(
+                (y0 - 22_000.0).abs() < 1e-6,
+                "{kind:?}: first output {y0} != first sample"
+            );
+        }
+    }
+
+    #[test]
+    fn gap_reseeds_instead_of_poisoning_the_state() {
+        let fs = 100.0;
+        let mut b = Biquad::new(
+            BiquadKind::LowPass,
+            5.0,
+            std::f64::consts::FRAC_1_SQRT_2,
+            fs,
+        )
+        .unwrap();
+        for _ in 0..50 {
+            b.process(100.0);
+        }
+        // A NaN gap passes through …
+        assert!(b.process(f64::NAN).is_nan());
+        // … and the next finite sample restarts *at* the signal, not at 0,
+        // and not stuck at NaN.
+        let y = b.process(100.0);
+        assert!((y - 100.0).abs() < 1e-6, "post-gap output {y}");
+        let y2 = b.process(100.0);
+        assert!(y2.is_finite(), "state stayed poisoned: {y2}");
+    }
+
+    #[test]
+    fn retune_keeps_the_curve_near_the_signal() {
+        // A live cutoff change must not restart the curve from zero (the
+        // redesign used to wipe the delay line despite claiming otherwise).
+        let fs = 100.0;
+        let mut b = Biquad::new(
+            BiquadKind::LowPass,
+            5.0,
+            std::f64::consts::FRAC_1_SQRT_2,
+            fs,
+        )
+        .unwrap();
+        for _ in 0..200 {
+            b.process(5_000.0);
+        }
+        let mut p = ParamValues::new();
+        p.set_all(&[
+            (PARAM_FC_HZ, 10.0),
+            (PARAM_Q, std::f64::consts::FRAC_1_SQRT_2),
+        ]);
+        b.configure(&p, fs).unwrap();
+        let y = b.process(5_000.0);
+        assert!((y - 5_000.0).abs() < 1.0, "retune restarted from zero: {y}");
     }
 }

@@ -171,12 +171,7 @@ impl UlogSource {
             };
             for field in &topic.fields {
                 out.push((
-                    SignalId::new(
-                        SYSTEM_ID,
-                        COMPONENT_ID,
-                        meta.message_id,
-                        field.name.clone(),
-                    ),
+                    SignalId::new(SYSTEM_ID, COMPONENT_ID, meta.message_id, field.name.clone()),
                     meta.name.clone(),
                 ));
             }
@@ -187,7 +182,10 @@ impl UlogSource {
 
     /// Every numeric signal the log carries, sorted for stable output.
     pub fn signals(&self) -> Vec<SignalId> {
-        self.signal_entries().into_iter().map(|(id, _)| id).collect()
+        self.signal_entries()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect()
     }
 
     /// One summary per topic, sorted by name.
@@ -252,8 +250,10 @@ impl UlogSource {
                 None => return Ok(None),
                 Some(UlogRecord::Skipped(_)) => continue,
                 Some(UlogRecord::Data { topic_id }) => {
-                    let Some((message_id, message_name)) =
-                        self.meta.get(&topic_id).map(|m| (m.message_id, m.name.clone()))
+                    let Some((message_id, message_name)) = self
+                        .meta
+                        .get(&topic_id)
+                        .map(|m| (m.message_id, m.name.clone()))
                     else {
                         continue;
                     };
@@ -466,7 +466,7 @@ pub async fn run_replay(
             scrub_steps += 1;
             if scrub_steps >= SCRUB_MAX_STEPS {
                 scrub_until = f64::NEG_INFINITY;
-            } else if scrub_steps % SCRUB_YIELD_EVERY == 0 {
+            } else if scrub_steps.is_multiple_of(SCRUB_YIELD_EVERY) {
                 tokio::task::yield_now().await;
             }
             continue;
@@ -549,7 +549,10 @@ mod tests {
         let signals = src.signals();
         let fields: Vec<&str> = signals.iter().map(|s| s.field.as_str()).collect();
         assert_eq!(fields, ["timestamp", "x"]);
-        assert_eq!(signals[0].message_id, signals[1].message_id, "one topic, one id");
+        assert_eq!(
+            signals[0].message_id, signals[1].message_id,
+            "one topic, one id"
+        );
         assert_eq!(signals[0].system_id, SYSTEM_ID);
         assert_eq!(signals[0].component_id, COMPONENT_ID);
 
