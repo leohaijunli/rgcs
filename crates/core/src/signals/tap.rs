@@ -78,7 +78,11 @@ impl Subscriptions {
     }
 
     pub fn contains(&self, id: &SignalId) -> bool {
-        self.state.lock().expect("subscription lock").ids.contains(id)
+        self.state
+            .lock()
+            .expect("subscription lock")
+            .ids
+            .contains(id)
     }
 
     /// Whether any subscribed field belongs to this message (pre-filter, no
@@ -111,7 +115,9 @@ impl TimestampMapper {
     pub fn map(&mut self, fc_ms: f64, rx_ms: f64) -> f64 {
         // FC reboot / clock wrap: the raw timestamp fell far below the previous
         // sample's, so the old minimum offset is meaningless — drop it.
-        let rebooted = self.last_fc_ms.is_some_and(|last| fc_ms < last - ROLLBACK_MS);
+        let rebooted = self
+            .last_fc_ms
+            .is_some_and(|last| fc_ms < last - ROLLBACK_MS);
         if rebooted {
             self.offset_ms = None;
         }
@@ -131,7 +137,10 @@ impl TimestampMapper {
         let out = fc_ms + offset;
         // Host-axis safety net: if the mapped time still went backward by a
         // large margin, drop the stale baseline so the next sample re-baselines.
-        if self.last_out_ms.is_some_and(|last| out < last - ROLLBACK_MS) {
+        if self
+            .last_out_ms
+            .is_some_and(|last| out < last - ROLLBACK_MS)
+        {
             self.offset_ms = None;
         }
         self.last_out_ms = Some(out);
@@ -212,7 +221,11 @@ fn handle_message(
     let Ok(extraction) = extract::extract(&env.message) else {
         return;
     };
-    let rx_ms = env.received_at.saturating_duration_since(epoch).as_secs_f64() * 1000.0;
+    let rx_ms = env
+        .received_at
+        .saturating_duration_since(epoch)
+        .as_secs_f64()
+        * 1000.0;
     let t_ms = fc_ms(&extraction)
         .map(|(field, fc)| mapper.map(field, fc, rx_ms))
         .unwrap_or(rx_ms);
@@ -450,7 +463,14 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(SAMPLE_CHANNEL_CAP);
         let (_stop_tx, stop_rx) = tokio::sync::oneshot::channel();
 
-        let tap = tokio::spawn(run_tap(events, subs, catalog.clone(), tx, stats.clone(), stop_rx));
+        let tap = tokio::spawn(run_tap(
+            events,
+            subs,
+            catalog.clone(),
+            tx,
+            stats.clone(),
+            stop_rx,
+        ));
         bus_tx
             .send(ConnectionEvent::Message(Box::new(envelope(
                 0,
@@ -482,7 +502,6 @@ mod tests {
 
     #[test]
     fn timestamp_mappers_keep_per_field_baselines() {
-
         // time_boot_ms and time_usec are different clocks; each re-baselines
         // independently, so a reboot of one must not disturb the other.
         let mut m = TimestampMappers::default();
@@ -505,7 +524,10 @@ mod tests {
         assert!(subs.contains_message(30));
         assert!(!subs.contains_message(105));
         subs.clear();
-        assert!(!subs.contains_message(30), "cleared subscriptions match none");
+        assert!(
+            !subs.contains_message(30),
+            "cleared subscriptions match none"
+        );
     }
 
     #[tokio::test]
@@ -596,7 +618,10 @@ mod tests {
         tap.await.unwrap();
 
         let dropped = stats.lock().unwrap().dropped;
-        assert!(dropped > 0, "the overflow is counted as dropped, got {dropped}");
+        assert!(
+            dropped > 0,
+            "the overflow is counted as dropped, got {dropped}"
+        );
         assert!(
             samples.len() >= 2,
             "tap keeps forwarding after Lagged, got {}",
@@ -622,7 +647,14 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(SAMPLE_CHANNEL_CAP);
         let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
 
-        let tap = tokio::spawn(run_tap(events, subs, catalog.clone(), tx, stats.clone(), stop_rx));
+        let tap = tokio::spawn(run_tap(
+            events,
+            subs,
+            catalog.clone(),
+            tx,
+            stats.clone(),
+            stop_rx,
+        ));
         stop_tx.send(()).unwrap();
 
         tokio::time::timeout(Duration::from_secs(2), tap)

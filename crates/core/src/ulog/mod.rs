@@ -373,9 +373,9 @@ fn parse_format(text: &str) -> Result<(String, FormatDef), UlogError> {
         if part.is_empty() {
             continue;
         }
-        let (spec, field_name) = part.split_once(' ').ok_or_else(|| {
-            UlogError::BadFormat(format!("{name}: field {part:?} has no name"))
-        })?;
+        let (spec, field_name) = part
+            .split_once(' ')
+            .ok_or_else(|| UlogError::BadFormat(format!("{name}: field {part:?} has no name")))?;
         let (ty, arr) = split_array(spec)?;
         fields.push(RawField {
             ty: ty.to_string(),
@@ -547,8 +547,14 @@ mod tests {
         let mut r = reader(v);
         assert_eq!(r.header.version, 1);
         assert_eq!(r.header.timestamp_us, 172_000);
-        assert!(matches!(r.next_record().unwrap(), Some(UlogRecord::Skipped(b'B'))));
-        assert!(matches!(r.next_record().unwrap(), Some(UlogRecord::Skipped(b'I'))));
+        assert!(matches!(
+            r.next_record().unwrap(),
+            Some(UlogRecord::Skipped(b'B'))
+        ));
+        assert!(matches!(
+            r.next_record().unwrap(),
+            Some(UlogRecord::Skipped(b'I'))
+        ));
         assert_eq!(r.next_record().unwrap(), None, "clean EOF");
     }
 
@@ -584,7 +590,10 @@ mod tests {
                 // 8 + 4 + 12 + 1 = 25; the uint8_t[4] padding is not logged.
                 assert_eq!(topic.payload_len, 25);
                 assert_eq!(r.data_body().len(), 25);
-                assert_eq!(topic.timestamp_us(r.data_body()), Some(100_000 + data * 1000));
+                assert_eq!(
+                    topic.timestamp_us(r.data_body()),
+                    Some(100_000 + data * 1000)
+                );
                 let mut out = Vec::new();
                 topic.decode(r.data_body(), &mut out);
                 assert_eq!(out.len(), 6, "timestamp, x, vel[0..2], ok");
@@ -625,14 +634,19 @@ mod tests {
         // `inner` logs 4 bytes of content but its struct is 8 bytes padded; the
         // embedded copy still occupies all 8 (its padding is interior here).
         v.extend(format_record("inner:uint32_t a;uint8_t[4] _padding0;"));
-        v.extend(format_record("outer:uint64_t timestamp;inner sub;uint8_t[2] _padding0;"));
+        v.extend(format_record(
+            "outer:uint64_t timestamp;inner sub;uint8_t[2] _padding0;",
+        ));
         v.extend(add_record(0, 2, "outer"));
         v.extend(data_record(2, &[0u8; 16]));
         let mut r = reader(v);
         while let Some(rec) = r.next_record().expect("read") {
             if matches!(rec, UlogRecord::Data { .. }) {
                 let topic = r.topics.get(&2).expect("topic");
-                assert_eq!(topic.payload_len, 16, "8 + 8 (inner incl. padding), no tail pad");
+                assert_eq!(
+                    topic.payload_len, 16,
+                    "8 + 8 (inner incl. padding), no tail pad"
+                );
                 let names: Vec<&str> = topic.fields.iter().map(|f| f.name.as_str()).collect();
                 assert_eq!(names, ["timestamp"], "nested structs are not expanded");
                 return;

@@ -572,7 +572,10 @@ mod tests {
         let out = s.ingest(&sample(&signal, 10_000.0, 42.0));
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].raw, 42.0, "raw keeps flowing");
-        assert!(out[0].filtered.is_nan(), "the undesignable stage is dropped");
+        assert!(
+            out[0].filtered.is_nan(),
+            "the undesignable stage is dropped"
+        );
     }
 
     #[test]
@@ -718,7 +721,11 @@ mod tests {
             ));
         }
         let frames = s.poll_spectra();
-        assert_eq!(frames.len(), 1, "filtered-source analyzer still produces a frame");
+        assert_eq!(
+            frames.len(),
+            1,
+            "filtered-source analyzer still produces a frame"
+        );
         assert_eq!(frames[0].1.n, 64);
     }
 

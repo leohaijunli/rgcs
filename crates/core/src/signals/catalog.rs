@@ -124,8 +124,18 @@ mod tests {
         let t0 = Instant::now();
         cat.observe(&id, "ATTITUDE", 0.1, t0);
         assert_eq!(cat.len(), 1);
-        cat.observe(&id, "ATTITUDE", 0.2, t0 + std::time::Duration::from_millis(10));
-        cat.observe(&id, "ATTITUDE", 0.3, t0 + std::time::Duration::from_millis(20));
+        cat.observe(
+            &id,
+            "ATTITUDE",
+            0.2,
+            t0 + std::time::Duration::from_millis(10),
+        );
+        cat.observe(
+            &id,
+            "ATTITUDE",
+            0.3,
+            t0 + std::time::Duration::from_millis(20),
+        );
         let rows = cat.snapshot(Instant::now());
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].message_name, "ATTITUDE");
@@ -140,7 +150,12 @@ mod tests {
     #[test]
     fn clear_drops_every_entry() {
         let mut cat = SignalCatalog::new();
-        cat.observe(&SignalId::new(1, 1, 30, "roll"), "ATTITUDE", 1.0, Instant::now());
+        cat.observe(
+            &SignalId::new(1, 1, 30, "roll"),
+            "ATTITUDE",
+            1.0,
+            Instant::now(),
+        );
         assert_eq!(cat.len(), 1);
         cat.clear();
         assert!(cat.is_empty());
