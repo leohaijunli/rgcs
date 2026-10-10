@@ -20,6 +20,7 @@ pub mod rtk;
 pub mod signals;
 pub mod survey;
 pub mod telemetry;
+pub mod ulog;
 
 pub use commands::{CommandError, CommandEvent, CommandResult, CommandService, CommandSession};
 pub use devices::{DeviceDatabase, DeviceEvent, DeviceManager, DeviceRole, SerialDeviceInfo};

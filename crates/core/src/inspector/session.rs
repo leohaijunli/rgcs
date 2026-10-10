@@ -213,6 +213,10 @@ impl Session {
         configs: impl IntoIterator<Item = Trace>,
     ) -> Result<HashSet<SignalId>, SessionError> {
         let mut next: HashMap<TraceId, RunningTrace> = HashMap::new();
+        // A trace whose filter cannot be designed at the observed rate (e.g. a
+        // cutoff at or above Nyquist for a slow stream) must not take the whole
+        // trace set down: it keeps streaming raw and we report why afterwards.
+        let mut first_error: Option<SessionError> = None;
         for cfg in configs {
             if next.contains_key(&cfg.id) {
                 return Err(SessionError::DuplicateTrace(cfg.id));
@@ -226,15 +230,39 @@ impl Session {
                     // Rebuild the DSP but keep the fs estimate.
                     let fs = existing.fs.fs_hz().unwrap_or(NOMINAL_FS_HZ);
                     existing.cfg = cfg;
-                    existing.pipeline = build_pipeline(&existing.cfg, fs)?;
-                    existing.analyzer = build_analyzer(existing.cfg.analyzer.as_ref(), fs)?;
+                    existing.pipeline = match build_pipeline(&existing.cfg, fs) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            first_error.get_or_insert(e);
+                            Pipeline::new()
+                        }
+                    };
+                    existing.analyzer = match build_analyzer(existing.cfg.analyzer.as_ref(), fs) {
+                        Ok(a) => a,
+                        Err(e) => {
+                            first_error.get_or_insert(e);
+                            None
+                        }
+                    };
                     existing.fs_built = 0.0; // reconfigure on the next sample
                     next.insert(existing.cfg.id.clone(), existing);
                 }
                 None => {
                     let fs = NOMINAL_FS_HZ;
-                    let pipeline = build_pipeline(&cfg, fs)?;
-                    let analyzer = build_analyzer(cfg.analyzer.as_ref(), fs)?;
+                    let pipeline = match build_pipeline(&cfg, fs) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            first_error.get_or_insert(e);
+                            Pipeline::new()
+                        }
+                    };
+                    let analyzer = match build_analyzer(cfg.analyzer.as_ref(), fs) {
+                        Ok(a) => a,
+                        Err(e) => {
+                            first_error.get_or_insert(e);
+                            None
+                        }
+                    };
                     next.insert(
                         cfg.id.clone(),
                         RunningTrace {
@@ -258,7 +286,10 @@ impl Session {
         }
         self.traces = next;
         self.by_signal = by_signal;
-        Ok(self.subscribe_ids())
+        match first_error {
+            Some(e) => Err(e),
+            None => Ok(self.subscribe_ids()),
+        }
     }
 
     /// Apply one live sample to every trace that subscribes to its signal.
@@ -520,6 +551,28 @@ mod tests {
             s.set_traces(vec![cfg]),
             Err(SessionError::NotAFilter(_))
         ));
+    }
+
+    #[test]
+    fn a_filter_that_cannot_be_designed_keeps_the_trace_streaming_raw() {
+        let mut s = Session::new();
+        let signal = sig(30, "roll");
+        // A slow stream (1 Hz) makes the registry's 5 Hz default low-pass sit
+        // above Nyquist, so the stage cannot be designed at the observed rate.
+        s.set_traces(vec![trace(signal.clone(), vec![])]).unwrap();
+        for i in 0..10 {
+            s.ingest(&sample(&signal, i as f64 * 1000.0, i as f64));
+        }
+        let err = s
+            .set_traces(vec![trace(signal.clone(), vec![lpf(5.0)])])
+            .expect_err("cutoff above Nyquist is rejected");
+        assert!(matches!(err, SessionError::InvalidParams(_)), "got {err:?}");
+        // The trace is still there and still streams its raw signal.
+        assert_eq!(s.len(), 1, "trace kept despite the bad filter");
+        let out = s.ingest(&sample(&signal, 10_000.0, 42.0));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].raw, 42.0, "raw keeps flowing");
+        assert!(out[0].filtered.is_nan(), "the undesignable stage is dropped");
     }
 
     #[test]

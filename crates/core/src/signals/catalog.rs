@@ -99,6 +99,11 @@ impl SignalCatalog {
         rows
     }
 
+    /// Drop every entry (a source switch: live link ↔ ULog replay).
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
     pub fn len(&self) -> usize {
         self.entries.len()
     }
@@ -130,6 +135,16 @@ mod tests {
             "rate {}",
             rows[0].rate_hz
         );
+    }
+
+    #[test]
+    fn clear_drops_every_entry() {
+        let mut cat = SignalCatalog::new();
+        cat.observe(&SignalId::new(1, 1, 30, "roll"), "ATTITUDE", 1.0, Instant::now());
+        assert_eq!(cat.len(), 1);
+        cat.clear();
+        assert!(cat.is_empty());
+        assert!(cat.snapshot(Instant::now()).is_empty());
     }
 
     #[test]

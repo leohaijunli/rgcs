@@ -2,6 +2,19 @@
 
 > 状态:已实现 P0–P7(2026-10-09),P7 后续项(轴联动、属性面板、工作区保存/加载、`SET_MESSAGE_INTERVAL` 调速、`core::inspector::session`、主界面入口按钮)于 2026-10-09 补齐。ADR 编号按实际占用改为 **ADR-015(DSP 放 core)**、**ADR-016(独立窗口 + Channel)**,而非草案中的 009/010。
 > 后续(2026-10-09,对照 Simulink Data Inspector 简化):信号树**勾选即把信号加入当前活动 Plot**(去掉每 Plot 的下拉选择)、**分组勾选框一次加/减整组信号**、搜索时**一键加入全部匹配**、每信号在勾选框后直接设颜色(SDI 色板)、支持把信号**拖拽**入 Plot、Plot 网格布局预设(1×1/2×1/3×1)、双光标 Δt/Δy 测量、工具栏改为**图标 + 分组 + 溢出菜单**(导出/保存/加载收进 `⋯`)、**Fit 到数据** + 拖拽缩放 + **Shift 拖拽平移** + 双击 Fit(图表上有手势提示)、**Plot 标题双击重命名**、x 轴缩放与 `Follow` 自动滚动(x 自动跟随最新、y 轴自适应)、修掉 inspector 窗口未引入 uPlot 基础 CSS 的 bug(此前 `.u-over/.u-under` 为 static,导致光标/缩放/图例错位)。
+> 修复(2026-10-09,可读性与多信号绘图):
+> - 信号列表不再在变量后显性显示频率/实时值,改到属性面板(`Value`/`Rate`);浅色主题下属性、图例、坐标轴标签统一用 `--mg-ink`(深色)而非 `--mg-muted`。
+> - **滤波曲线单独配色**:`filtered` 曲线用信号色旋转约 150° 的色相,`raw` 保持用户选定颜色(虚线),trace chip 同时显示两个色块。
+> - **多信号同框不显示曲线的根因**:uPlot 用 `null`(而非 `NaN`)表示断点——它的 y 轴 range 扫描只跳过 `null`。此前一个信号晚加入时其列首为 `NaN`,污染整条 y 轴范围,导致整个 Plot 空白。`mergedData` 现在输出 `null` 断点。
+> - 无滤波的 trace 不再生成冗余的 `filtered` 系列(其全 `NaN` 列会在图例回读成 `NaN`)。
+> - 图表加 `ResizeObserver`:切换 3×1 等布局后 canvas 跟随网格单元宽度(此前 uPlot 只在构造时取宽度,曲线会溢出整行)。
+> - FFT 图放大到 220 px 高,加宽 y 轴并显示轴标签 `Hz` / `magnitude`,刻度用紧凑格式。
+> - `Session::set_traces` 不再因单个 trace 的滤波器无法在当前采样率下设计(截止频率 ≥ 奈奎斯特,如 5 Hz 低通挂在 1 Hz 慢流上)而使整个 trace 集合失败:该 trace 保留并只输出原始曲线,错误照常上报;新增 stage 的默认截止频率按观测速率收紧到 `0.4·fs`。
+>
+> 新增(2026-10-09,ULog 回放与可读性):
+> - **ULog(`.ulg`)回放**(决策 B):`core::ulog` 手写 reader(`F`/`A`/`D` 记录,无新依赖)+ `core::ulog::replay`,把日志转成与 live tap 相同的 `SignalSample` 流,复用 `batch_loop`/DSP session;工具栏 **Open ULog** / 播放暂停 / 速度 / 拖动定位 / **Back to live**;文件由 Rust 命令读取。`testdata/` 无 `.ulg`,夹具在 `ulog::tests` 内生成。
+> - 打开 ULog 或切回 live 时**清空并按 topic 预填信号树**,消息列表立即刷新(此前沿用旧列表,看起来"没更新")。
+> - 原生控件(WebKitGTK 的 `<select>`/`<input>`/滚动条)此前跟随系统浅色主题,呈现为白底灰字:inspector 根元素加 `color-scheme`,并显式给 `option`、输入框、`disabled` 控件配色;`disabled` 文本用 `-webkit-text-fill-color` 覆盖 WebKit 的灰字。
 
 ## 1. 需求
 
@@ -53,7 +66,9 @@ PX4 ──MAVLink──▶ ConnectionHandle (broadcast<ConnectionEvent>)
 - 代价:改参数需一次 IPC(毫秒级,可接受)。
 - 备选:前端 Web Worker 做 DSP,延迟更低,但会出现 TS/Rust 两套实现。
 
-**决策 B:信号源抽象为 `SampleSource` trait。** 目前只有 live MAVLink,将来可挂 ULog 回放(`testdata/` 已有 ULog)。
+**决策 B:信号源抽象为 `SampleSource`,ULog 回放已实现。** 默认是 live MAVLink;`core::ulog`(手写 reader,不加依赖)解析 PX4 `.ulg` 的 `F`/`A`/`D` 记录,`core::ulog::replay` 把它转成与 tap 相同的 `SignalSample` 流,复用同一 `batch_loop` 与 DSP session,前端只切换数据源。注意:`testdata/` **没有** `.ulg` 夹具(此前文档写"已有 ULog"与实际不符),回放夹具由 `crates/core/src/ulog/mod.rs` 的 `#[cfg(test)]` 最小 ULog writer 在测试内生成。
+
+用法(Signal Inspector 工具栏):**Open ULog** 选择 `.ulg`(文件由 Rust 命令 `inspector_open_ulog` 读取,不走 fs 插件);回放时显示文件名 + 播放/暂停、速度(0.25×–8×)、拖动定位(seek),**Back to live** 回到实时链路。打开或切回时清空信号树并按 uORB topic 预填,列表立即刷新。x 轴为日志相对时间(0..时长),不是墙钟;`message_id` = topic 名的稳定 FNV-1a 哈希(含实例号),`system_id`/`component_id` 固定 1/1。
 
 ## 4. 数据采集层 `core::signals`
 
@@ -217,7 +232,7 @@ testdata/dsp/     scipy 生成的黄金向量
 - **FFT 带宽受 MAVLink 流速率限制。** PX4 默认给 GCS 链路的流较慢(ATTITUDE 等约几十 Hz),奈奎斯特频率因而很低。做振动或高频分析,需先用 `MAV_CMD_SET_MESSAGE_INTERVAL` 提高目标消息速率(P7 做成 UI 控件),或在 PX4 侧用 `mavlink stream` 调整。`CommandService` 是否已支持该命令未核实,P7 时确认,不支持则补充。UI 明确显示当前 fs 与 Nyquist,避免误读频谱。
 - **丢包与乱序**(UDP):由 gap 检测与断线处理覆盖。
 - **未验证项**:`mavlink` 0.17 serde 序列化的字段形态(枚举、bitflags、数组)需在 P2 起步时用测试确认;`vite.config.ts` 多页面改法;TopBar / IconRail 入口位置;`check:*` 脚本的具体约束。
-- **设计假设**:监视器窗口为单例,窗口内放多个 Plot;一条 Trace 可串多级滤波;`NAMED_VALUE_FLOAT` 等自定义消息在范围内;多机、ULog 回放不在第一期,但接口已预留(`SignalId` 含 sys/comp、`SampleSource` trait)。
+- **设计假设**:监视器窗口为单例,窗口内放多个 Plot;一条 Trace 可串多级滤波;`NAMED_VALUE_FLOAT` 等自定义消息在范围内;多机不在第一期(接口已预留 `SignalId` 含 sys/comp);ULog 回放已按本决策 B 实现。
 
 ## 11. 待确认
 

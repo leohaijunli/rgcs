@@ -66,6 +66,76 @@ body,
   padding: 4px 6px;
 }
 
+/* Native controls (WebKitGTK in the app, Chromium in the browser) follow the
+ * OS theme unless told otherwise, which shows up as white selects/inputs with
+ * grey text on the dark UI. `color-scheme` themes the closed control, the
+ * popup list and the scrollbars; the explicit rules below cover WebKitGTK,
+ * which ignores `background`/`color` on some controls, and override the
+ * greyed-out text WebKit gives disabled controls. */
+html {
+  color-scheme: dark;
+}
+
+html[data-theme='light'] {
+  color-scheme: light;
+}
+
+option {
+  background: var(--mg-bg);
+  color: var(--mg-ink);
+}
+
+.toolbar input:not([type='color']),
+.plot input:not([type='color']),
+.properties input:not([type='color']):not([type='checkbox']) {
+  background: var(--mg-bg);
+  color: var(--mg-ink);
+  -webkit-text-fill-color: var(--mg-ink);
+  border: 1px solid var(--mg-border);
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 12px;
+}
+
+.toolbar select:disabled,
+.plot select:disabled,
+.properties select:disabled,
+.properties input:disabled {
+  color: var(--mg-ink);
+  -webkit-text-fill-color: var(--mg-ink);
+  opacity: 0.75;
+}
+
+input[type='checkbox'],
+input[type='range'] {
+  accent-color: var(--mg-accent);
+}
+
+/* ULog replay controls (plan decision B): file name, seek, clock, speed. */
+.replay-name {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--mg-ink);
+  font-weight: 600;
+}
+
+.replay-seek {
+  width: 160px;
+  accent-color: var(--mg-accent);
+}
+
+.replay-time {
+  color: var(--mg-ink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.replay-speed {
+  padding: 3px 4px;
+}
+
 .toolbar-menu {
   position: relative;
   display: inline-flex;
@@ -122,7 +192,7 @@ body,
 
 .plot-empty {
   grid-column: 1 / -1;
-  color: var(--mg-muted);
+  color: var(--mg-ink);
   font-size: 12px;
   padding: 14px;
 }
@@ -179,7 +249,7 @@ body,
 .signal-group-head .caret {
   width: 0;
   height: 0;
-  border-left: 5px solid var(--mg-muted);
+  border-left: 5px solid var(--mg-ink);
   border-top: 4px solid transparent;
   border-bottom: 4px solid transparent;
   transition: transform 0.1s;
@@ -248,7 +318,7 @@ body,
 }
 
 .signal-list .msg {
-  color: var(--mg-muted);
+  color: var(--mg-ink);
   font-size: 11px;
 }
 
@@ -320,7 +390,7 @@ body,
 .plot .plot-head .title {
   font-family: var(--mg-font-mono);
   font-size: 11px;
-  color: var(--mg-muted);
+  color: var(--mg-ink);
   cursor: pointer;
 }
 
@@ -349,7 +419,7 @@ body,
 }
 
 .properties dt {
-  color: var(--mg-muted);
+  color: var(--mg-ink);
 }
 
 .properties dd {
@@ -365,12 +435,12 @@ body,
 }
 
 .properties .prop-row label {
-  color: var(--mg-muted);
+  color: var(--mg-ink);
   font-size: 11px;
 }
 
 .properties .hint {
-  color: var(--mg-muted);
+  color: var(--mg-ink);
   font-size: 11px;
 }
 
@@ -420,7 +490,7 @@ body,
 }
 
 .plot .plot-head .hint {
-  color: var(--mg-muted);
+  color: var(--mg-ink);
   font-size: 10px;
 }
 

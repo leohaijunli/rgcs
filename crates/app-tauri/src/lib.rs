@@ -42,7 +42,12 @@ pub fn run() {
             inspector_service::inspector_status,
             inspector_service::inspector_set_traces,
             inspector_service::inspector_catalog,
-            inspector_service::inspector_list_algorithms
+            inspector_service::inspector_list_algorithms,
+            inspector_service::inspector_open_ulog,
+            inspector_service::inspector_replay,
+            inspector_service::inspector_replay_status,
+            inspector_service::inspector_use_live,
+            inspector_service::inspector_source
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

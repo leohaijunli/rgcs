@@ -9,15 +9,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import uPlot from 'uplot'
 import { invoke, Channel } from '@tauri-apps/api/core'
+import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import {
   ChevronsRight,
   Eraser,
+  FolderOpen,
   Link2,
   Maximize2,
   MoreHorizontal,
   Pause,
   Play,
   Plus,
+  Radio,
   Ruler,
 } from 'lucide-react'
 import { makeProcessor, magnitudeSpectrum, type AlgorithmInfo } from './dsp'
@@ -57,6 +60,34 @@ interface InspectorStatus {
   tap_running: boolean
 }
 
+/** Rust `ReplayStatus` (inspector_service.rs): ULog playback state. */
+interface ReplayStatus {
+  active: boolean
+  name: string | null
+  duration_ms: number
+  position_ms: number
+  playing: boolean
+  speed: number
+}
+
+/** Rust `UlogInfo` (inspector_service.rs): result of opening a `.ulg`. */
+interface UlogInfo {
+  name: string
+  duration_ms: number
+  topics: { name: string; signals: number }[]
+}
+
+/** Replay speed presets (matches the Rust `ReplayControl` clamp). */
+const REPLAY_SPEEDS = [0.25, 0.5, 1, 2, 4, 8]
+
+/** `m:ss.s` clock for the replay slider. */
+function fmtClock(sec: number): string {
+  if (!Number.isFinite(sec) || sec < 0) return '0:00.0'
+  const m = Math.floor(sec / 60)
+  const s = sec - m * 60
+  return `${m}:${s.toFixed(1).padStart(4, '0')}`
+}
+
 /** Per-trace ring capacity (~5 min at 200 Hz); older samples are overwritten. */
 const RING_CAP = 65536
 
@@ -83,6 +114,30 @@ const PALETTE = ['#4ea1ff', '#3ddc84', '#ffb454', '#ff6b6b', '#c792ea', '#22d3ee
 /** Pinned-cursor line colour for the dual-cursor measurement (P7). */
 const MEASURE_COLOR = '#ffb454'
 
+/** uPlot axis font / label font, kept at the panel text size so ticks and units
+ * stay legible in the narrow spectrum view. */
+const AXIS_FONT = '11px system-ui, sans-serif'
+
+/** Compact magnitude tick label: scientific notation only when the numbers get
+ * long, so the y-axis gutter stays narrow enough to leave room for the curve. */
+function fmtMag(v: number): string {
+  if (v === 0) return '0'
+  const a = Math.abs(v)
+  if (a >= 1e4 || a < 1e-3) return v.toExponential(1)
+  return String(Number(v.toPrecision(3)))
+}
+
+/** Default parameters for a new filter stage. The registry default low-pass
+ * cutoff is 5 Hz, which sits above Nyquist for slow MAVLink streams (a 5 Hz
+ * filter on a 10 Hz signal cannot be designed), so pull `fc_hz` under the
+ * observed rate — otherwise the stage would silently be dropped by the DSP. */
+function defaultStageParams(a: AlgorithmInfo, rate_hz: number): [string, number][] {
+  return a.params.map((pp) => {
+    const v = pp.key === 'fc_hz' && rate_hz > 0 ? Math.min(pp.default, 0.4 * rate_hz) : pp.default
+    return [pp.key, v] as [string, number]
+  })
+}
+
 function hashIndex(s: string): number {
   let h = 0
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0
@@ -91,6 +146,53 @@ function hashIndex(s: string): number {
 /** Series colour for a signal (SDI colours each signal, not each trace). */
 function colorOf(signalKey_: string, colors: Record<string, string>): string {
   return colors[signalKey_] ?? PALETTE[hashIndex(signalKey_) % PALETTE.length]
+}
+
+function hexToRgb(hex: string): [number, number, number] | null {
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex.trim())
+  if (!m) return null
+  const h = m[1].length === 3 ? m[1].replace(/./g, (c) => c + c) : m[1]
+  const n = parseInt(h, 16)
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+}
+
+function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
+  const rr = r / 255
+  const gg = g / 255
+  const bb = b / 255
+  const max = Math.max(rr, gg, bb)
+  const min = Math.min(rr, gg, bb)
+  const l = (max + min) / 2
+  const d = max - min
+  if (d === 0) return [0, 0, l]
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min)
+  let h: number
+  if (max === rr) h = ((gg - bb) / d + (gg < bb ? 6 : 0)) / 6
+  else if (max === gg) h = ((bb - rr) / d + 2) / 6
+  else h = ((rr - gg) / d + 4) / 6
+  return [h, s, l]
+}
+
+function hslToHex(h: number, s: number, l: number): string {
+  const channel = (n: number) => {
+    const k = (n + h * 12) % 12
+    const a = s * Math.min(l, 1 - l)
+    const v = l - a * Math.max(-1, Math.min(k - 3, Math.min(9 - k, 1)))
+    return Math.round(v * 255).toString(16).padStart(2, '0')
+  }
+  return `#${channel(0)}${channel(8)}${channel(4)}`
+}
+
+/** Colour for the derived "filtered" curve: the signal hue rotated ~150° and
+ * re-lit, so the filter output reads apart from the signal-coloured raw trace
+ * (the raw line keeps the colour the user picked). */
+function filteredColor(base: string): string {
+  const rgb = hexToRgb(base)
+  if (!rgb) return base
+  const [h, s, l] = rgbToHsl(rgb[0], rgb[1], rgb[2])
+  const nh = (h + 0.42) % 1
+  const nl = l < 0.5 ? Math.min(0.8, l + 0.18) : Math.max(0.4, l - 0.1)
+  return hslToHex(nh, Math.min(1, s + 0.05), nl)
 }
 
 let idSeq = 0
@@ -113,6 +215,9 @@ function token(name: string): string {
 }
 const cssVarCache = new Map<string, string>()
 const MUTED = () => token('--mg-muted')
+/** Body text colour: dark on the light theme, bright on the dark theme, so
+ * labels and tick values stay legible on either background. */
+const INK = () => token('--mg-ink')
 
 /** The trace with this id, across every plot. */
 function findTrace(plots: Plot[], id: string): Trace | undefined {
@@ -145,6 +250,10 @@ export function InspectorApp() {
   const [dropPlot, setDropPlot] = useState<string | null>(null)
   /** Overflow menu (export / save / load) open state. */
   const [menuOpen, setMenuOpen] = useState(false)
+  /** ULog playback state (`null` = the live link is the source). */
+  const [replay, setReplay] = useState<ReplayStatus | null>(null)
+  /** Seek slider position while dragging; committed to the backend on release. */
+  const [seekPreview, setSeekPreview] = useState<number | null>(null)
 
   const noticeAt = useRef(0)
   const showNotice = useCallback((msg: string) => {
@@ -154,6 +263,58 @@ export function InspectorApp() {
       if (Date.now() - noticeAt.current >= 4000) setNotice(null)
     }, 4000)
   }, [])
+
+  /** Open a `.ulg` and switch the source to replay (plan decision B). */
+  const openUlog = useCallback(async () => {
+    try {
+      const path = await openDialog({
+        multiple: false,
+        filters: [{ name: 'ULog', extensions: ['ulg'] }],
+      })
+      if (typeof path !== 'string') return
+      const info = await invoke<UlogInfo>('inspector_open_ulog', { path })
+      setReplay({
+        active: true,
+        name: info.name,
+        duration_ms: info.duration_ms,
+        position_ms: 0,
+        playing: true,
+        speed: 1,
+      })
+      showNotice(
+        `Replaying ${info.name} · ${(info.duration_ms / 1000).toFixed(1)} s · ${info.topics.length} topics`,
+      )
+    } catch (e) {
+      showNotice(String(e))
+    }
+  }, [showNotice])
+
+  /** Update the replay control (play/pause, speed, seek). */
+  const replayControl = useCallback(
+    async (patch: { play?: boolean; speed?: number; seek_ms?: number }) => {
+      const args: Record<string, unknown> = {}
+      if (patch.play !== undefined) args.play = patch.play
+      if (patch.speed !== undefined) args.speed = patch.speed
+      if (patch.seek_ms !== undefined) args.seekMs = patch.seek_ms
+      try {
+        setReplay(await invoke<ReplayStatus>('inspector_replay', args))
+      } catch (e) {
+        showNotice(String(e))
+      }
+    },
+    [showNotice],
+  )
+
+  /** Stop replaying and hand the source back to the live link. */
+  const useLive = useCallback(async () => {
+    try {
+      await invoke('inspector_use_live')
+    } catch (e) {
+      showNotice(String(e))
+    }
+    setReplay(null)
+    setSeekPreview(null)
+  }, [showNotice])
 
   const pausedRef = useRef(paused)
   pausedRef.current = paused
@@ -169,6 +330,9 @@ export function InspectorApp() {
   const spectra = useRef<Map<string, SpectrumFrame>>(new Map())
   const charts = useRef<Map<string, uPlot>>(new Map())
   const chartSigs = useRef<Map<string, string>>(new Map())
+  /** Keeps each chart's canvas in sync with its grid cell (layout presets,
+   * window resize); uPlot only sizes on construction otherwise. */
+  const chartResizers = useRef<Map<string, ResizeObserver>>(new Map())
   const chartHosts = useRef<Map<string, HTMLDivElement>>(new Map())
   /** Per-plot DOM node the uPlot legend is mounted into, so it never overlays
    * the curve or axes (uPlot's default legend sits inside the plot box). */
@@ -422,6 +586,12 @@ export function InspectorApp() {
       try {
         const cat = await invoke<CatalogEntry[]>('inspector_catalog')
         const s = await invoke<InspectorStatus>('inspector_status')
+        try {
+          const rs = await invoke<ReplayStatus>('inspector_replay_status')
+          setReplay(rs.active ? rs : null)
+        } catch {
+          /* replay status is optional */
+        }
         if (s.tap_running) {
           const now = Date.now()
           if (lastT > 0 && s.messages >= lastMsgs) {
@@ -487,20 +657,34 @@ export function InspectorApp() {
       const host = chartHosts.current.get(p.id)
       if (!host) continue
       const sig = `${axisLink}|${p.traces
-        .map((t) => `${t.id}:${colorOf(signalKey(t.signal), colors)}`)
+        .map(
+          (t) =>
+            `${t.id}:${colorOf(signalKey(t.signal), colors)}:${t.pipeline.length > 0 ? 1 : 0}`,
+        )
         .join(',')}`
       if (charts.current.has(p.id) && chartSigs.current.get(p.id) === sig) continue
       charts.current.get(p.id)?.destroy()
+      chartResizers.current.get(p.id)?.disconnect()
       const cursor = axisLink ? { show: true, sync: { key: SYNC_KEY } } : { show: true }
       const series: uPlot.Series[] = [{ label: 't', stroke: 'transparent' }]
       for (const t of p.traces) {
         const color = colorOf(signalKey(t.signal), colors)
         // Short label (field only) keeps the legend on one line.
         const name = t.signal.field
-        series.push({ label: `${name} raw`, stroke: color, width: 1, dash: [4, 3] })
-        series.push({ label: `${name} filtered`, stroke: color, width: 2 })
+        if (t.pipeline.length === 0) {
+          // Without a filter there is only one curve; no phantom "filtered"
+          // series (its all-NaN data used to read back as "NaN" in the legend).
+          series.push({ label: name, stroke: color, width: 2 })
+        } else {
+          // The filtered curve gets its own hue so it never hides behind raw.
+          series.push({ label: `${name} raw`, stroke: color, width: 1, dash: [4, 3] })
+          series.push({ label: `${name} filtered`, stroke: filteredColor(color), width: 2 })
+        }
       }
-      const empty = [[], ...p.traces.flatMap(() => [[], []])] as unknown as uPlot.AlignedData
+      const empty = [
+        [],
+        ...p.traces.flatMap((t) => (t.pipeline.length > 0 ? [[], []] : [[]])),
+      ] as unknown as uPlot.AlignedData
       const chart = new uPlot(
         {
           width: host.clientWidth,
@@ -537,8 +721,8 @@ export function InspectorApp() {
           ],
           scales: { x: { time: false, auto: false }, y: { auto: true } },
           axes: [
-            { stroke: MUTED(), grid: { stroke: MUTED(), width: 1, dash: [2, 4] } },
-            { stroke: MUTED() },
+            { stroke: INK(), grid: { stroke: MUTED(), width: 1, dash: [2, 4] } },
+            { stroke: INK() },
           ],
           series,
         },
@@ -547,12 +731,20 @@ export function InspectorApp() {
       )
       charts.current.set(p.id, chart)
       chartSigs.current.set(p.id, sig)
+      const ro = new ResizeObserver(() => {
+        const w = host.clientWidth
+        if (w > 0 && Math.abs(w - chart.width) > 1) chart.setSize({ width: w, height: 220 })
+      })
+      ro.observe(host)
+      chartResizers.current.set(p.id, ro)
     }
     for (const id of [...charts.current.keys()]) {
       if (!plots.some((p) => p.id === id && p.traces.length > 0)) {
         charts.current.get(id)?.destroy()
         charts.current.delete(id)
         chartSigs.current.delete(id)
+        chartResizers.current.get(id)?.disconnect()
+        chartResizers.current.delete(id)
         pins.current.delete(id)
       }
     }
@@ -686,13 +878,10 @@ export function InspectorApp() {
 
   /** Append a filter stage (the pipeline is multi-stage: detrend → LPF → …). */
   const addStage = useCallback(
-    (id: string) => {
-      const a = algorithms.find((x) => x.kind === 'processor')
-      if (!a) return
-      const params: [string, number][] = a.params.map((pp) => [pp.key, pp.default])
-      patchTrace(id, (t) => ({ ...t, pipeline: [...t.pipeline, { algorithm: a.id, params }] }))
+    (id: string, algorithm: string, params: [string, number][]) => {
+      patchTrace(id, (t) => ({ ...t, pipeline: [...t.pipeline, { algorithm, params }] }))
     },
-    [algorithms, patchTrace],
+    [patchTrace],
   )
 
   const removeStage = useCallback(
@@ -789,12 +978,99 @@ export function InspectorApp() {
             </div>
           )}
         </div>
-        <span style={{ marginLeft: 'auto', color: 'var(--mg-muted)', fontSize: 11 }}>
+        {tauri && replay?.active && (
+          <>
+            <span className="toolbar-sep" />
+            <button
+              className="icon-btn"
+              title={replay.playing ? 'Pause replay' : 'Play replay'}
+              aria-label={replay.playing ? 'Pause replay' : 'Play replay'}
+              onClick={() => void replayControl({ play: !replay.playing })}
+            >
+              {replay.playing ? <Pause size={16} /> : <Play size={16} />}
+            </button>
+            <span className="replay-name" title={replay.name ?? ''}>
+              {replay.name}
+            </span>
+            <input
+              className="replay-seek"
+              type="range"
+              min={0}
+              max={Math.max(1, Math.round(replay.duration_ms))}
+              step={1}
+              value={Math.round(seekPreview ?? replay.position_ms)}
+              title="Seek"
+              aria-label="Seek replay"
+              onChange={(e) => setSeekPreview(Number(e.target.value))}
+              onMouseUp={() => {
+                if (seekPreview != null) {
+                  void replayControl({ seek_ms: seekPreview })
+                  setSeekPreview(null)
+                }
+              }}
+              onKeyUp={() => {
+                if (seekPreview != null) {
+                  void replayControl({ seek_ms: seekPreview })
+                  setSeekPreview(null)
+                }
+              }}
+            />
+            <span className="replay-time">
+              {fmtClock((seekPreview ?? replay.position_ms) / 1000)} / {fmtClock(replay.duration_ms / 1000)}
+            </span>
+            <select
+              className="replay-speed"
+              value={replay.speed}
+              title="Replay speed"
+              aria-label="Replay speed"
+              onChange={(e) => void replayControl({ speed: Number(e.target.value) })}
+            >
+              {REPLAY_SPEEDS.map((sp) => (
+                <option key={sp} value={sp}>
+                  {sp}×
+                </option>
+              ))}
+            </select>
+            <button
+              className="icon-btn"
+              title="Back to live"
+              aria-label="Back to live"
+              onClick={() => void useLive()}
+            >
+              <Radio size={16} />
+            </button>
+          </>
+        )}
+        {tauri && !replay?.active && (
+          <>
+            <span className="toolbar-sep" />
+            <button
+              className="icon-btn"
+              title="Open ULog for replay"
+              aria-label="Open ULog"
+              onClick={() => void openUlog()}
+            >
+              <FolderOpen size={16} />
+            </button>
+          </>
+        )}
+        <span style={{ marginLeft: 'auto', color: 'var(--mg-ink)', fontSize: 11 }}>
           {tauri && status && (
             <>
-              {status.connected ? <span style={{ color: 'var(--mg-ok)' }}>● link</span> : <span style={{ color: 'var(--mg-warn)' }}>● no link</span>}
-              {' · '}
-              {status.tap_running ? `${rate.toFixed(0)} msg/s` : '—'} · dropped {status.dropped}
+              {replay?.active ? (
+                <>
+                  <span style={{ color: 'var(--mg-ok)' }}>● replay</span>
+                  {' · '}
+                  {replay.name} · {(replay.position_ms / 1000).toFixed(1)} s /{' '}
+                  {(replay.duration_ms / 1000).toFixed(1)} s
+                </>
+              ) : (
+                <>
+                  {status.connected ? <span style={{ color: 'var(--mg-ok)' }}>● link</span> : <span style={{ color: 'var(--mg-warn)' }}>● no link</span>}
+                  {' · '}
+                  {status.tap_running ? `${rate.toFixed(0)} msg/s` : '—'} · dropped {status.dropped}
+                </>
+              )}
             </>
           )}
           {'  '}Signal Inspector{tauri ? '' : ' · mock'}
@@ -875,9 +1151,16 @@ export function InspectorApp() {
                 <span className={`trace-chip ${selected === t.id ? 'selected' : ''}`} key={t.id}>
                   <span
                     className="chip-color"
-                    title="Series color"
+                    title="Raw color"
                     style={{ background: colorOf(signalKey(t.signal), colors) }}
                   />
+                  {t.pipeline.length > 0 && (
+                    <span
+                      className="chip-color"
+                      title="Filtered color"
+                      style={{ background: filteredColor(colorOf(signalKey(t.signal), colors)) }}
+                    />
+                  )}
                   <span className="mono" onClick={() => setSelected(t.id)}>
                     {signalKey(t.signal)}
                   </span>
@@ -920,7 +1203,7 @@ export function InspectorApp() {
         tauri={tauri}
         onColor={(c) => selectedTrace && setColor(signalKey(selectedTrace.signal), c)}
         onRemove={() => selected && removeTrace(selected)}
-        onAddStage={() => selected && addStage(selected)}
+        onAddStage={(algorithm, params) => selected && addStage(selected, algorithm, params)}
         onRemoveStage={(i) => selected && removeStage(selected, i)}
         onSetStage={(i, next) => selected && setStage(selected, i, next)}
         onError={showNotice}
@@ -1089,10 +1372,9 @@ function SignalBrowser({
           + Add {shownCount} shown
         </button>
       )}
-      {catalog.length === 0 && <div style={{ color: 'var(--mg-muted)' }}>Waiting for data…</div>}
+      {catalog.length === 0 && <div style={{ color: 'var(--mg-ink)' }}>Waiting for data…</div>}
       {visible.map((g) => {
         const isCollapsed = collapsed.has(g.name)
-      const rateSum = g.entries.reduce((s, c) => s + (Number.isFinite(c.rate_hz) ? c.rate_hz : 0), 0)
       const allInGroup = g.entries.every((c) => checked.has(signalKey(c.signal)))
       const someInGroup = g.entries.some((c) => checked.has(signalKey(c.signal)))
       return (
@@ -1112,7 +1394,7 @@ function SignalBrowser({
             <span className={isCollapsed ? 'caret caret-closed' : 'caret'} />
               <span>{g.name}</span>
               <span className="msg">
-                {g.entries.length} · {fmt(rateSum, 0)} Hz
+                {g.entries.length}
               </span>
             </div>
             {!isCollapsed &&
@@ -1131,10 +1413,6 @@ function SignalBrowser({
                     <input type="checkbox" checked={checked.has(key)} onChange={() => onToggle(c.signal)} />
                     <ColorPicker color={colorOf(key, colors)} onPick={(col) => onColor(key, col)} />
                     <span className="mono">{c.signal.field}</span>
-                    <span className="msg">
-                      {' '}
-                      {fmt(c.rate_hz, 0)} Hz · {fmt(c.last_value, 1)}
-                    </span>
                   </label>
                 )
               })}
@@ -1224,10 +1502,15 @@ function mergedData(
   if (outX.length < 2) return null
 
   const x = Float64Array.from(outX, (v) => v / 1000)
-  const series: Float64Array[] = [x]
+  // uPlot expresses gaps with `null`/`undefined`, never `NaN`: its y-range scan
+  // keeps `NaN` (only `null` is skipped), so one `NaN` at the edge of the view
+  // poisons the whole scale and blanks every curve in the plot.
+  const gap = (v: number): number | null => (Number.isFinite(v) ? v : null)
+  const series: (Float64Array | (number | null)[])[] = [x]
   for (let i = 0; i < k; i++) {
-    series.push(Float64Array.from(outRaw[i]))
-    series.push(Float64Array.from(outFilt[i]))
+    series.push(outRaw[i].map(gap))
+    // Only filtered traces carry a second column, matching the series list.
+    if (traces[i].pipeline.length > 0) series.push(outFilt[i].map(gap))
   }
   // `tEnd` is in seconds to match the x data (uPlot scales use the data units).
   return { data: series as uPlot.AlignedData, tEnd: outX[outX.length - 1] / 1000 }
@@ -1459,7 +1742,7 @@ function PropertiesPanel({
   tauri: boolean
   onColor: (color: string) => void
   onRemove: () => void
-  onAddStage: () => void
+  onAddStage: (algorithm: string, params: [string, number][]) => void
   onRemoveStage: (index: number) => void
   onSetStage: (index: number, next: AlgoConfig) => void
   onError: (msg: string) => void
@@ -1468,7 +1751,7 @@ function PropertiesPanel({
     return (
       <aside className="properties">
         <div className="prop-title">Properties</div>
-        <div style={{ color: 'var(--mg-muted)', fontSize: 12 }}>No trace selected — click a trace chip.</div>
+        <div style={{ color: 'var(--mg-ink)', fontSize: 12 }}>No trace selected — click a trace chip.</div>
       </aside>
     )
   }
@@ -1484,6 +1767,8 @@ function PropertiesPanel({
         <dd className="mono">{key}</dd>
         <dt>Message</dt>
         <dd>{entry ? `msg ${messageId}` : `msg ${messageId} (not seen yet)`}</dd>
+        <dt>Value</dt>
+        <dd>{entry ? fmt(entry.last_value, 3) : '—'}</dd>
         <dt>Rate</dt>
         <dd>{entry ? `${fmt(entry.rate_hz, 1)} Hz` : '—'}</dd>
         <dt>Est. fs</dt>
@@ -1566,7 +1851,15 @@ function PropertiesPanel({
           </div>
         )
       })}
-      <button onClick={onAddStage}>+ Add filter stage</button>
+      <button
+        onClick={() => {
+          const a = algorithms.find((x) => x.kind === 'processor')
+          if (!a) return
+          onAddStage(a.id, defaultStageParams(a, fs > 0 ? fs : entry?.rate_hz ?? 0))
+        }}
+      >
+        + Add filter stage
+      </button>
       <button className="remove" onClick={onRemove}>
         Remove trace
       </button>
@@ -1580,6 +1873,7 @@ function PropertiesPanel({
 function SpectrumView({ frame, label }: { frame: SpectrumFrame | null; label: string }) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const plotRef = useRef<uPlot | null>(null)
+  const roRef = useRef<ResizeObserver | null>(null)
   const [ready, setReady] = useState(false)
 
   const setHost = useCallback((el: HTMLDivElement | null) => {
@@ -1588,13 +1882,33 @@ function SpectrumView({ frame, label }: { frame: SpectrumFrame | null; label: st
       if (!plotRef.current) {
         plotRef.current = new uPlot(
           {
-            width: el.clientWidth,
-            height: 120,
+            width: el.clientWidth || 640,
+            height: 220,
             legend: { show: false },
-            axes: [{ stroke: MUTED() }, { stroke: MUTED() }],
+            scales: { x: { time: false }, y: { auto: true } },
+            axes: [
+              {
+                label: 'Hz',
+                font: AXIS_FONT,
+                labelFont: AXIS_FONT,
+                labelSize: 16,
+                size: 40,
+                stroke: INK(),
+                grid: { stroke: MUTED(), width: 1, dash: [2, 4] },
+              },
+              {
+                label: 'magnitude',
+                font: AXIS_FONT,
+                labelFont: AXIS_FONT,
+                labelSize: 16,
+                size: 58,
+                stroke: INK(),
+                values: (_u, vals) => vals.map(fmtMag),
+              },
+            ],
             series: [
               { label: 'Hz', stroke: 'transparent' },
-              { label: 'mag', stroke: token('--mg-mag') },
+              { label: 'mag', stroke: token('--mg-mag'), width: 1 },
             ],
           },
           [[], []],
@@ -1602,7 +1916,17 @@ function SpectrumView({ frame, label }: { frame: SpectrumFrame | null; label: st
         )
         setReady(true)
       }
+      roRef.current?.disconnect()
+      const ro = new ResizeObserver(() => {
+        const plot = plotRef.current
+        const w = el.clientWidth
+        if (plot && w > 0 && Math.abs(w - plot.width) > 1) plot.setSize({ width: w, height: 220 })
+      })
+      ro.observe(el)
+      roRef.current = ro
     } else {
+      roRef.current?.disconnect()
+      roRef.current = null
       plotRef.current?.destroy()
       plotRef.current = null
       setReady(false)
@@ -1610,6 +1934,8 @@ function SpectrumView({ frame, label }: { frame: SpectrumFrame | null; label: st
   }, [])
 
   useEffect(() => () => {
+    roRef.current?.disconnect()
+    roRef.current = null
     plotRef.current?.destroy()
     plotRef.current = null
   }, [])
@@ -1630,7 +1956,7 @@ function SpectrumView({ frame, label }: { frame: SpectrumFrame | null; label: st
 
   if (!frame) return <div className="peak-note">{label}: waiting for a full FFT window…</div>
   return (
-    <div style={{ fontSize: 11, color: 'var(--mg-muted)', marginTop: 2 }}>
+    <div style={{ fontSize: 11, color: 'var(--mg-ink)', marginTop: 2 }}>
       {label} · peak {frame.peak_freq_hz.toFixed(1)} Hz · fs {frame.fs.toFixed(0)} Hz · Nyquist {frame.nyquist.toFixed(0)} Hz · Δf {frame.delta_f.toFixed(2)} Hz
       <div ref={setHost} className="chart" />
       {!ready && <div className="peak-note">allocating chart…</div>}
