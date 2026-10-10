@@ -2,17 +2,14 @@ import { Activity, Settings } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { invoke } from '@tauri-apps/api/core'
-import { useDevicesStore } from '../stores/devices'
-import { useLinkStore } from '../stores/link'
 import { useTelemetryStore } from '../stores/telemetry'
 import { useUiStore, type View } from '../stores/ui'
 import { isTauri } from '../inspector/mock'
-import { fcStatusLabel } from '../util/linkLabel'
-import { hasInboundPackets, linkLevel, linkLevelTone } from '../util/linkLevel'
 import { modeLabel } from '../util/modeLabel'
 import SettingsDialog, { type SettingsTab } from './dialogs/SettingsDialog'
+import LinkPopover from './LinkPopover'
 
-const VIEWS: View[] = ['planning', 'flight', 'data']
+const VIEWS: View[] = ['planning', 'flight']
 
 function pillTone(kind: 'ok' | 'warn' | 'err' | 'off'): string {
   switch (kind) {
@@ -63,12 +60,9 @@ export default function TopBar() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('connection')
   const view = useUiStore((s) => s.view)
   const setView = useUiStore((s) => s.setView)
-  const link = useLinkStore((s) => s.link)
-  const devices = useDevicesStore((s) => s.devices)
   const heartbeat = useTelemetryStore((s) => s.snapshot?.heartbeat ?? null)
   const gps = useTelemetryStore((s) => s.snapshot?.gps ?? null)
   const sys = useTelemetryStore((s) => s.snapshot?.sys_status ?? null)
-  const fieldAges = useTelemetryStore((s) => s.snapshot?.field_ages)
 
   const openConnection = () => {
     setSettingsTab('connection')
@@ -82,7 +76,6 @@ export default function TopBar() {
       window.open('inspector.html', '_blank')
     }
   }
-  const level = linkLevel(link, hasInboundPackets(fieldAges))
 
   const armed = heartbeat?.base_mode.safety_armed === true
   const mode = modeLabel(t, heartbeat)
@@ -134,18 +127,7 @@ export default function TopBar() {
           tone={rtkTone}
         />
         <Pill label={t('link.batt')} value={batteryText} tone={batteryTone} />
-        <Pill
-          label={t('link.fc')}
-          value={fcStatusLabel(t, link)}
-          tone={linkLevelTone(level)}
-          onClick={openConnection}
-          title={t('settings.tab.connection')}
-        />
-        <Pill
-          label={t('link.devices')}
-          value={devices.length ? String(devices.length) : '—'}
-          tone={devices.length ? 'ok' : 'off'}
-        />
+        <LinkPopover onOpenSettings={openConnection} />
 
         <button
           aria-label={t('inspector.open')}

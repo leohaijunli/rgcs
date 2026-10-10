@@ -6,7 +6,6 @@ export default {
   nav: {
     planning: 'Plan',
     flight: 'Flight',
-    data: 'Data',
   },
   inspector: {
     open: 'Signal inspector',
@@ -25,6 +24,14 @@ export default {
     lost: 'Heartbeat lost',
     disconnected: 'Disconnected',
     noLink: 'No link',
+    connectionDetails: 'Connection details',
+    systemId: 'Sys / comp',
+    vehicleType: 'Type',
+    autopilot: 'Autopilot',
+    heartbeatAge: 'Heartbeat age',
+    endpoint: 'Endpoint',
+    disconnect: 'Disconnect',
+    never: 'Never',
     error: {
       title: 'Link error',
       history: 'History',
@@ -54,16 +61,11 @@ export default {
   layers: {
     on: 'ON',
     off: 'OFF',
-    notLoaded: 'Not loaded yet',
-    terrainLater: 'Arrives with the DEM (Phase 3)',
+    popover: 'Layers',
   },
   panels: {
     status: 'Status',
     current: 'Current WP',
-    missions: 'Missions',
-    vehicles: 'Vehicles',
-    layers: 'Layers',
-    tasks: 'Tasks',
     planItems: 'Plan items',
     vehicle: 'Vehicle',
     telemetry: 'Telemetry',
@@ -209,8 +211,6 @@ export default {
     export: 'Export',
   },
   terrain: {
-    dtm: 'DTM terrain',
-    dsm: 'DSM canopy',
     imagery: 'Imagery',
     grid: 'Grid',
   },
@@ -338,10 +338,6 @@ export default {
       static: 'STATIC',
       ppp: 'PPP',
     },
-  },
-  views: {
-    planningPlaceholder: 'Planning view active — use the Properties panel to build a mission.',
-    dataPlaceholder: 'Data & QC panel arrives in Phase 4.',
   },
   mock: {
     banner: 'MOCK DATA',

@@ -1,30 +1,25 @@
 import { create } from 'zustand'
 
-export type View = 'planning' | 'flight' | 'data'
+export type View = 'planning' | 'flight'
 export type Theme = 'dark' | 'light'
-export type DrawerId = 'missions' | 'vehicles' | 'layers' | null
 export type DockTab = 'profile' | 'qc' | 'log'
 /** Active map tool. `add` places a new waypoint on click; `polygon` draws a
  * survey boundary (both planning view only). */
 export type MapTool = 'select' | 'add' | 'polygon'
 
 export interface ViewConfig {
-  /** Drawer section opened by default when switching to this view. */
-  drawer: DrawerId
   rightTab: string
   dockTab: DockTab
 }
 
 export const VIEW_CONFIG: Record<View, ViewConfig> = {
-  planning: { drawer: 'missions', rightTab: 'panels.properties', dockTab: 'profile' },
-  flight: { drawer: 'vehicles', rightTab: 'panels.telemetry', dockTab: 'qc' },
-  data: { drawer: 'layers', rightTab: 'panels.layers', dockTab: 'qc' },
+  planning: { rightTab: 'panels.properties', dockTab: 'profile' },
+  flight: { rightTab: 'panels.telemetry', dockTab: 'qc' },
 }
 
 interface UiState {
   view: View
   theme: Theme
-  drawer: DrawerId
   dockTab: DockTab
   rightOpen: boolean
   dockOpen: boolean
@@ -44,8 +39,6 @@ interface UiState {
   qcOpen: boolean
   setView: (v: View) => void
   setTheme: (t: Theme) => void
-  toggleDrawer: (id: NonNullable<DrawerId>) => void
-  closeDrawer: () => void
   toggleRight: () => void
   setDockOpen: (open: boolean) => void
   setDockHeight: (h: number) => void
@@ -86,7 +79,6 @@ const initialTheme: Theme =
 export const useUiStore = create<UiState>((set) => ({
   view: 'flight',
   theme: initialTheme,
-  drawer: narrowScreen() ? null : 'vehicles',
   dockTab: 'qc',
   rightOpen: !narrowScreen(),
   dockOpen: true,
@@ -102,7 +94,6 @@ export const useUiStore = create<UiState>((set) => ({
   setView: (view) =>
     set(() => ({
       view,
-      drawer: VIEW_CONFIG[view].drawer,
       rightOpen: !narrowScreen(),
       // Editing tools belong to the planning view (finding 18).
       ...(view === 'planning' ? {} : { mapTool: 'select' as const }),
@@ -111,8 +102,6 @@ export const useUiStore = create<UiState>((set) => ({
     applyTheme(theme)
     set({ theme })
   },
-  toggleDrawer: (id) => set((s) => ({ drawer: s.drawer === id ? null : id })),
-  closeDrawer: () => set({ drawer: null }),
   toggleRight: () => set((s) => ({ rightOpen: !s.rightOpen })),
   setDockOpen: (dockOpen) => set({ dockOpen }),
   setDockHeight: (h) => set({ dockHeight: Math.max(DOCK_MIN, Math.min(DOCK_MAX, h)) }),

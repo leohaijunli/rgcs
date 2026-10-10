@@ -3,6 +3,7 @@ import {
   Compass,
   Crosshair,
   House,
+  Layers,
   LineChart,
   Move3d,
   PenTool,
@@ -11,6 +12,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import { useTelemetryStore } from '../stores/telemetry'
 import { useUiStore } from '../stores/ui'
+import { useEffect, useRef, useState } from 'react'
 
 interface Props {
   onGoHome: () => void
@@ -31,6 +33,24 @@ export default function MapToolbar({ onGoHome, onNorth }: Props) {
   const pos = useTelemetryStore((s) => s.snapshot?.global_position ?? null)
   const showHeights = useUiStore((s) => s.showHeights)
   const toggleHeights = useUiStore((s) => s.toggleHeights)
+  const [layersOpen, setLayersOpen] = useState(false)
+  const layersRef = useRef<HTMLDivElement>(null)
+
+  // Close the Layers popover on an outside click or Esc (P1 temporary entry;
+  // P3 rewrites the whole tool strip).
+  useEffect(() => {
+    if (!layersOpen) return
+    const onDown = (e: PointerEvent) => {
+      if (!layersRef.current?.contains(e.target as Node)) setLayersOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setLayersOpen(false)
+    window.addEventListener('pointerdown', onDown)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('pointerdown', onDown)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [layersOpen])
 
   return (
     // The flight-command bar owns the top-right corner in the Fly view; start
@@ -58,6 +78,15 @@ export default function MapToolbar({ onGoHome, onNorth }: Props) {
         onClick={() => setQcOpen(true)}
         icon={LineChart}
       />
+      <div className="relative" ref={layersRef}>
+        <ToolButton
+          title={t('layers.popover')}
+          active={layersOpen}
+          onClick={() => setLayersOpen((o) => !o)}
+          icon={Layers}
+        />
+        {layersOpen && <LayersPopover />}
+      </div>
       <ToolButton
         title={t('map.mode3d')}
         active={map3d}
@@ -82,6 +111,39 @@ export default function MapToolbar({ onGoHome, onNorth }: Props) {
           {Math.round(pos.altitude.meters)} m
         </div>
       )}
+    </div>
+  )
+}
+
+/** Layer toggles that lived in the drawer (P1 temporary home; P3 → tool strip). */
+function LayersPopover() {
+  const { t } = useTranslation()
+  const showImagery = useUiStore((s) => s.showImagery)
+  const showGrid = useUiStore((s) => s.showGrid)
+  const toggleImagery = useUiStore((s) => s.toggleImagery)
+  const toggleGrid = useUiStore((s) => s.toggleGrid)
+  const items = [
+    { key: 'terrain.imagery', on: showImagery, toggle: toggleImagery },
+    { key: 'terrain.grid', on: showGrid, toggle: toggleGrid },
+  ]
+  return (
+    <div className="absolute left-1/2 top-full z-50 mt-1 w-44 -translate-x-1/2 rounded border border-line bg-panel p-2 shadow-2xl">
+      <div className="mb-1 text-[10px] uppercase tracking-wide text-muted">Layers</div>
+      <div className="space-y-1">
+        {items.map(({ key, on, toggle }) => (
+          <button
+            key={key}
+            onClick={toggle}
+            aria-pressed={on}
+            className="flex w-full touch-target items-center justify-between rounded border border-line bg-canvas px-3 py-1.5 text-sm hover:bg-panel"
+          >
+            <span className="text-ink">{t(key)}</span>
+            <span className={`mono text-xs ${on ? 'text-ok' : 'text-muted'}`}>
+              {on ? t('layers.on') : t('layers.off')}
+            </span>
+          </button>
+        ))}
+      </div>
     </div>
   )
 }
