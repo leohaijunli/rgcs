@@ -382,6 +382,26 @@
   - 顺带修掉一个回归：折线改成 "每段一色" 后 `layer.line` 不再存在，拖拽预览只移动了点、不更新折线。`WaypointLayer` 改为记录 `runs: {entity, seqs}[]`，`previewWaypoint` 重画包含该 seq 的那一段。
 - 验收：`check:planfile` 新增用例覆盖 `heightRuns(items, groundM)`（落地基准 + 各自净空，9 个用例全通过）；`npm run typecheck`、`check:colors`、`check:contrast`、`npm run build` 通过。
 
+### #40 [P2][app/devices] 串口列表不自动刷新
+**状态**：待处理（操作员报告，2026-10-10；电机测试任务结束后处理）
+- 现象：串口连接界面里，插拔 USB 串口设备后列表不更新，需要手动刷新。
+- 备注：`core::devices::DeviceManager` 已有 `watch`/`DeviceEvent`（Added/Removed）骨架（manager.rs，含事件差分单测），但 `app-tauri::commands::enumerate_devices` 只做一次性枚举，Settings → Devices / Connection 串口下拉没有订阅它。修法：app 侧起一个 watch 任务，把 diff 以 Tauri 事件推送，前端下拉实时更新。
+
+### #41 [P2][app/devices] 串口列表应只显示 ttyACM* / ttyUSB*
+**状态**：待处理（操作员报告，2026-10-10；电机测试任务结束后处理）
+- 现象：`enumerate_devices` 把 `serialport::available_ports()` 全部列出（含 ttyS*、PCI 口等），干扰选择。
+- 备注：按操作员要求只保留 `/dev/ttyACM*` 与 `/dev/ttyUSB*`（USB CDC/FTDI 等），过滤放在 `DeviceManager::enumerate` 或命令层，Windows 对应 `COM*` 不受影响。
+
+### #42 [P1][helper] udev 规则/权限自动安装助手未实现
+**状态**：待处理（操作员报告，2026-10-10；电机测试任务结束后处理）
+- 现象：非 root 下打开串口常因权限失败；"自动添加设备规则、自动处理权限和连接"的功能没有实现（`helpers/udev-installer/` 只有 README 占位，ADR-009/DEVELOPMENT_PLAN §9）。
+- 备注：涉及提权（AGENTS 规则 5），实现前需先做失败/风险分析（错误设备、错误规则、恢复路径），polkit/pkexec 或 systemd 单元方案对比后定。
+
+### #43 [P2][frontend] 设置菜单应提供 UAV 3D 模型朝向的设置（pitch/roll/yaw 偏移）
+**状态**：待处理（操作员要求，2026-10-10）
+- 现象：UAV 3D 模型的朝向校正是硬编码的 `cesium/constants.ts::UAV_MODEL_NOSE_YAW_OFFSET_DEG = -90`（仅 yaw）。换模型文件或换机型后，机头/水平姿态可能对不上，需要改代码才能调。
+- 期望：Settings → Vehicle 增加 "Model orientation offset" 三个输入（pitch/roll/yaw，度），持久化（同 initialPosition 的 localStorage/prefs 模式），地图渲染（`cesium/uav.ts` 的模型姿态合成）应用这三个偏移；默认值保持现行为（yaw −90°，pitch/roll 0）。
+
 ## 待核实项（先验证再决定是否开 issue）
 - `mavlink` crate 0.17 的 UDP 监听是否设置 `SO_REUSEADDR`；`udpin` 的回复地址行为（抓包确认）。
 - `DO_PAUSE_CONTINUE` 在 PX4 v1.17 的实际语义。现状（2026-10-07）：Pause/Continue 已按 MAVLink 规范接入（param1 = 0 暂停 / 1 继续，`send_command("pause"|"continue")`，见 `crates/app-tauri/src/commands.rs::named_command`，含 3 个单测）；PX4 v1.17 是否支持、以及参数语义仍需 SITL 抓包确认——不支持时 FC 回 NACK，UI 会显示 "Not supported by the FC"。
