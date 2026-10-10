@@ -20,6 +20,15 @@ interface FramePayload {
   samples: TraceSample[]
 }
 
+/** Rust `InspectorStatus` (inspector_service.rs). */
+interface InspectorStatus {
+  messages: number
+  samples: number
+  dropped: number
+  connected: boolean
+  tap_running: boolean
+}
+
 interface FilterCfg {
   algo: string
   params: Record<string, number>
@@ -72,6 +81,18 @@ export function InspectorApp() {
   const [spectrumFor, setSpectrumFor] = useState<string | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
   const [axisLink, setAxisLink] = useState(false)
+  const [status, setStatus] = useState<InspectorStatus | null>(null)
+  const [rate, setRate] = useState(0)
+  const [notice, setNotice] = useState<string | null>(null)
+
+  const noticeAt = useRef(0)
+  const showNotice = useCallback((msg: string) => {
+    noticeAt.current = Date.now()
+    setNotice(msg)
+    setTimeout(() => {
+      if (Date.now() - noticeAt.current >= 4000) setNotice(null)
+    }, 4000)
+  }, [])
 
   const pausedRef = useRef(paused)
   pausedRef.current = paused
@@ -147,12 +168,16 @@ export function InspectorApp() {
     void (async () => {
       try {
         await invoke('inspector_connect', { channel })
+      } catch (e) {
+        showNotice(String(e))
+      }
+      try {
         const cat = await invoke<CatalogEntry[]>('inspector_catalog')
         if (!disposed) setCatalog(cat)
         const algos = await invoke<AlgorithmInfo[]>('inspector_list_algorithms')
         if (!disposed) setAlgorithms(algos)
-      } catch {
-        // No link: leave the tree empty; the user can still mock in the browser.
+      } catch (e) {
+        showNotice(String(e))
       }
     })()
     return () => {
@@ -176,7 +201,7 @@ export function InspectorApp() {
           : []
       traces.push({ signal: signalFor(key, catalog), pipeline, analyzer: null })
     }
-    void invoke('inspector_set_traces', { traces }).catch(() => undefined)
+    void invoke('inspector_set_traces', { traces }).catch((e) => showNotice(String(e)))
   }, [checked, filterBy, tauri, catalog])
 
   // On a filter change, drop the stale filtered history so the trace restarts.
@@ -184,12 +209,29 @@ export function InspectorApp() {
     for (const b of buffers.current.values()) b.filtered = []
   }, [filterBy, tauri])
 
-  // Refresh the catalog periodically so the tree fills as signals arrive.
+  // Refresh the catalog periodically so the tree fills as signals arrive, and
+  // poll the tap/link status for the toolbar (dropped, msg/s, link state).
   useEffect(() => {
     if (!tauri) return
+    let lastMsgs = 0
+    let lastT = 0
     const id = setInterval(async () => {
       try {
-        setCatalog(await invoke<CatalogEntry[]>('inspector_catalog'))
+        const cat = await invoke<CatalogEntry[]>('inspector_catalog')
+        const s = await invoke<InspectorStatus>('inspector_status')
+        if (s.tap_running) {
+          const now = Date.now()
+          if (lastT > 0 && s.messages >= lastMsgs) {
+            const dt = (now - lastT) / 1000
+            if (dt > 0) setRate((s.messages - lastMsgs) / dt)
+          }
+          lastMsgs = s.messages
+          lastT = now
+        } else {
+          setRate(0)
+        }
+        setCatalog(cat)
+        setStatus(s)
       } catch {
         /* not connected */
       }
@@ -333,9 +375,17 @@ export function InspectorApp() {
         <button onClick={saveWorkspace}>Save</button>
         <button onClick={loadWorkspace}>Load</button>
         <span style={{ marginLeft: 'auto', color: 'var(--mg-muted)', fontSize: 11 }}>
-          Signal Inspector{tauri ? '' : ' · mock'}
+          {tauri && status && (
+            <>
+              {status.connected ? <span style={{ color: 'var(--mg-ok)' }}>● link</span> : <span style={{ color: 'var(--mg-warn)' }}>● no link</span>}
+              {' · '}
+              {status.tap_running ? `${rate.toFixed(0)} msg/s` : '—'} · dropped {status.dropped}
+            </>
+          )}
+          {'  '}Signal Inspector{tauri ? '' : ' · mock'}
         </span>
       </div>
+      {notice && <div className="inspector-notice">{notice}</div>}
 
       <SignalBrowser catalog={catalog} checked={checked} onToggle={toggle} />
 
@@ -406,6 +456,7 @@ export function InspectorApp() {
         filterBy={selected ? filterBy[selected] : undefined}
         tauri={tauri}
         onRemove={() => selected && toggle(selected)}
+        onError={showNotice}
       />
     </div>
   )
@@ -558,6 +609,7 @@ function PropertiesPanel({
   filterBy,
   tauri,
   onRemove,
+  onError,
 }: {
   selected: string | null
   catalog: CatalogEntry[]
@@ -565,6 +617,7 @@ function PropertiesPanel({
   filterBy: FilterCfg | undefined
   tauri: boolean
   onRemove: () => void
+  onError: (msg: string) => void
 }) {
   if (!selected) {
     return (
@@ -601,7 +654,9 @@ function PropertiesPanel({
           onChange={(e) => {
             const intervalUs = Number(e.target.value)
             if (tauri) {
-              void invoke('set_message_interval', { messageId, intervalUs }).catch(() => undefined)
+              void invoke('set_message_interval', { messageId, intervalUs }).catch((e) =>
+                onError(String(e)),
+              )
             }
           }}
         >

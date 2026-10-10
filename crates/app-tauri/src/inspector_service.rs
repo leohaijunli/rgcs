@@ -18,8 +18,9 @@ use parking_lot::Mutex as PMutex;
 use serde::Serialize;
 use std::sync::Mutex;
 use tauri::ipc::Channel;
+use tauri::WindowEvent;
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::state::AppState;
 
@@ -46,8 +47,22 @@ pub struct InspectorState {
     pub session: Arc<PMutex<Session>>,
     /// The window's channel, registered by `inspector_connect`.
     frame: Arc<PMutex<Option<Channel<SampleFrame>>>>,
-    /// Set while a tap+batcher pair is running for the current link.
-    tap_running: Arc<PMutex<bool>>,
+    /// The running tap's stop signal, one per attached link. Re-attaching
+    /// (reconnect) or disconnecting (window close) fires it so the tap exits
+    /// promptly instead of draining until the link closes (plan P0-5).
+    tap: Arc<PMutex<Option<oneshot::Sender<()>>>>,
+}
+
+/// A snapshot of the tap and link for the inspector window's status bar.
+#[derive(Debug, Clone, Serialize)]
+pub struct InspectorStatus {
+    pub messages: u64,
+    pub samples: u64,
+    pub dropped: u64,
+    /// True when a primary link exists (the tap can stream).
+    pub connected: bool,
+    /// True while a tap task is attached to a link.
+    pub tap_running: bool,
 }
 
 impl AppState {
@@ -55,13 +70,14 @@ impl AppState {
         &self.inspector
     }
 
-    /// Attach the tap to a link and start the batcher (idempotent per link).
+    /// Attach the tap to a link and start the batcher. Stops a previous tap
+    /// from an earlier link (it may still be draining a stream being torn
+    /// down) and starts a fresh one for this link (plan P0-6).
     pub fn attach_inspector(&self, handle: ConnectionHandle) {
         let inspector = self.inspector();
-        if *inspector.tap_running.lock() {
-            return;
+        if let Some(old) = inspector.tap.lock().take() {
+            let _ = old.send(());
         }
-        *inspector.tap_running.lock() = true;
 
         // A (re)connected link restarts the filter state but keeps the trace
         // configuration (plan §4: "滤波状态重置并在曲线留断点").
@@ -74,31 +90,57 @@ impl AppState {
         let session = inspector.session.clone();
         let frame = inspector.frame.clone();
         let (tx, rx) = mpsc::channel(SAMPLE_CHANNEL_CAP);
+        let (stop_tx, stop_rx) = oneshot::channel();
+        *inspector.tap.lock() = Some(stop_tx);
 
-        let running = inspector.tap_running.clone();
-        tauri::async_runtime::spawn(async move {
-            run_tap(events, subs, catalog, tx, stats).await;
-            // Link gone: allow a re-attach on the next connect.
-            *running.lock() = false;
-        });
+        tauri::async_runtime::spawn(run_tap(events, subs, catalog, tx, stats, stop_rx));
         tauri::async_runtime::spawn(batch_loop(rx, session, frame));
     }
 
-    /// Register the window's channel and start producing samples.
-    pub fn inspector_connect(&self, handle: ConnectionHandle, channel: Channel<SampleFrame>) {
+    /// Register the window's channel and start producing samples. Idempotent:
+    /// a window may (re)register without double-acquiring the subscription
+    /// refcount. A missing link is fine — the tap attaches when a link comes
+    /// up (via [`attach_inspector`](Self::attach_inspector)).
+    pub fn inspector_connect(&self, handle: Option<ConnectionHandle>, channel: Channel<SampleFrame>) {
         let inspector = self.inspector();
+        let first = inspector.frame.lock().is_none();
         *inspector.frame.lock() = Some(channel);
-        inspector.subs.acquire();
-        self.attach_inspector(handle);
+        if first {
+            inspector.subs.acquire();
+        }
+        if let Some(handle) = handle {
+            self.attach_inspector(handle);
+        }
     }
 
-    /// The window closed: stop producing samples and drop the trace set.
+    /// The window closed: stop producing samples, cancel the tap, and drop the
+    /// trace set. Idempotent (frontend cleanup and the window `Destroyed`
+    /// handler may both call it).
     pub fn inspector_disconnect(&self) {
         let inspector = self.inspector();
+        if inspector.frame.lock().is_none() {
+            return;
+        }
+        if let Some(stop) = inspector.tap.lock().take() {
+            let _ = stop.send(());
+        }
         inspector.subs.release();
         inspector.subs.clear();
         inspector.session.lock().clear();
         *inspector.frame.lock() = None;
+    }
+
+    /// Whether a tap is attached and a link is present (for the status bar).
+    pub fn inspector_status(&self) -> InspectorStatus {
+        let inspector = self.inspector();
+        let stats = inspector.stats.lock().expect("stats lock");
+        InspectorStatus {
+            messages: stats.messages,
+            samples: stats.samples,
+            dropped: stats.dropped,
+            connected: self.connection().is_some(),
+            tap_running: inspector.tap.lock().is_some(),
+        }
     }
 
     /// Current catalog for the signal tree.
@@ -154,12 +196,21 @@ pub fn inspector_open(app: AppHandle) -> Result<(), String> {
         let _ = win.set_focus();
         return Ok(());
     }
-    WebviewWindowBuilder::new(&app, "inspector", WebviewUrl::App("inspector.html".into()))
+    let win = WebviewWindowBuilder::new(&app, "inspector", WebviewUrl::App("inspector.html".into()))
         .title("Signal Inspector")
         .inner_size(1280.0, 800.0)
         .min_inner_size(800.0, 480.0)
         .build()
         .map_err(|e| e.to_string())?;
+    // Belt-and-suspenders on top of the React effect cleanup: closing the
+    // window with the X cancels the tap even if the webview's cleanup never
+    // runs (plan P0-5). `inspector_disconnect` is idempotent.
+    let app_for_cleanup = app.clone();
+    win.on_window_event(move |event| {
+        if let WindowEvent::Destroyed = event {
+            app_for_cleanup.state::<AppState>().inspector_disconnect();
+        }
+    });
     Ok(())
 }
 
@@ -173,15 +224,21 @@ pub fn inspector_close(app: AppHandle, state: State<'_, AppState>) -> Result<(),
     Ok(())
 }
 
-/// Register the window's sample channel and start the tap.
+/// Register the window's sample channel and start the tap. A missing link is
+/// not an error: the tap attaches when a link comes up (plan P0-6).
 #[tauri::command]
-pub async fn inspector_connect(
+pub fn inspector_connect(
     state: State<'_, AppState>,
     channel: Channel<SampleFrame>,
 ) -> Result<(), String> {
-    let handle = state.connection().ok_or("no link")?;
-    state.inspector_connect(handle, channel);
+    state.inspector_connect(state.connection(), channel);
     Ok(())
+}
+
+/// Snapshot of the tap stats and link state, for the window's status bar.
+#[tauri::command]
+pub fn inspector_status(state: State<'_, AppState>) -> Result<InspectorStatus, String> {
+    Ok(state.inspector_status())
 }
 
 /// Stop streaming into this window (the window itself stays open).

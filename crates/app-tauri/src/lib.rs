@@ -39,6 +39,7 @@ pub fn run() {
             inspector_service::inspector_close,
             inspector_service::inspector_connect,
             inspector_service::inspector_disconnect,
+            inspector_service::inspector_status,
             inspector_service::inspector_set_traces,
             inspector_service::inspector_catalog,
             inspector_service::inspector_list_algorithms

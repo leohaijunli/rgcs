@@ -8,11 +8,12 @@
 //! offset (the plan's approach); messages without a time field fall back to the
 //! receive time. The UI flags traces whose timing is receive-based.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use mavlink::Message;
+use serde::Serialize;
 use tokio::sync::mpsc;
 
 use crate::mavlink::connection::ConnectionEvent;
@@ -80,66 +81,108 @@ impl Subscriptions {
     }
 }
 
-/// Maps FC timestamps onto the host axis via the minimum `rx − fc` offset.
+/// An FC timestamp that drops by at least this much (ms) means the FC rebooted
+/// (e.g. `time_usec` restarted) or the clock wrapped; re-baseline so new data
+/// lands on the host axis instead of in the past.
+const ROLLBACK_MS: f64 = 1000.0;
+
+/// Maps one FC time source onto the host axis via the minimum `rx − fc`
+/// offset, detecting FC reboots/clock wraps and re-baselining.
 #[derive(Debug, Clone, Default)]
 pub struct TimestampMapper {
     offset_ms: Option<f64>,
+    last_fc_ms: Option<f64>,
+    last_out_ms: Option<f64>,
 }
 
 impl TimestampMapper {
     /// Map an FC timestamp (ms) to host time (ms), keeping the minimum offset.
     pub fn map(&mut self, fc_ms: f64, rx_ms: f64) -> f64 {
+        // FC reboot / clock wrap: the raw timestamp fell far below the previous
+        // sample's, so the old minimum offset is meaningless — drop it.
+        let rebooted = self.last_fc_ms.is_some_and(|last| fc_ms < last - ROLLBACK_MS);
+        if rebooted {
+            self.offset_ms = None;
+        }
+        self.last_fc_ms = Some(fc_ms);
         let offset = rx_ms - fc_ms;
-        match self.offset_ms {
+        let offset = match self.offset_ms {
             None => {
                 self.offset_ms = Some(offset);
-                rx_ms
+                offset
             }
-            Some(min) => {
-                if offset < min {
-                    self.offset_ms = Some(offset);
-                }
-                fc_ms + self.offset_ms.unwrap_or(offset)
+            Some(min) if offset < min => {
+                self.offset_ms = Some(offset);
+                offset
             }
+            Some(min) => min,
+        };
+        let out = fc_ms + offset;
+        // Host-axis safety net: if the mapped time still went backward by a
+        // large margin, drop the stale baseline so the next sample re-baselines.
+        if self.last_out_ms.is_some_and(|last| out < last - ROLLBACK_MS) {
+            self.offset_ms = None;
         }
+        self.last_out_ms = Some(out);
+        out
+    }
+}
+
+/// One [`TimestampMapper`] per FC time field, because `time_boot_ms` and
+/// `time_usec` are not the same clock (different magnitude/rate) and each needs
+/// its own rollback baseline.
+#[derive(Debug, Clone, Default)]
+pub struct TimestampMappers {
+    by_field: HashMap<&'static str, TimestampMapper>,
+}
+
+impl TimestampMappers {
+    pub fn map(&mut self, field: &'static str, fc_ms: f64, rx_ms: f64) -> f64 {
+        self.by_field.entry(field).or_default().map(fc_ms, rx_ms)
     }
 }
 
 /// The tap task outcome, surfaced to the UI like the hub's dropped counter.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize)]
 pub struct TapStats {
     pub messages: u64,
     pub samples: u64,
     pub dropped: u64,
 }
 
-/// Run the tap until the stream closes. Subscribed samples are forwarded on
-/// `tx`; the catalog is updated for every seen field. Takes owned clones so a
-/// service can spawn it without a `'static` fight.
+/// Run the tap until the stream closes or `stop` fires. Subscribed samples are
+/// forwarded on `tx`; the catalog is updated for every seen field. Takes owned
+/// clones so a service can spawn it without a `'static` fight.
 pub async fn run_tap(
     mut events: RoutedEvents,
     subs: Subscriptions,
     catalog: Arc<Mutex<SignalCatalog>>,
     tx: mpsc::Sender<SignalSample>,
     stats: Arc<Mutex<TapStats>>,
+    mut stop: tokio::sync::oneshot::Receiver<()>,
 ) {
-    let mut mapper = TimestampMapper::default();
+    let mut mappers = TimestampMappers::default();
     // Host time axis: milliseconds since the tap started. (`received_at` is an
     // `Instant`, so `.elapsed()` would be ~0 for every message.)
     let epoch = std::time::Instant::now();
     loop {
-        match events.recv().await {
-            Ok(ConnectionEvent::Message(env)) => {
-                handle_message(&env, &subs, &catalog, &mut mapper, epoch, &tx, &stats);
-            }
-            Ok(_) => continue, // lifecycle events pass through but carry no samples
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                // The shared bus overflowed (PX4 streams a lot): count the
-                // loss and keep going instead of killing the tap for good.
-                stats.lock().expect("stats lock").dropped += n;
-                continue;
-            }
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+        tokio::select! {
+            // Window closed: cancel the tap instead of draining until the link
+            // closes (plan P0-5).
+            _ = &mut stop => break,
+            ev = events.recv() => match ev {
+                Ok(ConnectionEvent::Message(env)) => {
+                    handle_message(&env, &subs, &catalog, &mut mappers, epoch, &tx, &stats);
+                }
+                Ok(_) => continue, // lifecycle events pass through but carry no samples
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    // The shared bus overflowed (PX4 streams a lot): count the
+                    // loss and keep going instead of killing the tap for good.
+                    stats.lock().expect("stats lock").dropped += n;
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            },
         }
     }
 }
@@ -148,7 +191,7 @@ fn handle_message(
     env: &MessageEnvelope,
     subs: &Subscriptions,
     catalog: &Arc<Mutex<SignalCatalog>>,
-    mapper: &mut TimestampMapper,
+    mapper: &mut TimestampMappers,
     epoch: std::time::Instant,
     tx: &mpsc::Sender<SignalSample>,
     stats: &Arc<Mutex<TapStats>>,
@@ -159,7 +202,7 @@ fn handle_message(
     };
     let rx_ms = env.received_at.saturating_duration_since(epoch).as_secs_f64() * 1000.0;
     let t_ms = fc_ms(&extraction)
-        .map(|fc| mapper.map(fc, rx_ms))
+        .map(|(field, fc)| mapper.map(field, fc, rx_ms))
         .unwrap_or(rx_ms);
     // The catalog fills for every seen message, subscribed or not, so the
     // signal tree is populated before anything is checked (plan §4).
@@ -212,8 +255,9 @@ fn handle_message(
     }
 }
 
-/// The FC timestamp in milliseconds, from `time_boot_ms` or `time_usec`.
-fn fc_ms(extraction: &extract::Extraction) -> Option<f64> {
+/// The FC timestamp in milliseconds, from `time_boot_ms` or `time_usec`, plus
+/// which field it came from (each field gets its own host-axis mapper).
+fn fc_ms(extraction: &extract::Extraction) -> Option<(&'static str, f64)> {
     for name in FC_MS_FIELDS {
         if let Some(f) = extraction.fields.iter().find(|f| f.field == *name) {
             let ms = if *name == "time_usec" {
@@ -221,7 +265,7 @@ fn fc_ms(extraction: &extract::Extraction) -> Option<f64> {
             } else {
                 f.value
             };
-            return Some(ms);
+            return Some((name, ms));
         }
     }
     None
@@ -274,6 +318,7 @@ mod tests {
         let catalog = Arc::new(Mutex::new(SignalCatalog::new()));
         let stats = Arc::new(Mutex::new(TapStats::default()));
         let (tx, mut rx) = mpsc::channel(SAMPLE_CHANNEL_CAP);
+        let (_stop_tx, stop_rx) = tokio::sync::oneshot::channel();
 
         let tap = tokio::spawn(run_tap(
             events,
@@ -281,6 +326,7 @@ mod tests {
             catalog.clone(),
             tx,
             stats.clone(),
+            stop_rx,
         ));
 
         // Fake FC: 100 ATTITUDE messages at 100 Hz.
@@ -331,6 +377,7 @@ mod tests {
         let catalog = Arc::new(Mutex::new(SignalCatalog::new()));
         let stats = Arc::new(Mutex::new(TapStats::default()));
         let (tx, mut rx) = mpsc::channel(SAMPLE_CHANNEL_CAP);
+        let (_stop_tx, stop_rx) = tokio::sync::oneshot::channel();
 
         let tap = tokio::spawn(run_tap(
             events,
@@ -338,6 +385,7 @@ mod tests {
             catalog.clone(),
             tx,
             stats.clone(),
+            stop_rx,
         ));
 
         bus_tx
@@ -374,8 +422,9 @@ mod tests {
         let catalog = Arc::new(Mutex::new(SignalCatalog::new()));
         let stats = Arc::new(Mutex::new(TapStats::default()));
         let (tx, mut rx) = mpsc::channel(SAMPLE_CHANNEL_CAP);
+        let (_stop_tx, stop_rx) = tokio::sync::oneshot::channel();
 
-        let tap = tokio::spawn(run_tap(events, subs, catalog.clone(), tx, stats.clone()));
+        let tap = tokio::spawn(run_tap(events, subs, catalog.clone(), tx, stats.clone(), stop_rx));
         bus_tx
             .send(ConnectionEvent::Message(Box::new(envelope(
                 0,
@@ -389,5 +438,61 @@ mod tests {
         assert!(!catalog.lock().unwrap().is_empty(), "catalog filled");
         assert!(rx.try_recv().is_err(), "no samples without an open window");
         tap.await.unwrap();
+    }
+
+    #[test]
+    fn timestamp_mapper_rebaselines_on_fc_reboot() {
+        let mut m = TimestampMapper::default();
+        // Baseline at 100 Hz: fc time 100_000..100_020 ms, host 1000..1020 ms.
+        assert_eq!(m.map(100_000.0, 1000.0), 1000.0);
+        assert!(m.map(100_010.0, 1010.0) > 1005.0);
+        assert!(m.map(100_020.0, 1020.0) > 1015.0);
+        // FC reboot: time_usec restarts near zero.
+        let t = m.map(5.0, 1030.0);
+        // Mapped time must land on the host axis, not in the past.
+        assert!(t > 1020.0, "re-baselined to host axis, got {t}");
+        assert!(t < 1040.0, "within the current window, got {t}");
+    }
+
+    #[test]
+    fn timestamp_mappers_keep_per_field_baselines() {
+        // time_boot_ms and time_usec are different clocks; each re-baselines
+        // independently, so a reboot of one must not disturb the other.
+        let mut m = TimestampMappers::default();
+        let boot = m.map("time_boot_ms", 10.0, 1000.0);
+        assert_eq!(boot, 1000.0);
+        assert!(m.map("time_boot_ms", 20.0, 1010.0) > 1005.0);
+        // time_usec (ms) has a large magnitude; its baseline is independent.
+        let usec = m.map("time_usec", 5_000_000.0, 1010.0);
+        assert!(usec > 1000.0, "usec baseline independent, got {usec}");
+        assert!(usec < 1020.0, "usec on host axis, got {usec}");
+        // Mapping one field does not disturb the other's baseline.
+        assert!(m.map("time_usec", 5_000_010.0, 1020.0) > 1010.0);
+        assert!(m.map("time_boot_ms", 30.0, 1030.0) >= 1020.0);
+    }
+
+    #[tokio::test]
+    async fn tap_stops_when_the_window_closes() {
+        // The link stays open; closing the window must cancel the tap instead
+        // of leaving it draining until the link closes (plan P0-5).
+        let (bus_tx, bus_rx) = tokio::sync::broadcast::channel(64);
+        let events = RoutedEvents::new(bus_rx, MessageRoute::all());
+        let subs = Subscriptions::new();
+        subs.acquire();
+        let catalog = Arc::new(Mutex::new(SignalCatalog::new()));
+        let stats = Arc::new(Mutex::new(TapStats::default()));
+        let (tx, mut rx) = mpsc::channel(SAMPLE_CHANNEL_CAP);
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+
+        let tap = tokio::spawn(run_tap(events, subs, catalog.clone(), tx, stats.clone(), stop_rx));
+        stop_tx.send(()).unwrap();
+
+        tokio::time::timeout(Duration::from_secs(2), tap)
+            .await
+            .expect("tap cancelled on window close")
+            .unwrap();
+        // The tap dropped its sender, so the receiver closes.
+        assert!(rx.recv().await.is_none());
+        drop(bus_tx);
     }
 }

@@ -115,6 +115,16 @@ pub async fn connect(
         old.connection.shutdown().await;
     }
 
+    // A (re)connected link re-attaches an already-open inspector: otherwise a
+    // link swap would leave the inspector window open but dry (plan P0-6).
+    // `attach_inspector` stops the old tap (draining the old stream) and starts
+    // a fresh one for this link.
+    if state.inspector().subs.is_active() {
+        if let Some(h) = state.connection() {
+            state.attach_inspector(h);
+        }
+    }
+
     Ok(ConnectResponse {
         ok: true,
         endpoint: config.endpoint.to_address_string(),
