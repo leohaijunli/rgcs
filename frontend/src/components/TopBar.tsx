@@ -1,4 +1,4 @@
-import { Activity, Settings } from 'lucide-react'
+import { LineChart, Settings } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { invoke } from '@tauri-apps/api/core'
@@ -133,9 +133,10 @@ export default function TopBar() {
           aria-label={t('inspector.open')}
           title={t('inspector.open')}
           onClick={openInspector}
-          className="flex h-11 w-11 items-center justify-center rounded border border-line bg-canvas text-muted hover:text-ink"
+          className="flex h-11 items-center gap-1.5 rounded border border-line bg-canvas px-2.5 text-muted hover:text-ink"
         >
-          <Activity size={16} />
+          <LineChart size={16} />
+          <span className="hidden text-xs xl:inline">{t('inspector.open')}</span>
         </button>
         <button
           aria-label={t('settings.menu')}

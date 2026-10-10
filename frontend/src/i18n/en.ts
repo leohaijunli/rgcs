@@ -238,6 +238,7 @@ export default {
     uav: 'UAV',
     endpointHint: 'MAVLink endpoint: udpin:<addr>:<port>, udpout:..., tcpout:..., serial:<port>:<baud>.',
     mode3d: '2D / 3D',
+    select: 'Select',
     follow: 'Follow vehicle',
     home: 'Go home',
     north: 'North up',
@@ -350,6 +351,9 @@ export default {
       static: 'STATIC',
       ppp: 'PPP',
     },
+  },
+  view: {
+    popover: 'View',
   },
   mock: {
     banner: 'MOCK DATA',

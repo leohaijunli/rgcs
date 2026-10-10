@@ -69,6 +69,26 @@ export default function MapView() {
     })
   }, [missionItems, selectedSeq, kinds, showHeights, home, setMission])
 
+  // Tool shortcuts (P3 §4.3): W = add waypoint, P = draw polygon. Planning
+  // only; Esc already returns to select (cesium/waypoints.ts).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (view !== 'planning') return
+      const tag = (e.target as HTMLElement | null)?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      if (e.key === 'w' || e.key === 'W') {
+        useUiStore.getState().setMapTool(useUiStore.getState().mapTool === 'add' ? 'select' : 'add')
+      } else if (e.key === 'p' || e.key === 'P') {
+        useUiStore.getState().setMapTool(
+          useUiStore.getState().mapTool === 'polygon' ? 'select' : 'polygon',
+        )
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [view])
+
   if (initError) {
     return (
       <div className="flex h-full w-full flex-col items-center justify-center gap-2 p-6 text-center">
@@ -96,6 +116,21 @@ export default function MapView() {
           {t('map.polygonHint')}
         </div>
       )}
+      <CoordinateReadout />
+    </div>
+  )
+}
+
+/** Vehicle position readout, bottom-right corner (§4.3: moved out of the
+ * toolbar so the strip carries only tools). */
+function CoordinateReadout() {
+  const pos = useTelemetryStore((s) => s.snapshot?.global_position ?? null)
+  if (!pos) return null
+  return (
+    <div className="mono pointer-events-none absolute bottom-3 right-3 rounded border border-line bg-panel/85 px-2 py-1 text-right text-[10px] leading-tight text-muted shadow-lg">
+      {pos.latitude_deg.toFixed(5)} · {pos.longitude_deg.toFixed(5)}
+      <br />
+      {Math.round(pos.altitude.meters)} m
     </div>
   )
 }
