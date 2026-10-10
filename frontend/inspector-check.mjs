@@ -20,7 +20,7 @@ await page.goto(url, { waitUntil: 'load' })
 await page.waitForTimeout(1500)
 await page.screenshot({ path: '/tmp/inspector-after-1.5s.png' })
 
-const checkboxes = page.locator('.signal-list input[type=checkbox]')
+const checkboxes = page.locator('.signal-list label input[type=checkbox]')
 console.log('checkbox count:', await checkboxes.count())
 await step('check signal', async () => {
   if ((await checkboxes.count()) > 0) await checkboxes.first().check()
@@ -46,6 +46,49 @@ await step('signal color picker', async () => {
   if (n === 0) throw new Error('no colour palette')
   await dots.nth(3).click()
   await page.waitForTimeout(300)
+})
+
+// Group select-all and the search "add all shown" button.
+await step('group select-all', async () => {
+  const before = await page.locator('.plot').first().locator('.trace-chip').count()
+  await page.locator('.signal-group-head .group-check').first().check()
+  await page.waitForTimeout(400)
+  const after = await page.locator('.plot').first().locator('.trace-chip').count()
+  if (after <= before) throw new Error(`group add did not grow: ${before} -> ${after}`)
+})
+
+// Overflow menu holds export/save/load.
+await step('search add-all-shown', async () => {
+  await page.locator('.signal-search').fill('mag')
+  await page.waitForTimeout(200)
+  const btn = page.getByRole('button', { name: /Add \d+ shown/ })
+  if ((await btn.count()) === 0) throw new Error('no add-shown button')
+  await btn.click()
+  await page.waitForTimeout(300)
+  await page.locator('.signal-search').fill('')
+})
+await step('overflow menu', async () => {
+  await page.getByRole('button', { name: 'More' }).click()
+  await page.waitForTimeout(150)
+  if ((await page.getByRole('button', { name: 'Export CSV' }).count()) === 0) {
+    throw new Error('overflow menu has no items')
+  }
+  await page.getByRole('button', { name: 'More' }).click()
+})
+
+// Fit-to-data and inline plot rename.
+await step('fit to data', async () => {
+  await page.getByRole('button', { name: 'Fit to data' }).click()
+  await page.waitForTimeout(200)
+})
+await step('rename plot', async () => {
+  await page.locator('.plot .title').first().dblclick()
+  const input = page.locator('.plot .title-edit').first()
+  await input.fill('Roll and Pitch')
+  await input.press('Enter')
+  await page.waitForTimeout(200)
+  const text = await page.locator('.plot .title').first().innerText()
+  if (!text.includes('Roll')) throw new Error(`rename failed: ${JSON.stringify(text)}`)
 })
 
 // Select the trace, attach the FFT analyzer and switch its input to the
@@ -77,7 +120,7 @@ await step('layout 2 cols', async () => {
   await page.waitForTimeout(400)
 })
 await step('delta cursor', async () => {
-  await page.getByRole('button', { name: 'Δ cursors' }).click()
+  await page.getByRole('button', { name: 'Measure cursors' }).click()
   const box = await page.locator('.chart').first().boundingBox()
   if (!box) throw new Error('no chart box')
   const y = box.y + box.height * 0.5

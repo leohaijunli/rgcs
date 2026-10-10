@@ -1,7 +1,7 @@
 # MagGCS 实时信号监视器(Signal Inspector)实施方案
 
 > 状态:已实现 P0–P7(2026-10-09),P7 后续项(轴联动、属性面板、工作区保存/加载、`SET_MESSAGE_INTERVAL` 调速、`core::inspector::session`、主界面入口按钮)于 2026-10-09 补齐。ADR 编号按实际占用改为 **ADR-015(DSP 放 core)**、**ADR-016(独立窗口 + Channel)**,而非草案中的 009/010。
-> 后续(2026-10-09,对照 Simulink Data Inspector 简化):信号树**勾选即把信号加入当前活动 Plot**(去掉每 Plot 的下拉选择)、每信号在勾选框后直接设颜色(SDI 色板)、支持把信号**拖拽**入 Plot、Plot 网格布局预设(1×1/2×1/3×1)、双光标 Δt/Δy 测量、x 轴缩放与 `Follow` 自动滚动(x 自动跟随最新、y 轴自适应)、修掉 inspector 窗口未引入 uPlot 基础 CSS 的 bug(此前 `.u-over/.u-under` 为 static,导致光标/缩放/图例错位)。
+> 后续(2026-10-09,对照 Simulink Data Inspector 简化):信号树**勾选即把信号加入当前活动 Plot**(去掉每 Plot 的下拉选择)、**分组勾选框一次加/减整组信号**、搜索时**一键加入全部匹配**、每信号在勾选框后直接设颜色(SDI 色板)、支持把信号**拖拽**入 Plot、Plot 网格布局预设(1×1/2×1/3×1)、双光标 Δt/Δy 测量、工具栏改为**图标 + 分组 + 溢出菜单**(导出/保存/加载收进 `⋯`)、**Fit 到数据** + 拖拽缩放 + **Shift 拖拽平移** + 双击 Fit(图表上有手势提示)、**Plot 标题双击重命名**、x 轴缩放与 `Follow` 自动滚动(x 自动跟随最新、y 轴自适应)、修掉 inspector 窗口未引入 uPlot 基础 CSS 的 bug(此前 `.u-over/.u-under` 为 static,导致光标/缩放/图例错位)。
 
 ## 1. 需求
 

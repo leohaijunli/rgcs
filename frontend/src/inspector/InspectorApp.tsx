@@ -9,6 +9,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import uPlot from 'uplot'
 import { invoke, Channel } from '@tauri-apps/api/core'
+import {
+  ChevronsRight,
+  Eraser,
+  Link2,
+  Maximize2,
+  MoreHorizontal,
+  Pause,
+  Play,
+  Plus,
+  Ruler,
+} from 'lucide-react'
 import { makeProcessor, magnitudeSpectrum, type AlgorithmInfo } from './dsp'
 import { isTauri, mockAlgorithms, mockCatalog, mockSamples, msgName, signalKey } from './mock'
 import type { AlgoConfig } from '../generated-types/AlgoConfig'
@@ -132,6 +143,8 @@ export function InspectorApp() {
   const [notice, setNotice] = useState<string | null>(null)
   /** Plot currently highlighted as a drag-and-drop target (P7). */
   const [dropPlot, setDropPlot] = useState<string | null>(null)
+  /** Overflow menu (export / save / load) open state. */
+  const [menuOpen, setMenuOpen] = useState(false)
 
   const noticeAt = useRef(0)
   const showNotice = useCallback((msg: string) => {
@@ -228,6 +241,31 @@ export function InspectorApp() {
   /** Set the colour for a signal key (shared by all its traces/plots). */
   const setColor = useCallback((signalKey_: string, color: string) => {
     setColors((prev) => ({ ...prev, [signalKey_]: color }))
+  }, [])
+
+  /** Add or remove many signals on the active plot at once (group / search
+   * select-all). Creates the active plot if none exists yet. */
+  const toggleMany = useCallback((signals: SignalId[], add: boolean) => {
+    const existing =
+      activePlotRef.current != null && plotsRef.current.some((p) => p.id === activePlotRef.current)
+    const pid = existing ? (activePlotRef.current as string) : newId('p')
+    setPlots((prev) => {
+      const base = existing ? prev : [...prev, { id: pid, title: 'Plot', traces: [] }]
+      return base
+        .map((p) => {
+          if (p.id !== pid) return p
+          let traces = p.traces
+          for (const s of signals) {
+            const key = signalKey(s)
+            const has = traces.some((t) => signalKey(t.signal) === key)
+            if (add && !has) traces = [...traces, newTrace(s)]
+            else if (!add && has) traces = traces.filter((t) => signalKey(t.signal) !== key)
+          }
+          return { ...p, traces }
+        })
+        .filter((p) => p.traces.length > 0)
+    })
+    if (!existing) setActivePlot(pid)
   }, [])
 
   /** Check/uncheck a signal: add/remove a trace on the active plot. Checking
@@ -419,6 +457,27 @@ export function InspectorApp() {
     markDirty()
   }, [windowSec, markDirty])
 
+  /** Fit one plot's x axis to its buffered data (and stop following). */
+  const fitPlot = useCallback((plotId: string) => {
+    const p = plotsRef.current.find((x) => x.id === plotId)
+    const chart = charts.current.get(plotId)
+    if (!p || !chart) return
+    let min = Infinity
+    let max = -Infinity
+    for (const t of p.traces) {
+      const r = buffers.current.get(t.id)
+      if (!r || r.length === 0) continue
+      min = Math.min(min, r.timeAt(0) / 1000)
+      max = Math.max(max, r.newestTime() / 1000)
+    }
+    if (Number.isFinite(min) && max > min) chart.setScale('x', { min, max })
+  }, [])
+
+  const fitAll = useCallback(() => {
+    setFollow(false)
+    for (const id of charts.current.keys()) fitPlot(id)
+  }, [fitPlot])
+
   // Create/destroy one uPlot per plot. Recreated when its trace set or the
   // per-trace colors change (series are fixed at construction) or axis linking
   // toggles (the cursor sync key has no runtime setter).
@@ -456,6 +515,7 @@ export function InspectorApp() {
           cursor,
           plugins: [
             deltaCursorPlugin(p.id, pins, measureEnabled, () => chartMeasures.current.get(p.id)),
+            panFitPlugin(p.id, fitPlot),
             {
               // A user drag-zoom (or pan) changes x away from the auto window:
               // stop following so the zoom sticks.
@@ -497,7 +557,7 @@ export function InspectorApp() {
       }
     }
     markDirty()
-  }, [plots, axisLink, colors, markDirty])
+  }, [plots, axisLink, colors, markDirty, fitPlot])
 
   // Redraw on a requestAnimationFrame loop instead of a React render per frame
   // (S4). Reads refs only; React state is structure, not data.
@@ -652,10 +712,15 @@ export function InspectorApp() {
   return (
     <div className="inspector-grid">
       <div className="toolbar">
-        <button className={paused ? 'active' : ''} onClick={() => setPaused(!paused)}>
-          {paused ? 'Run' : 'Pause'}
+        <button
+          className={`icon-btn ${paused ? 'active' : ''}`}
+          title={paused ? 'Resume' : 'Pause'}
+          aria-label={paused ? 'Resume' : 'Pause'}
+          onClick={() => setPaused(!paused)}
+        >
+          {paused ? <Play size={16} /> : <Pause size={16} />}
         </button>
-        <select value={windowSec} onChange={(e) => setWindowSec(Number(e.target.value))}>
+        <select value={windowSec} title="Time window" onChange={(e) => setWindowSec(Number(e.target.value))}>
           <option value={10}>10 s</option>
           <option value={30}>30 s</option>
           <option value={60}>60 s</option>
@@ -670,28 +735,60 @@ export function InspectorApp() {
           <option value={3}>3×1</option>
         </select>
         <span className="toolbar-sep" />
-        <button className={axisLink ? 'active' : ''} onClick={() => setAxisLink(!axisLink)}>
-          Link axes
-        </button>
-        <button className={measure ? 'active' : ''} title="Click a plot to measure Δt / Δy" onClick={() => setMeasure(!measure)}>
-          Δ cursors
+        <button
+          className={`icon-btn ${axisLink ? 'active' : ''}`}
+          title="Link plot cursors"
+          aria-label="Link plot cursors"
+          onClick={() => setAxisLink(!axisLink)}
+        >
+          <Link2 size={16} />
         </button>
         <button
-          className={follow ? 'active' : ''}
-          title="Auto-scroll to the newest data (drag-zoom a plot to pause it)"
+          className={`icon-btn ${measure ? 'active' : ''}`}
+          title="Measure Δt / Δy (click a plot to pin)"
+          aria-label="Measure cursors"
+          onClick={() => setMeasure(!measure)}
+        >
+          <Ruler size={16} />
+        </button>
+        <button
+          className={`icon-btn ${follow ? 'active' : ''}`}
+          title="Follow the newest data (drag-zoom a plot to pause it)"
+          aria-label="Follow newest data"
           onClick={() => {
             setFollow(true)
             markDirty()
           }}
         >
-          Follow
+          <ChevronsRight size={16} />
+        </button>
+        <button className="icon-btn" title="Fit plot(s) to data" aria-label="Fit to data" onClick={fitAll}>
+          <Maximize2 size={16} />
         </button>
         <span className="toolbar-sep" />
-        <button onClick={addPlot}>New plot</button>
-        <button onClick={clearAll}>Clear data</button>
-        <button onClick={exportCsv}>Export CSV</button>
-        <button onClick={saveWorkspace}>Save</button>
-        <button onClick={loadWorkspace}>Load</button>
+        <button className="icon-btn" title="New plot" aria-label="New plot" onClick={addPlot}>
+          <Plus size={16} />
+        </button>
+        <button className="icon-btn" title="Clear data" aria-label="Clear data" onClick={clearAll}>
+          <Eraser size={16} />
+        </button>
+        <div className="toolbar-menu" onMouseLeave={() => setMenuOpen(false)}>
+          <button
+            className={`icon-btn ${menuOpen ? 'active' : ''}`}
+            title="More"
+            aria-label="More"
+            onClick={() => setMenuOpen((o) => !o)}
+          >
+            <MoreHorizontal size={16} />
+          </button>
+          {menuOpen && (
+            <div className="toolbar-menu-pop">
+              <button onClick={() => { exportCsv(); setMenuOpen(false) }}>Export CSV</button>
+              <button onClick={() => { saveWorkspace(); setMenuOpen(false) }}>Save workspace</button>
+              <button onClick={() => { loadWorkspace(); setMenuOpen(false) }}>Load workspace</button>
+            </div>
+          )}
+        </div>
         <span style={{ marginLeft: 'auto', color: 'var(--mg-muted)', fontSize: 11 }}>
           {tauri && status && (
             <>
@@ -711,6 +808,7 @@ export function InspectorApp() {
         colors={colors}
         onColor={setColor}
         onToggle={toggleSignal}
+        onToggleMany={toggleMany}
       />
 
       <div className="plot-grid" style={{ gridTemplateColumns: `repeat(${layoutCols}, minmax(0, 1fr))` }}>
@@ -737,7 +835,7 @@ export function InspectorApp() {
             }}
           >
             <div className="plot-head">
-              <span className="title">{p.title || 'Plot'}</span>
+              <PlotTitle title={p.title} onRename={(t) => setPlots((prev) => prev.map((x) => (x.id === p.id ? { ...x, title: t } : x)))} />
               <span className="hint">check signals at left to add</span>
               <button title="Remove plot" onClick={() => removePlot(p.id)}>
                 ×
@@ -753,6 +851,7 @@ export function InspectorApp() {
                     else chartHosts.current.delete(p.id)
                   }}
                   className="chart"
+                  title="Drag: zoom time · Shift+drag: pan · Double-click: fit"
                 />
                 <div
                   ref={(el) => {
@@ -832,6 +931,45 @@ export function InspectorApp() {
 
 /** Left panel: catalog grouped by message with a search box and collapsible
  * groups. Grouping makes the tree usable with PX4's hundreds of fields. */
+/** Inline-editable plot title: double-click to rename, Enter/blur commits. */
+function PlotTitle({ title, onRename }: { title: string; onRename: (t: string) => void }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(title)
+  if (!editing) {
+    return (
+      <span
+        className="title"
+        title="Double-click to rename"
+        onDoubleClick={(e) => {
+          e.stopPropagation()
+          setDraft(title)
+          setEditing(true)
+        }}
+      >
+        {title || 'Plot'}
+      </span>
+    )
+  }
+  const commit = () => {
+    onRename(draft.trim() || title)
+    setEditing(false)
+  }
+  return (
+    <input
+      className="title-edit"
+      autoFocus
+      value={draft}
+      onClick={(e) => e.stopPropagation()}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') commit()
+        else if (e.key === 'Escape') setEditing(false)
+      }}
+    />
+  )
+}
+
 /** SDI-style per-signal colour picker: a swatch that opens a small palette. */
 function ColorPicker({ color, onPick }: { color: string; onPick: (c: string) => void }) {
   const [open, setOpen] = useState(false)
@@ -886,12 +1024,14 @@ function SignalBrowser({
   colors,
   onColor,
   onToggle,
+  onToggleMany,
 }: {
   catalog: CatalogEntry[]
   checked: Set<string>
   colors: Record<string, string>
   onColor: (key: string, color: string) => void
   onToggle: (signal: SignalId) => void
+  onToggleMany: (signals: SignalId[], add: boolean) => void
 }) {
   const [query, setQuery] = useState('')
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
@@ -925,6 +1065,8 @@ function SignalBrowser({
       .filter((g) => g.entries.length > 0)
   }, [groups, q])
 
+  const shownCount = visible.reduce((n, g) => n + g.entries.length, 0)
+
   const toggleGroup = (name: string) =>
     setCollapsed((prev) => {
       const next = new Set(prev)
@@ -942,14 +1084,32 @@ function SignalBrowser({
         value={query}
         onChange={(e) => setQuery(e.target.value)}
       />
+      {q && shownCount > 0 && (
+        <button className="add-shown" onClick={() => onToggleMany(visible.flatMap((g) => g.entries.map((c) => c.signal)), true)}>
+          + Add {shownCount} shown
+        </button>
+      )}
       {catalog.length === 0 && <div style={{ color: 'var(--mg-muted)' }}>Waiting for data…</div>}
       {visible.map((g) => {
         const isCollapsed = collapsed.has(g.name)
-        const rateSum = g.entries.reduce((s, c) => s + (Number.isFinite(c.rate_hz) ? c.rate_hz : 0), 0)
-        return (
-          <div className="signal-group" key={g.name}>
-            <div className="signal-group-head" onClick={() => toggleGroup(g.name)}>
-              <span className={isCollapsed ? 'caret caret-closed' : 'caret'} />
+      const rateSum = g.entries.reduce((s, c) => s + (Number.isFinite(c.rate_hz) ? c.rate_hz : 0), 0)
+      const allInGroup = g.entries.every((c) => checked.has(signalKey(c.signal)))
+      const someInGroup = g.entries.some((c) => checked.has(signalKey(c.signal)))
+      return (
+        <div className="signal-group" key={g.name}>
+          <div className="signal-group-head" onClick={() => toggleGroup(g.name)}>
+            <input
+              type="checkbox"
+              className="group-check"
+              checked={allInGroup}
+              title="Add / remove every signal in this group"
+              ref={(el) => {
+                if (el) el.indeterminate = someInGroup && !allInGroup
+              }}
+              onClick={(e) => e.stopPropagation()}
+              onChange={() => onToggleMany(g.entries.map((c) => c.signal), !allInGroup)}
+            />
+            <span className={isCollapsed ? 'caret caret-closed' : 'caret'} />
               <span>{g.name}</span>
               <span className="msg">
                 {g.entries.length} · {fmt(rateSum, 0)} Hz
@@ -1141,6 +1301,37 @@ function estimateFs(ring: Ring): number {
   if (n < 2) return 100
   const dt = (ring.timeAt(n - 1) - ring.timeAt(0)) / (n - 1)
   return dt > 0 ? 1000 / dt : 100
+}
+
+/** Shift+drag pans the time axis; double-click fits the plot to its data. Both
+ * gestures stop the x axis from following (the toolbar `Follow` restores it). */
+function panFitPlugin(plotId: string, fit: (plotId: string) => void): uPlot.Plugin {
+  return {
+    hooks: {
+      ready: (u) => {
+        u.root.addEventListener('mousedown', (e) => {
+          if (!e.shiftKey || e.button !== 0) return
+          e.preventDefault()
+          const startX = e.clientX
+          const s = u.scales.x
+          const startMin = s.min ?? 0
+          const startMax = s.max ?? startMin + 1
+          const perPx = (startMax - startMin) / Math.max(1, u.bbox.width)
+          const move = (ev: MouseEvent) => {
+            const d = -(ev.clientX - startX) * perPx
+            u.setScale('x', { min: startMin + d, max: startMax + d })
+          }
+          const up = () => {
+            window.removeEventListener('mousemove', move)
+            window.removeEventListener('mouseup', up)
+          }
+          window.addEventListener('mousemove', move)
+          window.addEventListener('mouseup', up)
+        })
+        u.root.addEventListener('dblclick', () => fit(plotId), true)
+      },
+    },
+  }
 }
 
 /** SDI-style dual cursor (P7): with the Δ toggle on, clicking a plot pins
