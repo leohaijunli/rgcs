@@ -67,9 +67,6 @@ function FlightInspector() {
           [t('link.fc'), link?.fc_alive ? t('link.connected') : t('link.lost')],
         ]}
       />
-      <div className="panel rounded p-3 text-xs text-muted">
-        {t('panels.commandsNote')}
-      </div>
     </div>
   )
 }

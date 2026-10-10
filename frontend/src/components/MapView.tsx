@@ -89,7 +89,7 @@ export default function MapView() {
   return (
     <div className="relative h-full w-full">
       <div ref={containerRef} className="h-full w-full" />
-      <MapToolbar onGoHome={goHome} onToggleMeasure={() => undefined} onNorth={lookNorth} />
+      <MapToolbar onGoHome={goHome} onNorth={lookNorth} />
       {view === 'planning' && mapTool === 'add' && (
         <div className="pointer-events-none absolute left-1/2 top-3 -translate-x-1/2 rounded border border-line bg-panel/85 px-3 py-1 text-xs text-ink shadow-lg">
           {t('map.addHint')}

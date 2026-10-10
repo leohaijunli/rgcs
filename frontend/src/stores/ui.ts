@@ -41,7 +41,6 @@ interface UiState {
   showImagery: boolean
   /** Offline graticule base layer. */
   showGrid: boolean
-  dashboardOpen: boolean
   qcOpen: boolean
   setView: (v: View) => void
   setTheme: (t: Theme) => void
@@ -59,7 +58,6 @@ interface UiState {
   toggleHeights: () => void
   toggleImagery: () => void
   toggleGrid: () => void
-  setDashboardOpen: (open: boolean) => void
   setQcOpen: (open: boolean) => void
 }
 
@@ -100,7 +98,6 @@ export const useUiStore = create<UiState>((set) => ({
   showHeights: false,
   showImagery: true,
   showGrid: true,
-  dashboardOpen: false,
   qcOpen: false,
   setView: (view) =>
     set(() => ({
@@ -128,7 +125,6 @@ export const useUiStore = create<UiState>((set) => ({
   toggleHeights: () => set((s) => ({ showHeights: !s.showHeights })),
   toggleImagery: () => set((s) => ({ showImagery: !s.showImagery })),
   toggleGrid: () => set((s) => ({ showGrid: !s.showGrid })),
-  setDashboardOpen: (dashboardOpen) => set({ dashboardOpen }),
   setQcOpen: (qcOpen) => set({ qcOpen }),
 }))
 

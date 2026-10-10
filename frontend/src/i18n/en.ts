@@ -68,7 +68,6 @@ export default {
     vehicle: 'Vehicle',
     telemetry: 'Telemetry',
     properties: 'Properties',
-    commandsNote: 'Read-only telemetry; commands arrive with Phase 5.',
   },
   plan: {
     waypoint: 'Waypoint',
@@ -219,19 +218,15 @@ export default {
     profile: 'Profile / AGL',
     qc: 'Realtime QC',
     log: 'Log',
-    qcPlaceholder: 'Realtime QC curves (Phase 4)',
-    logPlaceholder: 'Mission log (Phase 5)',
   },
   map: {
     connect: 'Connect',
     cancel: 'Cancel',
     uav: 'UAV',
     endpointHint: 'MAVLink endpoint: udpin:<addr>:<port>, udpout:..., tcpout:..., serial:<port>:<baud>.',
-    dashboard: 'Instrument dashboard',
     mode3d: '2D / 3D',
     follow: 'Follow vehicle',
     home: 'Go home',
-    measure: 'Measure',
     north: 'North up',
     addWaypoint: 'Add waypoints (click the map)',
     heights: 'Waypoint heights (stick + label)',
@@ -347,7 +342,6 @@ export default {
   views: {
     planningPlaceholder: 'Planning view active — use the Properties panel to build a mission.',
     dataPlaceholder: 'Data & QC panel arrives in Phase 4.',
-    profilePlaceholder: 'Terrain profile arrives in Phase 3.',
   },
   mock: {
     banner: 'MOCK DATA',
