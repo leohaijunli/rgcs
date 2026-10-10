@@ -13,7 +13,8 @@
 - **S1 完成** (`3341748`):窗口 `Destroyed` 清理、可取消 tap(`oneshot` stop)、幂等 `inspector_connect` + 链路出现时自动 attach + `commands::connect` 重连后重新 attach、`inspector_status` 暴露 `TapStats`/链路状态、前端状态栏(msg/s、dropped、link)与错误提示、每来源时间映射(`time_boot_ms`/`time_usec` 各自 baseline)与 FC 重启回退检测(回退 >1 s 时重新取 baseline)。`cargo test -p maggcs-core signals` 由 13 增至 16 通过。
 - **S2 完成**:数据模型重构(见 §3 S2)。`InspectorApp.tsx` 改为 plot/trace 模型,按 `trace_id` 路由,uPlot 与缓冲均以 `trace_id` 为 key;帧改为列式;`CatalogEntry.message_name` 由 mavlink 提供。前端 `tsc` 通过、mock 模式 Playwright 冒烟(`frontend/inspector-check.mjs`)0 错误、`core` lib 234 测试通过、`maggcs-app` 编译通过。
 - **S3 完成**:暂停改为冻结视图 + 后台继续缓冲;每个字段可配多级滤波链(`+ Filter` 增删级、每级参数,编辑器移到属性面板);FFT 改走 Rust analyzer(`SampleFrame.spectra`),可选原始/滤波后(`Trace.analyzer_source`),显示 fs/Nyquist/Δf,分析器在 Rust 侧独立缓冲、与视图窗口解耦(视图缓冲保底仅 mock 保留);plot 窗口可新增/删除,多个 trace 叠加到同一个 plot(每个 plot 一个 uPlot、共用合并时间轴),每 trace 可选颜色并随工作区保存;mock 模式补了算法表,滤波/FFT UI 在浏览器可交互。
-- **S4/S5 部分**:S4 tap 订阅集合改快照(`contains_message`,不再每条消息分配 `HashSet`,完成);S5 新增 Rust 测试:NaN 序列化、无时间字段消息时间戳单调、analyzer_source=Filtered(完成)。其余(前端环形缓冲/rAF、catalog 节流、Lagged 测试、前端 mock NaN 注入)未做。
+- **S4 完成**(`frontend/src/inspector/ring.ts`、`InspectorApp.tsx`):tap 订阅集合改快照(`contains_message`,不再每条消息分配 `HashSet`);前端改预分配三通道环形缓冲(`Ring`,`RING_CAP=65536` 约 5 分钟 @200 Hz,窗口裁剪按时间 O(dropped));`requestAnimationFrame` 仅在 dirty 时重绘、暂停只冻结视图;`mergedData` 改 k 路归并,点数超过像素宽度时走 `decimateMinMax` 每桶保留最早/最晚极值;catalog/status 轮询节流提取为 `CATALOG_POLL_MS`(节流放在前端轮询层,Rust `catalog.observe` 仍逐消息更新,`rate_hz` EMA 不受影响)。
+- **S5 部分**:已加 Rust 测试:NaN 序列化、无时间字段消息时间戳单调、analyzer_source=Filtered。其余(Lagged 恢复测试、前端 mock NaN 注入)未做。
 
 ---
 
@@ -99,8 +100,8 @@
 ### S4:性能(1–2 天)
 
 - [x] tap 内订阅集合改为快照(`Subscriptions::contains_message`,不再每条消息分配 `HashSet`)
-- [ ] catalog 更新节流到约 10 Hz(未做:与 `rate_hz` 的 EMA 语义冲突,需先设计按间隔计数)
-- [ ] 前端环形缓冲、rAF 重绘、min/max 抽稀
+- [x] catalog 更新节流(2026-10-09:节流放在前端轮询层 `CATALOG_POLL_MS=1000`,`catalog.observe` 仍逐消息更新,故 `rate_hz` EMA 精度不受影响——以"调低 UI 刷新率"替代"Rust 侧按间隔计数")
+- [x] 前端环形缓冲、rAF 重绘、min/max 抽稀(2026-10-09:`Ring` 预分配三通道;rAF 仅在 dirty 时重绘、暂停冻结视图;k 路归并 + `decimateMinMax` 每桶保留最早/最晚极值)
 - [ ] 目标:8 个 trace、各 200 Hz,连续 30 分钟,堆内存不持续增长,单核占用有上限(阈值在 S0 基线测量后确定)
 
 ### S5:测试与文档(1 天)

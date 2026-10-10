@@ -18,6 +18,7 @@ import type { Plot } from '../generated-types/Plot'
 import type { SignalId } from '../generated-types/SignalId'
 import type { SpectrumFrame } from '../generated-types/SpectrumFrame'
 import type { Trace } from '../generated-types/Trace'
+import { Ring } from './ring'
 
 /** Rust `TraceFrame` (inspector_service.rs): columnar, so the SignalId is not
  * repeated per sample. */
@@ -45,11 +46,13 @@ interface InspectorStatus {
   tap_running: boolean
 }
 
-interface Buffer {
-  t: number[]
-  raw: number[]
-  filtered: number[]
-}
+/** Per-trace ring capacity (~5 min at 200 Hz); older samples are overwritten. */
+const RING_CAP = 65536
+
+/** Catalog/status poll period. The tree only needs a coarse refresh, so we
+ * throttle the IPC+React churn here rather than in Rust: `catalog.observe`
+ * still runs on every message, keeping `rate_hz`'s EMA accurate (S4). */
+const CATALOG_POLL_MS = 1000
 
 interface Workspace {
   version: 2
@@ -109,7 +112,6 @@ export function InspectorApp() {
   const [colors, setColors] = useState<Record<string, string>>({})
   const [paused, setPaused] = useState(false)
   const [windowSec, setWindowSec] = useState(30)
-  const [version, setVersion] = useState(0)
   const [selected, setSelected] = useState<string | null>(null)
   const [axisLink, setAxisLink] = useState(false)
   const [status, setStatus] = useState<InspectorStatus | null>(null)
@@ -132,14 +134,19 @@ export function InspectorApp() {
   const plotsRef = useRef(plots)
   plotsRef.current = plots
 
-  const buffers = useRef<Map<string, Buffer>>(new Map())
+  const buffers = useRef<Map<string, Ring>>(new Map())
   /** Latest Rust-computed spectrum per trace (S3). */
   const spectra = useRef<Map<string, SpectrumFrame>>(new Map())
   const charts = useRef<Map<string, uPlot>>(new Map())
   const chartSigs = useRef<Map<string, string>>(new Map())
   const chartHosts = useRef<Map<string, HTMLDivElement>>(new Map())
 
-  const bump = useCallback(() => setVersion((v) => v + 1), [])
+  /** New samples set this; a requestAnimationFrame loop redraws (S4: no React
+   * re-render per frame). */
+  const dirty = useRef(false)
+  const markDirty = useCallback(() => {
+    dirty.current = true
+  }, [])
 
   /** checked = every signal that currently has a trace (for the tree). */
   const checked = useMemo(
@@ -224,17 +231,17 @@ export function InspectorApp() {
 
   /** Route one live sample to every trace bound to its signal. */
   const routeSample = useCallback(
-    (id: SignalId, t_ms: number, raw: number, filtered: number, touched: Set<Buffer>) => {
+    (id: SignalId, t_ms: number, raw: number, filtered: number) => {
       const key = signalKey(id)
       for (const p of plotsRef.current) {
         for (const t of p.traces) {
           if (signalKey(t.signal) !== key) continue
-          const b = buffers.current.get(t.id) ?? { t: [], raw: [], filtered: [] }
-          b.t.push(t_ms)
-          b.raw.push(raw)
-          b.filtered.push(filtered)
-          buffers.current.set(t.id, b)
-          touched.add(b)
+          let ring = buffers.current.get(t.id)
+          if (!ring) {
+            ring = new Ring(RING_CAP)
+            buffers.current.set(t.id, ring)
+          }
+          ring.push(t_ms, raw, filtered)
         }
       }
     },
@@ -247,10 +254,8 @@ export function InspectorApp() {
     if (!tauri) {
       const id = setInterval(() => {
         const now = performance.now() / 1000
-        const touched = new Set<Buffer>()
-        for (const s of mockSamples(now)) routeSample(s.id, s.t_ms, s.value, NaN, touched)
-        for (const b of touched) trimBuffer(b, windowRef.current, 1024)
-        bump()
+        for (const s of mockSamples(now)) routeSample(s.id, s.t_ms, s.value, NaN)
+        markDirty()
       }, 10)
       setCatalog(mockCatalog())
       setAlgorithms(mockAlgorithms())
@@ -259,23 +264,19 @@ export function InspectorApp() {
     let disposed = false
     const channel = new Channel<FramePayload>()
     const onMessage = (frame: FramePayload) => {
-      const touched = new Set<Buffer>()
       for (const tf of frame.traces) {
-        const b = buffers.current.get(tf.trace_id) ?? { t: [], raw: [], filtered: [] }
-        for (let i = 0; i < tf.t.length; i++) {
-          b.t.push(tf.t[i])
-          // serde_json writes NaN as null; turn it back into NaN (a gap in uPlot).
-          b.raw.push(tf.raw[i] ?? NaN)
-          b.filtered.push(tf.filtered[i] ?? NaN)
+        let ring = buffers.current.get(tf.trace_id)
+        if (!ring) {
+          ring = new Ring(RING_CAP)
+          buffers.current.set(tf.trace_id, ring)
         }
-        buffers.current.set(tf.trace_id, b)
-        touched.add(b)
+        for (let i = 0; i < tf.t.length; i++) {
+          // serde_json writes NaN as null; turn it back into NaN (a gap in uPlot).
+          ring.push(tf.t[i], tf.raw[i] ?? NaN, tf.filtered[i] ?? NaN)
+        }
       }
       for (const sf of frame.spectra) spectra.current.set(sf.trace_id, sf.frame)
-      // The Rust analyzer keeps its own window, so the view buffer only needs
-      // the visible span (S3: FFT decoupled from the plot window).
-      for (const b of touched) trimBuffer(b, windowRef.current, 2)
-      bump()
+      markDirty()
     }
     channel.onmessage = onMessage
     void (async () => {
@@ -298,7 +299,7 @@ export function InspectorApp() {
       void invoke('inspector_disconnect')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tauri, bump])
+  }, [tauri, markDirty, routeSample])
 
   // Push the flattened trace set (signal + pipeline + analyzer) to the Rust
   // session. An unchanged trace keeps its running state; a changed one is
@@ -318,6 +319,8 @@ export function InspectorApp() {
 
   // Refresh the catalog periodically so the tree fills as signals arrive, and
   // poll the tap/link status for the toolbar (dropped, msg/s, link state).
+  // Throttled to `CATALOG_POLL_MS`; see the constant for why this is the right
+  // throttling layer (the Rust rate EMA stays per-message).
   useEffect(() => {
     if (!tauri) return
     let lastMsgs = 0
@@ -342,22 +345,24 @@ export function InspectorApp() {
       } catch {
         /* not connected */
       }
-    }, 1000)
+    }, CATALOG_POLL_MS)
     return () => clearInterval(id)
   }, [tauri])
 
-  // Trim every buffer to the selected window (keep at least one FFT window).
-  useEffect(() => {
-    const keep = Math.max(tauri ? 2 : 1024, Math.ceil((windowSec * 1000) / 10))
-    for (const [key, b] of buffers.current) {
-      if (b.t.length > keep) {
-        b.t = b.t.slice(-keep)
-        b.raw = b.raw.slice(-keep)
-        b.filtered = b.filtered.slice(-keep)
-        buffers.current.set(key, b)
-      }
+  // Trim every ring to the selected window (keep at least one FFT window in
+  // mock mode). Runs during the redraw loop so a shrinking window drops old
+  // samples immediately; the ring cap bounds memory while paused.
+  const trimRings = useCallback(() => {
+    const keep = Math.max(tauri ? 2 : 1024, Math.ceil((windowRef.current * 1000) / 10))
+    for (const ring of buffers.current.values()) {
+      ring.trimBefore(ring.newestTime() - windowRef.current * 1000, keep)
     }
-  }, [windowSec, tauri])
+  }, [tauri])
+
+  // A window change only needs a redraw; the loop trims to the new window.
+  useEffect(() => {
+    markDirty()
+  }, [windowSec, markDirty])
 
   // Create/destroy one uPlot per plot. Recreated when its trace set or the
   // per-trace colors change (series are fixed at construction) or axis linking
@@ -405,29 +410,50 @@ export function InspectorApp() {
         chartSigs.current.delete(id)
       }
     }
-  }, [plots, axisLink, colors])
+    markDirty()
+  }, [plots, axisLink, colors, markDirty])
 
-  // Feed data into the charts whenever new samples arrive or filters change.
-  // Paused = freeze the view (SDI behavior): data keeps buffering above, but the
-  // visible window stops advancing until Run.
-  useEffect(() => {
-    if (pausedRef.current) return
-    for (const p of plots) {
+  // Redraw on a requestAnimationFrame loop instead of a React render per frame
+  // (S4). Reads refs only; React state is structure, not data.
+  const renderAll = useCallback(() => {
+    trimRings()
+    for (const p of plotsRef.current) {
       const chart = charts.current.get(p.id)
       if (!chart) continue
-      const merged = mergedData(p, buffers.current, tauri)
+      const host = chartHosts.current.get(p.id)
+      const maxPoints = Math.max(256, (host?.clientWidth ?? 800) * 2)
+      const merged = mergedData(p, buffers.current, tauri, maxPoints)
       if (!merged) continue
       chart.setData(merged.data)
       if (merged.tEnd > 0) chart.setScale('x', { min: merged.tEnd - windowRef.current, max: merged.tEnd })
     }
-  }, [version, plots, tauri, paused])
+  }, [tauri, trimRings])
+
+  useEffect(() => {
+    let raf = 0
+    const tick = () => {
+      raf = requestAnimationFrame(tick)
+      if (!dirty.current) return
+      dirty.current = false
+      // Paused = freeze the view (SDI behavior); buffering continues above.
+      if (pausedRef.current) return
+      renderAll()
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [renderAll])
+
+  // Structural/scale changes ask for a redraw even without new samples.
+  useEffect(() => {
+    markDirty()
+  }, [windowSec, plots, colors, paused, markDirty])
 
   useEffect(() => {
     for (const chart of charts.current.values()) chart.redraw()
   }, [windowSec])
 
   const clearAll = () => {
-    buffers.current.clear()
+    for (const ring of buffers.current.values()) ring.clear()
     for (const chart of charts.current.values()) chart.setData(chart.series.map(() => []) as unknown as uPlot.AlignedData)
   }
 
@@ -435,10 +461,10 @@ export function InspectorApp() {
     const rows: string[] = ['t_ms,trace,raw,filtered']
     for (const p of plots) {
       for (const t of p.traces) {
-        const b = buffers.current.get(t.id)
-        if (!b) continue
-        for (let i = 0; i < b.t.length; i++) {
-          rows.push(`${b.t[i].toFixed(1)},${signalKey(t.signal)},${b.raw[i]},${b.filtered[i] ?? ''}`)
+        const ring = buffers.current.get(t.id)
+        if (!ring) continue
+        for (let i = 0; i < ring.length; i++) {
+          rows.push(`${ring.timeAt(i).toFixed(1)},${signalKey(t.signal)},${ring.rawAt(i)},${ring.filtAt(i)}`)
         }
       }
     }
@@ -455,12 +481,13 @@ export function InspectorApp() {
    * the view window), the TS mirror in mock mode. */
   const spectrum = (trace: Trace): SpectrumFrame | null => {
     if (tauri) return spectra.current.get(trace.id) ?? null
-    const b = buffers.current.get(trace.id)
-    if (!b) return null
+    const ring = buffers.current.get(trace.id)
+    if (!ring) return null
     const n = 1024
-    const recent = b.raw.slice(-n)
+    const recent: number[] = []
+    for (let i = Math.max(0, ring.length - n); i < ring.length; i++) recent.push(ring.rawAt(i))
     if (recent.length < n) return null
-    const fs = estimateFs(b)
+    const fs = estimateFs(ring)
     const s = magnitudeSpectrum(recent, fs)
     return s
       ? {
@@ -753,44 +780,137 @@ function mirrorFilter(raw: number[], pipeline: AlgoConfig[], fs: number): number
 }
 
 /** Merge every trace in a plot onto one sorted time axis (uPlot needs each
- * series to share x), padding each series with NaN where it has no sample. */
+ * series to share x), padding each series with NaN where it has no sample.
+ * When the union axis exceeds `maxPoints`, min/max decimation (S4) caps the
+ * number of columns drawn without hiding peaks. */
 function mergedData(
   plot: Plot,
-  buffers: Map<string, Buffer>,
+  buffers: Map<string, Ring>,
   tauri: boolean,
+  maxPoints: number,
 ): { data: uPlot.AlignedData; tEnd: number } | null {
-  const columns: { t: number[]; raw: number[]; filt: number[] }[] = []
-  const stamps = new Set<number>()
-  for (const tr of plot.traces) {
-    const b = buffers.get(tr.id)
-    if (!b || b.t.length === 0) {
-      columns.push({ t: [], raw: [], filt: [] })
-      continue
+  const traces = plot.traces
+  const k = traces.length
+  const rings = traces.map((tr) => buffers.get(tr.id))
+  // Mock mode has no Rust analyzer, so precompute the TS mirror of the
+  // filtered line once and read it by index during the merge.
+  const mirrors: number[][] | null = tauri
+    ? null
+    : traces.map((tr, i) => {
+        const r = rings[i]
+        if (!r || r.length === 0) return []
+        const raw: number[] = []
+        for (let j = 0; j < r.length; j++) raw.push(r.rawAt(j))
+        return mirrorFilter(raw, tr.pipeline, estimateFs(r))
+      })
+
+  // k-way merge over the (already sorted) per-trace rings.
+  const cursor = new Array<number>(k).fill(0)
+  const xs: number[] = []
+  const rawCols: number[][] = traces.map(() => [])
+  const filtCols: number[][] = traces.map(() => [])
+  for (;;) {
+    let minT = Infinity
+    for (let i = 0; i < k; i++) {
+      const r = rings[i]
+      if (r && cursor[i] < r.length) {
+        const t = r.timeAt(cursor[i])
+        if (t < minT) minT = t
+      }
     }
-    const filt = tauri ? b.filtered : mirrorFilter(b.raw, tr.pipeline, estimateFs(b))
-    for (const x of b.t) stamps.add(x)
-    columns.push({ t: b.t, raw: b.raw, filt })
+    if (!Number.isFinite(minT)) break
+    xs.push(minT)
+    for (let i = 0; i < k; i++) {
+      const r = rings[i]
+      const j = cursor[i]
+      if (r && j < r.length && r.timeAt(j) === minT) {
+        rawCols[i].push(r.rawAt(j))
+        filtCols[i].push(tauri ? r.filtAt(j) : mirrors![i][j])
+        cursor[i] = j + 1
+      } else {
+        rawCols[i].push(NaN)
+        filtCols[i].push(NaN)
+      }
+    }
   }
-  const xs = [...stamps].sort((a, b) => a - b)
-  if (xs.length < 2) return null
-  const x = Float64Array.from(xs, (v) => v / 1000)
+
+  let outX = xs
+  let outRaw = rawCols
+  let outFilt = filtCols
+  if (xs.length > maxPoints) {
+    const d = decimateMinMax(xs, rawCols, filtCols, maxPoints)
+    outX = d.x
+    outRaw = d.raw
+    outFilt = d.filt
+  }
+  if (outX.length < 2) return null
+
+  const x = Float64Array.from(outX, (v) => v / 1000)
   const series: Float64Array[] = [x]
-  for (const c of columns) {
-    const rawMap = new Map<number, number>()
-    const filtMap = new Map<number, number>()
-    for (let i = 0; i < c.t.length; i++) {
-      rawMap.set(c.t[i], c.raw[i])
-      filtMap.set(c.t[i], c.filt[i])
-    }
-    series.push(Float64Array.from(xs, (v) => finiteOrNaN(rawMap.get(v))))
-    series.push(Float64Array.from(xs, (v) => finiteOrNaN(filtMap.get(v))))
+  for (let i = 0; i < k; i++) {
+    series.push(Float64Array.from(outRaw[i]))
+    series.push(Float64Array.from(outFilt[i]))
   }
   // `tEnd` is in seconds to match the x data (uPlot scales use the data units).
-  return { data: series as uPlot.AlignedData, tEnd: xs[xs.length - 1] / 1000 }
+  return { data: series as uPlot.AlignedData, tEnd: outX[outX.length - 1] / 1000 }
 }
 
-function finiteOrNaN(v: number | undefined): number {
-  return v !== undefined && Number.isFinite(v) ? v : NaN
+/** Min/max decimation over a shared time axis: each bucket keeps up to two
+ * columns (the earliest and latest extreme of every series) so peaks survive
+ * downsampling while all series keep the same x. */
+function decimateMinMax(
+  xs: number[],
+  raw: number[][],
+  filt: number[][],
+  maxPoints: number,
+): { x: number[]; raw: number[][]; filt: number[][] } {
+  const n = xs.length
+  const k = raw.length
+  const buckets = Math.max(1, Math.floor(Math.max(2, maxPoints) / 2))
+  const size = n / buckets
+  const outX: number[] = []
+  const outRaw: number[][] = raw.map(() => [])
+  const outFilt: number[][] = filt.map(() => [])
+  for (let b = 0; b < buckets; b++) {
+    const lo = Math.floor(b * size)
+    const hi = Math.min(n, Math.floor((b + 1) * size))
+    if (hi <= lo) continue
+    const x1 = xs[lo]
+    const x2 = xs[hi - 1]
+    const two = x2 > x1
+    outX.push(x1)
+    if (two) outX.push(x2)
+    for (let i = 0; i < k; i++) {
+      const col = raw[i]
+      const fcol = filt[i]
+      let minJ = -1
+      let maxJ = -1
+      for (let j = lo; j < hi; j++) {
+        const v = col[j]
+        if (v !== v) continue
+        if (minJ < 0 || v < col[minJ]) minJ = j
+        if (maxJ < 0 || v > col[maxJ]) maxJ = j
+      }
+      if (minJ < 0) {
+        outRaw[i].push(NaN)
+        outFilt[i].push(NaN)
+        if (two) {
+          outRaw[i].push(NaN)
+          outFilt[i].push(NaN)
+        }
+        continue
+      }
+      const firstJ = minJ <= maxJ ? minJ : maxJ
+      const lastJ = minJ <= maxJ ? maxJ : minJ
+      outRaw[i].push(col[firstJ])
+      outFilt[i].push(fcol[firstJ])
+      if (two) {
+        outRaw[i].push(col[lastJ])
+        outFilt[i].push(fcol[lastJ])
+      }
+    }
+  }
+  return { x: outX, raw: outRaw, filt: outFilt }
 }
 
 /** Number formatter that tolerates null/NaN (serde_json turns NaN into null). */
@@ -798,26 +918,10 @@ function fmt(v: number | null | undefined, digits: number): string {
   return typeof v === 'number' && Number.isFinite(v) ? v.toFixed(digits) : '—'
 }
 
-/** Drop samples older than the window (relative to the newest sample), but
- * never below `minSamples` (the FFT window in mock mode). */
-function trimBuffer(b: Buffer, windowSec: number, minSamples: number): void {
-  const n = b.t.length
-  if (n < 2) return
-  const keep = Math.max(minSamples, Math.ceil((windowSec * 1000) / 10))
-  const maxDrop = Math.max(0, n - keep)
-  const cutoff = b.t[n - 1] - windowSec * 1000
-  let k = 0
-  while (k < maxDrop && b.t[k] < cutoff) k++
-  if (k > 0) {
-    b.t.splice(0, k)
-    b.raw.splice(0, k)
-    b.filtered.splice(0, k)
-  }
-}
-
-function estimateFs(b: Buffer): number {
-  if (b.t.length < 2) return 100
-  const dt = (b.t[b.t.length - 1] - b.t[0]) / (b.t.length - 1)
+function estimateFs(ring: Ring): number {
+  const n = ring.length
+  if (n < 2) return 100
+  const dt = (ring.timeAt(n - 1) - ring.timeAt(0)) / (n - 1)
   return dt > 0 ? 1000 / dt : 100
 }
 
@@ -851,7 +955,7 @@ function PropertiesPanel({
   color: string | undefined
   catalog: CatalogEntry[]
   algorithms: AlgorithmInfo[]
-  buffer: Buffer | undefined
+  buffer: Ring | undefined
   tauri: boolean
   onColor: (color: string) => void
   onRemove: () => void
@@ -885,7 +989,7 @@ function PropertiesPanel({
         <dt>Est. fs</dt>
         <dd>{fs > 0 ? `${fs.toFixed(1)} Hz` : '—'}</dd>
         <dt>Samples</dt>
-        <dd>{buffer ? buffer.t.length : 0}</dd>
+        <dd>{buffer ? buffer.length : 0}</dd>
       </dl>
       <div className="prop-row">
         <label>Color</label>
