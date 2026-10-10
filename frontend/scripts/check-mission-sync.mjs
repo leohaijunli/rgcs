@@ -414,8 +414,10 @@ await check('a running FC mission with an empty local plan auto-fetches', () => 
   eq(useMissionStore.getState().syncState, 'downloading', 'auto-fetch started')
   eq(useMissionStore.getState().busy, true, 'busy during fetch')
   // A non-empty local plan is never auto-fetched: the operator's work must
-  // not be clobbered by an in-flight mission.
-  reset()
+  // not be clobbered by an in-flight mission. (`reset`, not `clearPlan`:
+  // the first half left a download in flight, which clearPlan does not
+  // unwind.)
+  useMissionStore.getState().reset()
   useMissionStore.getState().addWaypointAt(48.6493, -123.3982)
   useMissionStore
     .getState()
