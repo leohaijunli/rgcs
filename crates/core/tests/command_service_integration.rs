@@ -201,10 +201,9 @@ async fn ack_accepted_completes() {
     let mut h = harness().await;
     h.svc.send(RTL, [0.0; 7]).await.expect("enqueue");
 
-    let (_header, msg) = peer_recv(&mut h.peer).await;
-    let mavlink::common::MavMessage::COMMAND_LONG(cmd) = msg else {
-        panic!("FC expected COMMAND_LONG, got {msg:?}");
-    };
+    // Skip the worker's own GCS heartbeat announcements (1 Hz) — they race
+    // the command onto the wire.
+    let cmd = peer_recv_command_long(&mut h.peer).await;
     assert_eq!(cmd.command, RTL);
     assert_eq!(cmd.confirmation, 0);
 
@@ -241,10 +240,9 @@ async fn denied_reports_result() {
     let mut h = harness().await;
     h.svc.send(RTL, [0.0; 7]).await.expect("enqueue");
 
-    let (_header, msg) = peer_recv(&mut h.peer).await;
-    let mavlink::common::MavMessage::COMMAND_LONG(cmd) = msg else {
-        panic!("FC expected COMMAND_LONG, got {msg:?}");
-    };
+    // Skip the worker's own GCS heartbeat announcements (1 Hz) — they race
+    // the command onto the wire.
+    let cmd = peer_recv_command_long(&mut h.peer).await;
     peer_send_ack(
         &mut h.peer,
         cmd.command,

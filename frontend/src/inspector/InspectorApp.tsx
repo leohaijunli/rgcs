@@ -108,11 +108,26 @@ interface Workspace {
 const WS_KEY = 'maggcs.inspector.workspace'
 const SYNC_KEY = 'maggcs-inspector'
 
-/** Default series palette; a trace picks one by hashing its id, override-able. */
-const PALETTE = ['#4ea1ff', '#3ddc84', '#ffb454', '#ff6b6b', '#c792ea', '#22d3ee', '#f472b6', '#a3e635']
+/** Default series palette; a trace picks one by hashing its id, override-able.
+ * Colours come from the trace tokens (ADR-010), resolved lazily so the theme
+ * can swap them under a live window. */
+function tracePalette(): string[] {
+  return Array.from({ length: 8 }, (_, i) => cssVarToken(`--mg-trace-${i + 1}`))
+}
+
+/** Read a design token at call time (the cached variant is for hot paths);
+ * falls back to the accent token, never a literal colour. */
+function cssVarToken(name: string): string {
+  const style = getComputedStyle(document.documentElement)
+  return (
+    style.getPropertyValue(name).trim() ||
+    style.getPropertyValue('--mg-accent').trim() ||
+    'transparent'
+  )
+}
 
 /** Pinned-cursor line colour for the dual-cursor measurement (P7). */
-const MEASURE_COLOR = '#ffb454'
+const MEASURE_COLOR = () => cssVarToken('--mg-trace-measure')
 
 /** uPlot axis font / label font, kept at the panel text size so ticks and units
  * stay legible in the narrow spectrum view. */
@@ -145,7 +160,7 @@ function hashIndex(s: string): number {
 }
 /** Series colour for a signal (SDI colours each signal, not each trace). */
 function colorOf(signalKey_: string, colors: Record<string, string>): string {
-  return colors[signalKey_] ?? PALETTE[hashIndex(signalKey_) % PALETTE.length]
+  return colors[signalKey_] ?? tracePalette()[hashIndex(signalKey_) % 8]
 }
 
 function hexToRgb(hex: string): [number, number, number] | null {
@@ -242,9 +257,8 @@ function magComponents(traces: Trace[]): { x: number; y: number; z: number } | n
   return x >= 0 && y >= 0 && z >= 0 ? { x, y, z } : null
 }
 
-/** Total magnetic-field intensity curve colour: pure red reads on both themes
- * and is not part of the base palette. */
-const TOTAL_MAG_COLOR = '#ff0000'
+/** Total magnetic-field intensity curve colour: the dedicated trace token. */
+const TOTAL_MAG_COLOR = () => cssVarToken('--mg-trace-total-mag')
 
 let idSeq = 0
 /** A stable id for a plot/trace within this window (persisted in the workspace). */
@@ -260,7 +274,7 @@ function newTrace(signal: SignalId): Trace {
 function token(name: string): string {
   const cached = cssVarCache.get(name)
   if (cached) return cached
-  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim() || 'cyan'
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim() || cssVarToken('--mg-trace-6')
   cssVarCache.set(name, v)
   return v
 }
@@ -757,7 +771,7 @@ export function InspectorApp() {
       }
       // When a plot carries all three mag components, append the total
       // intensity √(x²+y²+z²) as a derived series (computed in mergedData).
-      if (mag) series.push({ label: 'total (nT)', stroke: TOTAL_MAG_COLOR, width: 2 })
+      if (mag) series.push({ label: 'total (nT)', stroke: TOTAL_MAG_COLOR(), width: 2 })
       const empty = [
         [],
         ...p.traces.flatMap((t) => (t.pipeline.length > 0 ? [[], []] : [[]])),
@@ -1354,7 +1368,7 @@ function ColorPicker({ color, onPick }: { color: string; onPick: (c: string) => 
       />
       {open && (
         <div className="color-pop">
-          {PALETTE.map((c) => (
+          {tracePalette().map((c) => (
             <button
               type="button"
               key={c}
@@ -1742,7 +1756,7 @@ function deltaCursorPlugin(
     if (!Number.isFinite(x)) return
     const { ctx } = u
     ctx.save()
-    ctx.strokeStyle = MEASURE_COLOR
+    ctx.strokeStyle = MEASURE_COLOR()
     ctx.lineWidth = 1
     ctx.setLineDash([4, 3])
     ctx.beginPath()

@@ -223,7 +223,9 @@ async fn arming_mid_test_stops_within_a_tick_and_releases() {
     // ticker's first tick fires immediately after Start.
     tokio::time::sleep(Duration::from_millis(400)).await;
 
-    svc.send(MotorTestCommand::Start).await.expect("start");
+    svc.send(MotorTestCommand::StartManual)
+        .await
+        .expect("start");
     wait_event(&mut evt, Duration::from_secs(2), |e| {
         *e == MotorTestEvent::StateChanged(SessionState::ManualRunning)
     })

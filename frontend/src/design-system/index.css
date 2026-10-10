@@ -59,6 +59,22 @@
   --mg-text-sm: 12px;
   --mg-text-base: 14px;
   --mg-text-lg: 18px;
+
+  /* Signal-trace palette (ADR-010: colours come from tokens, never literals).
+     The Inspector assigns one per signal by hashing its key; distinct enough
+     on both themes and reserved for traces only. */
+  --mg-trace-1: #4ea1ff;
+  --mg-trace-2: #3ddc84;
+  --mg-trace-3: #ffb454;
+  --mg-trace-4: #ff6b6b;
+  --mg-trace-5: #c792ea;
+  --mg-trace-6: #22d3ee;
+  --mg-trace-7: #f472b6;
+  --mg-trace-8: #a3e635;
+  /* Pinned dual-cursor measurement line. */
+  --mg-trace-measure: #ffb454;
+  /* Derived total-magnetic-intensity curve: pure red reads on both themes. */
+  --mg-trace-total-mag: #ff0000;
 }
 
 /* High-contrast light theme for outdoor field use. */

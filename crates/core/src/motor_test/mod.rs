@@ -21,7 +21,10 @@ pub mod source;
 
 pub use interlock::{Interlock, SafetyLimits, HEARTBEAT_STALE};
 pub use service::{MotorTestCommand, MotorTestEvent, MotorTestService, StopReason};
-pub use source::{ManualSource, MotorSlot, PresetKind, PresetSource, RpmSource, SenderConfig, WaveformPreset, AnySource};
+pub use source::{
+    AnySource, ManualSource, MotorSlot, PresetKind, PresetSource, RpmSource, SenderConfig,
+    WaveformPreset,
+};
 
 use std::time::Instant;
 

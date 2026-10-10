@@ -6,8 +6,7 @@ fn main() {
     // to embed nothing and fail only at runtime with "asset not found:
     // index.html". Fail here instead, with the fix in the message.
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
-    let index = std::path::Path::new(&manifest_dir)
-        .join("../../frontend/dist/index.html");
+    let index = std::path::Path::new(&manifest_dir).join("../../frontend/dist/index.html");
     if !index.exists() {
         panic!(
             "frontend/dist/index.html is missing — build the frontend first: \
