@@ -60,6 +60,7 @@ interface Workspace {
   plots: Plot[]
   colors: Record<string, string>
   axisLink: boolean
+  layoutCols?: number
 }
 
 const WS_KEY = 'maggcs.inspector.workspace'
@@ -68,13 +69,17 @@ const SYNC_KEY = 'maggcs-inspector'
 /** Default series palette; a trace picks one by hashing its id, override-able. */
 const PALETTE = ['#4ea1ff', '#3ddc84', '#ffb454', '#ff6b6b', '#c792ea', '#22d3ee', '#f472b6', '#a3e635']
 
+/** Pinned-cursor line colour for the dual-cursor measurement (P7). */
+const MEASURE_COLOR = '#ffb454'
+
 function hashIndex(s: string): number {
   let h = 0
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0
   return Math.abs(h)
 }
-function colorOf(traceId: string, colors: Record<string, string>): string {
-  return colors[traceId] ?? PALETTE[hashIndex(traceId) % PALETTE.length]
+/** Series colour for a signal (SDI colours each signal, not each trace). */
+function colorOf(signalKey_: string, colors: Record<string, string>): string {
+  return colors[signalKey_] ?? PALETTE[hashIndex(signalKey_) % PALETTE.length]
 }
 
 let idSeq = 0
@@ -114,9 +119,19 @@ export function InspectorApp() {
   const [windowSec, setWindowSec] = useState(30)
   const [selected, setSelected] = useState<string | null>(null)
   const [axisLink, setAxisLink] = useState(false)
+  /** Plot-grid column count (P7 layout presets): 1×1 / 2×1 / 3×1. */
+  const [layoutCols, setLayoutCols] = useState(1)
+  /** SDI-style dual cursor: click a plot to pin cursor A for Δt/Δy (P7). */
+  const [measure, setMeasure] = useState(false)
+  /** Plot that checkboxes add signals to (the "same plot" workflow). */
+  const [activePlot, setActivePlot] = useState<string | null>(null)
+  /** Auto-scroll x to the newest data; a user drag-zoom turns it off. */
+  const [follow, setFollow] = useState(true)
   const [status, setStatus] = useState<InspectorStatus | null>(null)
   const [rate, setRate] = useState(0)
   const [notice, setNotice] = useState<string | null>(null)
+  /** Plot currently highlighted as a drag-and-drop target (P7). */
+  const [dropPlot, setDropPlot] = useState<string | null>(null)
 
   const noticeAt = useRef(0)
   const showNotice = useCallback((msg: string) => {
@@ -133,6 +148,8 @@ export function InspectorApp() {
   windowRef.current = windowSec
   const plotsRef = useRef(plots)
   plotsRef.current = plots
+  const activePlotRef = useRef(activePlot)
+  activePlotRef.current = activePlot
 
   const buffers = useRef<Map<string, Ring>>(new Map())
   /** Latest Rust-computed spectrum per trace (S3). */
@@ -140,6 +157,19 @@ export function InspectorApp() {
   const charts = useRef<Map<string, uPlot>>(new Map())
   const chartSigs = useRef<Map<string, string>>(new Map())
   const chartHosts = useRef<Map<string, HTMLDivElement>>(new Map())
+  /** Per-plot DOM node the uPlot legend is mounted into, so it never overlays
+   * the curve or axes (uPlot's default legend sits inside the plot box). */
+  const chartLegends = useRef<Map<string, HTMLDivElement>>(new Map())
+  /** Pinned cursor-A time (seconds) per plot, for the dual-cursor measurement. */
+  const pins = useRef<Map<string, number | null>>(new Map())
+  /** Per-plot DOM node the Δt/Δy readout is written into (no React churn). */
+  const chartMeasures = useRef<Map<string, HTMLDivElement>>(new Map())
+  const measureEnabled = useRef(false)
+  measureEnabled.current = measure
+  const followRef = useRef(follow)
+  followRef.current = follow
+  /** The x-range we last set per chart, to tell our auto-scale from a user zoom. */
+  const expectedX = useRef<Map<uPlot, { min: number; max: number }>>(new Map())
 
   /** New samples set this; a requestAnimationFrame loop redraws (S4: no React
    * re-render per frame). */
@@ -148,10 +178,10 @@ export function InspectorApp() {
     dirty.current = true
   }, [])
 
-  /** checked = every signal that currently has a trace (for the tree). */
+  /** checked = the signals in the active plot (checking adds to it). */
   const checked = useMemo(
-    () => new Set(plots.flatMap((p) => p.traces.map((t) => signalKey(t.signal)))),
-    [plots],
+    () => new Set((plots.find((p) => p.id === activePlot)?.traces ?? []).map((t) => signalKey(t.signal))),
+    [plots, activePlot],
   )
 
   const patchTrace = useCallback((id: string, patch: (t: Trace) => Trace) => {
@@ -178,10 +208,15 @@ export function InspectorApp() {
 
   const removeTrace = useCallback((id: string) => removeTracesWhere((t) => t.id === id), [removeTracesWhere])
 
-  const removePlot = useCallback((id: string) => setPlots((prev) => prev.filter((p) => p.id !== id)), [])
+  const removePlot = useCallback((id: string) => {
+    setPlots((prev) => prev.filter((p) => p.id !== id))
+    setActivePlot((cur) => (cur === id ? null : cur))
+  }, [])
 
   const addPlot = useCallback(() => {
-    setPlots((prev) => [...prev, { id: newId('p'), title: `Plot ${prev.length + 1}`, traces: [] }])
+    const id = newId('p')
+    setPlots((prev) => [...prev, { id, title: `Plot ${prev.length + 1}`, traces: [] }])
+    setActivePlot(id)
   }, [])
 
   const addTraceToPlot = useCallback((plotId: string, signal: SignalId) => {
@@ -190,30 +225,49 @@ export function InspectorApp() {
     )
   }, [])
 
-  const setColor = useCallback((traceId: string, color: string) => {
-    setColors((prev) => ({ ...prev, [traceId]: color }))
+  /** Set the colour for a signal key (shared by all its traces/plots). */
+  const setColor = useCallback((signalKey_: string, color: string) => {
+    setColors((prev) => ({ ...prev, [signalKey_]: color }))
   }, [])
 
-  /** Check/uncheck a signal: add it as a new single-trace plot, or drop it. */
+  /** Check/uncheck a signal: add/remove a trace on the active plot. Checking
+   * with no plot yet creates one (checkboxes are the only add path; no menu). */
   const toggleSignal = useCallback(
     (signal: SignalId) => {
       const key = signalKey(signal)
-      const exists = plotsRef.current.some((p) => p.traces.some((t) => signalKey(t.signal) === key))
-      if (exists) {
-        removeTracesWhere((t) => signalKey(t.signal) === key)
-      } else {
-        setPlots((prev) => [...prev, { id: newId('p'), title: key, traces: [newTrace(signal)] }])
+      const id = activePlotRef.current
+      const target = id ? plotsRef.current.find((p) => p.id === id) : undefined
+      if (target) {
+        const present = target.traces.some((t) => signalKey(t.signal) === key)
+        setPlots((prev) =>
+          prev
+            .map((p) =>
+              p.id === target.id
+                ? {
+                    ...p,
+                    traces: present
+                      ? p.traces.filter((t) => signalKey(t.signal) !== key)
+                      : [...p.traces, newTrace(signal)],
+                  }
+                : p,
+            )
+            .filter((p) => p.traces.length > 0),
+        )
+        return
       }
+      const nid = newId('p')
+      setPlots((prev) => [...prev, { id: nid, title: key, traces: [newTrace(signal)] }])
+      setActivePlot(nid)
     },
-    [removeTracesWhere],
+    [],
   )
 
   // Workspace save/load (P7 + S2/S3): plots (with full SignalIds + chains),
   // colors, window and axis link. v1 (`checked`/`filterBy` by key) is dropped.
   const saveWorkspace = useCallback(() => {
-    const ws: Workspace = { version: 2, windowSec, plots, colors, axisLink }
+    const ws: Workspace = { version: 2, windowSec, plots, colors, axisLink, layoutCols }
     localStorage.setItem(WS_KEY, JSON.stringify(ws))
-  }, [windowSec, plots, colors, axisLink])
+  }, [windowSec, plots, colors, axisLink, layoutCols])
 
   const loadWorkspace = useCallback(() => {
     const raw = localStorage.getItem(WS_KEY)
@@ -223,6 +277,7 @@ export function InspectorApp() {
       if (typeof ws.windowSec === 'number') setWindowSec(ws.windowSec)
       if (Array.isArray(ws.plots)) setPlots(ws.plots)
       if (ws.colors && typeof ws.colors === 'object') setColors(ws.colors)
+      if (typeof ws.layoutCols === 'number') setLayoutCols(ws.layoutCols)
       setAxisLink(Boolean(ws.axisLink))
     } catch {
       // Corrupt workspace: keep the defaults.
@@ -372,14 +427,17 @@ export function InspectorApp() {
       if (p.traces.length === 0) continue
       const host = chartHosts.current.get(p.id)
       if (!host) continue
-      const sig = `${axisLink}|${p.traces.map((t) => `${t.id}:${colorOf(t.id, colors)}`).join(',')}`
+      const sig = `${axisLink}|${p.traces
+        .map((t) => `${t.id}:${colorOf(signalKey(t.signal), colors)}`)
+        .join(',')}`
       if (charts.current.has(p.id) && chartSigs.current.get(p.id) === sig) continue
       charts.current.get(p.id)?.destroy()
       const cursor = axisLink ? { show: true, sync: { key: SYNC_KEY } } : { show: true }
       const series: uPlot.Series[] = [{ label: 't', stroke: 'transparent' }]
       for (const t of p.traces) {
-        const color = colorOf(t.id, colors)
-        const name = signalKey(t.signal)
+        const color = colorOf(signalKey(t.signal), colors)
+        // Short label (field only) keeps the legend on one line.
+        const name = t.signal.field
         series.push({ label: `${name} raw`, stroke: color, width: 1, dash: [4, 3] })
         series.push({ label: `${name} filtered`, stroke: color, width: 2 })
       }
@@ -387,10 +445,37 @@ export function InspectorApp() {
       const chart = new uPlot(
         {
           width: host.clientWidth,
-          height: 180,
-          legend: { show: true },
+          height: 220,
+          legend: {
+            show: true,
+            live: true,
+            mount: (_self, legendEl) => {
+              chartLegends.current.get(p.id)?.replaceChildren(legendEl)
+            },
+          },
           cursor,
-          scales: { x: { time: false } },
+          plugins: [
+            deltaCursorPlugin(p.id, pins, measureEnabled, () => chartMeasures.current.get(p.id)),
+            {
+              // A user drag-zoom (or pan) changes x away from the auto window:
+              // stop following so the zoom sticks.
+              hooks: {
+                setScale: (u, key) => {
+                  if (key !== 'x' || !followRef.current) return
+                  const t = expectedX.current.get(u)
+                  const s = u.scales.x
+                  if (
+                    t &&
+                    (Math.abs((s.min ?? 0) - t.min) > 1e-6 ||
+                      Math.abs((s.max ?? 0) - t.max) > 1e-6)
+                  ) {
+                    setFollow(false)
+                  }
+                },
+              },
+            },
+          ],
+          scales: { x: { time: false, auto: false }, y: { auto: true } },
           axes: [
             { stroke: MUTED(), grid: { stroke: MUTED(), width: 1, dash: [2, 4] } },
             { stroke: MUTED() },
@@ -408,6 +493,7 @@ export function InspectorApp() {
         charts.current.get(id)?.destroy()
         charts.current.delete(id)
         chartSigs.current.delete(id)
+        pins.current.delete(id)
       }
     }
     markDirty()
@@ -425,7 +511,11 @@ export function InspectorApp() {
       const merged = mergedData(p, buffers.current, tauri, maxPoints)
       if (!merged) continue
       chart.setData(merged.data)
-      if (merged.tEnd > 0) chart.setScale('x', { min: merged.tEnd - windowRef.current, max: merged.tEnd })
+      if (followRef.current && merged.tEnd > 0) {
+        const min = merged.tEnd - windowRef.current
+        expectedX.current.set(chart, { min, max: merged.tEnd })
+        chart.setScale('x', { min, max: merged.tEnd })
+      }
     }
   }, [tauri, trimRings])
 
@@ -447,6 +537,23 @@ export function InspectorApp() {
   useEffect(() => {
     markDirty()
   }, [windowSec, plots, colors, paused, markDirty])
+
+  // Turning the measurement off clears every pinned cursor and its readout.
+  useEffect(() => {
+    if (measure) return
+    pins.current.clear()
+    for (const chart of charts.current.values()) chart.redraw()
+    for (const el of chartMeasures.current.values()) {
+      el.replaceChildren()
+      el.style.display = 'none'
+    }
+  }, [measure])
+
+  // Keep the active plot (the checkbox target) pointing at a plot that exists.
+  useEffect(() => {
+    if (activePlot && plots.some((p) => p.id === activePlot)) return
+    setActivePlot(plots[0]?.id ?? null)
+  }, [plots, activePlot])
 
   useEffect(() => {
     for (const chart of charts.current.values()) chart.redraw()
@@ -553,9 +660,33 @@ export function InspectorApp() {
           <option value={30}>30 s</option>
           <option value={60}>60 s</option>
         </select>
+        <select
+          value={layoutCols}
+          title="Plot grid layout"
+          onChange={(e) => setLayoutCols(Number(e.target.value))}
+        >
+          <option value={1}>1×1</option>
+          <option value={2}>2×1</option>
+          <option value={3}>3×1</option>
+        </select>
+        <span className="toolbar-sep" />
         <button className={axisLink ? 'active' : ''} onClick={() => setAxisLink(!axisLink)}>
           Link axes
         </button>
+        <button className={measure ? 'active' : ''} title="Click a plot to measure Δt / Δy" onClick={() => setMeasure(!measure)}>
+          Δ cursors
+        </button>
+        <button
+          className={follow ? 'active' : ''}
+          title="Auto-scroll to the newest data (drag-zoom a plot to pause it)"
+          onClick={() => {
+            setFollow(true)
+            markDirty()
+          }}
+        >
+          Follow
+        </button>
+        <span className="toolbar-sep" />
         <button onClick={addPlot}>New plot</button>
         <button onClick={clearAll}>Clear data</button>
         <button onClick={exportCsv}>Export CSV</button>
@@ -574,30 +705,40 @@ export function InspectorApp() {
       </div>
       {notice && <div className="inspector-notice">{notice}</div>}
 
-      <SignalBrowser catalog={catalog} checked={checked} onToggle={toggleSignal} />
+      <SignalBrowser
+        catalog={catalog}
+        checked={checked}
+        colors={colors}
+        onColor={setColor}
+        onToggle={toggleSignal}
+      />
 
-      <div className="plot-grid">
+      <div className="plot-grid" style={{ gridTemplateColumns: `repeat(${layoutCols}, minmax(0, 1fr))` }}>
+        {plots.length === 0 && (
+          <div className="plot-empty">No plots yet — check a signal on the left to start plotting.</div>
+        )}
         {plots.map((p) => (
-          <div className="plot" key={p.id}>
+          <div
+            className={`plot ${activePlot === p.id ? 'active' : ''} ${dropPlot === p.id ? 'drop-target' : ''}`}
+            key={p.id}
+            onClick={() => setActivePlot(p.id)}
+            onDragOver={(e) => {
+              if (!e.dataTransfer.types.includes('text/plain')) return
+              e.preventDefault()
+              e.dataTransfer.dropEffect = 'copy'
+              if (dropPlot !== p.id) setDropPlot(p.id)
+            }}
+            onDragLeave={() => setDropPlot((cur) => (cur === p.id ? null : cur))}
+            onDrop={(e) => {
+              e.preventDefault()
+              setDropPlot(null)
+              const entry = catalog.find((c) => signalKey(c.signal) === e.dataTransfer.getData('text/plain'))
+              if (entry) addTraceToPlot(p.id, entry.signal)
+            }}
+          >
             <div className="plot-head">
               <span className="title">{p.title || 'Plot'}</span>
-              <select
-                value=""
-                title="Add a signal to this plot"
-                onChange={(e) => {
-                  const entry = catalog.find((c) => signalKey(c.signal) === e.target.value)
-                  if (entry) addTraceToPlot(p.id, entry.signal)
-                }}
-              >
-                <option value="">+ Signal</option>
-                {catalog
-                  .filter((c) => !p.traces.some((t) => signalKey(t.signal) === signalKey(c.signal)))
-                  .map((c) => (
-                    <option key={signalKey(c.signal)} value={signalKey(c.signal)}>
-                      {c.message_name}.{c.signal.field}
-                    </option>
-                  ))}
-              </select>
+              <span className="hint">check signals at left to add</span>
               <button title="Remove plot" onClick={() => removePlot(p.id)}>
                 ×
               </button>
@@ -605,22 +746,38 @@ export function InspectorApp() {
             {p.traces.length === 0 ? (
               <div className="peak-note">Empty plot — add a signal.</div>
             ) : (
-              <div
-                ref={(el) => {
-                  if (el) chartHosts.current.set(p.id, el)
-                  else chartHosts.current.delete(p.id)
-                }}
-                className="chart"
-              />
+              <>
+                <div
+                  ref={(el) => {
+                    if (el) chartHosts.current.set(p.id, el)
+                    else chartHosts.current.delete(p.id)
+                  }}
+                  className="chart"
+                />
+                <div
+                  ref={(el) => {
+                    if (el) chartLegends.current.set(p.id, el)
+                    else chartLegends.current.delete(p.id)
+                  }}
+                  className="plot-legend"
+                />
+                <div
+                  ref={(el) => {
+                    if (el) chartMeasures.current.set(p.id, el)
+                    else chartMeasures.current.delete(p.id)
+                  }}
+                  className="measure-readout"
+                  style={{ display: 'none' }}
+                />
+              </>
             )}
             <div className="trace-chips">
               {p.traces.map((t) => (
                 <span className={`trace-chip ${selected === t.id ? 'selected' : ''}`} key={t.id}>
-                  <input
-                    type="color"
+                  <span
+                    className="chip-color"
                     title="Series color"
-                    value={colorOf(t.id, colors)}
-                    onChange={(e) => setColor(t.id, e.target.value)}
+                    style={{ background: colorOf(signalKey(t.signal), colors) }}
                   />
                   <span className="mono" onClick={() => setSelected(t.id)}>
                     {signalKey(t.signal)}
@@ -657,12 +814,12 @@ export function InspectorApp() {
       <PropertiesPanel
         selected={selected}
         trace={selectedTrace}
-        color={selected ? colorOf(selected, colors) : undefined}
+        color={selectedTrace ? colorOf(signalKey(selectedTrace.signal), colors) : undefined}
         catalog={catalog}
         algorithms={algorithms}
         buffer={selected ? buffers.current.get(selected) : undefined}
         tauri={tauri}
-        onColor={(c) => selected && setColor(selected, c)}
+        onColor={(c) => selectedTrace && setColor(signalKey(selectedTrace.signal), c)}
         onRemove={() => selected && removeTrace(selected)}
         onAddStage={() => selected && addStage(selected)}
         onRemoveStage={(i) => selected && removeStage(selected, i)}
@@ -675,13 +832,65 @@ export function InspectorApp() {
 
 /** Left panel: catalog grouped by message with a search box and collapsible
  * groups. Grouping makes the tree usable with PX4's hundreds of fields. */
+/** SDI-style per-signal colour picker: a swatch that opens a small palette. */
+function ColorPicker({ color, onPick }: { color: string; onPick: (c: string) => void }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <span className="color-picker" onClick={(e) => e.preventDefault()}>
+      <button
+        type="button"
+        className="color-swatch"
+        style={{ background: color }}
+        title="Signal color"
+        onClick={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          setOpen((o) => !o)
+        }}
+      />
+      {open && (
+        <div className="color-pop">
+          {PALETTE.map((c) => (
+            <button
+              type="button"
+              key={c}
+              className="color-dot"
+              style={{ background: c }}
+              title={c}
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                onPick(c)
+                setOpen(false)
+              }}
+            />
+          ))}
+          <input
+            type="color"
+            value={color}
+            title="Custom color"
+            onChange={(e) => {
+              onPick(e.target.value)
+              setOpen(false)
+            }}
+          />
+        </div>
+      )}
+    </span>
+  )
+}
+
 function SignalBrowser({
   catalog,
   checked,
+  colors,
+  onColor,
   onToggle,
 }: {
   catalog: CatalogEntry[]
   checked: Set<string>
+  colors: Record<string, string>
+  onColor: (key: string, color: string) => void
   onToggle: (signal: SignalId) => void
 }) {
   const [query, setQuery] = useState('')
@@ -750,8 +959,17 @@ function SignalBrowser({
               g.entries.map((c) => {
                 const key = signalKey(c.signal)
                 return (
-                  <label key={key}>
+                  <label
+                    key={key}
+                    draggable
+                    title="Drag onto a plot to add it"
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData('text/plain', key)
+                      e.dataTransfer.effectAllowed = 'copy'
+                    }}
+                  >
                     <input type="checkbox" checked={checked.has(key)} onChange={() => onToggle(c.signal)} />
+                    <ColorPicker color={colorOf(key, colors)} onPick={(col) => onColor(key, col)} />
                     <span className="mono">{c.signal.field}</span>
                     <span className="msg">
                       {' '}
@@ -923,6 +1141,97 @@ function estimateFs(ring: Ring): number {
   if (n < 2) return 100
   const dt = (ring.timeAt(n - 1) - ring.timeAt(0)) / (n - 1)
   return dt > 0 ? 1000 / dt : 100
+}
+
+/** SDI-style dual cursor (P7): with the Δ toggle on, clicking a plot pins
+ * cursor A; the live cursor is B. Draws the pinned line and prints Δt plus each
+ * series' Δy into a dedicated DOM node (outside React, so hovering does not
+ * re-render the app). Clicking the same spot again clears the pin. */
+function deltaCursorPlugin(
+  plotId: string,
+  pins: { current: Map<string, number | null> },
+  enabled: { current: boolean },
+  host: () => HTMLDivElement | undefined,
+): uPlot.Plugin {
+  const num = (v: number): string => (Number.isFinite(v) ? v.toPrecision(4) : '—')
+  const valueAt = (u: uPlot, seriesIdx: number, x: number): number => {
+    const arr = u.data[seriesIdx] as Array<number | null | undefined>
+    if (!arr || arr.length === 0) return NaN
+    const v = arr[u.valToIdx(x)]
+    return typeof v === 'number' ? v : NaN
+  }
+  const render = (u: uPlot) => {
+    const el = host()
+    if (!el) return
+    const pin = pins.current.get(plotId)
+    if (!enabled.current || pin == null) {
+      el.replaceChildren()
+      el.style.display = 'none'
+      return
+    }
+    const left = u.cursor.left
+    const xB = left == null || left < 0 ? pin : u.posToVal(left, 'x')
+    const rows: HTMLElement[] = []
+    const dt = document.createElement('span')
+    dt.className = 'm-dt'
+    dt.textContent = `Δt ${num(xB - pin)} s`
+    rows.push(dt)
+    for (let i = 1; i < u.series.length; i++) {
+      const yA = valueAt(u, i, pin)
+      const yB = valueAt(u, i, xB)
+      if (!Number.isFinite(yA) || !Number.isFinite(yB)) continue
+      const item = document.createElement('span')
+      item.className = 'm-item'
+      item.textContent = `${u.series[i].label ?? `s${i}`}  Δy ${num(yB - yA)}`
+      rows.push(item)
+    }
+    el.replaceChildren(...rows)
+    el.style.display = 'flex'
+  }
+  const drawPin = (u: uPlot) => {
+    const pin = pins.current.get(plotId)
+    if (!enabled.current || pin == null) return
+    const x = u.valToPos(pin, 'x')
+    if (!Number.isFinite(x)) return
+    const { ctx } = u
+    ctx.save()
+    ctx.strokeStyle = MEASURE_COLOR
+    ctx.lineWidth = 1
+    ctx.setLineDash([4, 3])
+    ctx.beginPath()
+    ctx.moveTo(x, u.bbox.top)
+    ctx.lineTo(x, u.bbox.top + u.bbox.height)
+    ctx.stroke()
+    ctx.restore()
+  }
+  return {
+    hooks: {
+      ready: (u) => {
+        // Clicks land on the `.u-under` layer (a sibling of `.u-over`), so
+        // listen on the root and hit-test against the plot bbox.
+        // Capture phase: uPlot's own cursor `click` handler stops propagation,
+        // so we must run before it.
+        u.root.addEventListener(
+          'click',
+          (e) => {
+            if (!enabled.current) return
+            const r = u.root.getBoundingClientRect()
+            const px = e.clientX - r.left - u.bbox.left
+            const py = e.clientY - r.top - u.bbox.top
+            if (px < 0 || px > u.bbox.width || py < 0 || py > u.bbox.height) return
+            const x = u.posToVal(px, 'x')
+            const cur = pins.current.get(plotId)
+            pins.current.set(plotId, cur != null && Math.abs(cur - x) < 1e-9 ? null : x)
+            u.redraw(false)
+            render(u)
+          },
+          true,
+        )
+      },
+      setCursor: (u) => render(u),
+      draw: drawPin,
+    },
+  }
 }
 
 /** SET_MESSAGE_INTERVAL options (0 = default rate, -1 = disable). */

@@ -14,7 +14,7 @@
 - **S2 完成**:数据模型重构(见 §3 S2)。`InspectorApp.tsx` 改为 plot/trace 模型,按 `trace_id` 路由,uPlot 与缓冲均以 `trace_id` 为 key;帧改为列式;`CatalogEntry.message_name` 由 mavlink 提供。前端 `tsc` 通过、mock 模式 Playwright 冒烟(`frontend/inspector-check.mjs`)0 错误、`core` lib 234 测试通过、`maggcs-app` 编译通过。
 - **S3 完成**:暂停改为冻结视图 + 后台继续缓冲;每个字段可配多级滤波链(`+ Filter` 增删级、每级参数,编辑器移到属性面板);FFT 改走 Rust analyzer(`SampleFrame.spectra`),可选原始/滤波后(`Trace.analyzer_source`),显示 fs/Nyquist/Δf,分析器在 Rust 侧独立缓冲、与视图窗口解耦(视图缓冲保底仅 mock 保留);plot 窗口可新增/删除,多个 trace 叠加到同一个 plot(每个 plot 一个 uPlot、共用合并时间轴),每 trace 可选颜色并随工作区保存;mock 模式补了算法表,滤波/FFT UI 在浏览器可交互。
 - **S4 完成**(`frontend/src/inspector/ring.ts`、`InspectorApp.tsx`):tap 订阅集合改快照(`contains_message`,不再每条消息分配 `HashSet`);前端改预分配三通道环形缓冲(`Ring`,`RING_CAP=65536` 约 5 分钟 @200 Hz,窗口裁剪按时间 O(dropped));`requestAnimationFrame` 仅在 dirty 时重绘、暂停只冻结视图;`mergedData` 改 k 路归并,点数超过像素宽度时走 `decimateMinMax` 每桶保留最早/最晚极值;catalog/status 轮询节流提取为 `CATALOG_POLL_MS`(节流放在前端轮询层,Rust `catalog.observe` 仍逐消息更新,`rate_hz` EMA 不受影响)。
-- **S5 部分**:已加 Rust 测试:NaN 序列化、无时间字段消息时间戳单调、analyzer_source=Filtered。其余(Lagged 恢复测试、前端 mock NaN 注入)未做。
+- **S5 完成**:Rust 测试 NaN 序列化、无时间字段消息时间戳单调、analyzer_source=Filtered、**Lagged 后继续工作**;前端 mock 支持 `?fault` NaN/null 注入,`inspector-check.mjs` 在该模式下跑完整交互(勾选/颜色/FFT/布局/双光标/拖拽/清空)并断言无 `pageerror`;`signal-inspector-plan.md` 状态已更新。**未做**:5 分钟长跑内存测量(需实机/长时运行)。
 
 ---
 
@@ -108,9 +108,9 @@
 
 - [x] Rust:带 NaN 的 `CatalogEntry` 序列化测试(`catalog_entry_with_nan_serializes_as_null_not_a_panic`)
 - [x] Rust:tap 时间戳单调且接近真实间隔的测试(含无时间字段的消息,`timestamps_without_a_time_field_are_monotonic`)
-- [ ] Rust:Lagged 之后 tap 继续工作的测试
-- [ ] 前端:mock 加 null/NaN 注入,Playwright 跑 5 分钟,要求无 `pageerror`、无内存增长
-- [ ] 更新 `signal-inspector-plan.md` 的状态
+- [x] Rust:Lagged 之后 tap 继续工作的测试(2026-10-09:`tap_survives_a_lagged_bus_and_keeps_forwarding` — 用容量 2 的 broadcast 制造溢出,校验 `dropped` 计数且之后仍继续转发样本)
+- [x] 前端:mock 加 null/NaN 注入,Playwright 无 `pageerror`(2026-10-09:`mock.ts` 支持 `?fault`,轮转把一条信号置 NaN、并把 catalog 的 `rate_hz/last_value` 注入 null(复现 serde_json NaN→null);`inspector-check.mjs` 在该模式下跑完整流程并断言 0 error。**未做**:5 分钟长跑无内存增长的量化测量)
+- [x] 更新 `signal-inspector-plan.md` 的状态(2026-10-09:P7 各项与 SDI 式交互已补齐并记录)
 
 ---
 

@@ -48,6 +48,15 @@ export function msgName(messageId: number): string {
   return MESSAGE_NAMES[messageId] ?? `msg ${messageId}`
 }
 
+/** Monotonic counter for deterministic fault rotation across batches. */
+let tick = 0
+
+/** Fault injection is opt-in via `?fault` so the normal mock stays clean while
+ * the Playwright smoke test can force NaN/null like the real link would. */
+function faultsEnabled(): boolean {
+  return typeof location !== 'undefined' && new URLSearchParams(location.search).has('fault')
+}
+
 export function mockCatalog(): {
   signal: MockSignal['signal']
   message_name: string
@@ -55,11 +64,14 @@ export function mockCatalog(): {
   rate_hz: number
   last_seen_ms: number
 }[] {
-  return SIGS.map((s) => ({
+  const fault = faultsEnabled()
+  return SIGS.map((s, i) => ({
     signal: s.signal,
     message_name: msgName(s.signal.message_id),
-    last_value: s.base,
-    rate_hz: 100,
+    // `?fault` reproduces the real Tauri path, where serde_json turns a NaN
+    // field into `null`: the tree formatter must render `—`, not throw.
+    last_value: fault && i === 0 ? (null as unknown as number) : s.base,
+    rate_hz: fault && i === 1 ? (null as unknown as number) : 100,
     last_seen_ms: 0,
   }))
 }
@@ -72,8 +84,13 @@ export function signalKey(s: MockSignal['signal']): string {
 
 /** One mock sample batch, at 100 Hz. */
 export function mockSamples(t: number): SignalSample[] {
-  return SIGS.map((s) => {
-    const value = s.base + s.amp * Math.sin(2 * Math.PI * s.freqHz * t) + (Math.random() - 0.5) * s.amp * 0.1
+  const fault = faultsEnabled()
+  tick += 1
+  return SIGS.map((s, i) => {
+    let value = s.base + s.amp * Math.sin(2 * Math.PI * s.freqHz * t) + (Math.random() - 0.5) * s.amp * 0.1
+    // `?fault`: drop one rotating signal to NaN once a second, stressing the
+    // uPlot gap path and the filter/FFT code that consumes it (plan S5).
+    if (fault && tick % 100 === 0 && i === tick / 100 % SIGS.length) value = NaN
     return {
       id: { system_id: s.signal.system_id, component_id: s.signal.component_id, message_id: s.signal.message_id, field: s.signal.field },
       t_ms: t * 1000,

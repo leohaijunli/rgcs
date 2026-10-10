@@ -547,6 +547,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tap_survives_a_lagged_bus_and_keeps_forwarding() {
+        // The shared MAVLink bus is a bounded broadcast channel; under PX4's
+        // high-rate streams a slow reader overflows it. The tap must count the
+        // loss and keep running instead of exiting for good (plan S5).
+        let (bus_tx, bus_rx) = tokio::sync::broadcast::channel(2);
+        let events = RoutedEvents::new(bus_rx, MessageRoute::all());
+        let subs = Subscriptions::new();
+        subs.acquire();
+        subs.set(HashSet::from([SignalId::new(1, 1, 30, "roll")]));
+        let catalog = Arc::new(Mutex::new(SignalCatalog::new()));
+        let stats = Arc::new(Mutex::new(TapStats::default()));
+        let (tx, mut rx) = mpsc::channel(SAMPLE_CHANNEL_CAP);
+        let (_stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+
+        let tap = tokio::spawn(run_tap(events, subs, catalog, tx, stats.clone(), stop_rx));
+
+        // Burst more than the bus holds without yielding, so the tap's first
+        // `recv` is guaranteed to observe `Lagged`.
+        for i in 0..20u32 {
+            bus_tx
+                .send(ConnectionEvent::Message(Box::new(envelope(
+                    i as u8,
+                    attitude(i, i as f32),
+                ))))
+                .unwrap();
+        }
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+
+        // The bus still carries data after the lag.
+        bus_tx
+            .send(ConnectionEvent::Message(Box::new(envelope(
+                42,
+                attitude(42, 5.0),
+            ))))
+            .unwrap();
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        drop(bus_tx);
+
+        let mut samples = Vec::new();
+        while let Some(s) = rx.recv().await {
+            samples.push(s);
+        }
+        tap.await.unwrap();
+
+        let dropped = stats.lock().unwrap().dropped;
+        assert!(dropped > 0, "the overflow is counted as dropped, got {dropped}");
+        assert!(
+            samples.len() >= 2,
+            "tap keeps forwarding after Lagged, got {}",
+            samples.len()
+        );
+        assert_eq!(
+            samples.last().unwrap().value,
+            5.0,
+            "the post-lag message is delivered"
+        );
+    }
+
+    #[tokio::test]
     async fn tap_stops_when_the_window_closes() {
         // The link stays open; closing the window must cancel the tap instead
         // of leaving it draining until the link closes (plan P0-5).
