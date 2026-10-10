@@ -64,12 +64,21 @@ function FlightInspector() {
   const { items, progress } = useMissionProgress()
   const lastPattern = useMissionStore((s) => s.lastPattern)
   const select = useMissionStore((s) => s.select)
+  const syncState = useMissionStore((s) => s.syncState)
   const kinds = useMemo(() => kindsBySeq(lastPattern?.lines ?? []), [lastPattern])
 
   return (
     <div className="space-y-2">
       <FlightCommands />
       <MissionProgressCard />
+      {/* Auto-fetch notice: the FC is flying a mission the local (memory-only)
+       * plan does not hold yet; the store fetches it on the first
+       * MISSION_CURRENT and this fills in the progress. */}
+      {items.length === 0 && syncState === 'downloading' && (
+        <div className="rounded border border-line bg-canvas px-2 py-1 text-xs text-muted">
+          Fetching the FC mission…
+        </div>
+      )}
       <ActiveLineList items={items} progress={progress} kinds={kinds} select={select} />
     </div>
   )

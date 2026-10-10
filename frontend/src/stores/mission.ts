@@ -393,6 +393,20 @@ export const useMissionStore = create<MissionState>((set, get) => ({
     if (e.kind === 'completed' && e.op === 'upload') {
       void get().verifyFc()
     }
+    // The FC is flying a mission this plan does not know about (typical:
+    // the mission came from QGC or a previous session — the local plan is
+    // memory-only and a restart empties it). Fetch it once so the Fly view
+    // can show progress. Safe by construction: it only fires while the
+    // local plan is empty, so nothing the operator built can be clobbered.
+    if (
+      e.kind === 'current_changed' &&
+      get().waypoints.length === 0 &&
+      get().blocks.length === 0 &&
+      !get().busy &&
+      !get().verifying
+    ) {
+      void get().download()
+    }
   },
 
   handlePlan: (items) => {

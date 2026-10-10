@@ -401,6 +401,28 @@ await check('clearPlan also drops the pattern readout', () => {
   eq(useMissionStore.getState().lastPattern, null, 'lastPattern')
 })
 
+await check('a running FC mission with an empty local plan auto-fetches', () => {
+  // Operator report 2026-10-10: a SITL mission was flying but the Fly panel
+  // said "no waypoints" — the local plan is memory-only, so a restart (or a
+  // QGC-uploaded mission) leaves it empty. The first MISSION_CURRENT with
+  // an empty plan must trigger a download (the stubbed invoke resolves).
+  reset()
+  useMissionStore
+    .getState()
+    .handleEvent({ op: 'mission', kind: 'current_changed', sent: 0, total: 0, seq: 3 })
+  eq(useMissionStore.getState().currentSeq, 3, 'current seq recorded')
+  eq(useMissionStore.getState().syncState, 'downloading', 'auto-fetch started')
+  eq(useMissionStore.getState().busy, true, 'busy during fetch')
+  // A non-empty local plan is never auto-fetched: the operator's work must
+  // not be clobbered by an in-flight mission.
+  reset()
+  useMissionStore.getState().addWaypointAt(48.6493, -123.3982)
+  useMissionStore
+    .getState()
+    .handleEvent({ op: 'mission', kind: 'current_changed', sent: 0, total: 0, seq: 1 })
+  eq(useMissionStore.getState().syncState, 'idle', 'no auto-fetch with a local plan')
+})
+
 if (failures.length > 0) {
   console.error(`\ncheck:mission-sync FAILED — ${failures.length} failure(s):`)
   for (const f of failures) console.error(`  ${f}`)
