@@ -3,6 +3,8 @@ import { create } from 'zustand'
 export type View = 'planning' | 'flight'
 export type Theme = 'dark' | 'light'
 export type DockTab = 'profile' | 'qc' | 'log'
+/** One planning step expanded at a time (P2 §4.2). */
+export type PlanStep = 'area' | 'pattern' | 'waypoints' | 'sync'
 /** Active map tool. `add` places a new waypoint on click; `polygon` draws a
  * survey boundary (both planning view only). */
 export type MapTool = 'select' | 'add' | 'polygon'
@@ -20,6 +22,7 @@ export const VIEW_CONFIG: Record<View, ViewConfig> = {
 interface UiState {
   view: View
   theme: Theme
+  planStep: PlanStep
   dockTab: DockTab
   rightOpen: boolean
   dockOpen: boolean
@@ -39,6 +42,7 @@ interface UiState {
   qcOpen: boolean
   setView: (v: View) => void
   setTheme: (t: Theme) => void
+  setPlanStep: (step: PlanStep) => void
   toggleRight: () => void
   setDockOpen: (open: boolean) => void
   setDockHeight: (h: number) => void
@@ -79,6 +83,7 @@ const initialTheme: Theme =
 export const useUiStore = create<UiState>((set) => ({
   view: 'flight',
   theme: initialTheme,
+  planStep: 'area',
   dockTab: 'qc',
   rightOpen: !narrowScreen(),
   dockOpen: true,
@@ -102,6 +107,7 @@ export const useUiStore = create<UiState>((set) => ({
     applyTheme(theme)
     set({ theme })
   },
+  setPlanStep: (planStep) => set({ planStep }),
   toggleRight: () => set((s) => ({ rightOpen: !s.rightOpen })),
   setDockOpen: (dockOpen) => set({ dockOpen }),
   setDockHeight: (h) => set({ dockHeight: Math.max(DOCK_MIN, Math.min(DOCK_MAX, h)) }),

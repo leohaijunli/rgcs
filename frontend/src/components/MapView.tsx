@@ -4,7 +4,6 @@ import { useCesiumViewer } from '../hooks/useCesiumViewer'
 import { compileWaypoints, toDisplayItems } from '../mission/compile'
 import { kindsBySeq } from '../mission/lineKinds'
 import { orderedMissionItems } from '../mission/planfile'
-import { polygonArea, polygonPerimeter, selfIntersects } from '../mission/polygon'
 import { useMissionStore } from '../stores/mission'
 import { usePolygonStore } from '../stores/polygon'
 import { useTelemetryStore } from '../stores/telemetry'
@@ -19,12 +18,7 @@ export default function MapView() {
     useCesiumViewer(containerRef)
   const mapTool = useUiStore((s) => s.mapTool)
   const view = useUiStore((s) => s.view)
-  const polygon = usePolygonStore((s) => s.vertices)
   const polygonClosed = usePolygonStore((s) => s.closed)
-  const polygonCount = polygon.length
-  const polygonBad = polygonClosed && selfIntersects(polygon)
-  const areaHectares = polygonArea(polygon) / 10000
-  const perimeter = polygonPerimeter(polygon)
 
   // Telemetry updates: drone position, trail, camera follow.
   const snapshot = useTelemetryStore((s) => s.snapshot)
@@ -95,30 +89,11 @@ export default function MapView() {
           {t('map.addHint')}
         </div>
       )}
-      {view === 'planning' && polygonCount > 0 && (
-        <div
-          className={`pointer-events-none absolute bottom-3 left-1/2 flex -translate-x-1/2 flex-col items-center gap-0.5 rounded border px-3 py-1 text-xs shadow-lg ${
-            polygonBad ? 'border-error/60 bg-error/10 text-error' : 'border-line bg-panel/85 text-ink'
-          }`}
-        >
-          {mapTool === 'polygon' && !polygonClosed && (
-            <span className="text-muted">{t('map.polygonHint')}</span>
-          )}
-          {polygonClosed && <span>{t('map.polygonClosed')}</span>}
-          <span className="mono">
-            {t('map.polygonReadout', {
-              count: polygonCount,
-              area: areaHectares.toFixed(1),
-              perimeter: Math.round(perimeter),
-            })}
-          </span>
-          {polygonBad && <span className="font-medium">{t('map.polygonSelfIntersect')}</span>}
-          <button
-            onClick={() => usePolygonStore.getState().reset()}
-            className="pointer-events-auto rounded border border-line bg-canvas px-2 py-0.5 text-[11px] text-ink hover:bg-panel"
-          >
-            {t('map.polygonClear')}
-          </button>
+      {view === 'planning' && mapTool === 'polygon' && !polygonClosed && (
+        // Transient drawing hint (top-centre slot, §4.3); the boundary
+        // readout lives in the plan panel's Area step (P2).
+        <div className="pointer-events-none absolute left-1/2 top-3 -translate-x-1/2 rounded border border-line bg-panel/85 px-3 py-1 text-xs text-ink shadow-lg">
+          {t('map.polygonHint')}
         </div>
       )}
     </div>

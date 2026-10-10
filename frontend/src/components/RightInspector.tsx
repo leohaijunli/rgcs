@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import PlanningPanel from './panels/PlanningPanel'
+import PlanSteps from './panels/plan/PlanSteps'
 import MissionProgressCard from './panels/MissionProgressCard'
 import { useLinkStore } from '../stores/link'
 import { useTelemetryStore } from '../stores/telemetry'
@@ -42,7 +42,7 @@ export default function RightInspector() {
         </button>
       </div>
       <div className="flex-1 overflow-y-auto p-3">
-        {view === 'planning' ? <PlanningPanel /> : <FlightInspector />}
+        {view === 'planning' ? <PlanSteps /> : <FlightInspector />}
       </div>
     </aside>
   )
