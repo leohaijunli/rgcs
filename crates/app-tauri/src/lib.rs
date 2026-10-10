@@ -41,6 +41,7 @@ pub fn run() {
             actuator_service::actuator_close,
             actuator_service::actuator_status,
             actuator_service::actuator_start_manual,
+            actuator_service::actuator_start_preset,
             actuator_service::actuator_set_values,
             actuator_service::actuator_stop,
             actuator_service::actuator_estop,

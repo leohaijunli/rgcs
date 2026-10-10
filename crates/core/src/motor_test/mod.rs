@@ -21,7 +21,7 @@ pub mod source;
 
 pub use interlock::{Interlock, SafetyLimits, HEARTBEAT_STALE};
 pub use service::{MotorTestCommand, MotorTestEvent, MotorTestService, StopReason};
-pub use source::{ManualSource, MotorSlot, RpmSource, SenderConfig};
+pub use source::{ManualSource, MotorSlot, PresetKind, PresetSource, RpmSource, SenderConfig, WaveformPreset, AnySource};
 
 use std::time::Instant;
 
@@ -137,6 +137,8 @@ impl<S: RpmSource> MotorTestSession<S> {
     }
 
     /// One send step: interlock check → source values → clamp/slew → frames.
+    /// A running source that yields no frames this tick is exhausted (a
+    /// finished preset): stop cleanly with `StopReason::Completed`.
     pub fn tick(&mut self, now: Instant) -> Vec<MavMessage> {
         if !self.state.is_sending() {
             return Vec::new();
@@ -161,6 +163,13 @@ impl<S: RpmSource> MotorTestSession<S> {
                     COMMAND_TIMEOUT_S,
                 ));
             }
+        }
+        if out.is_empty() {
+            // The source ended (e.g. a preset ran its duration): the motors
+            // would idle on stale values until the FC-side timeout — stop
+            // explicitly instead.
+            self.stop(StopReason::Completed);
+            return self.release_frames();
         }
         out
     }
@@ -237,6 +246,32 @@ impl<S: RpmSource> MotorTestSession<S> {
 impl MotorTestSession<ManualSource> {
     /// Latest-value-wins slider update (UI throttles; never queues).
     pub fn set_values(&mut self, values: Vec<f32>) {
+        self.source.set_values(values);
+    }
+}
+
+impl MotorTestSession<source::AnySource> {
+    /// Manual start: keep (or restore) the slider source and begin sending.
+    pub fn start_manual(&mut self, now: Instant) {
+        if let source::AnySource::Preset(_) = &self.source {
+            // A finished/previous preset is replaced by the manual source of
+            // the same width; slider values were kept untouched meanwhile.
+            self.source =
+                source::AnySource::Manual(ManualSource::new(vec![0.0; self.last_values.len()]));
+        }
+        self.start(now);
+    }
+
+    /// Preset start: the waveform owns the values for its duration; the
+    /// sliders are disconnected (their update is ignored) until it ends.
+    pub fn start_preset(&mut self, preset: source::WaveformPreset, now: Instant) {
+        self.source =
+            source::AnySource::Preset(source::PresetSource::new(preset, self.last_values.len()));
+        self.start(now);
+    }
+
+    /// Latest-value-wins slider update through the swappable source.
+    pub fn set_any_values(&mut self, values: Vec<f32>) {
         self.source.set_values(values);
     }
 }
@@ -334,6 +369,34 @@ mod tests {
         assert_eq!(s.state(), SessionState::Emergency);
         s.reset_emergency();
         assert_eq!(s.state(), SessionState::Idle);
+    }
+
+    #[test]
+    fn preset_runs_then_completes_cleanly() {
+        use super::source::{AnySource, ManualSource, PresetKind, WaveformPreset};
+        let mut s =
+            MotorTestSession::new(AnySource::Manual(ManualSource::new(vec![0.0])), limits());
+        let now = Instant::now();
+        s.interlock_mut().observe_heartbeat(false, now);
+        s.start_preset(
+            WaveformPreset {
+                kind: PresetKind::Step,
+                amplitude: 0.8,
+                frequency_hz: 1.0,
+                duration_s: 0.05, // ~5 ticks at 10 Hz
+            },
+            now,
+        );
+        // While it runs: frames flow.
+        assert!(!s.tick(now).is_empty());
+        assert_eq!(s.state(), SessionState::ManualRunning);
+        // After the duration the source is exhausted: the next tick emits
+        // release frames and stops with `Completed`.
+        let later = now + std::time::Duration::from_millis(200);
+        let frames = s.tick(later);
+        assert_eq!(frames.len(), 1, "release frame");
+        assert_eq!(s.state(), SessionState::Idle);
+        assert_eq!(s.take_stop_reason(), Some(StopReason::Completed));
     }
 
     #[test]

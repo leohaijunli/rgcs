@@ -98,7 +98,7 @@ pub async fn actuator_start_manual(
         .await
         .is_ok()
     {
-        return send_session(&state, MotorTestCommand::Start)
+        return send_session(&state, MotorTestCommand::StartManual)
             .await
             .map_err(|e| e.to_string());
     }
@@ -112,7 +112,37 @@ pub async fn actuator_start_manual(
         forwarder,
     });
     let _ = svc.send(MotorTestCommand::SetValues(values)).await;
-    svc.send(MotorTestCommand::Start)
+    svc.send(MotorTestCommand::StartManual)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Start a preset waveform (all motors in sync for its duration; the
+/// session stops itself with `Completed` when it ends).
+#[tauri::command]
+pub async fn actuator_start_preset(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    preset: maggcs_core::motor_test::source::WaveformPreset,
+) -> Result<(), String> {
+    // Same reuse-or-respawn logic as the manual start: a live session takes
+    // the command; a dead one is re-spawned on the current link.
+    if send_session(&state, MotorTestCommand::StartPreset { preset })
+        .await
+        .is_ok()
+    {
+        return Ok(());
+    }
+    let handle = state
+        .connection()
+        .ok_or("no link — connect to the FC first")?;
+    let (svc, evt_rx) = MotorTestService::spawn(handle, limits_for_load("none"));
+    let forwarder = tauri::async_runtime::spawn(forward_events(app.clone(), evt_rx));
+    *state.motor_test.running.lock() = Some(crate::motor_test_state::RunningMotorTest {
+        svc: svc.clone(),
+        forwarder,
+    });
+    svc.send(MotorTestCommand::StartPreset { preset })
         .await
         .map_err(|e| e.to_string())
 }

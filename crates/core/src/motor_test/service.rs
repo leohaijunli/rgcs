@@ -13,7 +13,7 @@ use tokio::sync::mpsc;
 use ::mavlink::MessageData;
 
 use super::interlock::SafetyLimits;
-use super::source::ManualSource;
+use super::source::AnySource;
 use super::{MotorTestSession, SessionState};
 use crate::mavlink::connection::{ConnectionEvent, ConnectionHandle};
 use crate::mavlink::router::MessageRoute;
@@ -42,12 +42,19 @@ pub enum StopReason {
     AcksDenied,
     /// The MAVLink link dropped.
     LinkLost,
+    /// The source ran to its end (a preset finished its duration).
+    Completed,
 }
 
 /// Commands into the service (from the Tauri adapter).
 #[derive(Debug)]
 pub enum MotorTestCommand {
-    Start,
+    /// Start manual sending with the current slider values.
+    StartManual,
+    /// Start a preset waveform (owns all motors for its duration).
+    StartPreset {
+        preset: super::source::WaveformPreset,
+    },
     /// Latest-value-wins manual update (UI throttles to ~30 Hz).
     SetValues(Vec<f32>),
     Stop,
@@ -78,7 +85,10 @@ impl MotorTestService {
     ) -> (Self, mpsc::Receiver<MotorTestEvent>) {
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
         let (evt_tx, evt_rx) = mpsc::channel(32);
-        let session = MotorTestSession::new(ManualSource::new(vec![0.0; 4]), limits.clone());
+        let session = MotorTestSession::new(
+            AnySource::Manual(super::source::ManualSource::new(vec![0.0; 4])),
+            limits.clone(),
+        );
         let tick = std::time::Duration::from_secs_f64(1.0 / super::DEFAULT_TICK_HZ);
         tokio::spawn(run(handle, session, cmd_rx, evt_tx, tick));
         (Self { cmd_tx }, evt_rx)
@@ -105,7 +115,7 @@ impl MotorTestService {
 /// The shell loop. The session is the pure core; this only moves frames.
 async fn run(
     handle: ConnectionHandle,
-    mut session: MotorTestSession<ManualSource>,
+    mut session: MotorTestSession<AnySource>,
     mut cmd_rx: mpsc::Receiver<MotorTestCommand>,
     evt_tx: mpsc::Sender<MotorTestEvent>,
     tick: std::time::Duration,
@@ -123,8 +133,11 @@ async fn run(
             cmd = cmd_rx.recv() => {
                 let Some(cmd) = cmd else { return };
                 match cmd {
-                    MotorTestCommand::Start => session.start(Instant::now()),
-                    MotorTestCommand::SetValues(values) => session.set_values(values),
+                    MotorTestCommand::StartManual => session.start_manual(Instant::now()),
+                    MotorTestCommand::StartPreset { preset } => {
+                        session.start_preset(preset, Instant::now())
+                    }
+                    MotorTestCommand::SetValues(values) => session.set_any_values(values),
                     MotorTestCommand::Stop => session.stop(StopReason::Command),
                     MotorTestCommand::Emergency => session.emergency_stop(),
                     MotorTestCommand::ResetEmergency => session.reset_emergency(),

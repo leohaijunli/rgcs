@@ -30,6 +30,16 @@ const PROPS_HOLD_MS = 3000
 /** Motor count (fixed 4 until a vehicle config lands, D9). */
 const MOTOR_COUNT = 4
 
+/** Preset waveform kinds, mirrored from `core::motor_test::source`. */
+type PresetKind = 'step' | 'ramp' | 'square' | 'sine'
+
+const PRESETS: Array<{ id: PresetKind; label: string }> = [
+  { id: 'step', label: 'Step' },
+  { id: 'ramp', label: 'Ramp' },
+  { id: 'square', label: 'Square' },
+  { id: 'sine', label: 'Sine' },
+]
+
 /** Slider updates are merged at ~30 Hz — never queued (plan §8.1). */
 const SET_VALUES_MIN_INTERVAL_MS = 33
 
@@ -71,6 +81,11 @@ export function ActuatorApp() {
   const [phrase, setPhrase] = useState('')
   /** Hold-to-start progress, 0..1. */
   const [holdProgress, setHoldProgress] = useState(0)
+  /** Preset waveform (drives all motors in sync for its duration). */
+  const [preset, setPreset] = useState<PresetKind>('ramp')
+  const [amplitude, setAmplitude] = useState(0.5)
+  const [frequency, setFrequency] = useState(0.5)
+  const [duration, setDuration] = useState(5)
   const valuesRef = useRef(values)
   valuesRef.current = values
   const lastSend = useRef(0)
@@ -184,6 +199,20 @@ export function ActuatorApp() {
   const start = () => {
     if (!tauri || gate !== 'ready') return
     void invoke('actuator_start_manual', { load, values: valuesRef.current }).catch(() => {})
+  }
+
+  /** Presets run under the same gate as manual start, but click-to-run: the
+   * waveform is bounded by its duration *and* the interlock's slew limit. */
+  const runPreset = () => {
+    if (!tauri || gate !== 'ready' || running) return
+    void invoke('actuator_start_preset', {
+      preset: {
+        kind: preset,
+        amplitude,
+        frequency_hz: frequency,
+        duration_s: duration,
+      },
+    }).catch(() => {})
   }
 
   // Hold-to-start (full props): pointerdown begins the ramp; release before
@@ -325,6 +354,80 @@ export function ActuatorApp() {
               <span className="mono motor-value">{(v * 100).toFixed(0)}%</span>
             </label>
           ))}
+        </div>
+
+        <div className="card">
+          <h3>Preset waveform</h3>
+          <div className="btn-row">
+            {PRESETS.map((p) => (
+              <button
+                key={p.id}
+                className={`mode-btn ${preset === p.id ? 'active' : ''}`}
+                onClick={() => setPreset(p.id)}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          <label className="motor-row" style={{ marginTop: 8 }}>
+            <span className="motor-label" style={{ width: 52 }}>Ampl.</span>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.01}
+              value={amplitude}
+              disabled={emergency}
+              onChange={(e) => setAmplitude(Number(e.target.value))}
+            />
+            <span className="mono motor-value">{(amplitude * 100).toFixed(0)}%</span>
+          </label>
+          <label className="motor-row">
+            <span className="motor-label" style={{ width: 52 }}>Freq.</span>
+            <input
+              className="phrase-input"
+              style={{ flex: 1, margin: 0 }}
+              type="number"
+              min={0.01}
+              max={20}
+              step={0.1}
+              value={frequency}
+              disabled={emergency}
+              onChange={(e) => setFrequency(Number(e.target.value))}
+            />
+            <span className="mono motor-value">Hz</span>
+          </label>
+          <label className="motor-row">
+            <span className="motor-label" style={{ width: 52 }}>Dur.</span>
+            <input
+              className="phrase-input"
+              style={{ flex: 1, margin: 0 }}
+              type="number"
+              min={0.5}
+              max={300}
+              step={0.5}
+              value={duration}
+              disabled={emergency}
+              onChange={(e) => setDuration(Number(e.target.value))}
+            />
+            <span className="mono motor-value">s</span>
+          </label>
+          <div className="estop-note" style={{ marginTop: 4 }}>
+            All motors in sync; runs its duration, then stops itself.
+          </div>
+          <button
+            className="start-btn"
+            style={{ marginTop: 8 }}
+            disabled={gate !== 'ready' || running}
+            onClick={runPreset}
+            title={
+              gate === 'ready'
+                ? 'Run the preset (same safety gate as manual start)'
+                : 'Unlock the test first'
+            }
+          >
+            RUN PRESET
+          </button>
         </div>
 
         <div className="card">
