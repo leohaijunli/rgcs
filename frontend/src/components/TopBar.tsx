@@ -91,7 +91,6 @@ export default function TopBar() {
     <header className="flex h-12 shrink-0 items-center gap-3 border-b border-line bg-panel px-3">
       <div className="flex items-baseline gap-2">
         <span className="text-lg font-semibold tracking-wide text-accent">{t('app.title')}</span>
-        <span className="hidden text-xs text-muted lg:inline">{t('app.tagline')}</span>
       </div>
 
       <nav className="flex items-center gap-0.5 rounded border border-line bg-canvas p-0.5">

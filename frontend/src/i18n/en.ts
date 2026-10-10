@@ -1,7 +1,6 @@
 export default {
   app: {
     title: 'MagGCS',
-    tagline: 'Survey ground control',
   },
   nav: {
     planning: 'Plan',
@@ -70,6 +69,8 @@ export default {
     vehicle: 'Vehicle',
     telemetry: 'Telemetry',
     properties: 'Properties',
+    openPanel: 'Open panel',
+    closePanel: 'Close panel',
   },
   plan: {
     waypoint: 'Waypoint',

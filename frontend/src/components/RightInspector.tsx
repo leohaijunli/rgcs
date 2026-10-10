@@ -22,7 +22,20 @@ export default function RightInspector() {
   const rightOpen = useUiStore((s) => s.rightOpen)
   const toggleRight = useUiStore((s) => s.toggleRight)
 
-  if (!rightOpen) return null
+  // Closed (default on narrow screens, §4.7): leave a slim edge toggle so the
+  // panel is one tap away instead of unreachable.
+  if (!rightOpen) {
+    return (
+      <button
+        onClick={toggleRight}
+        title={t('panels.openPanel')}
+        aria-label={t('panels.openPanel')}
+        className="flex w-6 shrink-0 items-center justify-center border-l border-line bg-panel text-muted hover:text-ink"
+      >
+        <span className="text-xs">◀</span>
+      </button>
+    )
+  }
 
   const tab = VIEW_CONFIG[view].rightTab
 
@@ -32,6 +45,7 @@ export default function RightInspector() {
         <h2 className="text-sm font-medium">{t(tab)}</h2>
         <button
           onClick={toggleRight}
+          title={t('panels.closePanel')}
           className="touch-target rounded px-2 text-sm text-muted hover:text-ink"
         >
           ×
@@ -49,14 +63,14 @@ export default function RightInspector() {
 function FlightInspector() {
   const { items, progress } = useMissionProgress()
   const lastPattern = useMissionStore((s) => s.lastPattern)
-  const focus = useMissionStore((s) => s.focus)
+  const select = useMissionStore((s) => s.select)
   const kinds = useMemo(() => kindsBySeq(lastPattern?.lines ?? []), [lastPattern])
 
   return (
     <div className="space-y-2">
       <FlightCommands />
       <MissionProgressCard />
-      <ActiveLineList items={items} progress={progress} kinds={kinds} focus={focus} />
+      <ActiveLineList items={items} progress={progress} kinds={kinds} select={select} />
     </div>
   )
 }
@@ -65,12 +79,12 @@ function ActiveLineList({
   items,
   progress,
   kinds,
-  focus,
+  select,
 }: {
   items: ReturnType<typeof useMissionProgress>['items']
   progress: ReturnType<typeof useMissionProgress>['progress']
   kinds: Map<number, LineKind>
-  focus: (seq: number) => void
+  select: (seq: number | null) => void
 }) {
   const { t } = useTranslation()
   if (items.length === 0) return null
@@ -87,7 +101,7 @@ function ActiveLineList({
           return (
             <button
               key={item.seq}
-              onClick={() => focus(item.seq)}
+              onClick={() => select(item.seq)}
               aria-current={active ? 'step' : undefined}
               className={`flex w-full touch-target items-center gap-2 rounded border px-2 py-1.5 text-sm ${
                 active

@@ -22,7 +22,7 @@ export default function WaypointsStep({ importNotice }: { importNotice: string[]
   const waypoints = useMissionStore((s) => s.waypoints)
   const selectedSeq = useMissionStore((s) => s.selectedSeq)
   const currentSeq = useMissionStore((s) => s.currentSeq)
-  const focus = useMissionStore((s) => s.focus)
+  const select = useMissionStore((s) => s.select)
   const addWaypoint = useMissionStore((s) => s.addWaypoint)
   const addWaypointAt = useMissionStore((s) => s.addWaypointAt)
   const removeWaypoint = useMissionStore((s) => s.removeWaypoint)
@@ -94,7 +94,7 @@ export default function WaypointsStep({ importNotice }: { importNotice: string[]
                 onDragStart={() => setDragSeq(idx)}
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={() => onDrop(idx)}
-                onClick={() => focus(idx)}
+                onClick={() => select(idx)}
                 className={`flex cursor-pointer items-center gap-2 rounded border px-2 py-1.5 text-sm transition-colors ${
                   idx === selectedSeq
                     ? 'border-accent bg-accent/10'

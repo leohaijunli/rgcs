@@ -34,8 +34,6 @@ import { installMapTools } from '../cesium/waypoints'
 import { createFollowController } from '../cesium/follow'
 import type { FollowController } from '../cesium/follow'
 import {
-  FOCUS_FLIGHT_S,
-  FOCUS_HEIGHT_M,
   PREDICT_HORIZON_S,
   PREDICT_MIN_GROUNDSPEED_M_S,
   PREDICT_STEP_S,
@@ -48,7 +46,7 @@ import { DEFAULT_ALT_AGL_M } from '../mission/compile'
 import { usePrefsStore } from '../desktop/prefs'
 import { usePolygonStore } from '../stores/polygon'
 import { useUiStore } from '../stores/ui'
-import { degFromMavInt, useMissionStore } from '../stores/mission'
+import { useMissionStore } from '../stores/mission'
 import type { MissionItem } from '../generated-types/MissionItem'
 import type { TelemetrySnapshot } from '../generated-types/TelemetrySnapshot'
 
@@ -326,27 +324,6 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
       },
     })
   }, [])
-
-  // Frame a waypoint the operator picked from a list. One-shot: the request is
-  // cleared as soon as it is served, so camera control stays with the operator
-  // (a map pick selects but never moves the view).
-  const focusSeq = useMissionStore((s) => s.focusSeq)
-  useEffect(() => {
-    if (focusSeq === null) return
-    const viewer = viewerRef.current
-    const item = wpItemsRef.current.find((it) => it.seq === focusSeq)
-    useMissionStore.getState().clearFocus()
-    if (!viewer || !item || item.frame === 'mission') return
-    useUiStore.getState().setFollow(false)
-    viewer.camera.flyTo({
-      destination: Cesium.Cartesian3.fromDegrees(
-        degFromMavInt(item.y),
-        degFromMavInt(item.x),
-        item.z + FOCUS_HEIGHT_M,
-      ),
-      duration: FOCUS_FLIGHT_S,
-    })
-  }, [focusSeq])
 
   const setLayers = useCallback((showImagery: boolean, showGrid: boolean) => {
     const viewer = viewerRef.current
