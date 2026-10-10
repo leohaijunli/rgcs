@@ -36,6 +36,7 @@ export default function MapView() {
   const blocks = useMissionStore((s) => s.blocks)
   const planBase = useMissionStore((s) => s.planBase)
   const selectedSeq = useMissionStore((s) => s.selectedSeq)
+  const currentSeq = useMissionStore((s) => s.currentSeq)
   const lastPattern = useMissionStore((s) => s.lastPattern)
   const showHeights = useUiStore((s) => s.showHeights)
   const missionItems = useMemo(
@@ -63,11 +64,14 @@ export default function MapView() {
     setMission(missionItems, selectedSeq, {
       kinds,
       heights: showHeights,
-      // Stand the height sticks on the ground: HOME's AMSL altitude until a
-      // DEM exists (WS-D), same assumption the AGL mode makes.
-      groundM: home?.[2] ?? null,
+      // Ground plane for the sticks and the AGL chips: HOME's AMSL until a
+      // DEM exists (WS-D) — the same plane the vehicle drop line and the AGL
+      // compile mode stand on (0 until the plan carries a home position).
+      groundM: home?.[2] ?? 0,
+      // Flight-state colouring: flown waypoints dim, the target gets a halo.
+      currentSeq,
     })
-  }, [missionItems, selectedSeq, kinds, showHeights, home, setMission])
+  }, [missionItems, selectedSeq, kinds, showHeights, home, currentSeq, setMission])
 
   // Tool shortcuts (P3 §4.3): W = add waypoint, P = draw polygon. Planning
   // only; Esc already returns to select (cesium/waypoints.ts).

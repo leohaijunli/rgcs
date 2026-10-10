@@ -82,7 +82,12 @@ export default function WaypointsStep({ importNotice }: { importNotice: string[]
         <div className="rounded border border-line bg-canvas p-2 text-xs text-muted">{t('plan.empty')}</div>
       ) : (
         <ul className="space-y-1">
-          {waypoints.map((wp, idx) => (
+          {waypoints.map((wp, idx) => {
+          // Flight-state colouring (operator request): flown = dimmed row with
+          // a green index, the FC's target = accent, future = plain.
+          const flown = currentSeq != null && idx < currentSeq
+          const isActive = idx === currentSeq
+          return (
             <li key={idx}>
               <div
                 draggable
@@ -93,10 +98,16 @@ export default function WaypointsStep({ importNotice }: { importNotice: string[]
                 className={`flex cursor-pointer items-center gap-2 rounded border px-2 py-1.5 text-sm transition-colors ${
                   idx === selectedSeq
                     ? 'border-accent bg-accent/10'
-                    : 'border-line bg-panel hover:bg-canvas'
+                    : flown
+                      ? 'border-line bg-panel opacity-55'
+                      : 'border-line bg-panel hover:bg-canvas'
                 }`}
               >
-                <span className="mono w-6 shrink-0 text-right text-muted">{idx}</span>
+                <span
+                  className={`mono w-6 shrink-0 text-right ${isActive ? 'text-accent' : flown ? 'text-ok' : 'text-muted'}`}
+                >
+                  {idx}
+                </span>
                 {commandUsesCoordinate(wp.command) ? (
                   <>
                     <span className="mono min-w-0 flex-1 truncate">
@@ -132,8 +143,9 @@ export default function WaypointsStep({ importNotice }: { importNotice: string[]
               {/* Inline editor: under the row it belongs to (P5/A8). */}
               {idx === selectedSeq && selected ? <ItemEditor seq={idx} waypoint={wp} /> : null}
             </li>
-          ))}
-          {blocks.map((b) => (
+          )
+        })}
+        {blocks.map((b) => (
             <li key={`block-${b.index}`}>
               <div className="flex items-center gap-2 rounded border border-dashed border-line bg-canvas/60 px-2 py-1.5 text-sm text-muted">
                 <span className="shrink-0 rounded bg-canvas px-1 text-[10px] uppercase tracking-wide">

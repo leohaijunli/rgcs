@@ -4,7 +4,6 @@ import RightInspector from './components/RightInspector'
 import Dock from './components/Dock'
 import Hud from './components/Hud'
 import MockBanner from './components/MockBanner'
-import FlightCommands from './components/FlightCommands'
 import MapView from './components/MapView'
 import ErrorBanner from './components/ErrorBanner'
 import QcDialog from './components/dialogs/QcDialog'
@@ -20,7 +19,6 @@ export default function App() {
           <MapView />
           <MockBanner />
           <Hud />
-          <FlightCommands />
           <ErrorBanner />
         </main>
         <RightInspector />

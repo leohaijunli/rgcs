@@ -3,7 +3,6 @@ import { useEffect, useRef, useState } from 'react'
 import type { CommandEventPayload } from '../stores/command'
 import { useCommandStore, type CommandName } from '../stores/command'
 import { useLinkStore } from '../stores/link'
-import { useUiStore } from '../stores/ui'
 
 /** How long a disruptive button stays armed while waiting for the second click. */
 const CONFIRM_WINDOW_MS = 5000
@@ -20,9 +19,10 @@ const RESULT_LABELS: Record<string, string> = {
   failed: 'plan.cmd.rejected',
 }
 
+/** Flight commands, as the first block of the Fly panel (P4: no longer
+ * absolutely positioned over the map, where it covered the tool strip). */
 export default function FlightCommands() {
   const { t } = useTranslation()
-  const view = useUiStore((s) => s.view)
   const link = useLinkStore((s) => s.link)
   const pending = useCommandStore((s) => s.pending)
   const lastEvent = useCommandStore((s) => s.lastEvent)
@@ -32,7 +32,7 @@ export default function FlightCommands() {
 
   useEffect(() => () => window.clearTimeout(confirmTimer.current), [])
 
-  if (view !== 'flight' || !link?.fc_alive) return null
+  if (!link?.fc_alive) return null
 
   // Disruptive commands (RTL, pause) arm on the first click; a second click
   // within the confirm window sends them. Others (continue) send immediately.
@@ -60,28 +60,30 @@ export default function FlightCommands() {
     : statusLine(t, lastEvent)
 
   return (
-    <div className="pointer-events-auto absolute right-3 top-3 z-10 flex items-center gap-2 rounded border border-line bg-panel/85 p-1.5 shadow-xl backdrop-blur">
-      {(['pause', 'continue', 'rtl'] as const).map((name) => {
-        const armed = confirming === name
-        const label = armed
-          ? t(name === 'rtl' ? 'plan.cmd.confirmRtl' : 'plan.cmd.confirmPause')
-          : t(`plan.${name}`)
-        return (
-          <button
-            key={name}
-            onClick={() => press(name)}
-            disabled={pending !== null}
-            className={`rounded-md border border-line px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
-              armed
-                ? 'bg-warn text-canvas'
-                : 'bg-canvas text-ink hover:bg-accent hover:text-canvas'
-            }`}
-          >
-            {label}
-          </button>
-        )
-      })}
-      {status && <span className={`pr-1 text-xs ${status.tone}`}>{status.text}</span>}
+    <div className="panel rounded p-2">
+      <div className="flex flex-wrap items-center gap-1.5">
+        {(['pause', 'continue', 'rtl'] as const).map((name) => {
+          const armed = confirming === name
+          const label = armed
+            ? t(name === 'rtl' ? 'plan.cmd.confirmRtl' : 'plan.cmd.confirmPause')
+            : t(`plan.${name}`)
+          return (
+            <button
+              key={name}
+              onClick={() => press(name)}
+              disabled={pending !== null}
+              className={`flex-1 touch-target rounded-md border border-line px-2 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
+                armed
+                  ? 'bg-warn text-canvas'
+                  : 'bg-canvas text-ink hover:bg-accent hover:text-canvas'
+              }`}
+            >
+              {label}
+            </button>
+          )
+        })}
+      </div>
+      {status && <div className={`mt-1 text-xs ${status.tone}`}>{status.text}</div>}
     </div>
   )
 }

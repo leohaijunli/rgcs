@@ -334,12 +334,11 @@ export default {
     light: 'Light',
   },
   hud: {
-    alt: 'AGL',
     altAmsl: 'MSL',
     speed: 'SPD',
     heading: 'HDG',
-    battery: 'BATT',
-    gps: 'GPS',
+    collapse: 'Collapse instruments',
+    expand: 'Expand instruments',
     fix: {
       noGps: 'NO GPS',
       noFix: 'NO FIX',

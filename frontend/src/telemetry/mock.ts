@@ -4,6 +4,7 @@
 
 import type { TelemetrySnapshot } from '../generated-types/TelemetrySnapshot'
 import { useTelemetryStore } from '../stores/telemetry'
+import { useMissionStore } from '../stores/mission'
 import { usePrefsStore, type LatLon } from '../desktop/prefs'
 
 /** Tick period of the mock feed, in seconds. */
@@ -27,8 +28,25 @@ function pathAt(t: number, origin: LatLon) {
 export function startMockFeed(): number {
   useTelemetryStore.getState().setMock(true)
   let t = 0
+  // Mission playback: every `MISSION_STEP_TICKS` the mock reports the next
+  // waypoint as current (exactly the MISSION_CURRENT event a real FC sends),
+  // so the flight-state colouring, the progress card and the map halo are all
+  // exercise-able in the browser. Only runs when the local plan is non-empty.
+  const MISSION_STEP_TICKS = Math.round(4 / TICK_S)
   const id = window.setInterval(() => {
     t += 1
+    if (t % MISSION_STEP_TICKS === 0) {
+      const { waypoints, currentSeq } = useMissionStore.getState()
+      if (waypoints.length === 0) return
+      const next = currentSeq == null ? 0 : (currentSeq + 1) % waypoints.length
+      useMissionStore.getState().handleEvent({
+        op: 'mission',
+        kind: 'current_changed',
+        seq: next,
+        sent: 0,
+        total: 0,
+      })
+    }
     const origin = usePrefsStore.getState().initialPosition
     const { lat, lon, alt } = pathAt(t, origin)
 

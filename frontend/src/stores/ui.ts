@@ -29,11 +29,14 @@ interface UiState {
   dockHeight: number
   follow: boolean
   map3d: boolean
+  /** Flight-instrument HUD collapsed to a pill (bottom-left, §4.5). */
+  hudCollapsed: boolean
   /** Last known map-camera centre in degrees, used as the default new-waypoint spot. */
   mapCenter: { lat: number; lon: number } | null
   /** Active map tool; `Esc` and leaving the planning view reset it to `select`. */
   mapTool: MapTool
-  /** Draw a height stick and an altitude label on every map waypoint. */
+  /** Draw a height stick and an AGL chip on every map waypoint (default on:
+   * clearance is the number a survey plan is checked against). */
   showHeights: boolean
   /** OSM imagery layer on top of the offline grid. */
   showImagery: boolean
@@ -50,6 +53,7 @@ interface UiState {
   toggleFollow: () => void
   setFollow: (follow: boolean) => void
   toggleMap3d: () => void
+  toggleHud: () => void
   setMapCenter: (c: { lat: number; lon: number }) => void
   setMapTool: (tool: MapTool) => void
   toggleHeights: () => void
@@ -90,9 +94,10 @@ export const useUiStore = create<UiState>((set) => ({
   dockHeight: narrowScreen() ? 160 : DOCK_DEFAULT,
   follow: true,
   map3d: true,
+  hudCollapsed: false,
   mapCenter: null,
   mapTool: 'select',
-  showHeights: false,
+  showHeights: true,
   showImagery: true,
   showGrid: true,
   qcOpen: false,
@@ -115,6 +120,7 @@ export const useUiStore = create<UiState>((set) => ({
   toggleFollow: () => set((s) => ({ follow: !s.follow })),
   setFollow: (follow) => set({ follow }),
   toggleMap3d: () => set((s) => ({ map3d: !s.map3d })),
+  toggleHud: () => set((s) => ({ hudCollapsed: !s.hudCollapsed })),
   setMapCenter: (mapCenter) => set({ mapCenter }),
   setMapTool: (mapTool) => set({ mapTool }),
   toggleHeights: () => set((s) => ({ showHeights: !s.showHeights })),

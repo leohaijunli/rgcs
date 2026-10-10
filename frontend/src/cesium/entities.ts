@@ -239,6 +239,9 @@ export interface WaypointRenderOptions {
   heights?: boolean
   /** Ground AMSL altitude to stand the height sticks on (HOME while no DEM). */
   groundM?: number | null
+  /** Seq the FC is flying to: earlier points dim (flown), this one gets a
+   * halo, later ones keep their kind colour (future). `null` = not flying. */
+  currentSeq?: number | null
 }
 
 /** Remove a previously rendered waypoint layer from the viewer. */
@@ -277,8 +280,10 @@ export function renderWaypoints(
   // Height sticks first, so the path and the points stay on top of them. The
   // stick runs from the ground (HOME altitude until there is a DEM) up to the
   // waypoint, so the operator reads the clearance directly (issues.md #36).
+  // The accent colour and the boxed AGL label make the clearance prominent in
+  // the plan view without opening the per-item editor.
   if (opts.heights) {
-    const muted = Cesium.Color.fromCssColorString(cssVar('--mg-muted'))
+    const stickColor = Cesium.Color.fromCssColorString(cssVar('--mg-accent'))
     for (const run of heightRuns(located, opts.groundM ?? null)) {
       if (Math.abs(run.top - run.base) < HEIGHT_EPSILON_M) continue
       const item = located.find((it) => it.seq === run.seq)
@@ -290,8 +295,8 @@ export function renderWaypoints(
               Cesium.Cartesian3.fromDegrees(degFromMavInt(item.y), degFromMavInt(item.x), run.base),
               Cesium.Cartesian3.fromDegrees(degFromMavInt(item.y), degFromMavInt(item.x), run.top),
             ],
-            width: 1,
-            material: muted.withAlpha(0.7),
+            width: 2,
+            material: stickColor.withAlpha(0.8),
           },
         }),
       )
@@ -321,11 +326,19 @@ export function renderWaypoints(
   located.forEach((it) => {
     const isSel = it.seq === selectedSeq
     const kind = kinds.get(it.seq) ?? null
+    const base = colorForKind(kind, palette)
     const position = Cesium.Cartesian3.fromDegrees(
       degFromMavInt(it.y),
       degFromMavInt(it.x),
       it.z,
     )
+    // Flight-state colouring (operator request): a flown waypoint dims, the
+    // one the FC is flying to gets a green halo, future ones keep the kind
+    // colour. With no `currentSeq` (planning) every point stays full colour.
+    const cur = opts.currentSeq ?? null
+    const flown = cur != null && it.seq < cur
+    const isActive = cur != null && it.seq === cur
+    const fill = flown ? base.withAlpha(0.35) : base
     // A selected waypoint gets a white halo ring on top of a larger marker:
     // recolouring alone is invisible when the whole plan already shares the
     // accent colour, which is what the operator reported (issues.md #37).
@@ -342,27 +355,55 @@ export function renderWaypoints(
         }),
       )
     }
+    if (isActive) {
+      layer.extra.push(
+        viewer.entities.add({
+          position,
+          point: {
+            pixelSize: 22,
+            color: Cesium.Color.TRANSPARENT,
+            outlineColor: ok,
+            outlineWidth: 3,
+          },
+        }),
+      )
+    }
     const entity = viewer.entities.add({
       id: `wp-${it.seq}`,
       position,
       point: {
-        pixelSize: isSel ? 16 : 11,
-        color: isSel ? accent : colorForKind(kind, palette),
+        pixelSize: isSel || isActive ? 16 : flown ? 9 : 11,
+        color: fill,
         outlineColor: Cesium.Color.WHITE,
         outlineWidth: isSel ? 3 : 2,
       },
       label: {
-        // Altitude in the same units the panel edits (AMSL), so a waypoint's
-        // height is readable without opening the editor (issues.md #36).
-        text: opts.heights ? `${it.seq} · ${Math.round(it.z)} m` : String(it.seq),
-        font: '11px sans-serif',
-        pixelOffset: new Cesium.Cartesian2(0, -16),
+        // Clearance first: with height sticks on, the label carries the AGL
+        // above the ground plane (HOME's AMSL until a DEM exists) in a boxed
+        // chip so it reads at a glance in the plan view; without a ground
+        // reference the AMSL altitude stays (issues.md #36).
+        text: waypointLabel(it, opts),
+        font: 'bold 11px sans-serif',
+        pixelOffset: new Cesium.Cartesian2(0, -18),
         fillColor: Cesium.Color.WHITE,
+        showBackground: Boolean(opts.heights),
+        backgroundColor: Cesium.Color.BLACK.withAlpha(0.55),
+        backgroundPadding: new Cesium.Cartesian2(4, 3),
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
       },
     })
     layer.points.set(it.seq, entity)
   })
   return layer
+}
+
+/** Chip text under a waypoint: `seq · AGL m` above the ground plane (the same
+ * HOME-AMSL plane the vehicle drop line stands on; 0 until the plan carries a
+ * home position), else just the seq when sticks are off. */
+function waypointLabel(item: MissionItem, opts: WaypointRenderOptions): string {
+  if (!opts.heights) return String(item.seq)
+  const ground = opts.groundM ?? 0
+  return `${item.seq} · ${Math.max(0, Math.round(item.z - ground))} m AGL`
 }
 
 /**
