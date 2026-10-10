@@ -229,7 +229,6 @@ export default {
   },
   dock: {
     profile: 'Profile / AGL',
-    qc: 'Realtime QC',
     log: 'Log',
   },
   map: {

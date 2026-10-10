@@ -42,7 +42,6 @@ interface UiState {
   showImagery: boolean
   /** Offline graticule base layer. */
   showGrid: boolean
-  qcOpen: boolean
   setView: (v: View) => void
   setTheme: (t: Theme) => void
   setPlanStep: (step: PlanStep) => void
@@ -59,7 +58,6 @@ interface UiState {
   toggleHeights: () => void
   toggleImagery: () => void
   toggleGrid: () => void
-  setQcOpen: (open: boolean) => void
 }
 
 const DOCK_MIN = 96
@@ -100,7 +98,6 @@ export const useUiStore = create<UiState>((set) => ({
   showHeights: true,
   showImagery: true,
   showGrid: true,
-  qcOpen: false,
   setView: (view) =>
     set(() => ({
       view,
@@ -126,7 +123,6 @@ export const useUiStore = create<UiState>((set) => ({
   toggleHeights: () => set((s) => ({ showHeights: !s.showHeights })),
   toggleImagery: () => set((s) => ({ showImagery: !s.showImagery })),
   toggleGrid: () => set((s) => ({ showGrid: !s.showGrid })),
-  setQcOpen: (qcOpen) => set({ qcOpen }),
 }))
 
 applyTheme(initialTheme)

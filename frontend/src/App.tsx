@@ -6,7 +6,6 @@ import Hud from './components/Hud'
 import MockBanner from './components/MockBanner'
 import MapView from './components/MapView'
 import ErrorBanner from './components/ErrorBanner'
-import QcDialog from './components/dialogs/QcDialog'
 
 export default function App() {
   useTelemetryBridge()
@@ -24,7 +23,6 @@ export default function App() {
         <RightInspector />
       </div>
       <Dock />
-      <QcDialog />
     </div>
   )
 }
