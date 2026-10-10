@@ -291,11 +291,12 @@ export function InspectorApp() {
 
   /** Update the replay control (play/pause, speed, seek). */
   const replayControl = useCallback(
-    async (patch: { play?: boolean; speed?: number; seek_ms?: number }) => {
+    async (patch: { play?: boolean; speed?: number; seek_ms?: number; span_ms?: number }) => {
       const args: Record<string, unknown> = {}
       if (patch.play !== undefined) args.play = patch.play
       if (patch.speed !== undefined) args.speed = patch.speed
       if (patch.seek_ms !== undefined) args.seekMs = patch.seek_ms
+      if (patch.span_ms !== undefined) args.spanMs = patch.span_ms
       try {
         setReplay(await invoke<ReplayStatus>('inspector_replay', args))
       } catch (e) {
@@ -898,6 +899,25 @@ export function InspectorApp() {
 
   const selectedTrace = selected ? findTrace(plots, selected) : undefined
 
+  /**
+   * Commit the seek slider: drop the buffered view so the plot jumps to the new
+   * position (otherwise a backward seek leaves the old x-window on screen) and
+   * force-follow, then ask the backend to stream that region.
+   */
+  const commitSeek = useCallback(() => {
+    setSeekPreview((preview) => {
+      if (preview != null) {
+        buffers.current.clear()
+        spectra.current.clear()
+        setFollow(true)
+        markDirty()
+        void replayControl({ seek_ms: preview, span_ms: windowRef.current * 1000 })
+      }
+      return null
+    })
+  }, [replayControl, markDirty])
+
+
   return (
     <div className="inspector-grid">
       <div className="toolbar">
@@ -1002,18 +1022,8 @@ export function InspectorApp() {
               title="Seek"
               aria-label="Seek replay"
               onChange={(e) => setSeekPreview(Number(e.target.value))}
-              onMouseUp={() => {
-                if (seekPreview != null) {
-                  void replayControl({ seek_ms: seekPreview })
-                  setSeekPreview(null)
-                }
-              }}
-              onKeyUp={() => {
-                if (seekPreview != null) {
-                  void replayControl({ seek_ms: seekPreview })
-                  setSeekPreview(null)
-                }
-              }}
+              onMouseUp={commitSeek}
+              onKeyUp={commitSeek}
             />
             <span className="replay-time">
               {fmtClock((seekPreview ?? replay.position_ms) / 1000)} / {fmtClock(replay.duration_ms / 1000)}

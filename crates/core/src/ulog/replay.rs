@@ -37,6 +37,14 @@ const COMPONENT_ID: u8 = 1;
 const MAX_SLEEP_MS: f64 = 50.0;
 /// Poll interval while paused, at the end of the log, or after a read error.
 const IDLE_POLL_MS: u64 = 30;
+/// After a seek, stream this much log time (capped) without pacing so the plot
+/// shows data at the new position immediately — even while paused.
+const SCRUB_MAX_MS: f64 = 30_000.0;
+/// Upper bound on the records read in one scrub burst (a dense log's 30 s).
+const SCRUB_MAX_STEPS: usize = 120_000;
+/// Yield to the runtime every this many scrub records so a burst cannot starve
+/// the batch loop (which drains the sample channel).
+const SCRUB_YIELD_EVERY: usize = 512;
 
 /// One topic's identity for the catalog: a stable synthetic `message_id` plus
 /// the uORB name.
@@ -315,8 +323,8 @@ pub struct ReplayControl {
     speed_milli: AtomicU64,
     /// Position (relative ms) the replay has reached, for the seek slider.
     position_ms: AtomicU64,
-    /// Pending seek request (relative ms), if any.
-    seek_ms: Mutex<Option<f64>>,
+    /// Pending seek request `(target ms, span ms to scrub forward to show)`.
+    seek_ms: Mutex<Option<(f64, f64)>>,
 }
 
 impl Default for ReplayControl {
@@ -361,11 +369,13 @@ impl ReplayControl {
             .store(t_ms.max(0.0).round() as u64, Ordering::Relaxed);
     }
 
-    pub fn request_seek(&self, t_ms: f64) {
-        *self.seek_ms.lock().expect("replay seek lock") = Some(t_ms);
+    /// Ask the replay to jump to `t_ms`; `span_ms` is how much log time to
+    /// stream immediately so the plot shows data there (the visible window).
+    pub fn request_seek(&self, t_ms: f64, span_ms: f64) {
+        *self.seek_ms.lock().expect("replay seek lock") = Some((t_ms, span_ms));
     }
 
-    pub fn take_seek(&self) -> Option<f64> {
+    pub fn take_seek(&self) -> Option<(f64, f64)> {
         self.seek_ms.lock().expect("replay seek lock").take()
     }
 
@@ -391,14 +401,27 @@ pub async fn run_replay(
 ) {
     let epoch = Instant::now();
     let mut prev_rel_ms = 0.0f64;
+    // Log time to scrub up to without pacing after a seek (`NEG_INFINITY` when
+    // not scrubbing).
+    let mut scrub_until = f64::NEG_INFINITY;
+    let mut scrub_steps = 0usize;
     loop {
-        if let Some(seek) = control.take_seek() {
+        // Stop promptly even in the middle of an unpaced scrub burst.
+        if matches!(
+            stop.try_recv(),
+            Ok(()) | Err(oneshot::error::TryRecvError::Closed)
+        ) {
+            return;
+        }
+        if let Some((seek, span)) = control.take_seek() {
             if source.seek_ms(seek).is_ok() {
                 prev_rel_ms = seek;
                 control.set_position_ms(seek);
+                scrub_until = seek + span.clamp(0.0, SCRUB_MAX_MS);
             }
         }
-        if !control.is_playing() {
+        // While paused (and not filling a fresh seek) there is nothing to do.
+        if !control.is_playing() && prev_rel_ms >= scrub_until {
             if wait_or_stop(&mut stop, Duration::from_millis(IDLE_POLL_MS)).await {
                 break;
             }
@@ -412,6 +435,7 @@ pub async fn run_replay(
             // End of log: park in the paused state so the UI can seek back.
             Ok(None) => {
                 control.set_playing(false);
+                scrub_until = f64::NEG_INFINITY;
                 if wait_or_stop(&mut stop, Duration::from_millis(IDLE_POLL_MS)).await {
                     break;
                 }
@@ -420,18 +444,36 @@ pub async fn run_replay(
             // A corrupt record: pause instead of spinning on the same offset.
             Err(_) => {
                 control.set_playing(false);
+                scrub_until = f64::NEG_INFINITY;
                 if wait_or_stop(&mut stop, Duration::from_millis(IDLE_POLL_MS * 4)).await {
                     break;
                 }
                 continue;
             }
         };
-        deliver(&step, &subs, &catalog, &tx, &stats, epoch);
+        let gap_ms = (step.t_ms - prev_rel_ms).max(0.0);
+        let t_ms = step.t_ms;
+        if !deliver(&step, &subs, &catalog, &tx, &stats, epoch).await {
+            break;
+        }
         stats.lock().expect("stats lock").messages += 1;
-        control.set_position_ms(step.t_ms);
+        control.set_position_ms(t_ms);
+        prev_rel_ms = t_ms;
 
-        let mut remaining = (step.t_ms - prev_rel_ms).max(0.0) / control.speed();
-        prev_rel_ms = step.t_ms;
+        // Scrubbing past a seek: read on without pacing so the plot fills, but
+        // yield so the batch loop can drain, and stop after a bounded burst.
+        if prev_rel_ms < scrub_until {
+            scrub_steps += 1;
+            if scrub_steps >= SCRUB_MAX_STEPS {
+                scrub_until = f64::NEG_INFINITY;
+            } else if scrub_steps % SCRUB_YIELD_EVERY == 0 {
+                tokio::task::yield_now().await;
+            }
+            continue;
+        }
+        scrub_steps = 0;
+
+        let mut remaining = gap_ms / control.speed();
         while remaining > 0.0 {
             if !control.is_playing() || control.has_seek() {
                 break;
@@ -445,15 +487,17 @@ pub async fn run_replay(
     }
 }
 
-/// Update the catalog for every field and forward the subscribed samples.
-fn deliver(
+/// Update the catalog for every field and forward the subscribed samples. Uses
+/// a blocking send (backpressure): replay is not real-time, so it must not drop
+/// samples the way the live tap's `try_send` deliberately can.
+async fn deliver(
     step: &ReplayStep,
     subs: &Subscriptions,
     catalog: &Arc<Mutex<SignalCatalog>>,
     tx: &mpsc::Sender<SignalSample>,
     stats: &Arc<Mutex<TapStats>>,
     epoch: Instant,
-) {
+) -> bool {
     // A synthetic clock on the log's time axis (not wall time): the catalog's
     // EMA rate then reflects the log's native sample rate regardless of speed.
     let now = epoch + Duration::from_secs_f64((step.t_ms / 1000.0).max(0.0));
@@ -464,17 +508,18 @@ fn deliver(
         }
     }
     if !subs.is_active() {
-        return;
+        return true;
     }
     for sample in &step.samples {
         if !subs.contains(&sample.id) {
             continue;
         }
-        match tx.try_send(sample.clone()) {
-            Ok(()) => stats.lock().expect("stats lock").samples += 1,
-            Err(_) => stats.lock().expect("stats lock").dropped += 1,
+        if tx.send(sample.clone()).await.is_err() {
+            return false; // receiver dropped: stop the task
         }
+        stats.lock().expect("stats lock").samples += 1;
     }
+    true
 }
 
 /// Wait for `dur`, returning `true` if the stop signal fired first.
@@ -561,9 +606,9 @@ mod tests {
         control.set_speed(2.5);
         assert!((control.speed() - 2.5).abs() < 1e-9);
         assert!(!control.has_seek());
-        control.request_seek(123.0);
+        control.request_seek(123.0, 5000.0);
         assert!(control.has_seek());
-        assert_eq!(control.take_seek(), Some(123.0));
+        assert_eq!(control.take_seek(), Some((123.0, 5000.0)));
         assert!(!control.has_seek(), "a seek is delivered once");
     }
 
@@ -647,13 +692,62 @@ mod tests {
         );
 
         // Seek to 4 ms and play: the first sample is the record at 4 ms.
-        control.request_seek(4.0);
+        control.request_seek(4.0, 1000.0);
         control.set_playing(true);
         let sample = tokio::time::timeout(Duration::from_secs(5), rx.recv())
             .await
             .expect("a sample")
             .expect("channel open");
         assert!((sample.t_ms - 4.0).abs() < 1e-9, "t={}", sample.t_ms);
+
+        let _ = stop_tx.send(());
+        let _ = tokio::time::timeout(Duration::from_secs(2), task).await;
+    }
+
+    #[tokio::test]
+    async fn a_seek_while_paused_streams_the_new_region() {
+        // The user drags the slider while paused: the plot must show data at the
+        // new position without having to press play.
+        let subs = Subscriptions::new();
+        subs.acquire();
+        let x_id = SignalId::new(SYSTEM_ID, COMPONENT_ID, topic_message_id("sensor", 0), "x");
+        subs.set(HashSet::from([x_id]));
+
+        let control = Arc::new(ReplayControl::new());
+        control.set_speed(100.0);
+        control.set_playing(false);
+        let (tx, mut rx) = mpsc::channel(64);
+        let (stop_tx, stop_rx) = oneshot::channel();
+
+        let task = tokio::spawn(run_replay(
+            source(replay_log(0)),
+            subs,
+            Arc::new(Mutex::new(SignalCatalog::new())),
+            tx,
+            Arc::new(Mutex::new(TapStats::default())),
+            control.clone(),
+            stop_rx,
+        ));
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(150), rx.recv())
+                .await
+                .is_err(),
+            "paused replay emits nothing on its own"
+        );
+
+        // A 2 ms span covers the records at 4 ms and 6 ms.
+        control.request_seek(4.0, 2000.0);
+        let first = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("a sample")
+            .expect("channel open");
+        assert!((first.t_ms - 4.0).abs() < 1e-9, "t={}", first.t_ms);
+        let second = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("a second sample")
+            .expect("channel open");
+        assert!((second.t_ms - 6.0).abs() < 1e-9, "t={}", second.t_ms);
 
         let _ = stop_tx.send(());
         let _ = tokio::time::timeout(Duration::from_secs(2), task).await;

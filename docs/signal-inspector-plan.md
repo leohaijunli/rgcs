@@ -15,6 +15,7 @@
 > - **ULog(`.ulg`)回放**(决策 B):`core::ulog` 手写 reader(`F`/`A`/`D` 记录,无新依赖)+ `core::ulog::replay`,把日志转成与 live tap 相同的 `SignalSample` 流,复用 `batch_loop`/DSP session;工具栏 **Open ULog** / 播放暂停 / 速度 / 拖动定位 / **Back to live**;文件由 Rust 命令读取。`testdata/` 无 `.ulg`,夹具在 `ulog::tests` 内生成。
 > - 打开 ULog 或切回 live 时**清空并按 topic 预填信号树**,消息列表立即刷新(此前沿用旧列表,看起来"没更新")。
 > - 原生控件(WebKitGTK 的 `<select>`/`<input>`/滚动条)此前跟随系统浅色主题,呈现为白底灰字:inspector 根元素加 `color-scheme`,并显式给 `option`、输入框、`disabled` 控件配色;`disabled` 文本用 `-webkit-text-fill-color` 覆盖 WebKit 的灰字。
+> - **回放拖动定位后曲线随动**:seek 时前端清空视图缓存并按可视窗口长度 `Follow`(否则向后 seek 时旧 x 窗口留在屏上,新数据落在窗口外),后端从新位置无节流补发一段数据(暂停时同样补发),解决"拖动时间但图不动"。
 
 ## 1. 需求
 

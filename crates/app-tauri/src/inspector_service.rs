@@ -32,6 +32,9 @@ use crate::state::AppState;
 /// Batch window between channel frames (~30 Hz).
 const FRAME_INTERVAL_MS: u64 = 33;
 
+/// Default scrub span after a seek when the UI does not send its window length.
+const DEFAULT_SEEK_SPAN_MS: f64 = 30_000.0;
+
 static FRAME_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// One trace's samples within a frame, columnar so the `SignalId` is not
@@ -298,6 +301,7 @@ impl AppState {
         play: Option<bool>,
         speed: Option<f64>,
         seek_ms: Option<f64>,
+        span_ms: Option<f64>,
     ) -> ReplayStatus {
         let inspector = self.inspector();
         let guard = inspector.replay.lock();
@@ -309,7 +313,11 @@ impl AppState {
                 handle.control.set_speed(speed);
             }
             if let Some(seek_ms) = seek_ms {
-                handle.control.request_seek(seek_ms);
+                // `span_ms` is the visible window: stream that much log time
+                // right after the seek so the plot shows data at the new spot.
+                handle
+                    .control
+                    .request_seek(seek_ms, span_ms.unwrap_or(DEFAULT_SEEK_SPAN_MS));
             }
         }
         replay_status(guard.as_ref())
@@ -535,8 +543,9 @@ pub fn inspector_replay(
     play: Option<bool>,
     speed: Option<f64>,
     seek_ms: Option<f64>,
+    span_ms: Option<f64>,
 ) -> Result<ReplayStatus, String> {
-    Ok(state.inspector_replay(play, speed, seek_ms))
+    Ok(state.inspector_replay(play, speed, seek_ms, span_ms))
 }
 
 /// Poll the replay state (position, speed, playing) for the toolbar.
