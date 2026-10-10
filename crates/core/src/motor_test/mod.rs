@@ -256,9 +256,10 @@ impl MotorTestSession<ManualSource> {
 impl MotorTestSession<source::AnySource> {
     /// Manual start: keep (or restore) the slider source and begin sending.
     pub fn start_manual(&mut self, now: Instant) {
-        if let source::AnySource::Preset(_) = &self.source {
-            // A finished/previous preset is replaced by the manual source of
-            // the same width; slider values were kept untouched meanwhile.
+        if let source::AnySource::Preset(_) | source::AnySource::Forward(_) = &self.source {
+            // A finished/previous bounded source is replaced by the manual
+            // source of the same width; slider values were kept untouched
+            // meanwhile.
             self.source =
                 source::AnySource::Manual(ManualSource::new(vec![0.0; self.last_values.len()]));
         }
@@ -270,6 +271,17 @@ impl MotorTestSession<source::AnySource> {
     pub fn start_preset(&mut self, preset: source::WaveformPreset, now: Instant) {
         self.source =
             source::AnySource::Preset(source::PresetSource::new(preset, self.last_values.len()));
+        self.start(now);
+    }
+
+    /// Realtime-forward start (revised D3): the shared slot carries the
+    /// latest normalized outputs of the source vehicle (SITL); the session
+    /// reads it each tick and stops itself when the feed goes stale.
+    pub fn start_forward(&mut self, slot: source::ForwardSlot, now: Instant) {
+        self.source = source::AnySource::Forward(source::ForwardSource::new(
+            slot,
+            self.last_values.len(),
+        ));
         self.start(now);
     }
 

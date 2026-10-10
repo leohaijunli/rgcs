@@ -265,15 +265,14 @@ pub fn survey_generate_cloverleaf(pattern: CloverleafPattern) -> Result<PatternP
 
 /// Named vehicle command.
 ///
-/// `name` is one of `"rtl"`, `"pause"`, `"continue"`. The command is enqueued
+/// `name` is one of `"takeoff"`, `"land"`, `"rtl"`. The command is enqueued
 /// to the command service, which sends a `COMMAND_LONG` and retransmits until
 /// the FC acks; the outcome arrives asynchronously on the `"command"` event
 /// (issue #5).
 ///
-/// Pause/continue use `MAV_CMD_DO_PAUSE_CONTINUE` (param1: 0 = pause,
-/// 1 = continue, per the MAVLink spec). PX4's exact handling is still to be
-/// confirmed on SITL v1.17 — a rejection comes back as a NACK and is shown in
-/// the UI, so the failure mode is safe.
+/// `MAV_CMD_DO_PAUSE_CONTINUE` was removed: PX4 v1.17 has no handler for it
+/// (SITL-confirmed NACK, operator report 2026-10-10); takeoff/land are the
+/// flight-phase commands PX4 v1.17 actually supports.
 #[tauri::command]
 pub async fn send_command(name: String, state: State<'_, AppState>) -> Result<(), String> {
     let service = state.command().ok_or_else(|| "not connected".to_string())?;
@@ -283,11 +282,6 @@ pub async fn send_command(name: String, state: State<'_, AppState>) -> Result<()
         .await
         .map_err(|e| e.to_string())
 }
-
-/// `MAV_CMD_DO_PAUSE_CONTINUE` param1: pause.
-const PAUSE_CONTINUE_PAUSE: f32 = 0.0;
-/// `MAV_CMD_DO_PAUSE_CONTINUE` param1: continue.
-const PAUSE_CONTINUE_RESUME: f32 = 1.0;
 
 /// Map a stream-rate request to `MAV_CMD_SET_MESSAGE_INTERVAL` parameters.
 ///
@@ -324,20 +318,13 @@ pub async fn set_message_interval(
 
 /// Map a UI command name to its MAVLink command and parameters.
 fn named_command(name: &str) -> Result<(MavCmd, [f32; 7]), String> {
-    let mut params = [0.0f32; 7];
     let command = match name {
+        "takeoff" => MavCmd::MAV_CMD_NAV_TAKEOFF,
+        "land" => MavCmd::MAV_CMD_NAV_LAND,
         "rtl" => MavCmd::MAV_CMD_NAV_RETURN_TO_LAUNCH,
-        "pause" => {
-            params[0] = PAUSE_CONTINUE_PAUSE;
-            MavCmd::MAV_CMD_DO_PAUSE_CONTINUE
-        }
-        "continue" => {
-            params[0] = PAUSE_CONTINUE_RESUME;
-            MavCmd::MAV_CMD_DO_PAUSE_CONTINUE
-        }
         other => return Err(format!("unknown command: {other}")),
     };
-    Ok((command, params))
+    Ok((command, [0.0; 7]))
 }
 
 #[cfg(test)]
@@ -357,14 +344,13 @@ mod tests {
     }
 
     #[test]
-    fn pause_and_continue_share_do_pause_continue() {
-        let (pause_cmd, pause) = named_command("pause").expect("pause");
-        let (cont_cmd, cont) = named_command("continue").expect("continue");
-        assert_eq!(pause_cmd, MavCmd::MAV_CMD_DO_PAUSE_CONTINUE);
-        assert_eq!(cont_cmd, MavCmd::MAV_CMD_DO_PAUSE_CONTINUE);
-        assert_eq!(pause[0], PAUSE_CONTINUE_PAUSE);
-        assert_eq!(cont[0], PAUSE_CONTINUE_RESUME);
-        assert_eq!(pause[1..], cont[1..], "only param1 differs");
+    fn takeoff_and_land_map_to_nav_commands() {
+        let (takeoff_cmd, takeoff) = named_command("takeoff").expect("takeoff");
+        let (land_cmd, land) = named_command("land").expect("land");
+        assert_eq!(takeoff_cmd, MavCmd::MAV_CMD_NAV_TAKEOFF);
+        assert_eq!(land_cmd, MavCmd::MAV_CMD_NAV_LAND);
+        assert_eq!(takeoff, [0.0; 7]);
+        assert_eq!(land, [0.0; 7]);
     }
 
     #[test]

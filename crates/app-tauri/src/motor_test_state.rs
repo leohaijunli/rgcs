@@ -4,9 +4,11 @@
 //! re-spawned on the next start command.
 
 use parking_lot::Mutex as PLMutex;
-
-use maggcs_core::motor_test::{MotorTestService, SafetyLimits, SessionState};
 use std::time::Duration;
+
+use maggcs_core::mavlink::ConnectionHandle;
+use maggcs_core::motor_test::source::ForwardSlot;
+use maggcs_core::motor_test::{MotorTestService, SafetyLimits, SessionState};
 
 /// The live service handle (plus the event-forwarder task handle, so the
 /// forwarder dies with the entry).
@@ -18,12 +20,23 @@ pub struct RunningMotorTest {
     pub forwarder: tauri::async_runtime::JoinHandle<()>,
 }
 
+/// The secondary link: a PX4 SITL whose `SERVO_OUTPUT_RAW` feeds the
+/// realtime-forward slot (revised D3).
+pub struct SitlLink {
+    pub handle: ConnectionHandle,
+    /// Tap task: normalizes the SITL's main outputs 1–4 into the slot.
+    pub tap: tauri::async_runtime::JoinHandle<()>,
+    pub slot: ForwardSlot,
+    pub endpoint: String,
+}
+
 /// Process-wide holder; `Default` = nothing running. `last_state` mirrors the
 /// newest event so the status poll stays cheap (no service round-trip).
 #[derive(Default)]
 pub struct MotorTestState {
     pub running: PLMutex<Option<RunningMotorTest>>,
     pub last_state: PLMutex<Option<SessionState>>,
+    pub sitl: PLMutex<Option<SitlLink>>,
 }
 
 impl MotorTestState {

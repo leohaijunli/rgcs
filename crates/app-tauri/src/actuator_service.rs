@@ -6,6 +6,8 @@
 //! service on the current link (it stops with its link); events flow back
 //! to the window, and the window is pinned on top while the test runs.
 
+use std::time::Duration;
+
 use serde::Serialize;
 use tauri::AppHandle;
 use tauri::Emitter;
@@ -15,7 +17,11 @@ use tauri::WebviewUrl;
 use tauri::WebviewWindowBuilder;
 use tauri::WindowEvent;
 
+use maggcs_core::mavlink::connection::{spawn_connection, ConnectionEvent};
+use maggcs_core::mavlink::router::MessageRoute;
+use maggcs_core::mavlink::MavMessage;
 use maggcs_core::motor_test::service::{MotorTestCommand, MotorTestEvent, MotorTestService};
+use maggcs_core::motor_test::source::ForwardSlot;
 use maggcs_core::motor_test::{SessionState, DEFAULT_TICK_HZ};
 
 use crate::motor_test_state::limits_for_load;
@@ -36,6 +42,11 @@ pub struct ActuatorStatus {
     pub tick_hz: f64,
     /// `idle` | `running` | `stopping` | `emergency`, from the last event.
     pub session: String,
+    /// SITL source link (revised D3): connected + feed freshness.
+    pub sitl_connected: bool,
+    pub sitl_endpoint: Option<String>,
+    /// Seconds since the last SERVO_OUTPUT_RAW sample; null = none yet.
+    pub sitl_feed_age_s: Option<f64>,
 }
 
 /// Open the motor-test window, or focus it if it already exists.
@@ -177,6 +188,167 @@ pub async fn actuator_reset_emergency(state: State<'_, AppState>) -> Result<(), 
     send_session(&state, MotorTestCommand::ResetEmergency).await
 }
 
+/// The SITL feed's stream rate for `SERVO_OUTPUT_RAW` (10 Hz: enough head
+/// room for the 10 Hz sender tick without flooding the link).
+const SITL_STREAM_HZ: f64 = 10.0;
+
+/// Connect the SITL source link (revised D3): a secondary MAVLink
+/// connection whose `SERVO_OUTPUT_RAW` main outputs 1–4 feed the forward
+/// slot, normalized to 0..=1. Idempotent: a previous SITL link is dropped.
+#[tauri::command]
+pub async fn actuator_connect_sitl(
+    state: State<'_, AppState>,
+    endpoint: String,
+) -> Result<(), String> {
+    let config = maggcs_core::mavlink::ConnectionConfig {
+        endpoint: maggcs_core::mavlink::Endpoint::try_from(endpoint.as_str())
+            .map_err(|e| e.to_string())?,
+        system_id: 250,
+        component_id: 250,
+        target_system_id: 1,
+        target_component_id: 1,
+        heartbeat_timeout: Duration::from_secs(30),
+        ..Default::default()
+    };
+    let (handle, _events_rx, first_result) =
+        spawn_connection(config).await.map_err(|e| e.to_string())?;
+    match tokio::time::timeout(Duration::from_secs(3), first_result).await {
+        Ok(Ok(Ok(()))) => {}
+        Ok(Ok(Err(failure))) => {
+            handle.shutdown().await;
+            return Err(failure.message.to_string());
+        }
+        _ => {
+            handle.shutdown().await;
+            return Err("timed out waiting for the SITL link".into());
+        }
+    }
+
+    // Ask the SITL to stream its actuator outputs (fire-and-forget; PX4
+    // accepts MAV_CMD_SET_MESSAGE_INTERVAL while disarmed).
+    let interval_us = (1_000_000.0 / SITL_STREAM_HZ) as f32;
+    let _ = handle
+        .send(MavMessage::COMMAND_LONG(
+            ::mavlink::common::COMMAND_LONG_DATA {
+                param1: 36.0, // SERVO_OUTPUT_RAW
+                param2: interval_us,
+                param3: 0.0,
+                param4: 0.0,
+                param5: 0.0,
+                param6: 0.0,
+                param7: 0.0,
+                command: ::mavlink::common::MavCmd::MAV_CMD_SET_MESSAGE_INTERVAL,
+                target_system: 1,
+                target_component: 1,
+                confirmation: 0,
+            },
+        ))
+        .await;
+
+    let slot: ForwardSlot = std::sync::Arc::new(std::sync::Mutex::new(
+        maggcs_core::motor_test::source::ForwardState::new(4),
+    ));
+    let tap = tauri::async_runtime::spawn(run_sitl_tap(handle.clone(), slot.clone()));
+    let old = state
+        .motor_test
+        .sitl
+        .lock()
+        .replace(crate::motor_test_state::SitlLink {
+            handle,
+            tap,
+            slot,
+            endpoint,
+        });
+    if let Some(old) = old {
+        old.tap.abort();
+        old.handle.shutdown().await;
+    }
+    Ok(())
+}
+
+/// Drop the SITL source link.
+#[tauri::command]
+pub async fn actuator_disconnect_sitl(state: State<'_, AppState>) -> Result<(), String> {
+    // Take the entry out before awaiting: never hold the lock across the
+    // link shutdown (Send).
+    let old = state.motor_test.sitl.lock().take();
+    if let Some(old) = old {
+        old.tap.abort();
+        old.handle.shutdown().await;
+    }
+    Ok(())
+}
+
+/// Start realtime forwarding: the live SITL actuator outputs (already
+/// normalized into the slot by the tap) drive the real FC's motors.
+#[tauri::command]
+pub async fn actuator_start_forward(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    // The slot is fed by the SITL tap; forwarding without it is meaningless.
+    let slot = state
+        .motor_test
+        .sitl
+        .lock()
+        .as_ref()
+        .map(|s| s.slot.clone())
+        .ok_or("connect the SITL source first")?;
+    if send_session(
+        &state,
+        MotorTestCommand::StartForward { slot: slot.clone() },
+    )
+    .await
+    .is_ok()
+    {
+        return Ok(());
+    }
+    let handle = state
+        .connection()
+        .ok_or("no link — connect to the FC first")?;
+    let (svc, evt_rx) = MotorTestService::spawn(handle, limits_for_load("none"));
+    let forwarder = tauri::async_runtime::spawn(forward_events(app.clone(), evt_rx));
+    *state.motor_test.running.lock() = Some(crate::motor_test_state::RunningMotorTest {
+        svc: svc.clone(),
+        forwarder,
+    });
+    svc.send(MotorTestCommand::StartForward { slot })
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Tap task: SITL `SERVO_OUTPUT_RAW` → normalized 0..=1 into the forward
+/// slot (latest value wins; the tap never blocks the sender).
+async fn run_sitl_tap(handle: maggcs_core::mavlink::ConnectionHandle, slot: ForwardSlot) {
+    let mut events = handle.subscribe_route(MessageRoute::messages(&[36]));
+    loop {
+        match events.recv().await {
+            Ok(ConnectionEvent::Message(env)) => {
+                if let MavMessage::SERVO_OUTPUT_RAW(servo) = env.message {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs_f64())
+                        .unwrap_or(0.0);
+                    let pwm_to_norm = |pwm: u16| (((pwm as f32) - 1000.0) / 1000.0).clamp(0.0, 1.0);
+                    if let Ok(mut st) = slot.lock() {
+                        st.values = [
+                            pwm_to_norm(servo.servo1_raw),
+                            pwm_to_norm(servo.servo2_raw),
+                            pwm_to_norm(servo.servo3_raw),
+                            pwm_to_norm(servo.servo4_raw),
+                        ]
+                        .to_vec();
+                        st.last_update_s = Some(now);
+                    }
+                }
+            }
+            Ok(_) => {}
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+        }
+    }
+}
+
 /// Clone the live service handle out of the state (no lock across awaits).
 fn service_of(state: &AppState) -> Option<MotorTestService> {
     state
@@ -260,6 +432,28 @@ impl AppState {
             Some(SessionState::Emergency) => "emergency",
             _ => "idle",
         };
+        let (sitl_connected, sitl_endpoint, sitl_feed_age_s) = {
+            let guard = self.motor_test.sitl.lock();
+            match guard.as_ref() {
+                Some(link) => {
+                    let age = link
+                        .slot
+                        .lock()
+                        .ok()
+                        .and_then(|st| {
+                            st.last_update_s.map(|t| {
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map(|d| d.as_secs_f64() - t)
+                                    .unwrap_or(0.0)
+                            })
+                        })
+                        .filter(|a| *a >= 0.0);
+                    (true, Some(link.endpoint.clone()), age)
+                }
+                None => (false, None, None),
+            }
+        };
         ActuatorStatus {
             connected: link
                 .as_ref()
@@ -271,6 +465,9 @@ impl AppState {
             endpoint: link.map(|l| l.endpoint),
             tick_hz: DEFAULT_TICK_HZ,
             session: session.to_string(),
+            sitl_connected,
+            sitl_endpoint,
+            sitl_feed_age_s,
         }
     }
 }

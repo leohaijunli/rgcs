@@ -148,17 +148,19 @@ impl RpmSource for PresetSource {
     }
 }
 
-/// The session's swappable source: manual sliders or a preset waveform
-/// (profile/function sources join in A6/A7).
+/// The session's swappable source: manual sliders, a preset waveform, or
+/// realtime forwarding of another vehicle's actuator outputs (profile and
+/// function sources join in A6/A7).
 #[derive(Debug)]
 pub enum AnySource {
     Manual(ManualSource),
     Preset(PresetSource),
+    Forward(ForwardSource),
 }
 
 impl AnySource {
-    /// Latest-value-wins slider update; ignored while a preset runs (the
-    /// waveform owns the values for its duration).
+    /// Latest-value-wins slider update; ignored while another source owns
+    /// the values (preset duration or a live forward).
     pub fn set_values(&mut self, values: Vec<f32>) {
         if let AnySource::Manual(m) = self {
             m.set_values(values);
@@ -171,6 +173,7 @@ impl RpmSource for AnySource {
         match self {
             AnySource::Manual(m) => m.motor_count(),
             AnySource::Preset(p) => p.motor_count(),
+            AnySource::Forward(f) => f.motor_count(),
         }
     }
 
@@ -178,8 +181,96 @@ impl RpmSource for AnySource {
         match self {
             AnySource::Manual(m) => m.value(t_s, motor),
             AnySource::Preset(p) => p.value(t_s, motor),
+            AnySource::Forward(f) => f.value(t_s, motor),
         }
     }
+}
+
+/// Slot freshness bound: a SITL feed that goes quiet for this long counts
+/// as an exhausted source and the session stops itself (plan §8.3 — the
+/// exhaustion path is shared with a finished preset).
+pub const FORWARD_STALE_AFTER_S: f64 = 1.0;
+
+/// Grace from start before the first SITL sample must arrive: within it
+/// the source forwards 0 (idle — motors stay off, the FC keeps receiving
+/// timeouts) instead of insta-stopping a just-started session.
+pub const FORWARD_START_GRACE_S: f64 = 2.0;
+
+/// Realtime forward (revised D3): the latest actuator outputs of another
+/// vehicle (a PX4 SITL streaming `SERVO_OUTPUT_RAW`), normalized to 0..=1
+/// by the tap that feeds the slot. The sender reads at its own tick —
+/// latest value wins, nothing is queued, so a fast SITL cannot overrun the
+/// link and a slow one cannot stack up.
+///
+/// The slot is shared with the (app-side) tap: `Arc<Mutex<ForwardState>>`.
+pub type ForwardSlot = std::sync::Arc<std::sync::Mutex<ForwardState>>;
+
+#[derive(Debug)]
+pub struct ForwardState {
+    /// Last value per motor, normalized 0..=1.
+    pub values: Vec<f32>,
+    /// Seconds since epoch of the last tap update; `None` before the first.
+    pub last_update_s: Option<f64>,
+}
+
+impl ForwardState {
+    pub fn new(motors: usize) -> Self {
+        Self {
+            values: vec![0.0; motors],
+            last_update_s: None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ForwardSource {
+    slot: ForwardSlot,
+    motors: usize,
+    /// Idle-forward grace deadline (epoch seconds), set at construction.
+    grace_until_s: f64,
+}
+
+impl ForwardSource {
+    pub fn new(slot: ForwardSlot, motors: usize) -> Self {
+        Self {
+            slot,
+            motors,
+            grace_until_s: now_epoch_s() + FORWARD_START_GRACE_S,
+        }
+    }
+}
+
+impl RpmSource for ForwardSource {
+    fn motor_count(&self) -> usize {
+        self.motors
+    }
+
+    fn value(&mut self, _t_s: f64, motor: usize) -> Option<f32> {
+        let now = now_epoch_s();
+        let Ok(guard) = self.slot.lock() else {
+            return Some(0.0) // poisoned lock: idle, never spin
+        };
+        let fresh = guard
+            .last_update_s
+            .is_some_and(|t| t + FORWARD_STALE_AFTER_S >= now);
+        if fresh {
+            return guard.values.get(motor).copied();
+        }
+        // No sample yet (or the feed went stale) within the start grace:
+        // forward idle so a just-started session survives the first taps.
+        if now < self.grace_until_s {
+            return Some(0.0);
+        }
+        None // exhausted: the session stops itself
+    }
+}
+
+/// Seconds since the epoch (`SystemTime`), for tap-freshness stamps.
+fn now_epoch_s() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
 }
 
 #[cfg(test)]
@@ -262,5 +353,72 @@ mod tests {
         s.set_values(vec![0.9]);
         assert_eq!(s.value(0.0, 0), Some(0.0), "ramp at t=0, slider ignored");
         assert!((s.value(0.5, 0).unwrap() - 0.4).abs() < 1e-6, "ramp mid");
+    }
+
+    fn forward_slot(motors: usize) -> ForwardSlot {
+        std::sync::Arc::new(std::sync::Mutex::new(ForwardState::new(motors)))
+    }
+
+    /// Epoch seconds, matching the source's own clock.
+    fn epoch_now() -> f64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64()
+    }
+
+    #[test]
+    fn forward_follows_the_latest_slot_values() {
+        let slot = forward_slot(2);
+        {
+            let mut st = slot.lock().unwrap();
+            st.values = vec![0.2, 0.7];
+            st.last_update_s = Some(epoch_now());
+        }
+        let mut s = ForwardSource::new(slot, 2);
+        assert_eq!(s.value(0.0, 0), Some(0.2));
+        assert_eq!(s.value(0.0, 1), Some(0.7));
+    }
+
+    #[test]
+    fn forward_is_idle_within_the_start_grace_then_exhausts() {
+        // No sample at all: within the grace the source forwards idle (0),
+        // after it the session's exhaustion path stops the test.
+        let mut s = ForwardSource::new(forward_slot(1), 1);
+        assert_eq!(s.value(0.0, 0), Some(0.0), "grace: idle, not exhausted");
+        // Sleep past the grace; still no sample.
+        std::thread::sleep(std::time::Duration::from_millis(
+            (FORWARD_START_GRACE_S * 1000.0) as u64 + 100,
+        ));
+        assert_eq!(s.value(0.0, 0), None, "past grace with no feed: exhausted");
+    }
+
+    #[test]
+    fn forward_exhausts_when_the_feed_goes_stale() {
+        let slot = forward_slot(1);
+        {
+            let mut st = slot.lock().unwrap();
+            st.values = vec![0.4];
+            st.last_update_s = Some(epoch_now());
+        }
+        // Stale the slot beyond FORWARD_STALE_AFTER_S and the grace.
+        let mut s = ForwardSource::new(slot, 1);
+        assert_eq!(s.value(0.0, 0), Some(0.4), "fresh feed passes through");
+        {
+            let mut st = s_slot(&s);
+            st.last_update_s = Some(epoch_now() - FORWARD_STALE_AFTER_S - 10.0);
+        }
+        // Within the start grace the stale feed still forwards idle …
+        assert_eq!(s.value(0.0, 0), Some(0.0));
+        // … and after the grace it counts as exhausted.
+        std::thread::sleep(std::time::Duration::from_millis(
+            (FORWARD_START_GRACE_S * 1000.0) as u64 + 100,
+        ));
+        assert_eq!(s.value(0.0, 0), None, "stale feed: exhausted");
+    }
+
+    /// Test-only: reach the slot behind a source.
+    fn s_slot(s: &ForwardSource) -> std::sync::MutexGuard<'_, ForwardState> {
+        s.slot.lock().unwrap()
     }
 }

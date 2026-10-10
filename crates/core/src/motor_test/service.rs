@@ -55,6 +55,11 @@ pub enum MotorTestCommand {
     StartPreset {
         preset: super::source::WaveformPreset,
     },
+    /// Start realtime forwarding from the shared slot (revised D3; the
+    /// app-side SITL tap feeds it with normalized actuator outputs).
+    StartForward {
+        slot: super::source::ForwardSlot,
+    },
     /// Latest-value-wins manual update (UI throttles to ~30 Hz).
     SetValues(Vec<f32>),
     Stop,
@@ -136,6 +141,9 @@ async fn run(
                     MotorTestCommand::StartManual => session.start_manual(Instant::now()),
                     MotorTestCommand::StartPreset { preset } => {
                         session.start_preset(preset, Instant::now())
+                    }
+                    MotorTestCommand::StartForward { slot } => {
+                        session.start_forward(slot, Instant::now())
                     }
                     MotorTestCommand::SetValues(values) => session.set_any_values(values),
                     MotorTestCommand::Stop => session.stop(StopReason::Command),
