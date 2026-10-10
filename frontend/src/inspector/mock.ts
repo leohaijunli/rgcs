@@ -1,8 +1,11 @@
 // Browser-mode mock data source: feeds a fixed signal set when the inspector
 // runs outside Tauri (the plan's mock, mirroring `telemetry/mock`).
+//
+// The mock shows raw curves only: filtering and the FFT analyzer run in Rust
+// (`core::inspector::session`), so in a plain browser there is no DSP runtime
+// and the filter/FFT entry points are hidden rather than faked.
 
 import type { SignalSample } from '../generated-types/SignalSample'
-import type { AlgorithmInfo, ParamSpec } from './dsp'
 
 export interface MockSignal {
   id: string
@@ -89,7 +92,7 @@ export function mockSamples(t: number): SignalSample[] {
   return SIGS.map((s, i) => {
     let value = s.base + s.amp * Math.sin(2 * Math.PI * s.freqHz * t) + (Math.random() - 0.5) * s.amp * 0.1
     // `?fault`: drop one rotating signal to NaN once a second, stressing the
-    // uPlot gap path and the filter/FFT code that consumes it (plan S5).
+    // uPlot gap path (plan S5).
     if (fault && tick % 100 === 0 && i === tick / 100 % SIGS.length) value = NaN
     return {
       id: { system_id: s.signal.system_id, component_id: s.signal.component_id, message_id: s.signal.message_id, field: s.signal.field },
@@ -102,70 +105,4 @@ export function mockSamples(t: number): SignalSample[] {
 /** Whether Tauri is available (mock mode otherwise). */
 export function isTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
-}
-
-const float = (key: string, label: string, def: number, min: number, max: number, step: number): ParamSpec => ({
-  key,
-  label,
-  unit: null,
-  kind: { kind: 'Float', min, max, step, log: false },
-  default: def,
-})
-const int = (key: string, label: string, def: number, min: number, max: number): ParamSpec => ({
-  key,
-  label,
-  unit: null,
-  kind: { kind: 'Int', min, max },
-  default: def,
-})
-const enumeration = (key: string, label: string, def: number, options: string[]): ParamSpec => ({
-  key,
-  label,
-  unit: null,
-  kind: { kind: 'Enum', options },
-  default: def,
-})
-const bool = (key: string, label: string, def: number): ParamSpec => ({
-  key,
-  label,
-  unit: null,
-  kind: { kind: 'Bool' },
-  default: def,
-})
-
-/** The registry mirror for mock mode (`core::dsp::registry` is the source of
- * truth); keeps the filter UI live without Tauri. */
-export function mockAlgorithms(): AlgorithmInfo[] {
-  return [
-    {
-      id: 'lpf2',
-      name: '2nd-order low-pass',
-      kind: 'processor',
-      params: [float('fc_hz', 'Cutoff', 5, 0.001, 1000, 0.1), float('q', 'Q', 0.707, 0.001, 100, 0.01)],
-    },
-    {
-      id: 'hpf2',
-      name: '2nd-order high-pass',
-      kind: 'processor',
-      params: [float('fc_hz', 'Cutoff', 5, 0.001, 1000, 0.1), float('q', 'Q', 0.707, 0.001, 100, 0.01)],
-    },
-    { id: 'moving_average', name: 'Moving average', kind: 'processor', params: [int('window', 'Window', 10, 1, 1000)] },
-    {
-      id: 'detrend',
-      name: 'Detrend',
-      kind: 'processor',
-      params: [int('window', 'Window', 100, 2, 10000), bool('mode', 'Linear', 1)],
-    },
-    {
-      id: 'fft',
-      name: 'Realtime FFT',
-      kind: 'analyzer',
-      params: [
-        int('n', 'FFT length', 1024, 16, 8192),
-        enumeration('window', 'Window', 1, ['rectangular', 'hann', 'hamming', 'blackman', 'flat_top']),
-        enumeration('scale', 'Scale', 0, ['magnitude', 'psd', 'decibels']),
-        bool('detrend', 'Detrend', 0),
-      ],
-    },
-  ]
 }

@@ -23,8 +23,8 @@ import {
   Radio,
   Ruler,
 } from 'lucide-react'
-import { makeProcessor, magnitudeSpectrum, type AlgorithmInfo } from './dsp'
-import { isTauri, mockAlgorithms, mockCatalog, mockSamples, msgName, signalKey } from './mock'
+import type { AlgorithmInfo } from '../generated-types/AlgorithmInfo'
+import { isTauri, mockCatalog, mockSamples, msgName, signalKey } from './mock'
 import type { AlgoConfig } from '../generated-types/AlgoConfig'
 import type { AnalyzerSource } from '../generated-types/AnalyzerSource'
 import type { CatalogEntry } from '../generated-types/CatalogEntry'
@@ -413,6 +413,11 @@ export function InspectorApp() {
     [plots, activePlot],
   )
 
+  /** DSP entry points exist only when the Rust registry is available (the
+   * browser mock has no DSP runtime, so filters/FFT stay hidden). */
+  const hasAnalyzer = useMemo(() => algorithms.some((a) => a.kind === 'analyzer'), [algorithms])
+  const hasProcessors = useMemo(() => algorithms.some((a) => a.kind === 'processor'), [algorithms])
+
   const patchTrace = useCallback((id: string, patch: (t: Trace) => Trace) => {
     setPlots((prev) =>
       prev.map((p) => ({ ...p, traces: p.traces.map((t) => (t.id === id ? patch(t) : t)) })),
@@ -523,20 +528,33 @@ export function InspectorApp() {
     localStorage.setItem(WS_KEY, JSON.stringify(ws))
   }, [windowSec, plots, colors, axisLink, layoutCols])
 
-  const loadWorkspace = useCallback(() => {
-    const raw = localStorage.getItem(WS_KEY)
-    if (!raw) return
-    try {
-      const ws = JSON.parse(raw) as Workspace
-      if (typeof ws.windowSec === 'number') setWindowSec(ws.windowSec)
-      if (Array.isArray(ws.plots)) setPlots(ws.plots)
-      if (ws.colors && typeof ws.colors === 'object') setColors(ws.colors)
-      if (typeof ws.layoutCols === 'number') setLayoutCols(ws.layoutCols)
-      setAxisLink(Boolean(ws.axisLink))
-    } catch {
-      // Corrupt workspace: keep the defaults.
-    }
-  }, [])
+  const loadWorkspace = useCallback(
+    (stripDsp: boolean) => {
+      const raw = localStorage.getItem(WS_KEY)
+      if (!raw) return
+      try {
+        const ws = JSON.parse(raw) as Workspace
+        if (typeof ws.windowSec === 'number') setWindowSec(ws.windowSec)
+        if (Array.isArray(ws.plots)) {
+          // Browser mock has no DSP runtime: drop any saved pipelines and
+          // analyzers so no phantom "filtered" series or FFT views appear.
+          const plots = stripDsp
+            ? ws.plots.map((p) => ({
+                ...p,
+                traces: p.traces.map((t) => ({ ...t, pipeline: [], analyzer: null })),
+              }))
+            : ws.plots
+          setPlots(plots)
+        }
+        if (ws.colors && typeof ws.colors === 'object') setColors(ws.colors)
+        if (typeof ws.layoutCols === 'number') setLayoutCols(ws.layoutCols)
+        setAxisLink(Boolean(ws.axisLink))
+      } catch {
+        // Corrupt workspace: keep the defaults.
+      }
+    },
+    [],
+  )
 
   /** Route one live sample to every trace bound to its signal. */
   const routeSample = useCallback(
@@ -559,7 +577,7 @@ export function InspectorApp() {
 
   // Data source: the Tauri channel when running in the app, the mock otherwise.
   useEffect(() => {
-    loadWorkspace()
+    loadWorkspace(!tauri)
     if (!tauri) {
       const id = setInterval(() => {
         const now = performance.now() / 1000
@@ -567,7 +585,9 @@ export function InspectorApp() {
         markDirty()
       }, 10)
       setCatalog(mockCatalog())
-      setAlgorithms(mockAlgorithms())
+      // Browser mock: no Rust DSP runtime, so no algorithms are offered —
+      // traces stay raw-only and the filter/FFT entry points stay hidden.
+      setAlgorithms([])
       return () => clearInterval(id)
     }
     let disposed = false
@@ -664,15 +684,16 @@ export function InspectorApp() {
     return () => clearInterval(id)
   }, [tauri])
 
-  // Trim every ring to the selected window (keep at least one FFT window in
-  // mock mode). Runs during the redraw loop so a shrinking window drops old
-  // samples immediately; the ring cap bounds memory while paused.
+  // Trim every ring to the selected window. Runs during the redraw loop so a
+  // shrinking window drops old samples immediately; the ring cap bounds
+  // memory while paused. (Rust keeps its own analyzer windows decoupled from
+  // this view buffer, so no FFT window reservation is needed here.)
   const trimRings = useCallback(() => {
-    const keep = Math.max(tauri ? 2 : 1024, Math.ceil((windowRef.current * 1000) / 10))
+    const keep = Math.max(2, Math.ceil((windowRef.current * 1000) / 10))
     for (const ring of buffers.current.values()) {
       ring.trimBefore(ring.newestTime() - windowRef.current * 1000, keep)
     }
-  }, [tauri])
+  }, [])
 
   // A window change only needs a redraw; the loop trims to the new window.
   useEffect(() => {
@@ -830,7 +851,7 @@ export function InspectorApp() {
       if (!chart) continue
       const host = chartHosts.current.get(p.id)
       const maxPoints = Math.max(256, (host?.clientWidth ?? 800) * 2)
-      const merged = mergedData(p, buffers.current, tauri, maxPoints)
+      const merged = mergedData(p, buffers.current, maxPoints)
       if (!merged) continue
       chart.setData(merged.data)
       if (followRef.current && merged.tEnd > 0) {
@@ -839,7 +860,7 @@ export function InspectorApp() {
         chart.setScale('x', { min, max: merged.tEnd })
       }
     }
-  }, [tauri, trimRings])
+  }, [trimRings])
 
   useEffect(() => {
     let raf = 0
@@ -906,31 +927,11 @@ export function InspectorApp() {
     URL.revokeObjectURL(url)
   }
 
-  /** Latest spectrum for a trace: computed in Rust in the app (decoupled from
-   * the view window), the TS mirror in mock mode. */
-  const spectrum = (trace: Trace): SpectrumFrame | null => {
-    if (tauri) return spectra.current.get(trace.id) ?? null
-    const ring = buffers.current.get(trace.id)
-    if (!ring) return null
-    const n = 1024
-    const recent: number[] = []
-    for (let i = Math.max(0, ring.length - n); i < ring.length; i++) recent.push(ring.rawAt(i))
-    if (recent.length < n) return null
-    const fs = estimateFs(ring)
-    const s = magnitudeSpectrum(recent, fs)
-    return s
-      ? {
-          fs,
-          n: s.n,
-          delta_f: s.deltaF,
-          nyquist: s.nyquist,
-          bins: s.bins,
-          peak_bin: s.peakBin,
-          peak_freq_hz: s.peakFreqHz,
-          peak_value: s.peakValue,
-        }
-      : null
-  }
+  /** Latest spectrum for a trace — computed in Rust (the only DSP runtime),
+   * decoupled from the view window. In the browser mock no analyzer exists,
+   * so this is only ever consulted in the desktop app. */
+  const spectrum = (trace: Trace): SpectrumFrame | null =>
+    spectra.current.get(trace.id) ?? null
 
   /** FFT button: attach/detach the analyzer on a trace (runs in Rust in the
    * app; the TS mirror is used in mock mode). */
@@ -1063,7 +1064,7 @@ export function InspectorApp() {
             <div className="toolbar-menu-pop">
               <button onClick={() => { exportCsv(); setMenuOpen(false) }}>Export CSV</button>
               <button onClick={() => { saveWorkspace(); setMenuOpen(false) }}>Save workspace</button>
-              <button onClick={() => { loadWorkspace(); setMenuOpen(false) }}>Load workspace</button>
+              <button onClick={() => { loadWorkspace(!tauri); setMenuOpen(false) }}>Load workspace</button>
             </div>
           )}
         </div>
@@ -1243,9 +1244,11 @@ export function InspectorApp() {
                   <span className="mono" onClick={() => setSelected(t.id)}>
                     {signalLabel(t.signal)}
                   </span>
-                  <button className={t.analyzer ? 'active' : ''} onClick={() => toggleFft(t.id)}>
-                    FFT
-                  </button>
+                  {hasAnalyzer && (
+                    <button className={t.analyzer ? 'active' : ''} onClick={() => toggleFft(t.id)}>
+                      FFT
+                    </button>
+                  )}
                   {t.analyzer && (
                     <select
                       value={t.analyzer_source}
@@ -1280,6 +1283,7 @@ export function InspectorApp() {
         algorithms={algorithms}
         buffer={selected ? buffers.current.get(selected) : undefined}
         tauri={tauri}
+        showFilters={hasProcessors}
         onColor={(c) => selectedTrace && setColor(signalKey(selectedTrace.signal), c)}
         onRemove={() => selected && removeTrace(selected)}
         onAddStage={(algorithm, params) => selected && addStage(selected, algorithm, params)}
@@ -1502,18 +1506,6 @@ function SignalBrowser({
   )
 }
 
-/** Filter a raw buffer with the TS mirror (browser mock mode only); applies the
- * trace's whole pipeline in order. */
-function mirrorFilter(raw: number[], pipeline: AlgoConfig[], fs: number): number[] {
-  if (pipeline.length === 0) return new Array(raw.length).fill(NaN)
-  const procs = pipeline.map((s) => makeProcessor(s.algorithm, Object.fromEntries(s.params) as Record<string, number>, fs))
-  return raw.map((v) => {
-    let x = v
-    for (const p of procs) x = p.process(x)
-    return x
-  })
-}
-
 /** Merge every trace in a plot onto one sorted time axis (uPlot needs each
  * series to share x), padding each series with NaN where it has no sample.
  * When the union axis exceeds `maxPoints`, min/max decimation (S4) caps the
@@ -1521,23 +1513,11 @@ function mirrorFilter(raw: number[], pipeline: AlgoConfig[], fs: number): number
 function mergedData(
   plot: Plot,
   buffers: Map<string, Ring>,
-  tauri: boolean,
   maxPoints: number,
 ): { data: uPlot.AlignedData; tEnd: number } | null {
   const traces = plot.traces
   const k = traces.length
   const rings = traces.map((tr) => buffers.get(tr.id))
-  // Mock mode has no Rust analyzer, so precompute the TS mirror of the
-  // filtered line once and read it by index during the merge.
-  const mirrors: number[][] | null = tauri
-    ? null
-    : traces.map((tr, i) => {
-        const r = rings[i]
-        if (!r || r.length === 0) return []
-        const raw: number[] = []
-        for (let j = 0; j < r.length; j++) raw.push(r.rawAt(j))
-        return mirrorFilter(raw, tr.pipeline, estimateFs(r))
-      })
 
   // k-way merge over the (already sorted) per-trace rings.
   const cursor = new Array<number>(k).fill(0)
@@ -1560,7 +1540,7 @@ function mergedData(
       const j = cursor[i]
       if (r && j < r.length && r.timeAt(j) === minT) {
         rawCols[i].push(r.rawAt(j))
-        filtCols[i].push(tauri ? r.filtAt(j) : mirrors![i][j])
+        filtCols[i].push(r.filtAt(j))
         cursor[i] = j + 1
       } else {
         rawCols[i].push(NaN)
@@ -1819,6 +1799,7 @@ function PropertiesPanel({
   algorithms,
   buffer,
   tauri,
+  showFilters,
   onColor,
   onRemove,
   onAddStage,
@@ -1833,6 +1814,8 @@ function PropertiesPanel({
   algorithms: AlgorithmInfo[]
   buffer: Ring | undefined
   tauri: boolean
+  /** False in the browser mock: no Rust DSP runtime, so no filter UI. */
+  showFilters: boolean
   onColor: (color: string) => void
   onRemove: () => void
   onAddStage: (algorithm: string, params: [string, number][]) => void
@@ -1898,65 +1881,69 @@ function PropertiesPanel({
         </select>
         {!tauri && <div className="hint">Needs a link (mock data).</div>}
       </div>
-      <div className="prop-title">Filter chain</div>
-      {trace.pipeline.length === 0 && <div className="hint">Raw (no filter).</div>}
-      {trace.pipeline.map((stage, si) => {
-        const info = algorithms.find((a) => a.id === stage.algorithm)
-        return (
-          <div className="prop-row" key={si}>
-            <select
-              value={stage.algorithm}
-              onChange={(e) => {
-                const a = algorithms.find((x) => x.id === e.target.value)
-                const params: [string, number][] = a ? a.params.map((pp) => [pp.key, pp.default]) : []
-                onSetStage(si, { algorithm: e.target.value, params })
-              }}
-            >
-              {algorithms
-                .filter((a) => a.kind === 'processor')
-                .map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name}
-                  </option>
-                ))}
-            </select>
-            <button title="Remove stage" onClick={() => onRemoveStage(si)}>
-              ×
-            </button>
-            {info?.params.map((pp) => {
-              const cur = stage.params.find(([k]) => k === pp.key)?.[1] ?? pp.default
-              return (
-                <label key={pp.key} style={{ fontSize: 11 }}>
-                  {pp.label}
-                  <input
-                    type="number"
-                    style={{ width: 64, background: 'var(--mg-bg)', color: 'var(--mg-ink)', border: '1px solid var(--mg-border)', borderRadius: 4 }}
-                    value={cur}
-                    onChange={(e) => {
-                      const v = Number(e.target.value)
-                      onSetStage(si, {
-                        ...stage,
-                        params: stage.params.map(([k, old]) =>
-                          k === pp.key ? ([k, v] as [string, number]) : ([k, old] as [string, number]),
-                        ),
-                      })
-                    }}
-                  />
-                </label>
-              )
-            })}
-          </div>
-        )
-      })}
-      <button
-        onClick={() => {
-          const a = algorithms.find((x) => x.kind === 'processor')
-          if (!a) return
-          onAddStage(a.id, defaultStageParams(a, fs > 0 ? fs : entry?.rate_hz ?? 0))
-        }}
-      >
-        + Add filter stage
-      </button>
+      {showFilters && (
+        <>
+          <div className="prop-title">Filter chain</div>
+          {trace.pipeline.length === 0 && <div className="hint">Raw (no filter).</div>}
+          {trace.pipeline.map((stage, si) => {
+            const info = algorithms.find((a) => a.id === stage.algorithm)
+            return (
+              <div className="prop-row" key={si}>
+                <select
+                  value={stage.algorithm}
+                  onChange={(e) => {
+                    const a = algorithms.find((x) => x.id === e.target.value)
+                    const params: [string, number][] = a ? a.params.map((pp) => [pp.key, pp.default]) : []
+                    onSetStage(si, { algorithm: e.target.value, params })
+                  }}
+                >
+                  {algorithms
+                    .filter((a) => a.kind === 'processor')
+                    .map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}
+                      </option>
+                    ))}
+                </select>
+                <button title="Remove stage" onClick={() => onRemoveStage(si)}>
+                  ×
+                </button>
+                {info?.params.map((pp) => {
+                  const cur = stage.params.find(([k]) => k === pp.key)?.[1] ?? pp.default
+                  return (
+                    <label key={pp.key} style={{ fontSize: 11 }}>
+                      {pp.label}
+                      <input
+                        type="number"
+                        style={{ width: 64, background: 'var(--mg-bg)', color: 'var(--mg-ink)', border: '1px solid var(--mg-border)', borderRadius: 4 }}
+                        value={cur}
+                        onChange={(e) => {
+                          const v = Number(e.target.value)
+                          onSetStage(si, {
+                            ...stage,
+                            params: stage.params.map(([k, old]) =>
+                              k === pp.key ? ([k, v] as [string, number]) : ([k, old] as [string, number]),
+                            ),
+                          })
+                        }}
+                      />
+                    </label>
+                  )
+                })}
+              </div>
+            )
+          })}
+          <button
+            onClick={() => {
+              const a = algorithms.find((x) => x.kind === 'processor')
+              if (!a) return
+              onAddStage(a.id, defaultStageParams(a, fs > 0 ? fs : entry?.rate_hz ?? 0))
+            }}
+          >
+            + Add filter stage
+          </button>
+        </>
+      )}
       <button className="remove" onClick={onRemove}>
         Remove trace
       </button>
