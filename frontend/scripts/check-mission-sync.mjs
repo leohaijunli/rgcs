@@ -150,6 +150,47 @@ await check('a read-back at wire precision is not a false mismatch', async () =>
   eq(status(), 'synced', 'status')
 })
 
+await check('a command item position echoes through PX4 f32 storage', async () => {
+  // PX4 does not store MAV_FRAME_MISSION items verbatim: it parks their
+  // coordinate fields in the internal `mission_item_s.params[4..6]`, which are
+  // f32 (PX4 mavlink_mission.cpp). The sweep's DO_CHANGE_SPEED carries the
+  // reference position, so the FC echoes `x = round(f32(486493000)) =
+  // 486492992` — the hash must narrow the same way or every sweep upload
+  // reports "FC mission differs from the uploaded plan".
+  reset()
+  useMissionStore.getState().setWaypoints([
+    {
+      position: { latitude_deg: 48.6493, longitude_deg: -123.3982 },
+      altitude: { datum: 'AMSL_EGM96', meters: 0 },
+      command: 178, // DO_CHANGE_SPEED
+      params: [1, 5, -1, 0],
+      autocontinue: true,
+    },
+    {
+      position: { latitude_deg: 48.6493, longitude_deg: -123.3982 },
+      altitude: { datum: 'AMSL_EGM96', meters: 80 },
+      command: 16,
+      params: [0, 0, 0, 0],
+      autocontinue: true,
+    },
+  ])
+  const uploaded = useMissionStore.getState().flyable()
+  eq(uploaded[0].frame, 'mission', 'the speed item compiles to MAV_FRAME_MISSION')
+
+  await useMissionStore.getState().upload()
+  event('upload', 'completed')
+  // The FC's echo: params/z narrowed to f32, and the command item's x/y
+  // round-tripped through PX4's f32 storage (exact for the global waypoint).
+  const echoed = uploaded.map((i) =>
+    i.frame === 'mission'
+      ? { ...i, x: Math.round(Math.fround(i.x)), y: Math.round(Math.fround(i.y)), z: Math.fround(i.z), params: i.params.map(Math.fround) }
+      : { ...i, x: Math.round(i.x), y: Math.round(i.y), z: Math.fround(i.z), params: i.params.map(Math.fround) },
+  )
+  eq(echoed[0].x, Math.fround(uploaded[0].x), 'the echo really is f32-narrowed')
+  useMissionStore.getState().handlePlan(echoed)
+  eq(status(), 'synced', 'status')
+})
+
 await check('editing after a sync reads as unsaved, not unsynced', async () => {
   reset()
   useMissionStore.getState().addWaypointAt(48.6493, -123.3982)
