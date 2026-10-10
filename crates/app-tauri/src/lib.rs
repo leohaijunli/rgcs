@@ -9,6 +9,7 @@ mod command_service;
 mod commands;
 mod inspector_service;
 mod mission_service;
+mod motor_test_state;
 mod state;
 mod telemetry_pump;
 
@@ -39,6 +40,11 @@ pub fn run() {
             actuator_service::actuator_open,
             actuator_service::actuator_close,
             actuator_service::actuator_status,
+            actuator_service::actuator_start_manual,
+            actuator_service::actuator_set_values,
+            actuator_service::actuator_stop,
+            actuator_service::actuator_estop,
+            actuator_service::actuator_reset_emergency,
             inspector_service::inspector_open,
             inspector_service::inspector_close,
             inspector_service::inspector_connect,

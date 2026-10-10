@@ -40,7 +40,8 @@ pub const MAX_BUSY_STREAK: u32 = 3;
 
 /// Session lifecycle (plan §8.3). Profile/Function states arrive with A6/A7;
 /// A2 wires Manual only.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SessionState {
     /// No confirmation, nothing running.
     Idle,

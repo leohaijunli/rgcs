@@ -175,7 +175,11 @@ impl AppState {
     /// a window may (re)register without double-acquiring the subscription
     /// refcount. A missing link is fine — the tap attaches when a link comes
     /// up (via [`attach_inspector`](Self::attach_inspector)).
-    pub fn inspector_connect(&self, handle: Option<ConnectionHandle>, channel: Channel<SampleFrame>) {
+    pub fn inspector_connect(
+        &self,
+        handle: Option<ConnectionHandle>,
+        channel: Channel<SampleFrame>,
+    ) {
         let inspector = self.inspector();
         let first = inspector.frame.lock().is_none();
         *inspector.frame.lock() = Some(channel);
@@ -284,7 +288,9 @@ impl AppState {
             control: control.clone(),
             stop: stop_tx,
         });
-        tauri::async_runtime::spawn(run_replay(source, subs, catalog, tx, stats, control, stop_rx));
+        tauri::async_runtime::spawn(run_replay(
+            source, subs, catalog, tx, stats, control, stop_rx,
+        ));
         tauri::async_runtime::spawn(batch_loop(rx, session, frame));
 
         Ok(UlogInfo {
@@ -416,7 +422,7 @@ async fn batch_loop(
                     }
                 }
                 Ok(None) => return, // tap ended: stop (don't spin on a closed channel)
-                Err(_) => break,   // window elapsed: flush
+                Err(_) => break,    // window elapsed: flush
             }
         }
         if traces.is_empty() {
@@ -448,12 +454,13 @@ pub fn inspector_open(app: AppHandle) -> Result<(), String> {
         let _ = win.set_focus();
         return Ok(());
     }
-    let win = WebviewWindowBuilder::new(&app, "inspector", WebviewUrl::App("inspector.html".into()))
-        .title("Signal Inspector")
-        .inner_size(1280.0, 800.0)
-        .min_inner_size(800.0, 480.0)
-        .build()
-        .map_err(|e| e.to_string())?;
+    let win =
+        WebviewWindowBuilder::new(&app, "inspector", WebviewUrl::App("inspector.html".into()))
+            .title("Signal Inspector")
+            .inner_size(1280.0, 800.0)
+            .min_inner_size(800.0, 480.0)
+            .build()
+            .map_err(|e| e.to_string())?;
     // Belt-and-suspenders on top of the React effect cleanup: closing the
     // window with the X cancels the tap even if the webview's cleanup never
     // runs (plan P0-5). `inspector_disconnect` is idempotent.
@@ -503,10 +510,7 @@ pub fn inspector_disconnect(state: State<'_, AppState>) -> Result<(), String> {
 /// The trace set: binds signals to their filter pipelines and updates the tap's
 /// subscription set to the union of the traces' signals.
 #[tauri::command]
-pub fn inspector_set_traces(
-    state: State<'_, AppState>,
-    traces: Vec<Trace>,
-) -> Result<(), String> {
+pub fn inspector_set_traces(state: State<'_, AppState>, traces: Vec<Trace>) -> Result<(), String> {
     let inspector = state.inspector();
     let ids = inspector
         .session

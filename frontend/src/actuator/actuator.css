@@ -173,3 +173,63 @@ body,
   font-size: 11px;
   color: var(--mg-muted);
 }
+
+/* Per-motor slider rows. */
+.motor-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+
+.motor-label {
+  width: 24px;
+  color: var(--mg-muted);
+}
+
+.motor-row input[type='range'] {
+  flex: 1;
+  accent-color: var(--mg-accent);
+}
+
+.motor-value {
+  width: 38px;
+  text-align: right;
+  color: var(--mg-ink);
+}
+
+/* Typed confirmation for full props. */
+.phrase-input {
+  width: 100%;
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--mg-border);
+  border-radius: 5px;
+  background: var(--mg-bg);
+  color: var(--mg-ink);
+  font-family: var(--mg-font-mono, monospace);
+  font-size: 12px;
+}
+
+.phrase-input:focus {
+  outline: 1px solid var(--mg-accent);
+}
+
+/* Hold-to-start fill. */
+.start-btn.stop {
+  background: var(--mg-warn);
+  border-color: var(--mg-warn);
+  color: var(--mg-canvas, #000);
+}
+
+.hold-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: var(--mg-warn);
+  opacity: 0.45;
+  border-radius: 5px;
+  pointer-events: none;
+}

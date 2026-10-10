@@ -27,7 +27,8 @@ const WATCHED_MESSAGES: &[u32] = &[
 ];
 
 /// What ended a running session (surfaced to the UI, plan §8.3).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum StopReason {
     /// Operator pressed stop.
     Command,
@@ -89,6 +90,15 @@ impl MotorTestService {
         cmd: MotorTestCommand,
     ) -> Result<(), mpsc::error::SendError<MotorTestCommand>> {
         self.cmd_tx.send(cmd).await
+    }
+
+    /// Non-blocking stop-path send (window close): the buffered channel takes
+    /// it without awaiting from a sync context.
+    pub fn try_send(
+        &self,
+        cmd: MotorTestCommand,
+    ) -> Result<(), mpsc::error::TrySendError<MotorTestCommand>> {
+        self.cmd_tx.try_send(cmd)
     }
 }
 

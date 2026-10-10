@@ -16,6 +16,7 @@ use maggcs_core::CommandService;
 use parking_lot::Mutex;
 
 use crate::inspector_service::InspectorState;
+use crate::motor_test_state::MotorTestState;
 
 /// Stable identifier for one connection/vehicle session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -57,6 +58,10 @@ pub struct AppState {
     inner: Mutex<AppInner>,
     /// Signal Inspector tap/catalog/batcher (survives link swaps, ADR-016).
     pub inspector: InspectorState,
+    /// Motor-test service handle + event forwarder (survives link swaps; the
+    /// service itself stops with its link and is re-spawned on the next
+    /// start).
+    pub motor_test: MotorTestState,
     /// Held for the whole duration of a `connect`/`disconnect` command so the
     /// link swap is atomic with respect to other commands (issues.md #21).
     ops: tokio::sync::Mutex<()>,
