@@ -195,6 +195,57 @@ function filteredColor(base: string): string {
   return hslToHex(nh, Math.min(1, s + 0.05), nl)
 }
 
+/** Short display name for a signal: field only. The `sys:comp:msgid` prefix in
+ * `signalKey` is an internal routing key and is not user-facing. */
+function signalLabel(signal: SignalId): string {
+  return signal.field
+}
+
+/** Value-axis unit heuristics by field name (`null` = no unit shown). This is a
+ * raw-data inspector, so units are advisory and cheap: match a few PX4 fields
+ * (attitude, IMU, mag, pressure, altitude) instead of a full schema table. */
+const UNIT_PATTERNS: Array<[RegExp, string]> = [
+  [/mag/i, 'nT'],
+  [/^(roll|pitch|yaw)$/i, 'rad'],
+  [/^(roll|pitch|yaw)speed$/i, 'rad/s'],
+  [/^(x|y|z)?acc/i, 'm/s²'],
+  [/^(x|y|z)?gyro/i, 'rad/s'],
+  [/^temp/i, 'degC'],
+  [/pressure/i, 'hPa'],
+  [/alt/i, 'm'],
+  [/speed/i, 'm/s'],
+]
+
+function signalUnit(field: string): string | null {
+  for (const [re, unit] of UNIT_PATTERNS) {
+    if (re.test(field)) return unit
+  }
+  return null
+}
+
+/** The unit shared by every trace in a plot, or `null` for mixed/no units. */
+function commonUnit(traces: Trace[]): string | null {
+  const units = new Set<string>()
+  for (const t of traces) {
+    const u = signalUnit(t.signal.field)
+    if (u) units.add(u)
+  }
+  return units.size === 1 ? [...units][0] : null
+}
+
+/** Trace indices (into `traces`) of the three mag components, or `null` when
+ * the plot does not carry all of them (the total-intensity curve needs all). */
+function magComponents(traces: Trace[]): { x: number; y: number; z: number } | null {
+  const x = traces.findIndex((t) => t.signal.field === 'xmag')
+  const y = traces.findIndex((t) => t.signal.field === 'ymag')
+  const z = traces.findIndex((t) => t.signal.field === 'zmag')
+  return x >= 0 && y >= 0 && z >= 0 ? { x, y, z } : null
+}
+
+/** Total magnetic-field intensity curve colour: pure red reads on both themes
+ * and is not part of the base palette. */
+const TOTAL_MAG_COLOR = '#ff0000'
+
 let idSeq = 0
 /** A stable id for a plot/trace within this window (persisted in the workspace). */
 function newId(prefix: string): string {
@@ -667,24 +718,29 @@ export function InspectorApp() {
       charts.current.get(p.id)?.destroy()
       chartResizers.current.get(p.id)?.disconnect()
       const cursor = axisLink ? { show: true, sync: { key: SYNC_KEY } } : { show: true }
+      const mag = magComponents(p.traces)
       const series: uPlot.Series[] = [{ label: 't', stroke: 'transparent' }]
       for (const t of p.traces) {
         const color = colorOf(signalKey(t.signal), colors)
-        // Short label (field only) keeps the legend on one line.
-        const name = t.signal.field
+        const unit = signalUnit(t.signal.field)
+        const suffix = unit ? ` (${unit})` : ''
         if (t.pipeline.length === 0) {
           // Without a filter there is only one curve; no phantom "filtered"
           // series (its all-NaN data used to read back as "NaN" in the legend).
-          series.push({ label: name, stroke: color, width: 2 })
+          series.push({ label: `${t.signal.field}${suffix}`, stroke: color, width: 2 })
         } else {
           // The filtered curve gets its own hue so it never hides behind raw.
-          series.push({ label: `${name} raw`, stroke: color, width: 1, dash: [4, 3] })
-          series.push({ label: `${name} filtered`, stroke: filteredColor(color), width: 2 })
+          series.push({ label: `${t.signal.field} raw${suffix}`, stroke: color, width: 1, dash: [4, 3] })
+          series.push({ label: `${t.signal.field} filtered${suffix}`, stroke: filteredColor(color), width: 2 })
         }
       }
+      // When a plot carries all three mag components, append the total
+      // intensity √(x²+y²+z²) as a derived series (computed in mergedData).
+      if (mag) series.push({ label: 'total (nT)', stroke: TOTAL_MAG_COLOR, width: 2 })
       const empty = [
         [],
         ...p.traces.flatMap((t) => (t.pipeline.length > 0 ? [[], []] : [[]])),
+        ...(mag ? [[]] : []),
       ] as unknown as uPlot.AlignedData
       const chart = new uPlot(
         {
@@ -722,8 +778,21 @@ export function InspectorApp() {
           ],
           scales: { x: { time: false, auto: false }, y: { auto: true } },
           axes: [
-            { stroke: INK(), grid: { stroke: MUTED(), width: 1, dash: [2, 4] } },
-            { stroke: INK() },
+            {
+              label: 'time (s)',
+              font: AXIS_FONT,
+              labelFont: AXIS_FONT,
+              labelSize: 16,
+              stroke: INK(),
+              grid: { stroke: MUTED(), width: 1, dash: [2, 4] },
+            },
+            {
+              label: mag ? 'nT' : (commonUnit(p.traces) ?? ''),
+              font: AXIS_FONT,
+              labelFont: AXIS_FONT,
+              labelSize: 16,
+              stroke: INK(),
+            },
           ],
           series,
         },
@@ -1172,7 +1241,7 @@ export function InspectorApp() {
                     />
                   )}
                   <span className="mono" onClick={() => setSelected(t.id)}>
-                    {signalKey(t.signal)}
+                    {signalLabel(t.signal)}
                   </span>
                   <button className={t.analyzer ? 'active' : ''} onClick={() => toggleFft(t.id)}>
                     FFT
@@ -1197,7 +1266,7 @@ export function InspectorApp() {
               ))}
             </div>
             {selected && p.traces.some((t) => t.id === selected) && selectedTrace?.analyzer && (
-              <SpectrumView frame={spectrum(selectedTrace)} label={signalKey(selectedTrace.signal)} />
+              <SpectrumView frame={spectrum(selectedTrace)} label={signalLabel(selectedTrace.signal)} unit={signalUnit(selectedTrace.signal.field)} />
             )}
           </div>
         ))}
@@ -1522,6 +1591,20 @@ function mergedData(
     // Only filtered traces carry a second column, matching the series list.
     if (traces[i].pipeline.length > 0) series.push(outFilt[i].map(gap))
   }
+  // Derived total magnetic intensity √(x²+y²+z²), in the same columns as the
+  // mag components; a gap in any component is a gap in the total.
+  const mag = magComponents(traces)
+  if (mag) {
+    const total = outRaw[mag.x].map((_, i) => {
+      const a = outRaw[mag.x][i]
+      const b = outRaw[mag.y][i]
+      const c = outRaw[mag.z][i]
+      return a == null || b == null || c == null
+        ? null
+        : gap(Math.sqrt(a * a + b * b + c * c))
+    })
+    series.push(total)
+  }
   // `tEnd` is in seconds to match the x data (uPlot scales use the data units).
   return { data: series as uPlot.AlignedData, tEnd: outX[outX.length - 1] / 1000 }
 }
@@ -1769,12 +1852,16 @@ function PropertiesPanel({
   const entry = catalog.find((c) => signalKey(c.signal) === key)
   const fs = buffer ? estimateFs(buffer) : 0
   const messageId = entry?.signal.message_id ?? trace.signal.message_id
+  const unit = signalUnit(trace.signal.field)
   return (
     <aside className="properties">
       <div className="prop-title">Properties</div>
       <dl>
         <dt>Signal</dt>
-        <dd className="mono">{key}</dd>
+        <dd className="mono">
+          {signalLabel(trace.signal)}
+          {unit ? ` (${unit})` : ''}
+        </dd>
         <dt>Message</dt>
         <dd>{entry ? `msg ${messageId}` : `msg ${messageId} (not seen yet)`}</dd>
         <dt>Value</dt>
@@ -1880,7 +1967,7 @@ function PropertiesPanel({
 /** FFT view: one persistent uPlot instance (created on mount, destroyed on
  * unmount) updated via setData — the old inline-ref version created a new
  * chart on every 30 Hz render and leaked DOM. */
-function SpectrumView({ frame, label }: { frame: SpectrumFrame | null; label: string }) {
+function SpectrumView({ frame, label, unit }: { frame: SpectrumFrame | null; label: string; unit: string | null }) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const plotRef = useRef<uPlot | null>(null)
   const roRef = useRef<ResizeObserver | null>(null)
@@ -1907,7 +1994,7 @@ function SpectrumView({ frame, label }: { frame: SpectrumFrame | null; label: st
                 grid: { stroke: MUTED(), width: 1, dash: [2, 4] },
               },
               {
-                label: 'magnitude',
+                label: unit ? `magnitude (${unit})` : 'magnitude',
                 font: AXIS_FONT,
                 labelFont: AXIS_FONT,
                 labelSize: 16,
