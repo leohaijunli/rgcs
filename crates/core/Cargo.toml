@@ -16,3 +16,6 @@ ts-rs.workspace = true
 # Enables futures/alloc so mavlink's "tokio-1" feature compiles (Cargo feature unification).
 futures = { version = "0.3", features = ["alloc"] }
 num-traits = "0.2"
+
+[dev-dependencies]
+serde_json = "1"

@@ -1829,6 +1829,7 @@ dependencies = [
  "mavlink",
  "num-traits",
  "serde",
+ "serde_json",
  "serialport",
  "thiserror 2.0.21",
  "tokio",

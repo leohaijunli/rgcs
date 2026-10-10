@@ -15,6 +15,10 @@ use super::SignalId;
 #[ts(export)]
 pub struct CatalogEntry {
     pub signal: SignalId,
+    /// MAVLink message name (`ATTITUDE`, `HIGHRES_IMU`, …), from
+    /// `mavlink_core::Message::message_name`. Lets the signal tree group and
+    /// label without a hand-maintained id → name map.
+    pub message_name: String,
     pub last_value: f64,
     /// EMA of the arrival rate, Hz.
     pub rate_hz: f64,
@@ -29,6 +33,7 @@ const MIN_DT_S: f64 = 1e-6;
 
 #[derive(Debug)]
 struct EntryState {
+    message_name: String,
     last_value: f64,
     rate_hz: f64,
     last_at: Option<Instant>,
@@ -45,13 +50,18 @@ impl SignalCatalog {
         Self::default()
     }
 
-    /// Record a sample; updates the last value and the EMA rate.
-    pub fn observe(&mut self, id: &SignalId, value: f64, now: Instant) {
+    /// Record a sample; updates the message name, the last value and the EMA
+    /// rate.
+    pub fn observe(&mut self, id: &SignalId, message_name: &str, value: f64, now: Instant) {
         let e = self.entries.entry(id.clone()).or_insert(EntryState {
+            message_name: message_name.to_string(),
             last_value: 0.0,
             rate_hz: 0.0,
             last_at: None,
         });
+        if e.message_name != message_name {
+            e.message_name = message_name.to_string();
+        }
         if value.is_finite() {
             e.last_value = value;
         }
@@ -77,6 +87,7 @@ impl SignalCatalog {
             .iter()
             .map(|(id, s)| CatalogEntry {
                 signal: id.clone(),
+                message_name: s.message_name.clone(),
                 last_value: s.last_value,
                 rate_hz: s.rate_hz,
                 last_seen_ms: now.duration_since(s.last_at.unwrap_or(now)).as_secs_f64() * 1000.0,
@@ -106,12 +117,13 @@ mod tests {
         let mut cat = SignalCatalog::new();
         let id = SignalId::new(1, 1, 30, "roll");
         let t0 = Instant::now();
-        cat.observe(&id, 0.1, t0);
+        cat.observe(&id, "ATTITUDE", 0.1, t0);
         assert_eq!(cat.len(), 1);
-        cat.observe(&id, 0.2, t0 + std::time::Duration::from_millis(10));
-        cat.observe(&id, 0.3, t0 + std::time::Duration::from_millis(20));
+        cat.observe(&id, "ATTITUDE", 0.2, t0 + std::time::Duration::from_millis(10));
+        cat.observe(&id, "ATTITUDE", 0.3, t0 + std::time::Duration::from_millis(20));
         let rows = cat.snapshot(Instant::now());
         assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].message_name, "ATTITUDE");
         assert!((rows[0].last_value - 0.3).abs() < 1e-9, "last value");
         assert!(
             rows[0].rate_hz > 50.0 && rows[0].rate_hz < 150.0,
@@ -124,11 +136,27 @@ mod tests {
     fn snapshot_is_sorted_by_message_then_field() {
         let mut cat = SignalCatalog::new();
         let t = Instant::now();
-        cat.observe(&SignalId::new(1, 1, 105, "zmag"), 1.0, t);
-        cat.observe(&SignalId::new(1, 1, 30, "roll"), 1.0, t);
-        cat.observe(&SignalId::new(1, 1, 30, "pitch"), 1.0, t);
+        cat.observe(&SignalId::new(1, 1, 105, "zmag"), "HIGHRES_IMU", 1.0, t);
+        cat.observe(&SignalId::new(1, 1, 30, "roll"), "ATTITUDE", 1.0, t);
+        cat.observe(&SignalId::new(1, 1, 30, "pitch"), "ATTITUDE", 1.0, t);
         let rows = cat.snapshot(t);
         let ids: Vec<&str> = rows.iter().map(|r| r.signal.field.as_str()).collect();
         assert_eq!(ids, vec!["pitch", "roll", "zmag"], "sorted");
+    }
+
+    #[test]
+    fn catalog_entry_with_nan_serializes_as_null_not_a_panic() {
+        // serde_json writes a non-finite float as `null`; the blackscreen bug
+        // was the frontend choking on that. Pin the wire shape here (plan S5).
+        let entry = CatalogEntry {
+            signal: SignalId::new(1, 1, 30, "roll"),
+            message_name: "ATTITUDE".into(),
+            last_value: f64::NAN,
+            rate_hz: 0.0,
+            last_seen_ms: 0.0,
+        };
+        let json = serde_json::to_string(&entry).expect("serializes without failing");
+        assert!(json.contains("\"last_value\":null"), "{json}");
+        assert!(!json.contains("NaN"), "{json}");
     }
 }

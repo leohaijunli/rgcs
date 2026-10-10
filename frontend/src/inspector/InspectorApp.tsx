@@ -1,23 +1,39 @@
 // Signal Inspector (plan §6, ADR-016): a separate window that buffers the raw
-// signal stream into ring buffers and renders uPlot time plots with raw +
-// filtered traces. In Tauri mode the filter pipeline runs in Rust
-// (`core::inspector::session`, ADR-015) and the frames carry the filtered
-// values; in browser mock mode a TS mirror of `core::dsp` previews the filters.
-// P7: run/pause, window duration, clear, cursor, CSV export, axis linking, a
-// properties panelainer, workspace save/loadasiato and SET_MESSAGE_INTERVAL rate control.
+// signal stream into per-trace ring buffers and renders uPlot time plots. The
+// document is a set of plot windows; each plot draws one or more traces, and a
+// trace binds a signal to a filter chain (optionally an FFT analyzer). In Tauri
+// mode the pipeline runs in Rust (`core::inspector::session`, ADR-015) and
+// frames arrive columnar, keyed by trace id; in browser mock mode a TS mirror
+// of `core::dsp` previews the filters.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import uPlot from 'uplot'
 import { invoke, Channel } from '@tauri-apps/api/core'
 import { makeProcessor, magnitudeSpectrum, type AlgorithmInfo } from './dsp'
-import { isTauri, mockCatalog, mockSamples, msgName, signalKey } from './mock'
+import { isTauri, mockAlgorithms, mockCatalog, mockSamples, msgName, signalKey } from './mock'
+import type { AlgoConfig } from '../generated-types/AlgoConfig'
+import type { AnalyzerSource } from '../generated-types/AnalyzerSource'
 import type { CatalogEntry } from '../generated-types/CatalogEntry'
+import type { Plot } from '../generated-types/Plot'
 import type { SignalId } from '../generated-types/SignalId'
-import type { TraceSample } from '../generated-types/TraceSample'
+import type { SpectrumFrame } from '../generated-types/SpectrumFrame'
+import type { Trace } from '../generated-types/Trace'
 
+/** Rust `TraceFrame` (inspector_service.rs): columnar, so the SignalId is not
+ * repeated per sample. */
+interface TraceFrame {
+  trace_id: string
+  t: number[]
+  raw: number[]
+  filtered: number[]
+}
+
+/** Rust `SampleFrame`. */
 interface FramePayload {
   seq: number
-  samples: TraceSample[]
+  traces: TraceFrame[]
+  /** Analyzer windows completed since the last frame (S3: FFT in Rust). */
+  spectra: { trace_id: string; frame: SpectrumFrame }[]
 }
 
 /** Rust `InspectorStatus` (inspector_service.rs). */
@@ -29,11 +45,6 @@ interface InspectorStatus {
   tap_running: boolean
 }
 
-interface FilterCfg {
-  algo: string
-  params: Record<string, number>
-}
-
 interface Buffer {
   t: number[]
   raw: number[]
@@ -41,14 +52,38 @@ interface Buffer {
 }
 
 interface Workspace {
+  version: 2
   windowSec: number
-  checked: string[]
-  filterBy: Record<string, FilterCfg>
+  plots: Plot[]
+  colors: Record<string, string>
   axisLink: boolean
 }
 
 const WS_KEY = 'maggcs.inspector.workspace'
 const SYNC_KEY = 'maggcs-inspector'
+
+/** Default series palette; a trace picks one by hashing its id, override-able. */
+const PALETTE = ['#4ea1ff', '#3ddc84', '#ffb454', '#ff6b6b', '#c792ea', '#22d3ee', '#f472b6', '#a3e635']
+
+function hashIndex(s: string): number {
+  let h = 0
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0
+  return Math.abs(h)
+}
+function colorOf(traceId: string, colors: Record<string, string>): string {
+  return colors[traceId] ?? PALETTE[hashIndex(traceId) % PALETTE.length]
+}
+
+let idSeq = 0
+/** A stable id for a plot/trace within this window (persisted in the workspace). */
+function newId(prefix: string): string {
+  idSeq += 1
+  return `${prefix}${Date.now().toString(36)}${idSeq}`
+}
+
+function newTrace(signal: SignalId): Trace {
+  return { id: newId('t'), signal, pipeline: [], analyzer: null, analyzer_source: 'raw' }
+}
 
 function token(name: string): string {
   const cached = cssVarCache.get(name)
@@ -58,27 +93,23 @@ function token(name: string): string {
   return v
 }
 const cssVarCache = new Map<string, string>()
-const ACCENT = () => token('--mg-accent')
 const MUTED = () => token('--mg-muted')
 
-/** Resolve a signal-key to its wire SignalId (fallback for a not-yet-seen signal). */
-function signalFor(key: string, catalog: CatalogEntry[]): SignalId {
-  const entry = catalog.find((c) => signalKey(c.signal) === key)
-  return entry
-    ? entry.signal
-    : { system_id: 1, component_id: 1, message_id: 30, field: key.split('.').pop() ?? key }
+/** The trace with this id, across every plot. */
+function findTrace(plots: Plot[], id: string): Trace | undefined {
+  for (const p of plots) for (const t of p.traces) if (t.id === id) return t
+  return undefined
 }
 
 export function InspectorApp() {
   const tauri = isTauri()
   const [catalog, setCatalog] = useState<CatalogEntry[]>([])
   const [algorithms, setAlgorithms] = useState<AlgorithmInfo[]>([])
-  const [checked, setChecked] = useState<Set<string>>(new Set())
-  const [filterBy, setFilterBy] = useState<Record<string, FilterCfg>>({})
+  const [plots, setPlots] = useState<Plot[]>([])
+  const [colors, setColors] = useState<Record<string, string>>({})
   const [paused, setPaused] = useState(false)
   const [windowSec, setWindowSec] = useState(30)
   const [version, setVersion] = useState(0)
-  const [spectrumFor, setSpectrumFor] = useState<string | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
   const [axisLink, setAxisLink] = useState(false)
   const [status, setStatus] = useState<InspectorStatus | null>(null)
@@ -98,18 +129,84 @@ export function InspectorApp() {
   pausedRef.current = paused
   const windowRef = useRef(windowSec)
   windowRef.current = windowSec
+  const plotsRef = useRef(plots)
+  plotsRef.current = plots
 
   const buffers = useRef<Map<string, Buffer>>(new Map())
-  const plots = useRef<Map<string, uPlot>>(new Map())
-  const plotHosts = useRef<Map<string, HTMLDivElement>>(new Map())
+  /** Latest Rust-computed spectrum per trace (S3). */
+  const spectra = useRef<Map<string, SpectrumFrame>>(new Map())
+  const charts = useRef<Map<string, uPlot>>(new Map())
+  const chartSigs = useRef<Map<string, string>>(new Map())
+  const chartHosts = useRef<Map<string, HTMLDivElement>>(new Map())
 
   const bump = useCallback(() => setVersion((v) => v + 1), [])
 
-  // Workspace save/load (P7): the checked set, filters, window and axis link.
+  /** checked = every signal that currently has a trace (for the tree). */
+  const checked = useMemo(
+    () => new Set(plots.flatMap((p) => p.traces.map((t) => signalKey(t.signal)))),
+    [plots],
+  )
+
+  const patchTrace = useCallback((id: string, patch: (t: Trace) => Trace) => {
+    setPlots((prev) =>
+      prev.map((p) => ({ ...p, traces: p.traces.map((t) => (t.id === id ? patch(t) : t)) })),
+    )
+  }, [])
+
+  /** Remove every trace matching `pred`, dropping a plot once it is empty. */
+  const removeTracesWhere = useCallback((pred: (t: Trace) => boolean) => {
+    setPlots((prev) => {
+      const out: Plot[] = []
+      for (const p of prev) {
+        if (!p.traces.some(pred)) {
+          out.push(p)
+          continue
+        }
+        const traces = p.traces.filter((t) => !pred(t))
+        if (traces.length > 0) out.push({ ...p, traces })
+      }
+      return out
+    })
+  }, [])
+
+  const removeTrace = useCallback((id: string) => removeTracesWhere((t) => t.id === id), [removeTracesWhere])
+
+  const removePlot = useCallback((id: string) => setPlots((prev) => prev.filter((p) => p.id !== id)), [])
+
+  const addPlot = useCallback(() => {
+    setPlots((prev) => [...prev, { id: newId('p'), title: `Plot ${prev.length + 1}`, traces: [] }])
+  }, [])
+
+  const addTraceToPlot = useCallback((plotId: string, signal: SignalId) => {
+    setPlots((prev) =>
+      prev.map((p) => (p.id === plotId ? { ...p, traces: [...p.traces, newTrace(signal)] } : p)),
+    )
+  }, [])
+
+  const setColor = useCallback((traceId: string, color: string) => {
+    setColors((prev) => ({ ...prev, [traceId]: color }))
+  }, [])
+
+  /** Check/uncheck a signal: add it as a new single-trace plot, or drop it. */
+  const toggleSignal = useCallback(
+    (signal: SignalId) => {
+      const key = signalKey(signal)
+      const exists = plotsRef.current.some((p) => p.traces.some((t) => signalKey(t.signal) === key))
+      if (exists) {
+        removeTracesWhere((t) => signalKey(t.signal) === key)
+      } else {
+        setPlots((prev) => [...prev, { id: newId('p'), title: key, traces: [newTrace(signal)] }])
+      }
+    },
+    [removeTracesWhere],
+  )
+
+  // Workspace save/load (P7 + S2/S3): plots (with full SignalIds + chains),
+  // colors, window and axis link. v1 (`checked`/`filterBy` by key) is dropped.
   const saveWorkspace = useCallback(() => {
-    const ws: Workspace = { windowSec, checked: [...checked], filterBy, axisLink }
+    const ws: Workspace = { version: 2, windowSec, plots, colors, axisLink }
     localStorage.setItem(WS_KEY, JSON.stringify(ws))
-  }, [windowSec, checked, filterBy, axisLink])
+  }, [windowSec, plots, colors, axisLink])
 
   const loadWorkspace = useCallback(() => {
     const raw = localStorage.getItem(WS_KEY)
@@ -117,51 +214,67 @@ export function InspectorApp() {
     try {
       const ws = JSON.parse(raw) as Workspace
       if (typeof ws.windowSec === 'number') setWindowSec(ws.windowSec)
-      if (Array.isArray(ws.checked)) setChecked(new Set(ws.checked))
-      if (ws.filterBy && typeof ws.filterBy === 'object') setFilterBy(ws.filterBy)
+      if (Array.isArray(ws.plots)) setPlots(ws.plots)
+      if (ws.colors && typeof ws.colors === 'object') setColors(ws.colors)
       setAxisLink(Boolean(ws.axisLink))
     } catch {
       // Corrupt workspace: keep the defaults.
     }
   }, [])
 
+  /** Route one live sample to every trace bound to its signal. */
+  const routeSample = useCallback(
+    (id: SignalId, t_ms: number, raw: number, filtered: number, touched: Set<Buffer>) => {
+      const key = signalKey(id)
+      for (const p of plotsRef.current) {
+        for (const t of p.traces) {
+          if (signalKey(t.signal) !== key) continue
+          const b = buffers.current.get(t.id) ?? { t: [], raw: [], filtered: [] }
+          b.t.push(t_ms)
+          b.raw.push(raw)
+          b.filtered.push(filtered)
+          buffers.current.set(t.id, b)
+          touched.add(b)
+        }
+      }
+    },
+    [],
+  )
+
   // Data source: the Tauri channel when running in the app, the mock otherwise.
   useEffect(() => {
     loadWorkspace()
     if (!tauri) {
       const id = setInterval(() => {
-        if (pausedRef.current) return
         const now = performance.now() / 1000
-        for (const s of mockSamples(now)) {
-          const key = signalKey(s.id)
-          const b = buffers.current.get(key) ?? { t: [], raw: [], filtered: [] }
-          b.t.push(s.t_ms)
-          b.raw.push(s.value)
-          b.filtered.push(NaN)
-          buffers.current.set(key, b)
-          trimBuffer(b, windowRef.current)
-        }
+        const touched = new Set<Buffer>()
+        for (const s of mockSamples(now)) routeSample(s.id, s.t_ms, s.value, NaN, touched)
+        for (const b of touched) trimBuffer(b, windowRef.current, 1024)
         bump()
       }, 10)
       setCatalog(mockCatalog())
+      setAlgorithms(mockAlgorithms())
       return () => clearInterval(id)
     }
     let disposed = false
     const channel = new Channel<FramePayload>()
     const onMessage = (frame: FramePayload) => {
-      if (pausedRef.current) return
       const touched = new Set<Buffer>()
-      for (const s of frame.samples) {
-        const key = signalKey(s.id)
-        const b = buffers.current.get(key) ?? { t: [], raw: [], filtered: [] }
-        // serde_json writes NaN as null; turn it back into NaN (a gap in uPlot).
-        b.t.push(s.t_ms)
-        b.raw.push(s.raw ?? NaN)
-        b.filtered.push(s.filtered ?? NaN)
-        buffers.current.set(key, b)
+      for (const tf of frame.traces) {
+        const b = buffers.current.get(tf.trace_id) ?? { t: [], raw: [], filtered: [] }
+        for (let i = 0; i < tf.t.length; i++) {
+          b.t.push(tf.t[i])
+          // serde_json writes NaN as null; turn it back into NaN (a gap in uPlot).
+          b.raw.push(tf.raw[i] ?? NaN)
+          b.filtered.push(tf.filtered[i] ?? NaN)
+        }
+        buffers.current.set(tf.trace_id, b)
         touched.add(b)
       }
-      for (const b of touched) trimBuffer(b, windowRef.current)
+      for (const sf of frame.spectra) spectra.current.set(sf.trace_id, sf.frame)
+      // The Rust analyzer keeps its own window, so the view buffer only needs
+      // the visible span (S3: FFT decoupled from the plot window).
+      for (const b of touched) trimBuffer(b, windowRef.current, 2)
       bump()
     }
     channel.onmessage = onMessage
@@ -187,27 +300,21 @@ export function InspectorApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tauri, bump])
 
-  // Push the trace set (signals + their pipelines) to the Rust session. The
-  // session resets the filter for a changed trace, so clear its filtered
-  // buffer: the filtered line restarts at the next sample (SDI behavior).
+  // Push the flattened trace set (signal + pipeline + analyzer) to the Rust
+  // session. An unchanged trace keeps its running state; a changed one is
+  // rebuilt, so a filter change restarts that curve (SDI behavior).
   useEffect(() => {
     if (!tauri) return
-    const traces: Array<{ signal: SignalId; pipeline: { algorithm: string; params: [string, number][] }[]; analyzer: null }> = []
-    for (const key of checked) {
-      const cfg = filterBy[key]
-      const pipeline =
-        cfg && cfg.algo !== 'none'
-          ? [{ algorithm: cfg.algo, params: Object.entries(cfg.params) as [string, number][] }]
-          : []
-      traces.push({ signal: signalFor(key, catalog), pipeline, analyzer: null })
-    }
+    const traces = plots.flatMap((p) => p.traces)
     void invoke('inspector_set_traces', { traces }).catch((e) => showNotice(String(e)))
-  }, [checked, filterBy, tauri, catalog])
+  }, [plots, tauri])
 
-  // On a filter change, drop the stale filtered history so the trace restarts.
+  // Drop buffers/spectra for traces that no longer exist.
   useEffect(() => {
-    for (const b of buffers.current.values()) b.filtered = []
-  }, [filterBy, tauri])
+    const live = new Set(plots.flatMap((p) => p.traces.map((t) => t.id)))
+    for (const id of [...buffers.current.keys()]) if (!live.has(id)) buffers.current.delete(id)
+    for (const id of [...spectra.current.keys()]) if (!live.has(id)) spectra.current.delete(id)
+  }, [plots])
 
   // Refresh the catalog periodically so the tree fills as signals arrive, and
   // poll the tap/link status for the toolbar (dropped, msg/s, link state).
@@ -241,7 +348,7 @@ export function InspectorApp() {
 
   // Trim every buffer to the selected window (keep at least one FFT window).
   useEffect(() => {
-    const keep = Math.max(1024, Math.ceil((windowSec * 1000) / 10))
+    const keep = Math.max(tauri ? 2 : 1024, Math.ceil((windowSec * 1000) / 10))
     for (const [key, b] of buffers.current) {
       if (b.t.length > keep) {
         b.t = b.t.slice(-keep)
@@ -250,17 +357,29 @@ export function InspectorApp() {
         buffers.current.set(key, b)
       }
     }
-  }, [windowSec])
+  }, [windowSec, tauri])
 
-  // Create/destroy the checked plots. Rebuilt when axis linking toggles so the
-  // cursor sync key applies (uPlot has no runtime setter for it).
+  // Create/destroy one uPlot per plot. Recreated when its trace set or the
+  // per-trace colors change (series are fixed at construction) or axis linking
+  // toggles (the cursor sync key has no runtime setter).
   useEffect(() => {
-    for (const key of checked) {
-      if (plots.current.has(key)) continue
-      const host = plotHosts.current.get(key)
+    for (const p of plots) {
+      if (p.traces.length === 0) continue
+      const host = chartHosts.current.get(p.id)
       if (!host) continue
+      const sig = `${axisLink}|${p.traces.map((t) => `${t.id}:${colorOf(t.id, colors)}`).join(',')}`
+      if (charts.current.has(p.id) && chartSigs.current.get(p.id) === sig) continue
+      charts.current.get(p.id)?.destroy()
       const cursor = axisLink ? { show: true, sync: { key: SYNC_KEY } } : { show: true }
-      const plot = new uPlot(
+      const series: uPlot.Series[] = [{ label: 't', stroke: 'transparent' }]
+      for (const t of p.traces) {
+        const color = colorOf(t.id, colors)
+        const name = signalKey(t.signal)
+        series.push({ label: `${name} raw`, stroke: color, width: 1, dash: [4, 3] })
+        series.push({ label: `${name} filtered`, stroke: color, width: 2 })
+      }
+      const empty = [[], ...p.traces.flatMap(() => [[], []])] as unknown as uPlot.AlignedData
+      const chart = new uPlot(
         {
           width: host.clientWidth,
           height: 180,
@@ -271,69 +390,56 @@ export function InspectorApp() {
             { stroke: MUTED(), grid: { stroke: MUTED(), width: 1, dash: [2, 4] } },
             { stroke: MUTED() },
           ],
-          series: [
-            { label: 't', stroke: 'transparent' },
-            { label: 'raw', stroke: ACCENT() },
-            { label: 'filtered', stroke: token('--mg-ok'), width: 2 },
-          ],
+          series,
         },
-        [[], [], []],
+        empty,
         host,
       )
-      plots.current.set(key, plot)
+      charts.current.set(p.id, chart)
+      chartSigs.current.set(p.id, sig)
     }
-    for (const key of [...plots.current.keys()]) {
-      if (!checked.has(key)) {
-        plots.current.get(key)?.destroy()
-        plots.current.delete(key)
+    for (const id of [...charts.current.keys()]) {
+      if (!plots.some((p) => p.id === id && p.traces.length > 0)) {
+        charts.current.get(id)?.destroy()
+        charts.current.delete(id)
+        chartSigs.current.delete(id)
       }
     }
-  }, [checked, axisLink])
+  }, [plots, axisLink, colors])
 
-  // Feed data into the plots whenever new samples arrive or filters change.
+  // Feed data into the charts whenever new samples arrive or filters change.
+  // Paused = freeze the view (SDI behavior): data keeps buffering above, but the
+  // visible window stops advancing until Run.
   useEffect(() => {
-    for (const key of checked) {
-      const plot = plots.current.get(key)
-      const b = buffers.current.get(key)
-      if (!plot || !b || b.t.length < 2) continue
-      const cfg = filterBy[key]
-      const fs = estimateFs(b)
-      const raw = b.raw
-      const filt = tauri ? b.filtered : mirrorFilter(raw, cfg, fs)
-      const data: Float64Array[] = [
-        Float64Array.from(b.t, (v) => v / 1000),
-        Float64Array.from(raw, (v) => (Number.isFinite(v) ? v : NaN)),
-        Float64Array.from(filt, (v) => (Number.isFinite(v) ? v : NaN)),
-      ]
-      plot.setData(data as uPlot.AlignedData)
-      const tEnd = data[0][data[0].length - 1]
-      if (tEnd > 0) plot.setScale('x', { min: tEnd - windowRef.current, max: tEnd })
+    if (pausedRef.current) return
+    for (const p of plots) {
+      const chart = charts.current.get(p.id)
+      if (!chart) continue
+      const merged = mergedData(p, buffers.current, tauri)
+      if (!merged) continue
+      chart.setData(merged.data)
+      if (merged.tEnd > 0) chart.setScale('x', { min: merged.tEnd - windowRef.current, max: merged.tEnd })
     }
-  }, [version, checked, filterBy, tauri])
+  }, [version, plots, tauri, paused])
 
   useEffect(() => {
-    for (const plot of plots.current.values()) plot.redraw()
+    for (const chart of charts.current.values()) chart.redraw()
   }, [windowSec])
-
-  const toggle = (key: string) => {
-    setChecked((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
-  }
 
   const clearAll = () => {
     buffers.current.clear()
-    for (const p of plots.current.values()) p.setData([[], [], []])
+    for (const chart of charts.current.values()) chart.setData(chart.series.map(() => []) as unknown as uPlot.AlignedData)
   }
 
   const exportCsv = () => {
-    const rows: string[] = ['t_ms,key,raw,filtered']
-    for (const [key, b] of buffers.current) {
-      for (let i = 0; i < b.t.length; i++) {
-        rows.push(`${b.t[i].toFixed(1)},${key},${b.raw[i]},${b.filtered[i] ?? ''}`)
+    const rows: string[] = ['t_ms,trace,raw,filtered']
+    for (const p of plots) {
+      for (const t of p.traces) {
+        const b = buffers.current.get(t.id)
+        if (!b) continue
+        for (let i = 0; i < b.t.length; i++) {
+          rows.push(`${b.t[i].toFixed(1)},${signalKey(t.signal)},${b.raw[i]},${b.filtered[i] ?? ''}`)
+        }
       }
     }
     const blob = new Blob([rows.join('\n')], { type: 'text/csv' })
@@ -345,16 +451,69 @@ export function InspectorApp() {
     URL.revokeObjectURL(url)
   }
 
-  const spectrum = (key: string): { bins: number[]; peakFreqHz: number; fs: number; deltaF: number } | null => {
-    const b = buffers.current.get(key)
+  /** Latest spectrum for a trace: computed in Rust in the app (decoupled from
+   * the view window), the TS mirror in mock mode. */
+  const spectrum = (trace: Trace): SpectrumFrame | null => {
+    if (tauri) return spectra.current.get(trace.id) ?? null
+    const b = buffers.current.get(trace.id)
     if (!b) return null
     const n = 1024
     const recent = b.raw.slice(-n)
     if (recent.length < n) return null
     const fs = estimateFs(b)
     const s = magnitudeSpectrum(recent, fs)
-    return s ? { bins: s.bins, peakFreqHz: s.peakFreqHz, fs, deltaF: s.deltaF } : null
+    return s
+      ? {
+          fs,
+          n: s.n,
+          delta_f: s.deltaF,
+          nyquist: s.nyquist,
+          bins: s.bins,
+          peak_bin: s.peakBin,
+          peak_freq_hz: s.peakFreqHz,
+          peak_value: s.peakValue,
+        }
+      : null
   }
+
+  /** FFT button: attach/detach the analyzer on a trace (runs in Rust in the
+   * app; the TS mirror is used in mock mode). */
+  const toggleFft = useCallback(
+    (id: string) => {
+      patchTrace(id, (t) => {
+        if (t.analyzer) return { ...t, analyzer: null }
+        const a = algorithms.find((x) => x.kind === 'analyzer')
+        const params: [string, number][] = a ? a.params.map((pp) => [pp.key, pp.default]) : [['n', 1024]]
+        return { ...t, analyzer: { algorithm: a?.id ?? 'fft', params } }
+      })
+    },
+    [algorithms, patchTrace],
+  )
+
+  /** Append a filter stage (the pipeline is multi-stage: detrend → LPF → …). */
+  const addStage = useCallback(
+    (id: string) => {
+      const a = algorithms.find((x) => x.kind === 'processor')
+      if (!a) return
+      const params: [string, number][] = a.params.map((pp) => [pp.key, pp.default])
+      patchTrace(id, (t) => ({ ...t, pipeline: [...t.pipeline, { algorithm: a.id, params }] }))
+    },
+    [algorithms, patchTrace],
+  )
+
+  const removeStage = useCallback(
+    (id: string, index: number) =>
+      patchTrace(id, (t) => ({ ...t, pipeline: t.pipeline.filter((_, i) => i !== index) })),
+    [patchTrace],
+  )
+
+  const setStage = useCallback(
+    (id: string, index: number, next: AlgoConfig) =>
+      patchTrace(id, (t) => ({ ...t, pipeline: t.pipeline.map((s, i) => (i === index ? next : s)) })),
+    [patchTrace],
+  )
+
+  const selectedTrace = selected ? findTrace(plots, selected) : undefined
 
   return (
     <div className="inspector-grid">
@@ -370,6 +529,7 @@ export function InspectorApp() {
         <button className={axisLink ? 'active' : ''} onClick={() => setAxisLink(!axisLink)}>
           Link axes
         </button>
+        <button onClick={addPlot}>New plot</button>
         <button onClick={clearAll}>Clear data</button>
         <button onClick={exportCsv}>Export CSV</button>
         <button onClick={saveWorkspace}>Save</button>
@@ -387,75 +547,99 @@ export function InspectorApp() {
       </div>
       {notice && <div className="inspector-notice">{notice}</div>}
 
-      <SignalBrowser catalog={catalog} checked={checked} onToggle={toggle} />
+      <SignalBrowser catalog={catalog} checked={checked} onToggle={toggleSignal} />
 
       <div className="plot-grid">
-        {[...checked].map((key) => (
-          <div className="plot" key={key}>
+        {plots.map((p) => (
+          <div className="plot" key={p.id}>
             <div className="plot-head">
-              <span className={`title ${selected === key ? 'selected' : ''}`} onClick={() => setSelected(key)}>
-                {key}
-              </span>
+              <span className="title">{p.title || 'Plot'}</span>
               <select
-                value={filterBy[key]?.algo ?? 'none'}
+                value=""
+                title="Add a signal to this plot"
                 onChange={(e) => {
-                  const algo = e.target.value
-                  const params: Record<string, number> = {}
-                  const info = algorithms.find((a) => a.id === algo)
-                  if (info) for (const p of info.params) params[p.key] = p.default
-                  setFilterBy((prev) => ({ ...prev, [key]: { algo, params } }))
+                  const entry = catalog.find((c) => signalKey(c.signal) === e.target.value)
+                  if (entry) addTraceToPlot(p.id, entry.signal)
                 }}
               >
-                <option value="none">raw</option>
-                {algorithms.filter((a) => a.kind === 'processor').map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name}
-                  </option>
-                ))}
+                <option value="">+ Signal</option>
+                {catalog
+                  .filter((c) => !p.traces.some((t) => signalKey(t.signal) === signalKey(c.signal)))
+                  .map((c) => (
+                    <option key={signalKey(c.signal)} value={signalKey(c.signal)}>
+                      {c.message_name}.{c.signal.field}
+                    </option>
+                  ))}
               </select>
-              {filterBy[key] && filterBy[key].algo !== 'none' && (
-                <>
-                  {algorithms
-                    .find((a) => a.id === filterBy[key].algo)
-                    ?.params.map((p) => (
-                      <label key={p.key} style={{ fontSize: 11 }}>
-                        {p.label}
-                        <input
-                          type="number"
-                          style={{ width: 60, background: 'var(--mg-bg)', color: 'var(--mg-ink)', border: '1px solid var(--mg-border)', borderRadius: 4 }}
-                          value={filterBy[key].params[p.key] ?? p.default}
-                          onChange={(e) =>
-                            setFilterBy((prev) => ({
-                              ...prev,
-                              [key]: { ...prev[key], params: { ...prev[key].params, [p.key]: Number(e.target.value) } },
-                            }))
-                          }
-                        />
-                      </label>
-                    ))}
-                </>
-              )}
-              <button
-                className={spectrumFor === key ? 'active' : ''}
-                onClick={() => setSpectrumFor(spectrumFor === key ? null : key)}
-              >
-                FFT
+              <button title="Remove plot" onClick={() => removePlot(p.id)}>
+                ×
               </button>
-              <button onClick={() => toggle(key)}>×</button>
             </div>
-            <div ref={(el) => el && plotHosts.current.set(key, el)} className="chart" />
-            {spectrumFor === key && <SpectrumView key={key} data={spectrum(key)} label={key} />}
+            {p.traces.length === 0 ? (
+              <div className="peak-note">Empty plot — add a signal.</div>
+            ) : (
+              <div
+                ref={(el) => {
+                  if (el) chartHosts.current.set(p.id, el)
+                  else chartHosts.current.delete(p.id)
+                }}
+                className="chart"
+              />
+            )}
+            <div className="trace-chips">
+              {p.traces.map((t) => (
+                <span className={`trace-chip ${selected === t.id ? 'selected' : ''}`} key={t.id}>
+                  <input
+                    type="color"
+                    title="Series color"
+                    value={colorOf(t.id, colors)}
+                    onChange={(e) => setColor(t.id, e.target.value)}
+                  />
+                  <span className="mono" onClick={() => setSelected(t.id)}>
+                    {signalKey(t.signal)}
+                  </span>
+                  <button className={t.analyzer ? 'active' : ''} onClick={() => toggleFft(t.id)}>
+                    FFT
+                  </button>
+                  {t.analyzer && (
+                    <select
+                      value={t.analyzer_source}
+                      title="Analyzer input"
+                      onChange={(e) => {
+                        const src = e.target.value as AnalyzerSource
+                        patchTrace(t.id, (tr) => ({ ...tr, analyzer_source: src }))
+                      }}
+                    >
+                      <option value="raw">raw</option>
+                      <option value="filtered">filtered</option>
+                    </select>
+                  )}
+                  <button title="Remove trace" onClick={() => removeTrace(t.id)}>
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+            {selected && p.traces.some((t) => t.id === selected) && selectedTrace?.analyzer && (
+              <SpectrumView frame={spectrum(selectedTrace)} label={signalKey(selectedTrace.signal)} />
+            )}
           </div>
         ))}
       </div>
 
       <PropertiesPanel
         selected={selected}
+        trace={selectedTrace}
+        color={selected ? colorOf(selected, colors) : undefined}
         catalog={catalog}
+        algorithms={algorithms}
         buffer={selected ? buffers.current.get(selected) : undefined}
-        filterBy={selected ? filterBy[selected] : undefined}
         tauri={tauri}
-        onRemove={() => selected && toggle(selected)}
+        onColor={(c) => selected && setColor(selected, c)}
+        onRemove={() => selected && removeTrace(selected)}
+        onAddStage={() => selected && addStage(selected)}
+        onRemoveStage={(i) => selected && removeStage(selected, i)}
+        onSetStage={(i, next) => selected && setStage(selected, i, next)}
         onError={showNotice}
       />
     </div>
@@ -471,7 +655,7 @@ function SignalBrowser({
 }: {
   catalog: CatalogEntry[]
   checked: Set<string>
-  onToggle: (key: string) => void
+  onToggle: (signal: SignalId) => void
 }) {
   const [query, setQuery] = useState('')
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
@@ -480,7 +664,7 @@ function SignalBrowser({
   const groups = useMemo(() => {
     const byMsg = new Map<string, CatalogEntry[]>()
     for (const c of catalog) {
-      const name = msgName(c.signal.message_id)
+      const name = c.message_name || msgName(c.signal.message_id)
       const arr = byMsg.get(name) ?? []
       arr.push(c)
       byMsg.set(name, arr)
@@ -540,7 +724,7 @@ function SignalBrowser({
                 const key = signalKey(c.signal)
                 return (
                   <label key={key}>
-                    <input type="checkbox" checked={checked.has(key)} onChange={() => onToggle(key)} />
+                    <input type="checkbox" checked={checked.has(key)} onChange={() => onToggle(c.signal)} />
                     <span className="mono">{c.signal.field}</span>
                     <span className="msg">
                       {' '}
@@ -556,11 +740,57 @@ function SignalBrowser({
   )
 }
 
-/** Filter a raw buffer with the TS mirror (browser mock mode only). */
-function mirrorFilter(raw: number[], cfg: FilterCfg | undefined, fs: number): number[] {
-  if (!cfg || cfg.algo === 'none') return new Array(raw.length).fill(NaN)
-  const proc = makeProcessor(cfg.algo, cfg.params, fs)
-  return raw.map((v) => proc.process(v))
+/** Filter a raw buffer with the TS mirror (browser mock mode only); applies the
+ * trace's whole pipeline in order. */
+function mirrorFilter(raw: number[], pipeline: AlgoConfig[], fs: number): number[] {
+  if (pipeline.length === 0) return new Array(raw.length).fill(NaN)
+  const procs = pipeline.map((s) => makeProcessor(s.algorithm, Object.fromEntries(s.params) as Record<string, number>, fs))
+  return raw.map((v) => {
+    let x = v
+    for (const p of procs) x = p.process(x)
+    return x
+  })
+}
+
+/** Merge every trace in a plot onto one sorted time axis (uPlot needs each
+ * series to share x), padding each series with NaN where it has no sample. */
+function mergedData(
+  plot: Plot,
+  buffers: Map<string, Buffer>,
+  tauri: boolean,
+): { data: uPlot.AlignedData; tEnd: number } | null {
+  const columns: { t: number[]; raw: number[]; filt: number[] }[] = []
+  const stamps = new Set<number>()
+  for (const tr of plot.traces) {
+    const b = buffers.get(tr.id)
+    if (!b || b.t.length === 0) {
+      columns.push({ t: [], raw: [], filt: [] })
+      continue
+    }
+    const filt = tauri ? b.filtered : mirrorFilter(b.raw, tr.pipeline, estimateFs(b))
+    for (const x of b.t) stamps.add(x)
+    columns.push({ t: b.t, raw: b.raw, filt })
+  }
+  const xs = [...stamps].sort((a, b) => a - b)
+  if (xs.length < 2) return null
+  const x = Float64Array.from(xs, (v) => v / 1000)
+  const series: Float64Array[] = [x]
+  for (const c of columns) {
+    const rawMap = new Map<number, number>()
+    const filtMap = new Map<number, number>()
+    for (let i = 0; i < c.t.length; i++) {
+      rawMap.set(c.t[i], c.raw[i])
+      filtMap.set(c.t[i], c.filt[i])
+    }
+    series.push(Float64Array.from(xs, (v) => finiteOrNaN(rawMap.get(v))))
+    series.push(Float64Array.from(xs, (v) => finiteOrNaN(filtMap.get(v))))
+  }
+  // `tEnd` is in seconds to match the x data (uPlot scales use the data units).
+  return { data: series as uPlot.AlignedData, tEnd: xs[xs.length - 1] / 1000 }
+}
+
+function finiteOrNaN(v: number | undefined): number {
+  return v !== undefined && Number.isFinite(v) ? v : NaN
 }
 
 /** Number formatter that tolerates null/NaN (serde_json turns NaN into null). */
@@ -569,12 +799,11 @@ function fmt(v: number | null | undefined, digits: number): string {
 }
 
 /** Drop samples older than the window (relative to the newest sample), but
- * never below the FFT window (1024 samples) so the spectrum still has data
- * at short window lengths / low stream rates. */
-function trimBuffer(b: Buffer, windowSec: number): void {
+ * never below `minSamples` (the FFT window in mock mode). */
+function trimBuffer(b: Buffer, windowSec: number, minSamples: number): void {
   const n = b.t.length
   if (n < 2) return
-  const keep = Math.max(1024, Math.ceil((windowSec * 1000) / 10))
+  const keep = Math.max(minSamples, Math.ceil((windowSec * 1000) / 10))
   const maxDrop = Math.max(0, n - keep)
   const cutoff = b.t[n - 1] - windowSec * 1000
   let k = 0
@@ -604,38 +833,51 @@ const RATE_OPTIONS: Array<{ label: string; intervalUs: number }> = [
 
 function PropertiesPanel({
   selected,
+  trace,
+  color,
   catalog,
+  algorithms,
   buffer,
-  filterBy,
   tauri,
+  onColor,
   onRemove,
+  onAddStage,
+  onRemoveStage,
+  onSetStage,
   onError,
 }: {
   selected: string | null
+  trace: Trace | undefined
+  color: string | undefined
   catalog: CatalogEntry[]
+  algorithms: AlgorithmInfo[]
   buffer: Buffer | undefined
-  filterBy: FilterCfg | undefined
   tauri: boolean
+  onColor: (color: string) => void
   onRemove: () => void
+  onAddStage: () => void
+  onRemoveStage: (index: number) => void
+  onSetStage: (index: number, next: AlgoConfig) => void
   onError: (msg: string) => void
 }) {
-  if (!selected) {
+  if (!selected || !trace) {
     return (
       <aside className="properties">
         <div className="prop-title">Properties</div>
-        <div style={{ color: 'var(--mg-muted)', fontSize: 12 }}>No signal selected — click a plot title.</div>
+        <div style={{ color: 'var(--mg-muted)', fontSize: 12 }}>No trace selected — click a trace chip.</div>
       </aside>
     )
   }
-  const entry = catalog.find((c) => signalKey(c.signal) === selected)
+  const key = signalKey(trace.signal)
+  const entry = catalog.find((c) => signalKey(c.signal) === key)
   const fs = buffer ? estimateFs(buffer) : 0
-  const messageId = entry?.signal.message_id ?? 30
+  const messageId = entry?.signal.message_id ?? trace.signal.message_id
   return (
     <aside className="properties">
       <div className="prop-title">Properties</div>
       <dl>
         <dt>Signal</dt>
-        <dd className="mono">{selected}</dd>
+        <dd className="mono">{key}</dd>
         <dt>Message</dt>
         <dd>{entry ? `msg ${messageId}` : `msg ${messageId} (not seen yet)`}</dd>
         <dt>Rate</dt>
@@ -646,6 +888,10 @@ function PropertiesPanel({
         <dd>{buffer ? buffer.t.length : 0}</dd>
       </dl>
       <div className="prop-row">
+        <label>Color</label>
+        <input type="color" value={color} onChange={(e) => onColor(e.target.value)} />
+      </div>
+      <div className="prop-row">
         <label htmlFor="inspector-rate">Stream rate</label>
         <select
           id="inspector-rate"
@@ -654,9 +900,7 @@ function PropertiesPanel({
           onChange={(e) => {
             const intervalUs = Number(e.target.value)
             if (tauri) {
-              void invoke('set_message_interval', { messageId, intervalUs }).catch((e) =>
-                onError(String(e)),
-              )
+              void invoke('set_message_interval', { messageId, intervalUs }).catch((e) => onError(String(e)))
             }
           }}
         >
@@ -668,10 +912,57 @@ function PropertiesPanel({
         </select>
         {!tauri && <div className="hint">Needs a link (mock data).</div>}
       </div>
-      <div className="prop-row">
-        <label>Filter</label>
-        <span className="mono">{filterBy && filterBy.algo !== 'none' ? filterBy.algo : 'raw'}</span>
-      </div>
+      <div className="prop-title">Filter chain</div>
+      {trace.pipeline.length === 0 && <div className="hint">Raw (no filter).</div>}
+      {trace.pipeline.map((stage, si) => {
+        const info = algorithms.find((a) => a.id === stage.algorithm)
+        return (
+          <div className="prop-row" key={si}>
+            <select
+              value={stage.algorithm}
+              onChange={(e) => {
+                const a = algorithms.find((x) => x.id === e.target.value)
+                const params: [string, number][] = a ? a.params.map((pp) => [pp.key, pp.default]) : []
+                onSetStage(si, { algorithm: e.target.value, params })
+              }}
+            >
+              {algorithms
+                .filter((a) => a.kind === 'processor')
+                .map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                ))}
+            </select>
+            <button title="Remove stage" onClick={() => onRemoveStage(si)}>
+              ×
+            </button>
+            {info?.params.map((pp) => {
+              const cur = stage.params.find(([k]) => k === pp.key)?.[1] ?? pp.default
+              return (
+                <label key={pp.key} style={{ fontSize: 11 }}>
+                  {pp.label}
+                  <input
+                    type="number"
+                    style={{ width: 64, background: 'var(--mg-bg)', color: 'var(--mg-ink)', border: '1px solid var(--mg-border)', borderRadius: 4 }}
+                    value={cur}
+                    onChange={(e) => {
+                      const v = Number(e.target.value)
+                      onSetStage(si, {
+                        ...stage,
+                        params: stage.params.map(([k, old]) =>
+                          k === pp.key ? ([k, v] as [string, number]) : ([k, old] as [string, number]),
+                        ),
+                      })
+                    }}
+                  />
+                </label>
+              )
+            })}
+          </div>
+        )
+      })}
+      <button onClick={onAddStage}>+ Add filter stage</button>
       <button className="remove" onClick={onRemove}>
         Remove trace
       </button>
@@ -682,7 +973,7 @@ function PropertiesPanel({
 /** FFT view: one persistent uPlot instance (created on mount, destroyed on
  * unmount) updated via setData — the old inline-ref version created a new
  * chart on every 30 Hz render and leaked DOM. */
-function SpectrumView({ data, label }: { data: { bins: number[]; peakFreqHz: number; fs: number; deltaF: number } | null; label: string }) {
+function SpectrumView({ frame, label }: { frame: SpectrumFrame | null; label: string }) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const plotRef = useRef<uPlot | null>(null)
   const [ready, setReady] = useState(false)
@@ -721,23 +1012,22 @@ function SpectrumView({ data, label }: { data: { bins: number[]; peakFreqHz: num
 
   useEffect(() => {
     const plot = plotRef.current
-    if (!plot || !data || data.bins.length === 0) return
-    const n = data.bins.length
-    const nyquist = data.fs / 2
-    const maxBin = Math.min(n - 1, Math.ceil(nyquist / data.deltaF) || n - 1)
+    if (!plot || !frame || frame.bins.length === 0 || frame.delta_f <= 0) return
+    // Draw up to Nyquist (the FFT returns mirrored bins above it).
+    const maxBin = Math.max(1, Math.min(frame.bins.length - 1, Math.round(frame.nyquist / frame.delta_f)))
     const x = new Array<number>(maxBin)
     const y = new Array<number>(maxBin)
     for (let i = 0; i < maxBin; i++) {
-      x[i] = i * data.deltaF
-      y[i] = data.bins[i]
+      x[i] = i * frame.delta_f
+      y[i] = frame.bins[i]
     }
     plot.setData([x, y] as uPlot.AlignedData)
-  }, [data])
+  }, [frame])
 
-  if (!data) return <div className="peak-note">{label}: need 1024 samples for FFT</div>
+  if (!frame) return <div className="peak-note">{label}: waiting for a full FFT window…</div>
   return (
     <div style={{ fontSize: 11, color: 'var(--mg-muted)', marginTop: 2 }}>
-      peak {data.peakFreqHz.toFixed(1)} Hz · fs {data.fs.toFixed(0)} Hz · Δf {data.deltaF.toFixed(2)} Hz
+      {label} · peak {frame.peak_freq_hz.toFixed(1)} Hz · fs {frame.fs.toFixed(0)} Hz · Nyquist {frame.nyquist.toFixed(0)} Hz · Δf {frame.delta_f.toFixed(2)} Hz
       <div ref={setHost} className="chart" />
       {!ready && <div className="peak-note">allocating chart…</div>}
     </div>

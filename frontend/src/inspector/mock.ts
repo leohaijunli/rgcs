@@ -2,6 +2,7 @@
 // runs outside Tauri (the plan's mock, mirroring `telemetry/mock`).
 
 import type { SignalSample } from '../generated-types/SignalSample'
+import type { AlgorithmInfo, ParamSpec } from './dsp'
 
 export interface MockSignal {
   id: string
@@ -20,9 +21,9 @@ const SIGS: MockSignal[] = [
   { id: 'zmag', signal: { system_id: 1, component_id: 1, message_id: 105, field: 'zmag' }, base: 42000, amp: 90, freqHz: 0.3 },
 ]
 
-/** PX4/MAVLink message names for the signal browser group headers. Only the
- * ids PX4 commonly streams are listed; anything else falls back to `msg <id>`.
- * S2 will replace this map with `message_name` from the Rust catalog. */
+/** PX4/MAVLink message names for the mock catalog. In Tauri mode the name
+ * comes from the Rust catalog (`CatalogEntry.message_name`); this map only
+ * feeds the browser-mode mock. */
 const MESSAGE_NAMES: Record<number, string> = {
   0: 'HEARTBEAT',
   1: 'SYS_STATUS',
@@ -42,18 +43,31 @@ const MESSAGE_NAMES: Record<number, string> = {
   254: 'DEBUG',
 }
 
-/** Display name for a message id (group header in the signal browser). */
+/** Display name for a message id (mock fallback). */
 export function msgName(messageId: number): string {
   return MESSAGE_NAMES[messageId] ?? `msg ${messageId}`
 }
 
-export function mockCatalog(): { signal: MockSignal['signal']; last_value: number; rate_hz: number; last_seen_ms: number }[] {
-  return SIGS.map((s) => ({ signal: s.signal, last_value: s.base, rate_hz: 100, last_seen_ms: 0 }))
+export function mockCatalog(): {
+  signal: MockSignal['signal']
+  message_name: string
+  last_value: number
+  rate_hz: number
+  last_seen_ms: number
+}[] {
+  return SIGS.map((s) => ({
+    signal: s.signal,
+    message_name: msgName(s.signal.message_id),
+    last_value: s.base,
+    rate_hz: 100,
+    last_seen_ms: 0,
+  }))
 }
 
-/** Signal id string for the mock (the frontend keys its buffers by it). */
+/** Stable frontend key for a signal: `sys:comp:msguid.field` (S2). Includes
+ * the node ids so multi-vehicle setups do not collide. */
 export function signalKey(s: MockSignal['signal']): string {
-  return `${MESSAGE_NAMES[s.message_id] ?? s.message_id}.${s.field}`
+  return `${s.system_id}:${s.component_id}:${s.message_id}.${s.field}`
 }
 
 /** One mock sample batch, at 100 Hz. */
@@ -71,4 +85,70 @@ export function mockSamples(t: number): SignalSample[] {
 /** Whether Tauri is available (mock mode otherwise). */
 export function isTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+}
+
+const float = (key: string, label: string, def: number, min: number, max: number, step: number): ParamSpec => ({
+  key,
+  label,
+  unit: null,
+  kind: { kind: 'Float', min, max, step, log: false },
+  default: def,
+})
+const int = (key: string, label: string, def: number, min: number, max: number): ParamSpec => ({
+  key,
+  label,
+  unit: null,
+  kind: { kind: 'Int', min, max },
+  default: def,
+})
+const enumeration = (key: string, label: string, def: number, options: string[]): ParamSpec => ({
+  key,
+  label,
+  unit: null,
+  kind: { kind: 'Enum', options },
+  default: def,
+})
+const bool = (key: string, label: string, def: number): ParamSpec => ({
+  key,
+  label,
+  unit: null,
+  kind: { kind: 'Bool' },
+  default: def,
+})
+
+/** The registry mirror for mock mode (`core::dsp::registry` is the source of
+ * truth); keeps the filter UI live without Tauri. */
+export function mockAlgorithms(): AlgorithmInfo[] {
+  return [
+    {
+      id: 'lpf2',
+      name: '2nd-order low-pass',
+      kind: 'processor',
+      params: [float('fc_hz', 'Cutoff', 5, 0.001, 1000, 0.1), float('q', 'Q', 0.707, 0.001, 100, 0.01)],
+    },
+    {
+      id: 'hpf2',
+      name: '2nd-order high-pass',
+      kind: 'processor',
+      params: [float('fc_hz', 'Cutoff', 5, 0.001, 1000, 0.1), float('q', 'Q', 0.707, 0.001, 100, 0.01)],
+    },
+    { id: 'moving_average', name: 'Moving average', kind: 'processor', params: [int('window', 'Window', 10, 1, 1000)] },
+    {
+      id: 'detrend',
+      name: 'Detrend',
+      kind: 'processor',
+      params: [int('window', 'Window', 100, 2, 10000), bool('mode', 'Linear', 1)],
+    },
+    {
+      id: 'fft',
+      name: 'Realtime FFT',
+      kind: 'analyzer',
+      params: [
+        int('n', 'FFT length', 1024, 16, 8192),
+        enumeration('window', 'Window', 1, ['rectangular', 'hann', 'hamming', 'blackman', 'flat_top']),
+        enumeration('scale', 'Scale', 0, ['magnitude', 'psd', 'decibels']),
+        bool('detrend', 'Detrend', 0),
+      ],
+    },
+  ]
 }

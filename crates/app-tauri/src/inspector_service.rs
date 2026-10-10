@@ -8,7 +8,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use maggcs_core::inspector::{Session, TraceConfig, TraceSample};
+use std::collections::HashMap;
+
+use maggcs_core::dsp::SpectrumFrame;
+use maggcs_core::inspector::{Session, Trace};
 use maggcs_core::mavlink::connection::ConnectionHandle;
 use maggcs_core::mavlink::router::MessageRoute;
 use maggcs_core::signals::catalog::{CatalogEntry, SignalCatalog};
@@ -29,11 +32,31 @@ const FRAME_INTERVAL_MS: u64 = 33;
 
 static FRAME_SEQ: AtomicU64 = AtomicU64::new(0);
 
+/// One trace's samples within a frame, columnar so the `SignalId` is not
+/// repeated on every sample (plan §S2: `{ trace_id, t[], raw[], filtered[] }`).
+#[derive(Debug, Clone, Serialize)]
+pub struct TraceFrame {
+    pub trace_id: String,
+    pub t: Vec<f64>,
+    pub raw: Vec<f64>,
+    pub filtered: Vec<f64>,
+}
+
 /// One batched frame pushed to the inspector window at ~30 Hz.
 #[derive(Debug, Clone, Serialize)]
 pub struct SampleFrame {
     pub seq: u64,
-    pub samples: Vec<TraceSample>,
+    pub traces: Vec<TraceFrame>,
+    /// Any analyzer windows that completed since the last frame (S3: the FFT
+    /// runs in Rust, decoupled from the frontend's view buffer).
+    pub spectra: Vec<TraceSpectrum>,
+}
+
+/// One trace's spectrum frame.
+#[derive(Debug, Clone, Serialize)]
+pub struct TraceSpectrum {
+    pub trace_id: String,
+    pub frame: SpectrumFrame,
 }
 
 /// Shared inspector state held in [`AppState`] (not on the link, so the plot
@@ -162,27 +185,58 @@ async fn batch_loop(
 ) {
     loop {
         let deadline = tokio::time::Instant::now() + Duration::from_millis(FRAME_INTERVAL_MS);
-        let mut batch: Vec<TraceSample> = Vec::new();
+        // Columnar accumulation, grouped by trace id, preserving first-seen
+        // order so the frontend renders traces stably.
+        let mut index: HashMap<String, usize> = HashMap::new();
+        let mut traces: Vec<TraceFrame> = Vec::new();
         loop {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             if remaining.is_zero() {
                 break;
             }
             match tokio::time::timeout(remaining, rx.recv()).await {
-                Ok(Some(sample)) => batch.extend(session.lock().ingest(&sample)),
+                Ok(Some(sample)) => {
+                    for s in session.lock().ingest(&sample) {
+                        let i = match index.get(&s.trace_id) {
+                            Some(&i) => i,
+                            None => {
+                                let i = traces.len();
+                                index.insert(s.trace_id.clone(), i);
+                                traces.push(TraceFrame {
+                                    trace_id: s.trace_id.clone(),
+                                    t: Vec::new(),
+                                    raw: Vec::new(),
+                                    filtered: Vec::new(),
+                                });
+                                i
+                            }
+                        };
+                        let f = &mut traces[i];
+                        f.t.push(s.t_ms);
+                        f.raw.push(s.raw);
+                        f.filtered.push(s.filtered);
+                    }
+                }
                 Ok(None) => return, // tap ended: stop (don't spin on a closed channel)
                 Err(_) => break,   // window elapsed: flush
             }
         }
-        if batch.is_empty() {
+        if traces.is_empty() {
             continue;
         }
+        let spectra: Vec<TraceSpectrum> = session
+            .lock()
+            .poll_spectra()
+            .into_iter()
+            .map(|(trace_id, frame)| TraceSpectrum { trace_id, frame })
+            .collect();
         let Some(channel) = frame.lock().clone() else {
             continue;
         };
         let frame = SampleFrame {
             seq: FRAME_SEQ.fetch_add(1, Ordering::Relaxed),
-            samples: batch,
+            traces,
+            spectra,
         };
         let _ = channel.send(frame);
     }
@@ -253,7 +307,7 @@ pub fn inspector_disconnect(state: State<'_, AppState>) -> Result<(), String> {
 #[tauri::command]
 pub fn inspector_set_traces(
     state: State<'_, AppState>,
-    traces: Vec<TraceConfig>,
+    traces: Vec<Trace>,
 ) -> Result<(), String> {
     let inspector = state.inspector();
     let ids = inspector

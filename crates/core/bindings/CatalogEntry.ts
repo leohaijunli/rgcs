@@ -4,7 +4,13 @@ import type { SignalId } from "./SignalId";
 /**
  * One row of the signal tree.
  */
-export type CatalogEntry = { signal: SignalId, last_value: number, 
+export type CatalogEntry = { signal: SignalId, 
+/**
+ * MAVLink message name (`ATTITUDE`, `HIGHRES_IMU`, …), from
+ * `mavlink_core::Message::message_name`. Lets the signal tree group and
+ * label without a hand-maintained id → name map.
+ */
+message_name: string, last_value: number, 
 /**
  * EMA of the arrival rate, Hz.
  */

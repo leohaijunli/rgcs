@@ -2,15 +2,18 @@
 
 > 范围:`core::signals` → `app-tauri/inspector_service.rs` → `frontend/src/inspector/*`
 > 日期:2026-10-09
-> 说明:静态评审。此后已逐步落实:前端补丁跑过 `tsc`;Rust 已 `cargo test -p maggcs-core signals`(13 通过)与 `cargo build` 通过;PX4 6X 1.17 实机验证(见下"实机发现")。标注"待核实"的条目需先复现再修。
+> 说明:静态评审。此后已逐步落实:前端补丁跑过 `tsc`;Rust 已 `cargo test -p maggcs-core signals`(19 通过)与 `cargo build` 通过;PX4 6X 1.17 实机验证(见下"实机发现")。标注"待核实"的条目需先复现再修。
 
 ## 进度(2026-10-09 更新)
 
-- **S0 完成**:补丁验证(`cargo test -p maggcs-core signals` 13 通过、`cargo build` 通过)、P0-2 修(FFT 持久 uPlot + setData + destroy)、P0-3 修(`trimBuffer` 保底 1024 点)。未做:devtools 人工核对、SITL 实跑(有硬件可做)。
+- **S0 完成**:补丁验证(`cargo test -p maggcs-core signals` 通过、`cargo build` 通过)、P0-2 修(FFT 持久 uPlot + setData + destroy)、P0-3 修(`trimBuffer` 保底 1024 点)。未做:devtools 人工核对、SITL 实跑(有硬件可做)。
 - **实机发现(已修复)**:PX4 6X + 固件 1.17 连接时报 `InvalidEnum { MavEventCurrentSequenceFlags, value: 0 }`。根因:`CURRENT_EVENT_SEQUENCE.flags=0` 是正常值,但 mavlink 0.17 生成的 `MavEventCurrentSequenceFlags` 只有 `RESET=1`,无 0 变体;UDP 传输会静默丢弃坏帧,TCP/serial 会把错误浮上来。修复:`run_worker` 将单帧解析失败(InvalidEnum/InvalidFlag/UnknownMessage)视为可恢复,跳过该帧并计数(`is_recoverable_read_error`),不再断开重连。**已在实机验证**。附测试 `decode_failures_are_recoverable_but_io_is_not`。**已随 `1929c79` 提交并推送**。
 - **信号浏览器分组(用户要求,原 S3 首项提前)**:左栏按消息分组、可折叠、带搜索,`msgName()` 提供 PX4 消息名映射(30/105/147/22/33/105 等,未知回退 `msg <id>`)。
 - **ADR-016 已对齐实现** (`5ccec12`):写入实际帧类型 `SampleFrame`/`TraceSample`、tap 生命周期细节、时间戳决策;新增 "Implementation notes" 记录待办缺口(P0-4/P0-5/P0-6)。
-- **S1 其余未开始**:窗口关闭清理、幂等 connect + 重连 attach(已确认 `commands.rs::connect` 不会重新 attach,是真实缺口)、TapStats 暴露、错误提示、每源时间映射。**S2–S5 未开始**。
+- **S1 完成** (`3341748`):窗口 `Destroyed` 清理、可取消 tap(`oneshot` stop)、幂等 `inspector_connect` + 链路出现时自动 attach + `commands::connect` 重连后重新 attach、`inspector_status` 暴露 `TapStats`/链路状态、前端状态栏(msg/s、dropped、link)与错误提示、每来源时间映射(`time_boot_ms`/`time_usec` 各自 baseline)与 FC 重启回退检测(回退 >1 s 时重新取 baseline)。`cargo test -p maggcs-core signals` 由 13 增至 16 通过。
+- **S2 完成**:数据模型重构(见 §3 S2)。`InspectorApp.tsx` 改为 plot/trace 模型,按 `trace_id` 路由,uPlot 与缓冲均以 `trace_id` 为 key;帧改为列式;`CatalogEntry.message_name` 由 mavlink 提供。前端 `tsc` 通过、mock 模式 Playwright 冒烟(`frontend/inspector-check.mjs`)0 错误、`core` lib 234 测试通过、`maggcs-app` 编译通过。
+- **S3 完成**:暂停改为冻结视图 + 后台继续缓冲;每个字段可配多级滤波链(`+ Filter` 增删级、每级参数,编辑器移到属性面板);FFT 改走 Rust analyzer(`SampleFrame.spectra`),可选原始/滤波后(`Trace.analyzer_source`),显示 fs/Nyquist/Δf,分析器在 Rust 侧独立缓冲、与视图窗口解耦(视图缓冲保底仅 mock 保留);plot 窗口可新增/删除,多个 trace 叠加到同一个 plot(每个 plot 一个 uPlot、共用合并时间轴),每 trace 可选颜色并随工作区保存;mock 模式补了算法表,滤波/FFT UI 在浏览器可交互。
+- **S4/S5 部分**:S4 tap 订阅集合改快照(`contains_message`,不再每条消息分配 `HashSet`,完成);S5 新增 Rust 测试:NaN 序列化、无时间字段消息时间戳单调、analyzer_source=Filtered(完成)。其余(前端环形缓冲/rAF、catalog 节流、Lagged 测试、前端 mock NaN 注入)未做。
 
 ---
 
@@ -81,27 +84,29 @@
 
 ### S2:数据模型重构(2–3 天,破坏性改动,需确认)
 
-- [ ] 新增 `Plot { id, traces: Trace[] }` 与 `Trace { id, signal, pipeline: Vec<AlgoConfig>, analyzer }`;`Session` 以 `trace_id` 为 key,允许同一信号多个 trace
-- [ ] `CatalogEntry` 增加 `message_name`(来自 mavlink);前端 key 改为 `sys:comp:msg.field`;工作区保存完整 `SignalId`
-- [ ] 帧改为列式:`{ trace_id, t[], raw[], filtered[] }`
+- [x] 新增 `Plot { id, traces: Trace[] }` 与 `Trace { id, signal, pipeline: Vec<AlgoConfig>, analyzer }`;`Session` 以 `trace_id` 为 key(`by_signal` 做 signal→trace 路由),允许同一信号多个 trace;`SessionError::DuplicateTrace` 改为按 trace id
+- [x] `CatalogEntry` 增加 `message_name`(`tap` 从 `mavlink::Message::message_name()` 取);前端 key 改为 `sys:comp:msg.field`;工作区升级 v2 保存完整 `SignalId` 与 `pipeline`
+- [x] 帧改为列式:`TraceFrame { trace_id, t[], raw[], filtered[] }`,一条 `SampleFrame` 携带多条 trace;缓冲、uPlot、CSV 均按 `trace_id`
 
 ### S3:UI 对齐需求与 SDI(2–3 天)
 
 - [x] 信号树按消息分组,带搜索(2026-10-09 提前完成,含可折叠分组;拖到 plot 未做)
-- [ ] 可新增、删除 plot 窗口;每个字段单独选滤波链(可多级)、参数、颜色
-- [ ] FFT 改走 Rust analyzer,可选原始或滤波后;显示 fs 与 Nyquist;使用独立 FFT 环形缓冲,与视图窗口解耦
-- [ ] 暂停改为冻结视图、后台继续缓冲
+- [x] 每个字段单独选滤波链(可多级)、参数(2026-10-09:`+ Filter` 增删级,每级独立算法/参数;mock 与 Rust 均跑整条链)
+- [x] 可新增、删除 plot 窗口(把多个 trace 合并到一个 plot);每个 trace 可选颜色(2026-10-09:每个 plot 一个 uPlot,多 trace 的 raw/filtered 叠加在合并后的共用时间轴上;`New plot`/`+ Signal`/`×` 增删;颜色板可覆盖并随工作区保存)
+- [x] FFT 改走 Rust analyzer,可选原始或滤波后;显示 fs 与 Nyquist;使用独立 FFT 环形缓冲,与视图窗口解耦(2026-10-09:`Session::poll_spectra` 经 `SampleFrame.spectra` 下发,`Trace.analyzer_source` 选原始/滤波后)
+- [x] 暂停改为冻结视图、后台继续缓冲(2026-10-09:`onMessage` 不再丢数据,暂停只冻结 uPlot 视图)
 
 ### S4:性能(1–2 天)
 
-- [ ] tap 内订阅集合改为快照(不在每条消息里分配);catalog 更新节流到约 10 Hz
+- [x] tap 内订阅集合改为快照(`Subscriptions::contains_message`,不再每条消息分配 `HashSet`)
+- [ ] catalog 更新节流到约 10 Hz(未做:与 `rate_hz` 的 EMA 语义冲突,需先设计按间隔计数)
 - [ ] 前端环形缓冲、rAF 重绘、min/max 抽稀
 - [ ] 目标:8 个 trace、各 200 Hz,连续 30 分钟,堆内存不持续增长,单核占用有上限(阈值在 S0 基线测量后确定)
 
 ### S5:测试与文档(1 天)
 
-- [ ] Rust:带 NaN 的 `CatalogEntry` 序列化测试
-- [ ] Rust:tap 时间戳单调且接近真实间隔的测试(含无时间字段的消息)
+- [x] Rust:带 NaN 的 `CatalogEntry` 序列化测试(`catalog_entry_with_nan_serializes_as_null_not_a_panic`)
+- [x] Rust:tap 时间戳单调且接近真实间隔的测试(含无时间字段的消息,`timestamps_without_a_time_field_are_monotonic`)
 - [ ] Rust:Lagged 之后 tap 继续工作的测试
 - [ ] 前端:mock 加 null/NaN 注入,Playwright 跑 5 分钟,要求无 `pageerror`、无内存增长
 - [ ] 更新 `signal-inspector-plan.md` 的状态

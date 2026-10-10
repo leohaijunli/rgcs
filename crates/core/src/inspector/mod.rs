@@ -7,4 +7,7 @@
 
 pub mod session;
 
-pub use session::{AlgoConfig, Session, SessionError, TraceConfig, TraceSample, GAP_FACTOR};
+pub use session::{
+    AlgoConfig, AnalyzerSource, Plot, Session, SessionError, Trace, TraceId, TraceSample,
+    GAP_FACTOR,
+};

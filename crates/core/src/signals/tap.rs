@@ -30,10 +30,18 @@ pub const SAMPLE_CHANNEL_CAP: usize = 4096;
 /// The FC timestamp fields, in preference order (value in milliseconds).
 const FC_MS_FIELDS: &[&str] = &["time_boot_ms", "time_usec"];
 
+/// The subscription table plus the derived set of message ids (precomputed so
+/// the hot path never allocates).
+#[derive(Debug, Default)]
+struct SubsState {
+    ids: HashSet<SignalId>,
+    message_ids: HashSet<u32>,
+}
+
 /// The shared subscription set and reference count.
 #[derive(Debug, Clone, Default)]
 pub struct Subscriptions {
-    ids: Arc<Mutex<HashSet<SignalId>>>,
+    state: Arc<Mutex<SubsState>>,
     refs: Arc<AtomicUsize>,
 }
 
@@ -58,26 +66,29 @@ impl Subscriptions {
 
     /// The union of all signals the open plots use.
     pub fn set(&self, ids: HashSet<SignalId>) {
-        *self.ids.lock().expect("subscription lock") = ids;
+        let message_ids = ids.iter().map(|s| s.message_id).collect();
+        *self.state.lock().expect("subscription lock") = SubsState { ids, message_ids };
     }
 
     /// Drop every subscription (the window closed; the tap id-checks nothing).
     pub fn clear(&self) {
-        self.ids.lock().expect("subscription lock").clear();
+        let mut state = self.state.lock().expect("subscription lock");
+        state.ids.clear();
+        state.message_ids.clear();
     }
 
     pub fn contains(&self, id: &SignalId) -> bool {
-        self.ids.lock().expect("subscription lock").contains(id)
+        self.state.lock().expect("subscription lock").ids.contains(id)
     }
 
-    /// The message ids that have at least one subscribed field (pre-filter).
-    pub fn message_ids(&self) -> HashSet<u32> {
-        self.ids
+    /// Whether any subscribed field belongs to this message (pre-filter, no
+    /// allocation — P2).
+    pub fn contains_message(&self, message_id: u32) -> bool {
+        self.state
             .lock()
             .expect("subscription lock")
-            .iter()
-            .map(|s| s.message_id)
-            .collect()
+            .message_ids
+            .contains(&message_id)
     }
 }
 
@@ -197,6 +208,7 @@ fn handle_message(
     stats: &Arc<Mutex<TapStats>>,
 ) {
     let message_id = env.message.message_id();
+    let message_name = env.message.message_name();
     let Ok(extraction) = extract::extract(&env.message) else {
         return;
     };
@@ -215,15 +227,14 @@ fn handle_message(
                 message_id,
                 field.field.clone(),
             );
-            cat.observe(&id, field.value, env.received_at);
+            cat.observe(&id, message_name, field.value, env.received_at);
         }
     }
     stats.lock().expect("stats lock").messages += 1;
     if !subs.is_active() {
         return;
     }
-    let message_ids = subs.message_ids();
-    if !message_ids.contains(&message_id) {
+    if !subs.contains_message(message_id) {
         return;
     }
     for signal in extraction.signals(env.system_id(), env.component_id(), message_id) {
@@ -281,7 +292,9 @@ mod tests {
     use super::*;
     use crate::mavlink::connection::ConnectionEvent;
     use crate::mavlink::MavHeader;
-    use mavlink::common::{MavMessage, ATTITUDE_DATA};
+    use mavlink::common::{
+        MavAutopilot, MavMessage, MavModeFlag, MavState, MavType, ATTITUDE_DATA, HEARTBEAT_DATA,
+    };
     use std::time::{Duration, Instant};
 
     fn attitude(time_boot_ms: u32, roll: f32) -> MavMessage {
@@ -306,6 +319,19 @@ mod tests {
             message: msg,
             received_at: Instant::now(),
         }
+    }
+
+    /// A HEARTBEAT: a numeric message with no FC time field, so its samples
+    /// must fall back to the host clock.
+    fn heartbeat(custom_mode: u32) -> MavMessage {
+        MavMessage::HEARTBEAT(HEARTBEAT_DATA {
+            custom_mode,
+            mavtype: MavType::MAV_TYPE_QUADROTOR,
+            autopilot: MavAutopilot::MAV_AUTOPILOT_PX4,
+            base_mode: MavModeFlag::empty(),
+            system_status: MavState::MAV_STATE_ACTIVE,
+            mavlink_version: 3,
+        })
     }
 
     #[tokio::test]
@@ -456,6 +482,7 @@ mod tests {
 
     #[test]
     fn timestamp_mappers_keep_per_field_baselines() {
+
         // time_boot_ms and time_usec are different clocks; each re-baselines
         // independently, so a reboot of one must not disturb the other.
         let mut m = TimestampMappers::default();
@@ -469,6 +496,54 @@ mod tests {
         // Mapping one field does not disturb the other's baseline.
         assert!(m.map("time_usec", 5_000_010.0, 1020.0) > 1010.0);
         assert!(m.map("time_boot_ms", 30.0, 1030.0) >= 1020.0);
+    }
+
+    #[test]
+    fn subscriptions_precompute_message_ids() {
+        let subs = Subscriptions::new();
+        subs.set(HashSet::from([SignalId::new(1, 1, 30, "roll")]));
+        assert!(subs.contains_message(30));
+        assert!(!subs.contains_message(105));
+        subs.clear();
+        assert!(!subs.contains_message(30), "cleared subscriptions match none");
+    }
+
+    #[tokio::test]
+    async fn timestamps_without_a_time_field_are_monotonic() {
+        // HEARTBEAT carries no time field, so `t_ms` falls back to the host
+        // clock; consecutive samples must still be strictly increasing (plan S5).
+        let (bus_tx, bus_rx) = tokio::sync::broadcast::channel(64);
+        let events = RoutedEvents::new(bus_rx, MessageRoute::all());
+        let subs = Subscriptions::new();
+        subs.acquire();
+        subs.set(HashSet::from([SignalId::new(1, 1, 0, "custom_mode")]));
+        let catalog = Arc::new(Mutex::new(SignalCatalog::new()));
+        let stats = Arc::new(Mutex::new(TapStats::default()));
+        let (tx, mut rx) = mpsc::channel(SAMPLE_CHANNEL_CAP);
+        let (_stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+        let tap = tokio::spawn(run_tap(events, subs, catalog, tx, stats, stop_rx));
+
+        for i in 0..20u32 {
+            bus_tx
+                .send(ConnectionEvent::Message(Box::new(envelope(
+                    i as u8,
+                    heartbeat(i),
+                ))))
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        drop(bus_tx);
+
+        let mut ts = Vec::new();
+        while let Some(s) = rx.recv().await {
+            ts.push(s.t_ms);
+        }
+        tap.await.unwrap();
+        assert_eq!(ts.len(), 20, "one sample per heartbeat");
+        assert!(
+            ts.windows(2).all(|w| w[1] > w[0]),
+            "monotonic host timestamps: {ts:?}"
+        );
     }
 
     #[tokio::test]

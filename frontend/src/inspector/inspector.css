@@ -149,9 +149,50 @@ body,
 .plot .plot-head {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   font-size: 12px;
   padding: 2px 4px;
+}
+
+.plot .trace-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 2px 4px;
+}
+
+.plot .trace-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border: 1px solid var(--mg-border);
+  border-radius: 10px;
+  font-size: 11px;
+}
+
+.plot .trace-chip.selected {
+  border-color: var(--mg-accent);
+}
+
+.plot .trace-chip input[type='color'] {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+
+.properties input[type='color'] {
+  width: 32px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--mg-border);
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
 }
 
 .plot .plot-head .title {

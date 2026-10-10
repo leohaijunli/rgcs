@@ -32,6 +32,10 @@ const NOMINAL_FS_HZ: f64 = 100.0;
 /// Minimum usable sample rate, Hz.
 const MIN_FS_HZ: f64 = 0.01;
 
+/// Stable identity for one trace, chosen by the frontend so it survives
+/// workspace reloads and link reconnects. Two traces may share one signal.
+pub type TraceId = String;
+
 /// Errors from configuring or running the inspector session.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum SessionError {
@@ -39,8 +43,8 @@ pub enum SessionError {
     UnknownAlgorithm(String),
     #[error("invalid parameters: {0}")]
     InvalidParams(String),
-    #[error("a trace for signal {0:?} already exists")]
-    DuplicateTrace(SignalId),
+    #[error("a trace with id {0:?} already exists")]
+    DuplicateTrace(TraceId),
     #[error("algorithm {0} is an analyzer, not a filter")]
     NotAFilter(String),
     #[error("algorithm {0} is a filter, not an analyzer")]
@@ -76,23 +80,49 @@ impl AlgoConfig {
     }
 }
 
-/// The full configuration of one plotted trace: the source signal plus the
-/// filter chain and optional analyzer to apply to it.
+/// The full configuration of one plotted trace: a stable id, the source signal
+/// plus the filter chain and optional analyzer to apply to it. Several traces
+/// may bind the same signal with different filters.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
-pub struct TraceConfig {
+pub struct Trace {
+    /// Stable identity within one plot window (see [`TraceId`]).
+    pub id: TraceId,
     pub signal: SignalId,
     /// Ordered filter stages applied to every sample (`detrend → LPF`).
     pub pipeline: Vec<AlgoConfig>,
     /// An optional windowed analyzer (the FFT) on the raw signal.
     pub analyzer: Option<AlgoConfig>,
+    /// Whether the analyzer window sees the raw signal or the filtered output.
+    #[serde(default)]
+    pub analyzer_source: AnalyzerSource,
+}
+
+/// What the analyzer window is fed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum AnalyzerSource {
+    /// The value straight off the link (default).
+    #[default]
+    Raw,
+    /// The pipeline output (falls back to raw when there is no pipeline).
+    Filtered,
+}
+
+/// One plot window: a stable id, a title, and the traces drawn on it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct Plot {
+    pub id: String,
+    pub title: String,
+    pub traces: Vec<Trace>,
 }
 
 /// One processed sample streamed to the inspector window.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TraceSample {
-    pub id: SignalId,
+    pub trace_id: TraceId,
     /// Host-aligned time in milliseconds.
     pub t_ms: f64,
     pub raw: f64,
@@ -139,7 +169,7 @@ impl FsEstimator {
 }
 
 struct RunningTrace {
-    cfg: TraceConfig,
+    cfg: Trace,
     pipeline: Pipeline,
     analyzer: Option<Box<dyn Analyzer>>,
     fs: FsEstimator,
@@ -147,10 +177,13 @@ struct RunningTrace {
     fs_built: f64,
 }
 
-/// The session: the inspector's trace set and its running DSP state.
+/// The session: the inspector's trace set and its running DSP state, keyed by
+/// [`TraceId`] so several traces may share one signal.
 #[derive(Default)]
 pub struct Session {
-    traces: HashMap<SignalId, RunningTrace>,
+    traces: HashMap<TraceId, RunningTrace>,
+    /// `signal → trace ids`, for routing one live sample to every trace on it.
+    by_signal: HashMap<SignalId, Vec<TraceId>>,
 }
 
 impl Session {
@@ -168,25 +201,26 @@ impl Session {
 
     /// The signal ids the tap must subscribe to (the union of the traces).
     pub fn subscribe_ids(&self) -> HashSet<SignalId> {
-        self.traces.keys().cloned().collect()
+        self.by_signal.keys().cloned().collect()
     }
 
     /// Replace the trace set: adds new traces, rebuilds changed ones (keeping
-    /// the running filter state when the configuration is unchanged), and
-    /// drops removed signals. Returns the new subscription set.
+    /// the running filter state when id and configuration are unchanged), and
+    /// drops removed traces. Several traces may bind the same signal. Returns
+    /// the new subscription set.
     pub fn set_traces(
         &mut self,
-        configs: impl IntoIterator<Item = TraceConfig>,
+        configs: impl IntoIterator<Item = Trace>,
     ) -> Result<HashSet<SignalId>, SessionError> {
-        let mut next: HashMap<SignalId, RunningTrace> = HashMap::new();
+        let mut next: HashMap<TraceId, RunningTrace> = HashMap::new();
         for cfg in configs {
-            if next.contains_key(&cfg.signal) {
-                return Err(SessionError::DuplicateTrace(cfg.signal));
+            if next.contains_key(&cfg.id) {
+                return Err(SessionError::DuplicateTrace(cfg.id));
             }
-            match self.traces.remove(&cfg.signal) {
+            match self.traces.remove(&cfg.id) {
                 Some(existing) if existing.cfg == cfg => {
                     // Unchanged configuration: keep the running DSP state.
-                    next.insert(cfg.signal, existing);
+                    next.insert(cfg.id, existing);
                 }
                 Some(mut existing) => {
                     // Rebuild the DSP but keep the fs estimate.
@@ -195,14 +229,14 @@ impl Session {
                     existing.pipeline = build_pipeline(&existing.cfg, fs)?;
                     existing.analyzer = build_analyzer(existing.cfg.analyzer.as_ref(), fs)?;
                     existing.fs_built = 0.0; // reconfigure on the next sample
-                    next.insert(existing.cfg.signal.clone(), existing);
+                    next.insert(existing.cfg.id.clone(), existing);
                 }
                 None => {
                     let fs = NOMINAL_FS_HZ;
                     let pipeline = build_pipeline(&cfg, fs)?;
                     let analyzer = build_analyzer(cfg.analyzer.as_ref(), fs)?;
                     next.insert(
-                        cfg.signal.clone(),
+                        cfg.id.clone(),
                         RunningTrace {
                             cfg,
                             pipeline,
@@ -214,66 +248,44 @@ impl Session {
                 }
             }
         }
+        // Rebuild the signal → trace-id routing table for the new set.
+        let mut by_signal: HashMap<SignalId, Vec<TraceId>> = HashMap::new();
+        for (id, trace) in &next {
+            by_signal
+                .entry(trace.cfg.signal.clone())
+                .or_default()
+                .push(id.clone());
+        }
         self.traces = next;
+        self.by_signal = by_signal;
         Ok(self.subscribe_ids())
     }
 
-    /// Apply one live sample to its trace. Returns zero samples when no trace
-    /// subscribes to the signal; otherwise the raw+filtered sample and, when a
-    /// stream gap is detected, a leading `NaN` sample that breaks the curve.
+    /// Apply one live sample to every trace that subscribes to its signal.
+    /// Returns zero samples when none does; otherwise the raw+filtered sample
+    /// per trace and, when a stream gap is detected, a leading `NaN` sample
+    /// that breaks the curve.
     pub fn ingest(&mut self, sample: &SignalSample) -> Vec<TraceSample> {
-        let Some(trace) = self.traces.get_mut(&sample.id) else {
+        let Some(ids) = self.by_signal.get(&sample.id).cloned() else {
             return Vec::new();
         };
-        // The prior rate estimate and the new dt decide the gap check before
-        // the estimate absorbs this sample's dt.
-        let dt_ms = trace.fs.last_t_ms.map(|last| (sample.t_ms - last).abs());
-        let fs_before = trace.fs.fs_hz();
-        let fs_est = trace.fs.observe(sample.t_ms);
-        let mut out = Vec::with_capacity(2);
-        if let (Some(dt), Some(fs)) = (dt_ms, fs_before) {
-            let nominal_ms = 1000.0 / fs.max(MIN_FS_HZ);
-            if dt > GAP_FACTOR * nominal_ms {
-                trace.pipeline.reset();
-                trace.fs.clear_ema();
-                trace.fs_built = 0.0;
-                out.push(TraceSample {
-                    id: sample.id.clone(),
-                    t_ms: trace.fs.last_t_ms.unwrap_or(sample.t_ms) - nominal_ms,
-                    raw: f64::NAN,
-                    filtered: f64::NAN,
-                });
+        let mut out = Vec::with_capacity(ids.len() * 2);
+        for id in ids {
+            if let Some(trace) = self.traces.get_mut(&id) {
+                process(trace, id, sample, &mut out);
             }
         }
-        let mut filtered = f64::NAN;
-        if !trace.pipeline.is_empty() {
-            let fs = fs_est.unwrap_or(NOMINAL_FS_HZ);
-            let retune = trace.fs_built <= 0.0
-                || (fs - trace.fs_built).abs() / trace.fs_built.max(MIN_FS_HZ) > FS_RETUNE_FRACTION;
-            if retune && trace.pipeline.configure(fs).is_ok() {
-                trace.fs_built = fs;
-            }
-            filtered = trace.pipeline.process(sample.value);
-        }
-        if let Some(analyzer) = &mut trace.analyzer {
-            analyzer.push(sample.t_ms / 1000.0, sample.value);
-        }
-        out.push(TraceSample {
-            id: sample.id.clone(),
-            t_ms: sample.t_ms,
-            raw: sample.value,
-            filtered,
-        });
         out
     }
 
-    /// Collect a fresh spectrum frame from every analyzer.
-    pub fn poll_spectra(&mut self) -> Vec<SpectrumFrame> {
+    /// Collect a fresh spectrum frame from every analyzer, tagged with its
+    /// trace id.
+    pub fn poll_spectra(&mut self) -> Vec<(TraceId, SpectrumFrame)> {
         let mut frames = Vec::new();
-        for trace in self.traces.values_mut() {
+        for (id, trace) in self.traces.iter_mut() {
             if let Some(analyzer) = &mut trace.analyzer {
                 if let Some(frame) = analyzer.poll() {
-                    frames.push(frame);
+                    frames.push((id.clone(), frame));
                 }
             }
         }
@@ -283,6 +295,7 @@ impl Session {
     /// Drop every trace (the window closed).
     pub fn clear(&mut self) {
         self.traces.clear();
+        self.by_signal.clear();
     }
 
     /// Keep the configurations but drop all filter/analyzer state (reconnect).
@@ -295,8 +308,63 @@ impl Session {
     }
 }
 
+/// Apply one sample to one running trace, appending its output to `out`.
+fn process(
+    trace: &mut RunningTrace,
+    trace_id: TraceId,
+    sample: &SignalSample,
+    out: &mut Vec<TraceSample>,
+) {
+    // The prior rate estimate and the new dt decide the gap check before the
+    // estimate absorbs this sample's dt.
+    let dt_ms = trace.fs.last_t_ms.map(|last| (sample.t_ms - last).abs());
+    let fs_before = trace.fs.fs_hz();
+    let fs_est = trace.fs.observe(sample.t_ms);
+    if let (Some(dt), Some(fs)) = (dt_ms, fs_before) {
+        let nominal_ms = 1000.0 / fs.max(MIN_FS_HZ);
+        if dt > GAP_FACTOR * nominal_ms {
+            trace.pipeline.reset();
+            trace.fs.clear_ema();
+            trace.fs_built = 0.0;
+            out.push(TraceSample {
+                trace_id: trace_id.clone(),
+                t_ms: trace.fs.last_t_ms.unwrap_or(sample.t_ms) - nominal_ms,
+                raw: f64::NAN,
+                filtered: f64::NAN,
+            });
+        }
+    }
+    let mut filtered = f64::NAN;
+    if !trace.pipeline.is_empty() {
+        let fs = fs_est.unwrap_or(NOMINAL_FS_HZ);
+        let retune = trace.fs_built <= 0.0
+            || (fs - trace.fs_built).abs() / trace.fs_built.max(MIN_FS_HZ) > FS_RETUNE_FRACTION;
+        if retune && trace.pipeline.configure(fs).is_ok() {
+            trace.fs_built = fs;
+        }
+        filtered = trace.pipeline.process(sample.value);
+    }
+    let source = trace.cfg.analyzer_source;
+    if let Some(analyzer) = &mut trace.analyzer {
+        let x = match source {
+            AnalyzerSource::Raw => sample.value,
+            // A pipeline that produced a finite value feeds the FFT; otherwise
+            // (no pipeline, or across a gap) fall back to the raw sample.
+            AnalyzerSource::Filtered if filtered.is_finite() => filtered,
+            AnalyzerSource::Filtered => sample.value,
+        };
+        analyzer.push(sample.t_ms / 1000.0, x);
+    }
+    out.push(TraceSample {
+        trace_id,
+        t_ms: sample.t_ms,
+        raw: sample.value,
+        filtered,
+    });
+}
+
 /// Build a filter chain from a trace's stage list.
-fn build_pipeline(cfg: &TraceConfig, fs_hz: f64) -> Result<Pipeline, SessionError> {
+fn build_pipeline(cfg: &Trace, fs_hz: f64) -> Result<Pipeline, SessionError> {
     let mut pipeline = Pipeline::new();
     for stage in &cfg.pipeline {
         match registry::create(&stage.algorithm, &stage.param_values(), fs_hz)? {
@@ -353,11 +421,19 @@ mod tests {
         }
     }
 
-    fn trace(signal: SignalId, pipeline: Vec<AlgoConfig>) -> TraceConfig {
-        TraceConfig {
+    /// A one-trace config; the id is the field name so tests read clearly.
+    fn trace(signal: SignalId, pipeline: Vec<AlgoConfig>) -> Trace {
+        let id = signal.field.clone();
+        trace_id(&id, signal, pipeline)
+    }
+
+    fn trace_id(id: &str, signal: SignalId, pipeline: Vec<AlgoConfig>) -> Trace {
+        Trace {
+            id: id.to_string(),
             signal,
             pipeline,
             analyzer: None,
+            analyzer_source: AnalyzerSource::Raw,
         }
     }
 
@@ -377,28 +453,49 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_signal_is_rejected() {
+    fn duplicate_trace_id_is_rejected() {
         let mut s = Session::new();
-        // Two configs for the same signal in one call are rejected.
+        // Two traces with the same id in one call are rejected.
         assert!(matches!(
             s.set_traces(vec![
-                trace(sig(30, "roll"), vec![]),
-                trace(sig(30, "roll"), vec![lpf(5.0)]),
+                trace_id("a", sig(30, "roll"), vec![]),
+                trace_id("a", sig(30, "pitch"), vec![]),
             ]),
             Err(SessionError::DuplicateTrace(_))
         ));
     }
 
     #[test]
+    fn the_same_signal_can_back_two_traces() {
+        let mut s = Session::new();
+        let ids = s
+            .set_traces(vec![
+                trace_id("raw", sig(30, "roll"), vec![]),
+                trace_id("lp", sig(30, "roll"), vec![lpf(5.0)]),
+            ])
+            .unwrap();
+        assert_eq!(ids.len(), 1, "one signal subscribed once");
+        assert!(ids.contains(&sig(30, "roll")));
+        assert_eq!(s.len(), 2, "but two traces run");
+        let out = s.ingest(&sample(&sig(30, "roll"), 0.0, 1.0));
+        assert_eq!(out.len(), 2, "both traces emit a sample");
+        let mut out_ids: Vec<&str> = out.iter().map(|o| o.trace_id.as_str()).collect();
+        out_ids.sort();
+        assert_eq!(out_ids, vec!["lp", "raw"]);
+    }
+
+    #[test]
     fn unknown_algorithm_is_rejected() {
         let mut s = Session::new();
-        let cfg = TraceConfig {
+        let cfg = Trace {
+            id: "roll".into(),
             signal: sig(30, "roll"),
             pipeline: vec![AlgoConfig {
                 algorithm: "nope".into(),
                 params: vec![],
             }],
             analyzer: None,
+            analyzer_source: AnalyzerSource::Raw,
         };
         assert!(matches!(
             s.set_traces(vec![cfg]),
@@ -409,13 +506,15 @@ mod tests {
     #[test]
     fn analyzer_in_a_pipeline_slot_is_rejected() {
         let mut s = Session::new();
-        let cfg = TraceConfig {
+        let cfg = Trace {
+            id: "roll".into(),
             signal: sig(30, "roll"),
             pipeline: vec![AlgoConfig {
                 algorithm: "fft".into(),
                 params: vec![],
             }],
             analyzer: None,
+            analyzer_source: AnalyzerSource::Raw,
         };
         assert!(matches!(
             s.set_traces(vec![cfg]),
@@ -519,13 +618,15 @@ mod tests {
     #[test]
     fn analyzer_produces_a_spectrum_frame() {
         let mut s = Session::new();
-        s.set_traces(vec![TraceConfig {
+        s.set_traces(vec![Trace {
+            id: "roll".into(),
             signal: sig(30, "roll"),
             pipeline: vec![],
             analyzer: Some(AlgoConfig {
                 algorithm: "fft".into(),
                 params: vec![("n".into(), 64.0)],
             }),
+            analyzer_source: AnalyzerSource::Raw,
         }])
         .unwrap();
         for i in 0..64 {
@@ -537,14 +638,42 @@ mod tests {
         }
         let frames = s.poll_spectra();
         assert_eq!(frames.len(), 1, "one analyzer, one frame");
-        assert_eq!(frames[0].n, 64);
-        assert!(frames[0].bins.len() >= 32);
+        assert_eq!(frames[0].0, "roll", "tagged with the trace id");
+        assert_eq!(frames[0].1.n, 64);
+        assert!(frames[0].1.bins.len() >= 32);
+    }
+
+    #[test]
+    fn analyzer_can_run_on_the_filtered_signal() {
+        let mut s = Session::new();
+        s.set_traces(vec![Trace {
+            id: "roll".into(),
+            signal: sig(30, "roll"),
+            pipeline: vec![lpf(20.0)],
+            analyzer: Some(AlgoConfig {
+                algorithm: "fft".into(),
+                params: vec![("n".into(), 64.0)],
+            }),
+            analyzer_source: AnalyzerSource::Filtered,
+        }])
+        .unwrap();
+        for i in 0..64 {
+            s.ingest(&sample(
+                &sig(30, "roll"),
+                i as f64 * 10.0,
+                (i as f64 * 0.1).sin(),
+            ));
+        }
+        let frames = s.poll_spectra();
+        assert_eq!(frames.len(), 1, "filtered-source analyzer still produces a frame");
+        assert_eq!(frames[0].1.n, 64);
     }
 
     #[test]
     fn analyzer_built_with_a_processor_slot_is_rejected() {
         let mut s = Session::new();
-        let cfg = TraceConfig {
+        let cfg = Trace {
+            id: "roll".into(),
             signal: sig(30, "roll"),
             pipeline: vec![],
             analyzer: Some(AlgoConfig {
@@ -554,6 +683,7 @@ mod tests {
                     ("q".into(), std::f64::consts::FRAC_1_SQRT_2),
                 ],
             }),
+            analyzer_source: AnalyzerSource::Raw,
         };
         let result = s.set_traces(vec![cfg]);
         assert!(matches!(result, Err(SessionError::NotAnAnalyzer(_))));
