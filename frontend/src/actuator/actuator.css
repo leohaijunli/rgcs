@@ -44,6 +44,37 @@ body,
   position: relative;
   min-width: 0;
   padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Compact horizontal state strip; the rest of the column is reserved for
+ * the camera preview and realtime curves. */
+.state-strip {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 6px 12px;
+  border: 1px solid var(--mg-border);
+  border-radius: 6px;
+  background: var(--mg-bg-raised);
+}
+
+.state-word {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.reserved-area {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--mg-border);
+  border-radius: 6px;
+  text-align: center;
 }
 
 .actuator-right {

@@ -1,10 +1,14 @@
-// Motor / mag interference test window — A1+A3 (motor-test-plan §5–§6, §8.2).
+// Motor / mag interference test window — A1+A3 (motor-test-plan §5–§6, §8.2),
+// refactored to a source-driven layout (operator request 2026-10-10):
 //
-// Full-screen four-region frame. Live in A3: manual sliders (sync-all),
-// the risk-scaled start confirmation (no props/flat plate: unlock → click;
-// full props: unlock → typed phrase → 3 s hold), start/stop/estop/reset
-// wired to the Rust session, session events, and the always-on-top pin
-// while sending (driven from Rust).
+//   Header: live chips + state banner + EMERGENCY STOP
+//   Left (one workflow): prop load → command source → source panel → safety
+//   Mid: compact state strip + reserved space (GoPro video, curves)
+//   Right: live status
+//
+// One primary action per state: START (hold for full props) dispatches by
+// source — manual sliders or a preset waveform; STOP while running. The
+// safety gate (unlock → [typed phrase] → hold) applies to every source.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
@@ -12,14 +16,37 @@ import { listen } from '@tauri-apps/api/event'
 import { isTauri } from '../inspector/mock'
 
 /** Prop load selected for this test. Operator-declared — there is no
- * sensor that can tell the types apart, and detection is explicitly out
- * of scope (operator decision 2026-10-10). */
+ * sensor that can tell the types apart (operator decision 2026-10-10). */
 type Load = 'none' | 'plate' | 'props'
 
 const LOADS: Array<{ id: Load; label: string }> = [
   { id: 'none', label: 'No props' },
   { id: 'plate', label: 'Flat plate' },
   { id: 'props', label: 'Full props' },
+]
+
+/** Command sources. Manual = live sliders; Preset = bounded waveform
+ * (self-stopping); Forward = realtime SITL→FC forwarding (design pending). */
+type Source = 'manual' | 'preset' | 'forward'
+
+/** Preset waveform kinds, mirrored from `core::motor_test::source`. */
+type PresetKind = 'step' | 'ramp' | 'square' | 'sine'
+
+const SOURCES: Array<{ id: Source; label: string; hint: string }> = [
+  { id: 'manual', label: 'Manual', hint: 'Live sliders drive the motors' },
+  { id: 'preset', label: 'Preset', hint: 'Bounded waveform, stops itself' },
+  {
+    id: 'forward',
+    label: 'Forward',
+    hint: 'Realtime SITL→FC forwarding (pending design)',
+  },
+]
+
+const PRESETS: Array<{ id: PresetKind; label: string }> = [
+  { id: 'step', label: 'Step' },
+  { id: 'ramp', label: 'Ramp' },
+  { id: 'square', label: 'Square' },
+  { id: 'sine', label: 'Sine' },
 ]
 
 /** The typed phrase for full props (a deliberate gesture, not a click). */
@@ -29,16 +56,6 @@ const PROPS_HOLD_MS = 3000
 
 /** Motor count (fixed 4 until a vehicle config lands, D9). */
 const MOTOR_COUNT = 4
-
-/** Preset waveform kinds, mirrored from `core::motor_test::source`. */
-type PresetKind = 'step' | 'ramp' | 'square' | 'sine'
-
-const PRESETS: Array<{ id: PresetKind; label: string }> = [
-  { id: 'step', label: 'Step' },
-  { id: 'ramp', label: 'Ramp' },
-  { id: 'square', label: 'Square' },
-  { id: 'sine', label: 'Sine' },
-]
 
 /** Slider updates are merged at ~30 Hz — never queued (plan §8.1). */
 const SET_VALUES_MIN_INTERVAL_MS = 33
@@ -70,22 +87,24 @@ export function ActuatorApp() {
   const tauri = isTauri()
   const [status, setStatus] = useState<ActuatorStatus>(IDLE)
   const [load, setLoad] = useState<Load>('none')
+  const [source, setSource] = useState<Source>('manual')
   /** Unlocked = the operator removed the safety cover. Any load change
    * re-locks instantly (§8.2: the confirmation binds to session+load). */
   const [unlocked, setUnlocked] = useState(false)
   /** Latched emergency: stays until an explicit reset, never auto-clears. */
   const [emergency, setEmergency] = useState(false)
+  // Manual source state.
   const [values, setValues] = useState<number[]>(() => new Array(MOTOR_COUNT).fill(0))
   const [sync, setSync] = useState(true)
-  /** Typed confirmation for full props. */
-  const [phrase, setPhrase] = useState('')
-  /** Hold-to-start progress, 0..1. */
-  const [holdProgress, setHoldProgress] = useState(0)
-  /** Preset waveform (drives all motors in sync for its duration). */
+  // Preset source state.
   const [preset, setPreset] = useState<PresetKind>('ramp')
   const [amplitude, setAmplitude] = useState(0.5)
   const [frequency, setFrequency] = useState(0.5)
   const [duration, setDuration] = useState(5)
+  // Confirmation state.
+  const [phrase, setPhrase] = useState('')
+  const [holdProgress, setHoldProgress] = useState(0)
+
   const valuesRef = useRef(values)
   valuesRef.current = values
   const lastSend = useRef(0)
@@ -164,9 +183,7 @@ export function ActuatorApp() {
   )
 
   const setMotor = (index: number, v: number) => {
-    const next = sync
-      ? values.map(() => v)
-      : values.map((x, i) => (i === index ? v : x))
+    const next = sync ? values.map(() => v) : values.map((x, i) => (i === index ? v : x))
     setValues(next)
     pushValues(next)
   }
@@ -196,23 +213,23 @@ export function ActuatorApp() {
     return 'ready' as const
   }, [emergency, unlocked, load, phrase])
 
+  /** The one start action — dispatches by the selected source. */
   const start = () => {
-    if (!tauri || gate !== 'ready') return
-    void invoke('actuator_start_manual', { load, values: valuesRef.current }).catch(() => {})
-  }
-
-  /** Presets run under the same gate as manual start, but click-to-run: the
-   * waveform is bounded by its duration *and* the interlock's slew limit. */
-  const runPreset = () => {
     if (!tauri || gate !== 'ready' || running) return
-    void invoke('actuator_start_preset', {
-      preset: {
-        kind: preset,
-        amplitude,
-        frequency_hz: frequency,
-        duration_s: duration,
-      },
-    }).catch(() => {})
+    if (source === 'manual') {
+      void invoke('actuator_start_manual', { load, values: valuesRef.current }).catch(() => {})
+    } else if (source === 'preset') {
+      void invoke('actuator_start_preset', {
+        load,
+        preset: {
+          kind: preset,
+          amplitude,
+          frequency_hz: frequency,
+          duration_s: duration,
+        },
+      }).catch(() => {})
+    }
+    // 'forward' is gated off until the forwarding work package lands.
   }
 
   // Hold-to-start (full props): pointerdown begins the ramp; release before
@@ -248,16 +265,6 @@ export function ActuatorApp() {
   }
   useEffect(() => cancelHold, [])
 
-  const estopBtn = (
-    <button
-      className={`estop-btn ${emergency ? 'latched' : ''}`}
-      onClick={estop}
-      title="Stop all motors immediately (Esc)"
-    >
-      EMERGENCY STOP
-    </button>
-  )
-
   return (
     <div className="actuator-grid">
       <header className="actuator-header">
@@ -292,10 +299,16 @@ export function ActuatorApp() {
             RESET
           </button>
         )}
-        {estopBtn}
+        <button
+          className={`estop-btn ${emergency ? 'latched' : ''}`}
+          onClick={estop}
+          title="Stop all motors immediately (Esc)"
+        >
+          EMERGENCY STOP
+        </button>
       </header>
 
-      {/* Left: control panel. Load → unlock → start, the fixed order. */}
+      {/* Left: one workflow — load → source → source panel → safety. */}
       <aside className="actuator-left">
         <div className="card">
           <h3>Prop load</h3>
@@ -323,112 +336,127 @@ export function ActuatorApp() {
         <div className="card">
           <h3>Command source</h3>
           <div className="btn-row">
-            <button className="mode-btn active">Manual</button>
-            <button className="mode-btn" disabled title="Arrives with A6 (profile playback)">
-              Profile
-            </button>
-            <button className="mode-btn" disabled title="Arrives with A7 (speed functions)">
-              Function
-            </button>
+            {SOURCES.map((s) => (
+              <button
+                key={s.id}
+                className={`mode-btn ${source === s.id ? 'active' : ''}`}
+                disabled={running}
+                onClick={() => setSource(s.id)}
+                title={running ? 'Stop the test before switching source' : s.hint}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
+          <div className="estop-note" style={{ marginTop: 6 }}>
+            {SOURCES.find((s) => s.id === source)?.hint}
           </div>
         </div>
 
-        <div className="card">
-          <h3>Motors</h3>
-          <label className="row" style={{ marginBottom: 6 }}>
-            <span>Synchronize all</span>
-            <input type="checkbox" checked={sync} onChange={(e) => setSync(e.target.checked)} />
-          </label>
-          {values.map((v, i) => (
-            <label key={i} className="motor-row">
-              <span className="mono motor-label">M{i + 1}</span>
+        {/* Source panel: only the selected source's controls. */}
+        {source === 'manual' && (
+          <div className="card">
+            <h3>Motors</h3>
+            <label className="row" style={{ marginBottom: 6 }}>
+              <span>Synchronize all</span>
+              <input
+                type="checkbox"
+                checked={sync}
+                disabled={emergency}
+                onChange={(e) => setSync(e.target.checked)}
+              />
+            </label>
+            {values.map((v, i) => (
+              <label key={i} className="motor-row">
+                <span className="mono motor-label">M{i + 1}</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={v}
+                  disabled={emergency}
+                  onChange={(e) => setMotor(i, Number(e.target.value))}
+                />
+                <span className="mono motor-value">{(v * 100).toFixed(0)}%</span>
+              </label>
+            ))}
+          </div>
+        )}
+
+        {source === 'preset' && (
+          <div className="card">
+            <h3>Waveform</h3>
+            <div className="btn-row">
+              {PRESETS.map((p) => (
+                <button
+                  key={p.id}
+                  className={`mode-btn ${preset === p.id ? 'active' : ''}`}
+                  onClick={() => setPreset(p.id)}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            <label className="motor-row" style={{ marginTop: 8 }}>
+              <span className="motor-label" style={{ width: 52 }}>Ampl.</span>
               <input
                 type="range"
                 min={0}
                 max={1}
                 step={0.01}
-                value={v}
+                value={amplitude}
                 disabled={emergency}
-                onChange={(e) => setMotor(i, Number(e.target.value))}
+                onChange={(e) => setAmplitude(Number(e.target.value))}
               />
-              <span className="mono motor-value">{(v * 100).toFixed(0)}%</span>
+              <span className="mono motor-value">{(amplitude * 100).toFixed(0)}%</span>
             </label>
-          ))}
-        </div>
+            <label className="motor-row">
+              <span className="motor-label" style={{ width: 52 }}>Freq.</span>
+              <input
+                className="phrase-input"
+                style={{ flex: 1, margin: 0 }}
+                type="number"
+                min={0.01}
+                max={20}
+                step={0.1}
+                value={frequency}
+                disabled={emergency}
+                onChange={(e) => setFrequency(Number(e.target.value))}
+              />
+              <span className="mono motor-value">Hz</span>
+            </label>
+            <label className="motor-row">
+              <span className="motor-label" style={{ width: 52 }}>Dur.</span>
+              <input
+                className="phrase-input"
+                style={{ flex: 1, margin: 0 }}
+                type="number"
+                min={0.5}
+                max={300}
+                step={0.5}
+                value={duration}
+                disabled={emergency}
+                onChange={(e) => setDuration(Number(e.target.value))}
+              />
+              <span className="mono motor-value">s</span>
+            </label>
+            <div className="estop-note" style={{ marginTop: 4 }}>
+              All motors in sync; runs its duration, then stops itself.
+            </div>
+          </div>
+        )}
 
-        <div className="card">
-          <h3>Preset waveform</h3>
-          <div className="btn-row">
-            {PRESETS.map((p) => (
-              <button
-                key={p.id}
-                className={`mode-btn ${preset === p.id ? 'active' : ''}`}
-                onClick={() => setPreset(p.id)}
-              >
-                {p.label}
-              </button>
-            ))}
+        {source === 'forward' && (
+          <div className="card">
+            <h3>Realtime forward</h3>
+            <div className="estop-note">
+              Forwards live SITL actuator commands to the FC. Pending design:
+              which SITL signal feeds it and whether the GCS carries two links
+              at once.
+            </div>
           </div>
-          <label className="motor-row" style={{ marginTop: 8 }}>
-            <span className="motor-label" style={{ width: 52 }}>Ampl.</span>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.01}
-              value={amplitude}
-              disabled={emergency}
-              onChange={(e) => setAmplitude(Number(e.target.value))}
-            />
-            <span className="mono motor-value">{(amplitude * 100).toFixed(0)}%</span>
-          </label>
-          <label className="motor-row">
-            <span className="motor-label" style={{ width: 52 }}>Freq.</span>
-            <input
-              className="phrase-input"
-              style={{ flex: 1, margin: 0 }}
-              type="number"
-              min={0.01}
-              max={20}
-              step={0.1}
-              value={frequency}
-              disabled={emergency}
-              onChange={(e) => setFrequency(Number(e.target.value))}
-            />
-            <span className="mono motor-value">Hz</span>
-          </label>
-          <label className="motor-row">
-            <span className="motor-label" style={{ width: 52 }}>Dur.</span>
-            <input
-              className="phrase-input"
-              style={{ flex: 1, margin: 0 }}
-              type="number"
-              min={0.5}
-              max={300}
-              step={0.5}
-              value={duration}
-              disabled={emergency}
-              onChange={(e) => setDuration(Number(e.target.value))}
-            />
-            <span className="mono motor-value">s</span>
-          </label>
-          <div className="estop-note" style={{ marginTop: 4 }}>
-            All motors in sync; runs its duration, then stops itself.
-          </div>
-          <button
-            className="start-btn"
-            style={{ marginTop: 8 }}
-            disabled={gate !== 'ready' || running}
-            onClick={runPreset}
-            title={
-              gate === 'ready'
-                ? 'Run the preset (same safety gate as manual start)'
-                : 'Unlock the test first'
-            }
-          >
-            RUN PRESET
-          </button>
-        </div>
+        )}
 
         <div className="card">
           <h3>Safety</h3>
@@ -458,7 +486,7 @@ export function ActuatorApp() {
             <button
               className="start-btn"
               style={{ marginTop: 8, position: 'relative' }}
-              disabled={gate !== 'ready'}
+              disabled={gate !== 'ready' || source === 'forward'}
               onPointerDown={beginHold}
               onPointerUp={cancelHold}
               onPointerLeave={cancelHold}
@@ -469,18 +497,16 @@ export function ActuatorApp() {
                     ? 'Unlock the test first'
                     : gate === 'phrase'
                       ? `Type ${PROPS_PHRASE} first`
-                      : load === 'props'
-                        ? 'Hold for 3 seconds'
-                        : 'Start sending'
+                      : source === 'forward'
+                        ? 'Forwarding arrives with its work package'
+                        : load === 'props'
+                          ? 'Hold for 3 seconds'
+                          : 'Start sending'
               }
             >
               START
               {holdPct > 0 && holdPct < 1 && (
-                <span
-                  className="hold-fill"
-                  style={{ width: `${holdPct * 100}%` }}
-                  aria-hidden
-                />
+                <span className="hold-fill" style={{ width: `${holdPct * 100}%` }} aria-hidden />
               )}
             </button>
           )}
@@ -492,26 +518,12 @@ export function ActuatorApp() {
         </div>
       </aside>
 
-      {/* Middle: state readout. */}
+      {/* Middle: compact state strip + reserved monitoring space. */}
       <main className="actuator-mid">
-        <div
-          className="card"
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            height: '100%',
-            gap: 10,
-            borderColor: emergency ? 'var(--mg-error)' : 'var(--mg-border)',
-          }}
-        >
-          <div
-            className="mono"
+        <div className="state-strip">
+          <span
+            className="mono state-word"
             style={{
-              fontSize: 28,
-              fontWeight: 700,
-              letterSpacing: '0.12em',
               color: emergency
                 ? 'var(--mg-error)'
                 : running
@@ -520,12 +532,15 @@ export function ActuatorApp() {
             }}
           >
             {emergency ? 'EMERGENCY' : running ? 'RUNNING' : unlocked ? 'READY' : 'LOCKED'}
-          </div>
-          <div className="estop-note">
+          </span>
+          <span className="estop-note">
             {running
-              ? `Sending at ${status.tick_hz.toFixed(0)} Hz · window on top`
+              ? `${SOURCES.find((s) => s.id === source)?.label} · ${status.tick_hz.toFixed(0)} Hz · window on top`
               : 'Motor commands stopped · Esc = emergency stop'}
-          </div>
+          </span>
+        </div>
+        <div className="reserved-area estop-note">
+          Realtime curves (A5) and the camera preview land here.
         </div>
       </main>
 
