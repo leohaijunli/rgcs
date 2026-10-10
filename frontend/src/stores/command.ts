@@ -6,11 +6,11 @@ import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 
 /**
- * Commands the UI may send. `pause`/`continue` map to
- * `MAV_CMD_DO_PAUSE_CONTINUE` (param1 0/1); PX4 v1.17 handling is still to be
- * confirmed on SITL, and a rejection surfaces as a NACK in the UI.
+ * Commands the UI may send. `takeoff`/`land` map to `MAV_CMD_NAV_TAKEOFF` /
+ * `MAV_CMD_NAV_LAND`; `pause`/`continue` (`MAV_CMD_DO_PAUSE_CONTINUE`) were
+ * removed — PX4 v1.17 has no handler for them (SITL-confirmed NACK).
  */
-export type CommandName = 'rtl' | 'pause' | 'continue'
+export type CommandName = 'takeoff' | 'land' | 'rtl'
 
 /** Payload of the backend `command` event. */
 export interface CommandEventPayload {

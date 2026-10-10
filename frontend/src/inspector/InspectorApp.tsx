@@ -218,13 +218,14 @@ function signalLabel(signal: SignalId): string {
 
 /** Value-axis unit heuristics by field name (`null` = no unit shown). This is a
  * raw-data inspector, so units are advisory and cheap: match a few PX4 fields
- * (attitude, IMU, mag, pressure, altitude) instead of a full schema table. */
+ * (attitude, IMU, mag, pressure, altitude) instead of a full schema table.
+ * Angles/rates are displayed in degrees (operator convention 2026-10-10). */
 const UNIT_PATTERNS: Array<[RegExp, string]> = [
   [/mag/i, 'nT'],
-  [/^(roll|pitch|yaw)$/i, 'rad'],
-  [/^(roll|pitch|yaw)speed$/i, 'rad/s'],
+  [/^(roll|pitch|yaw)$/i, 'deg'],
+  [/^(roll|pitch|yaw)speed$/i, 'deg/s'],
+  [/^(x|y|z)?gyro/i, 'deg/s'],
   [/^(x|y|z)?acc/i, 'm/s²'],
-  [/^(x|y|z)?gyro/i, 'rad/s'],
   [/^temp/i, 'degC'],
   [/pressure/i, 'hPa'],
   [/alt/i, 'm'],
@@ -236,6 +237,14 @@ function signalUnit(field: string): string | null {
     if (re.test(field)) return unit
   }
   return null
+}
+
+/** Display scale for a signal's values: rad → deg for angle/rate fields
+ * (the wire is rad), 1 otherwise. Applies to every UI readout of the value. */
+const DEG_PER_RAD = 180 / Math.PI
+
+function signalScale(field: string): number {
+  return /^(roll|pitch|yaw)(speed)?$|gyro/.test(field) ? DEG_PER_RAD : 1
 }
 
 /** The unit shared by every trace in a plot, or `null` for mixed/no units. */
@@ -1581,9 +1590,12 @@ function mergedData(
   const gap = (v: number): number | null => (Number.isFinite(v) ? v : null)
   const series: (Float64Array | (number | null)[])[] = [x]
   for (let i = 0; i < k; i++) {
-    series.push(outRaw[i].map(gap))
+    // Angle/rate fields are converted rad → deg at display time (operator
+    // convention); the plotted curve and the legend share the unit.
+    const scale = signalScale(traces[i].signal.field)
+    series.push(outRaw[i].map((v) => gap(v * scale)))
     // Only filtered traces carry a second column, matching the series list.
-    if (traces[i].pipeline.length > 0) series.push(outFilt[i].map(gap))
+    if (traces[i].pipeline.length > 0) series.push(outFilt[i].map((v) => gap(v * scale)))
   }
   // Derived total magnetic intensity √(x²+y²+z²), in the same columns as the
   // mag components; a gap in any component is a gap in the total.
@@ -1862,7 +1874,7 @@ function PropertiesPanel({
         <dt>Message</dt>
         <dd>{entry ? `msg ${messageId}` : `msg ${messageId} (not seen yet)`}</dd>
         <dt>Value</dt>
-        <dd>{entry ? fmt(entry.last_value, 3) : '—'}</dd>
+        <dd>{entry ? fmt(entry.last_value * signalScale(trace.signal.field), 3) : '—'}</dd>
         <dt>Rate</dt>
         <dd>{entry ? `${fmt(entry.rate_hz, 1)} Hz` : '—'}</dd>
         <dt>Est. fs</dt>

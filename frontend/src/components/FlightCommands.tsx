@@ -8,7 +8,7 @@ import { useLinkStore } from '../stores/link'
 const CONFIRM_WINDOW_MS = 5000
 
 /** Commands that need a second click (they change what the aircraft is doing). */
-const CONFIRM: ReadonlyArray<CommandName> = ['rtl', 'pause']
+const CONFIRM: ReadonlyArray<CommandName> = ['takeoff', 'land', 'rtl']
 
 /** Terminal ack results mapped onto the status line. */
 const RESULT_LABELS: Record<string, string> = {
@@ -34,8 +34,8 @@ export default function FlightCommands() {
 
   if (!link?.fc_alive) return null
 
-  // Disruptive commands (RTL, pause) arm on the first click; a second click
-  // within the confirm window sends them. Others (continue) send immediately.
+  // Disruptive commands (takeoff, land, RTL) arm on the first click; a
+  // second click within the confirm window sends them.
   const press = (name: CommandName) => {
     if (!CONFIRM.includes(name)) {
       void send(name)
@@ -62,10 +62,10 @@ export default function FlightCommands() {
   return (
     <div className="panel rounded p-2">
       <div className="flex flex-wrap items-center gap-1.5">
-        {(['pause', 'continue', 'rtl'] as const).map((name) => {
+        {(['takeoff', 'land', 'rtl'] as const).map((name) => {
           const armed = confirming === name
           const label = armed
-            ? t(name === 'rtl' ? 'plan.cmd.confirmRtl' : 'plan.cmd.confirmPause')
+            ? t(name === 'rtl' ? 'plan.cmd.confirmRtl' : name === 'takeoff' ? 'plan.cmd.confirmTakeoff' : 'plan.cmd.confirmLand')
             : t(`plan.${name}`)
           return (
             <button
