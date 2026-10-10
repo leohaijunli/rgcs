@@ -15,6 +15,7 @@ pub mod height;
 pub mod inspector;
 pub mod mavlink;
 pub mod mission;
+pub mod motor_test;
 pub mod plan;
 pub mod rtk;
 pub mod signals;
