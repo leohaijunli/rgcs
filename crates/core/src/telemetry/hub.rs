@@ -291,7 +291,7 @@ mod tests {
 
         let heartbeat = tokio::time::timeout(Duration::from_secs(2), async {
             loop {
-                let current = snap_rx.borrow_and_update().heartbeat;
+                let current = snap_rx.borrow_and_update().heartbeat.clone();
                 if let Some(hb) = current {
                     return Some(hb);
                 }
@@ -385,8 +385,8 @@ mod tests {
 
         let heartbeat = tokio::time::timeout(Duration::from_secs(2), async {
             loop {
-                if let Some(hb) = snap_rx.borrow_and_update().heartbeat {
-                    return hb;
+                if let Some(ref hb) = snap_rx.borrow_and_update().heartbeat {
+                    return hb.clone();
                 }
                 if snap_rx.changed().await.is_err() {
                     panic!("snapshot channel closed");

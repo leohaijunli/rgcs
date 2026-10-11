@@ -7,6 +7,7 @@
 //! Field units follow the MAVLink conventions (meters, m/s, degrees).
 
 pub mod hub;
+pub mod px4_mode;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -426,7 +427,7 @@ impl VehicleId {
 }
 
 /// Normalized `HEARTBEAT`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct Heartbeat {
     pub system_id: u8,
@@ -435,6 +436,10 @@ pub struct Heartbeat {
     pub autopilot: Autopilot,
     pub base_mode: BaseMode,
     pub custom_mode: u32,
+    /// PX4 custom mode pre-decoded for display (`core::telemetry::px4_mode`,
+    /// ADR-017); empty for other autopilots. The frontend must not decode
+    /// `custom_mode` itself.
+    pub mode_label: String,
     pub flight_state: FlightState,
     pub mavlink_version: u8,
 }
@@ -451,16 +456,25 @@ impl TryFrom<&MessageEnvelope> for Heartbeat {
 
     fn try_from(env: &MessageEnvelope) -> Result<Self, Self::Error> {
         match &env.message {
-            MavMessage::HEARTBEAT(hb) => Ok(Heartbeat {
-                system_id: env.header.system_id,
-                component_id: env.header.component_id,
-                vehicle_type: VehicleType::from(hb.mavtype),
-                autopilot: Autopilot::from(hb.autopilot),
-                base_mode: BaseMode::from_raw(hb.base_mode.bits()),
-                custom_mode: hb.custom_mode,
-                flight_state: FlightState::from(hb.system_status),
-                mavlink_version: hb.mavlink_version,
-            }),
+            MavMessage::HEARTBEAT(hb) => {
+                let autopilot = Autopilot::from(hb.autopilot);
+                let mode_label = if autopilot == Autopilot::Px4 {
+                    px4_mode::decode_custom_mode(hb.custom_mode)
+                } else {
+                    String::new()
+                };
+                Ok(Heartbeat {
+                    system_id: env.header.system_id,
+                    component_id: env.header.component_id,
+                    vehicle_type: VehicleType::from(hb.mavtype),
+                    autopilot,
+                    base_mode: BaseMode::from_raw(hb.base_mode.bits()),
+                    custom_mode: hb.custom_mode,
+                    mode_label,
+                    flight_state: FlightState::from(hb.system_status),
+                    mavlink_version: hb.mavlink_version,
+                })
+            }
             _ => Err(TelemetryParseError::WrongMessageType {
                 expected: "HEARTBEAT",
             }),

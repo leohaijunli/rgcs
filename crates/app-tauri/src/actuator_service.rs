@@ -35,10 +35,12 @@ pub struct ActuatorStatus {
     pub fc_alive: bool,
     /// The one hard interlock: sending is only ever allowed while disarmed.
     pub armed: bool,
-    /// Raw PX4 custom-mode bitmask; the window decodes it to a flight-mode
-    /// name with the same table the TopBar uses (`util/px4mode.ts`).
+    /// Raw PX4 custom-mode bitmask (kept for diagnostics).
     pub custom_mode: u32,
     pub autopilot_px4: bool,
+    /// PX4 custom mode pre-decoded in core (`telemetry::px4_mode`, ADR-017);
+    /// the window must not decode `custom_mode` itself.
+    pub mode_label: String,
     pub endpoint: Option<String>,
     /// Sending rate the service is configured for (10 Hz until M0 says more).
     pub tick_hz: f64,
@@ -421,14 +423,16 @@ impl AppState {
     pub fn actuator_status(&self) -> ActuatorStatus {
         let link = self.link_status();
         let hub = self.hub();
-        let (armed, custom_mode, autopilot_px4) = match hub.and_then(|h| h.snapshot().heartbeat) {
-            Some(hb) => (
-                hb.base_mode.safety_armed,
-                hb.custom_mode,
-                hb.autopilot == maggcs_core::telemetry::Autopilot::Px4,
-            ),
-            None => (false, 0, false),
-        };
+        let (armed, custom_mode, autopilot_px4, mode_label) =
+            match hub.and_then(|h| h.snapshot().heartbeat) {
+                Some(hb) => (
+                    hb.base_mode.safety_armed,
+                    hb.custom_mode,
+                    hb.autopilot == maggcs_core::telemetry::Autopilot::Px4,
+                    hb.mode_label,
+                ),
+                None => (false, 0, false, String::new()),
+            };
         let session = match self.motor_test.session() {
             Some(SessionState::ManualRunning) => "running",
             Some(SessionState::Stopping) => "stopping",
@@ -466,6 +470,7 @@ impl AppState {
             armed,
             custom_mode,
             autopilot_px4,
+            mode_label,
             endpoint: link.map(|l| l.endpoint),
             tick_hz: DEFAULT_TICK_HZ,
             session: session.to_string(),

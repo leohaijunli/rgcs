@@ -14,7 +14,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { isTauri } from '../inspector/mock'
-import { px4Mode } from '../util/px4mode'
 
 /** Prop load selected for this test. Operator-declared — there is no
  * sensor that can tell the types apart (operator decision 2026-10-10). */
@@ -70,6 +69,8 @@ interface ActuatorStatus {
   armed: boolean
   /** Raw PX4 custom-mode bitmask; decoded for display via util/px4mode. */
   custom_mode: number
+  /** PX4 mode pre-decoded in core (ADR-017). */
+  mode_label: string
   autopilot_px4: boolean
   endpoint: string | null
   tick_hz: number
@@ -81,6 +82,7 @@ interface ActuatorStatus {
 }
 
 const IDLE: ActuatorStatus = {
+  mode_label: '',
   connected: false,
   fc_alive: false,
   armed: false,
@@ -715,7 +717,7 @@ export function ActuatorApp() {
           <div className="row">
             <span className="text-muted">FC mode</span>
             <span className="mono">
-              {status.autopilot_px4 ? px4Mode(status.custom_mode) : '—'}
+              {status.autopilot_px4 && status.mode_label ? status.mode_label : '—'}
             </span>
           </div>
           <div className="row">

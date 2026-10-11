@@ -67,6 +67,8 @@ export function startMockFeed(): number {
         component_id: 1,
         vehicle_type: 'quadrotor',
         autopilot: 'px4',
+        // Mock label; the real decode lives in core::telemetry::px4_mode.
+        mode_label: 'Auto·Loiter',
         base_mode: {
           custom_mode_enabled: true,
           test_enabled: false,

@@ -7,4 +7,10 @@ import type { VehicleType } from "./VehicleType";
 /**
  * Normalized `HEARTBEAT`.
  */
-export type Heartbeat = { system_id: number, component_id: number, vehicle_type: VehicleType, autopilot: Autopilot, base_mode: BaseMode, custom_mode: number, flight_state: FlightState, mavlink_version: number, };
+export type Heartbeat = { system_id: number, component_id: number, vehicle_type: VehicleType, autopilot: Autopilot, base_mode: BaseMode, custom_mode: number, 
+/**
+ * PX4 custom mode pre-decoded for display (`core::telemetry::px4_mode`,
+ * ADR-017); empty for other autopilots. The frontend must not decode
+ * `custom_mode` itself.
+ */
+mode_label: string, flight_state: FlightState, mavlink_version: number, };
