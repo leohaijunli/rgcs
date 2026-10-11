@@ -11,9 +11,9 @@ use std::time::{Duration, Instant};
 
 use ::mavlink::common::{MavCmd, COMMAND_ACK_DATA};
 use ::mavlink::MessageData;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
-use super::{CommandError, CommandEvent, CommandSession};
+use super::{CommandError, CommandEvent, CommandResult, CommandSession};
 use crate::mavlink::connection::{ConnectionEvent, ConnectionHandle};
 use crate::mavlink::router::MessageRoute;
 
@@ -25,6 +25,13 @@ pub const RETRANSMIT_TICK: Duration = Duration::from_millis(200);
 pub enum CommandCommand {
     /// Send a `COMMAND_LONG` and track it until its ack (or failure).
     Send { command: MavCmd, params: [f32; 7] },
+    /// Like [`Send`](CommandCommand::Send), but the task answers the
+    /// terminal outcome through `reply` (see [`CommandService::send_await`]).
+    SendAwait {
+        command: MavCmd,
+        params: [f32; 7],
+        reply: oneshot::Sender<Result<CommandResult, CommandError>>,
+    },
 }
 
 /// Handle to the running command service.
@@ -57,6 +64,34 @@ impl CommandService {
             .await
             .map_err(|_| CommandError::ServiceStopped)
     }
+
+    /// Enqueue a command and await its terminal outcome: the `COMMAND_ACK`
+    /// result when the FC answers, or the session failure (busy / no-ack
+    /// after the retry budget / link lost). `await_timeout` is a caller-side
+    /// cap on top of the session's own budget; on expiry the command keeps
+    /// running and this returns [`CommandError::TimedOut`].
+    pub async fn send_await(
+        &self,
+        command: MavCmd,
+        params: [f32; 7],
+        await_timeout: Duration,
+    ) -> Result<CommandResult, CommandError> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.cmd_tx
+            .send(CommandCommand::SendAwait {
+                command,
+                params,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| CommandError::ServiceStopped)?;
+        match tokio::time::timeout(await_timeout, reply_rx).await {
+            Ok(Ok(result)) => result,
+            // The service dropped the reply without answering: it stopped.
+            Ok(Err(_)) => Err(CommandError::ServiceStopped),
+            Err(_) => Err(CommandError::TimedOut),
+        }
+    }
 }
 
 /// Service task: drives the session from commands, inbound frames, and the
@@ -73,6 +108,10 @@ async fn run(
     // lifecycle events still pass through the router.
     let mut events_rx = handle.subscribe_route(MessageRoute::messages(&[COMMAND_ACK_DATA::ID]));
     let mut ticker = tokio::time::interval(RETRANSMIT_TICK);
+    // The pending send_await reply and the command it belongs to. One at
+    // most: a send_await arriving while another command is in flight is
+    // answered with Busy immediately.
+    let mut pending: Option<(MavCmd, oneshot::Sender<Result<CommandResult, CommandError>>)> = None;
 
     loop {
         let (events, frames) = tokio::select! {
@@ -83,6 +122,18 @@ async fn run(
                         match session.begin(command, params) {
                             Ok(out) => out,
                             Err(e) => (vec![CommandEvent::Failed { command, error: e }], Vec::new()),
+                        }
+                    }
+                    CommandCommand::SendAwait { command, params, reply } => {
+                        match session.begin(command, params) {
+                            Ok(out) => {
+                                pending = Some((command, reply));
+                                out
+                            }
+                            Err(e) => {
+                                let _ = reply.send(Err(e.clone()));
+                                (vec![CommandEvent::Failed { command, error: e }], Vec::new())
+                            }
                         }
                     }
                 }
@@ -109,6 +160,28 @@ async fn run(
                 (events, frames)
             }
         };
+
+        // A terminal event answers the pending send_await. A `Busy` failure
+        // is a concurrent command's rejection, never the awaited command's
+        // outcome, so it must not consume the reply.
+        if let Some((pending_cmd, _)) = &pending {
+            let terminal = events.iter().find_map(|e| match e {
+                CommandEvent::Completed { command, result } if *command == *pending_cmd => {
+                    Some(Ok(*result))
+                }
+                CommandEvent::Failed { command, error }
+                    if *command == *pending_cmd && *error != CommandError::Busy =>
+                {
+                    Some(Err(error.clone()))
+                }
+                _ => None,
+            });
+            if let Some(outcome) = terminal {
+                let (_, reply) = pending.take().expect("pending was just checked");
+                // A dropped receiver (caller timed out first) is fine.
+                let _ = reply.send(outcome);
+            }
+        }
 
         for e in events {
             if evt_tx.send(e).await.is_err() {

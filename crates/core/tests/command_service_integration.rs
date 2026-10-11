@@ -347,3 +347,76 @@ async fn never_acked_fails_with_no_ack() {
 
     h.handle.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn send_await_returns_the_ack_result() {
+    let mut h = harness().await;
+    let svc = h.svc.clone();
+    let awaiting =
+        tokio::spawn(async move { svc.send_await(RTL, [0.0; 7], Duration::from_secs(5)).await });
+
+    let cmd = peer_recv_command_long(&mut h.peer).await;
+    peer_send_ack(
+        &mut h.peer,
+        cmd.command,
+        mavlink::common::MavResult::MAV_RESULT_ACCEPTED,
+    )
+    .await;
+
+    let result = awaiting.await.expect("join").expect("send_await");
+    assert_eq!(result, CommandResult::Accepted);
+    h.handle.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn send_await_returns_denied_verdict() {
+    let mut h = harness().await;
+    let svc = h.svc.clone();
+    let awaiting =
+        tokio::spawn(async move { svc.send_await(RTL, [0.0; 7], Duration::from_secs(5)).await });
+
+    let cmd = peer_recv_command_long(&mut h.peer).await;
+    peer_send_ack(
+        &mut h.peer,
+        cmd.command,
+        mavlink::common::MavResult::MAV_RESULT_DENIED,
+    )
+    .await;
+
+    // DENIED must reach the caller as data, not as a send failure: SITL
+    // denies PREFLIGHT_REBOOT_SHUTDOWN exactly like this.
+    let result = awaiting.await.expect("join").expect("send_await");
+    assert_eq!(result, CommandResult::Denied);
+    h.handle.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn send_await_while_busy_answers_busy() {
+    let h = harness().await;
+    // An unacked plain send keeps the single session slot occupied.
+    h.svc.send(RTL, [0.0; 7]).await.expect("enqueue");
+
+    let svc = h.svc.clone();
+    let err = svc
+        .send_await(RTL, [0.0; 7], Duration::from_secs(5))
+        .await
+        .expect_err("must be busy");
+    assert_eq!(err, CommandError::Busy);
+
+    h.handle.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn send_await_times_out_without_terminal_ack() {
+    let h = harness().await;
+    // A short await cap fires before the session's own retry budget; the
+    // command keeps retransmitting in the background afterwards.
+    let err = h
+        .svc
+        .send_await(RTL, [0.0; 7], Duration::from_millis(300))
+        .await
+        .expect_err("must time out");
+    assert_eq!(err, CommandError::TimedOut);
+
+    h.handle.shutdown().await;
+}

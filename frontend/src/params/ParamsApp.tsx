@@ -245,8 +245,13 @@ export function ParamsApp() {
     if (!tauri) return
     setRebooting(true)
     try {
-      await invoke('params_reboot')
-      setNotice('Reboot sent — the link will drop; re-pull after reconnect.')
+      const result = await invoke<string>('params_reboot')
+      if (result === 'accepted')
+        setNotice('Reboot accepted — the link will drop; re-pull after reconnect.')
+      else if (result === 'denied')
+        // SITL denies PREFLIGHT_REBOOT_SHUTDOWN (a NuttX-only code path).
+        setNotice('FC rejected the reboot (denied) — SITL does not support reboot')
+      else setNotice(`Reboot result: ${result}`)
     } catch (e) {
       setNotice(String(e))
     } finally {

@@ -6,6 +6,7 @@
 
 use serde::Serialize;
 use std::sync::Mutex as StdMutex;
+use std::time::Duration;
 use tauri::AppHandle;
 use tauri::Emitter;
 use tauri::Manager;
@@ -209,16 +210,26 @@ pub struct SetEcho {
 /// Reboot the flight controller (MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN,
 /// param1 = 1). The link drops and comes back per the ADR-011 state model;
 /// the window should re-pull after reconnecting.
+/// How long `params_reboot` waits for the FC's `COMMAND_ACK`. The session's
+/// own retry budget is ~4 s; the headroom tolerates slow links.
+const REBOOT_ACK_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Reboot the flight controller (`MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN`,
+/// param1=1). Awaits the FC's verdict: SITL denies this command (PX4 only
+/// compiles the reboot path for `CONFIG_BOARDCTL_RESET` boards), so the UI
+/// must see `denied` instead of assuming the reboot is on its way.
 #[tauri::command]
-pub async fn params_reboot(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn params_reboot(state: State<'_, AppState>) -> Result<String, String> {
     let service = state.command().ok_or("not connected")?;
-    maggcs_core::CommandService::send(
+    let result = maggcs_core::CommandService::send_await(
         &service,
         ::mavlink::common::MavCmd::MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN,
         [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        REBOOT_ACK_TIMEOUT,
     )
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    Ok(crate::command_service::result_name(result).to_string())
 }
 
 /// The FC's firmware version ("" until AUTOPILOT_VERSION arrives). Requests

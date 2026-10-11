@@ -96,6 +96,10 @@ pub enum CommandError {
     /// The command service task terminated.
     #[error("command service stopped")]
     ServiceStopped,
+    /// The caller-side await window (`send_await`) elapsed before the
+    /// session reached a terminal outcome.
+    #[error("no terminal COMMAND_ACK within the await timeout")]
+    TimedOut,
 }
 
 #[derive(Debug)]
