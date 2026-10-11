@@ -512,11 +512,14 @@ pub fn inspector_disconnect(state: State<'_, AppState>) -> Result<(), String> {
 #[tauri::command]
 pub fn inspector_set_traces(state: State<'_, AppState>, traces: Vec<Trace>) -> Result<(), String> {
     let inspector = state.inspector();
-    let ids = inspector
+    inspector
         .session
         .lock()
         .set_traces(traces)
         .map_err(|e| e.to_string())?;
+    // subscribe_ids() unions the trace signals with the mag fields a loaded
+    // calibration needs, so trace edits never drop the derived-total feed.
+    let ids = inspector.session.lock().subscribe_ids();
     inspector.subs.set(ids);
     Ok(())
 }
@@ -525,6 +528,36 @@ pub fn inspector_set_traces(state: State<'_, AppState>, traces: Vec<Trace>) -> R
 #[tauri::command]
 pub fn inspector_catalog(state: State<'_, AppState>) -> Result<Vec<CatalogEntry>, String> {
     Ok(state.inspector_catalog())
+}
+
+/// Load (or clear with `None`) a magnetometer calibration JSON for the
+/// inspector's derived total-field curve (plan §9): the file is
+/// parsed and validated by `core::calib` and applied in the session, so the
+/// A*(m_raw - b) math runs in Rust (ADR-015).
+#[tauri::command]
+pub fn inspector_set_mag_calibration(
+    state: State<'_, AppState>,
+    json: Option<String>,
+) -> Result<bool, String> {
+    let inspector = state.inspector();
+    let session = &inspector.session;
+    match json {
+        None => {
+            session.lock().set_mag_calibration(None);
+            let ids = session.lock().subscribe_ids();
+            inspector.subs.set(ids);
+            Ok(false)
+        }
+        Some(text) => {
+            let cal =
+                maggcs_core::calib::MagCalibration::from_json(&text).map_err(|e| e.to_string())?;
+            session.lock().set_mag_calibration(Some(cal));
+            // The calibration adds the mag fields to the subscription set.
+            let ids = session.lock().subscribe_ids();
+            inspector.subs.set(ids);
+            Ok(true)
+        }
+    }
 }
 
 /// Every algorithm the frontend can attach to a trace, with its parameter form.

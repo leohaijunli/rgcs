@@ -94,6 +94,12 @@ average, detrend) and FFT — all executed in Rust. Angles are displayed in
 degrees; the trace palette is token-based and theme-aware. Workspaces
 (plots/traces/colors) persist locally.
 
+**Mag calibration:** load a calibration JSON (Overflow ▸ *Load mag
+calibration…*); the Rust session then derives the calibrated total field
+`A·(m−b)` as a `total cal (nT)` series on any plot carrying
+xmag/ymag/zmag. Without a calibration the plain √(x²+y²+z²) total is
+shown. The loaded calibration persists across window reopens.
+
 ## Settings
 
 - Connection (endpoint, presets, auto-connect), Vehicle (initial position,

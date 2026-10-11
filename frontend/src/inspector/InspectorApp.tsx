@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import uPlot from 'uplot'
 import { invoke, Channel } from '@tauri-apps/api/core'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
+import { readTextFile } from '@tauri-apps/plugin-fs'
 import {
   ChevronsRight,
   Eraser,
@@ -269,6 +270,11 @@ function magComponents(traces: Trace[]): { x: number; y: number; z: number } | n
 /** Total magnetic-field intensity curve colour: the dedicated trace token. */
 const TOTAL_MAG_COLOR = () => cssVarToken('--mg-trace-total-mag')
 
+/** Rust-side derived trace id for the calibrated total field
+ * (core::inspector::session::MAG_TOTAL_ID): the A·(m−b) math runs in the
+ * Rust session, the frontend only plots the column. */
+const MAG_TOTAL_ID = 'mag_total_cal'
+
 let idSeq = 0
 /** A stable id for a plot/trace within this window (persisted in the workspace). */
 function newId(prefix: string): string {
@@ -324,6 +330,13 @@ export function InspectorApp() {
   const [dropPlot, setDropPlot] = useState<string | null>(null)
   /** Overflow menu (export / save / load) open state. */
   const [menuOpen, setMenuOpen] = useState(false)
+  /** Mag calibration loaded in the Rust session (derived total field). */
+  const [calLoaded, setCalLoaded] = useState(false)
+  /** Mirrors calLoaded for the rAF render loop (which reads refs only). */
+  const calRef = useRef(false)
+  useEffect(() => {
+    calRef.current = calLoaded
+  }, [calLoaded])
   /** ULog playback state (`null` = the live link is the source). */
   const [replay, setReplay] = useState<ReplayStatus | null>(null)
   /** Seek slider position while dragging; committed to the backend on release. */
@@ -642,6 +655,17 @@ export function InspectorApp() {
         if (!disposed) setCatalog(cat)
         const algos = await invoke<AlgorithmInfo[]>('inspector_list_algorithms')
         if (!disposed) setAlgorithms(algos)
+        // Re-apply the persisted mag calibration, if any (it survives window
+        // closes; the Rust session derives the calibrated total from it).
+        const savedCal = localStorage.getItem('maggcs.magCal')
+        if (savedCal) {
+          try {
+            await invoke('inspector_set_mag_calibration', { json: savedCal })
+            if (!disposed) setCalLoaded(true)
+          } catch {
+            localStorage.removeItem('maggcs.magCal')
+          }
+        }
       } catch (e) {
         showNotice(String(e))
       }
@@ -757,7 +781,7 @@ export function InspectorApp() {
           (t) =>
             `${t.id}:${colorOf(signalKey(t.signal), colors)}:${t.pipeline.length > 0 ? 1 : 0}`,
         )
-        .join(',')}`
+        .join(',')}|cal:${calLoaded ? 1 : 0}`
       if (charts.current.has(p.id) && chartSigs.current.get(p.id) === sig) continue
       charts.current.get(p.id)?.destroy()
       chartResizers.current.get(p.id)?.disconnect()
@@ -779,8 +803,15 @@ export function InspectorApp() {
         }
       }
       // When a plot carries all three mag components, append the total
-      // intensity √(x²+y²+z²) as a derived series (computed in mergedData).
-      if (mag) series.push({ label: 'total (nT)', stroke: TOTAL_MAG_COLOR(), width: 2 })
+      // intensity as a derived series: the calibrated total streams from the
+      // Rust session (MAG_TOTAL_ID); without a calibration mergedData computes
+      // the plain √(x²+y²+z²).
+      if (mag)
+        series.push({
+          label: calLoaded ? 'total cal (nT)' : 'total (nT)',
+          stroke: TOTAL_MAG_COLOR(),
+          width: 2,
+        })
       const empty = [
         [],
         ...p.traces.flatMap((t) => (t.pipeline.length > 0 ? [[], []] : [[]])),
@@ -863,7 +894,7 @@ export function InspectorApp() {
       }
     }
     markDirty()
-  }, [plots, axisLink, colors, markDirty, fitPlot])
+  }, [plots, axisLink, colors, markDirty, fitPlot, calLoaded])
 
   // Redraw on a requestAnimationFrame loop instead of a React render per frame
   // (S4). Reads refs only; React state is structure, not data.
@@ -874,7 +905,7 @@ export function InspectorApp() {
       if (!chart) continue
       const host = chartHosts.current.get(p.id)
       const maxPoints = Math.max(256, (host?.clientWidth ?? 800) * 2)
-      const merged = mergedData(p, buffers.current, maxPoints)
+      const merged = mergedData(p, buffers.current, maxPoints, calRef.current)
       if (!merged) continue
       chart.setData(merged.data)
       if (followRef.current && merged.tEnd > 0) {
@@ -952,6 +983,38 @@ export function InspectorApp() {
     a.download = 'inspector.csv'
     a.click()
     URL.revokeObjectURL(url)
+  }
+
+  /** Load a mag calibration JSON into the Rust session; the derived
+   * calibrated total field (A·(m−b)) then streams as the MAG_TOTAL_ID
+   * trace. Persisted so a reopened window re-applies it. */
+  const loadCal = async () => {
+    try {
+      const f = await openDialog({
+        multiple: false,
+        filters: [{ name: 'Mag calibration', extensions: ['json'] }],
+      })
+      if (!f || typeof f !== 'string') return
+      const text = await readTextFile(f)
+      await invoke('inspector_set_mag_calibration', { json: text })
+      localStorage.setItem('maggcs.magCal', text)
+      setCalLoaded(true)
+      showNotice('Mag calibration applied — total field is now calibrated')
+    } catch (e) {
+      showNotice(String(e))
+    }
+  }
+
+  /** Drop the calibration: the total series falls back to plain √(x²+y²+z²). */
+  const clearCal = async () => {
+    try {
+      await invoke('inspector_set_mag_calibration', { json: null })
+      localStorage.removeItem('maggcs.magCal')
+      setCalLoaded(false)
+      showNotice('Mag calibration cleared')
+    } catch (e) {
+      showNotice(String(e))
+    }
   }
 
   /** Latest spectrum for a trace — computed in Rust (the only DSP runtime),
@@ -1092,9 +1155,26 @@ export function InspectorApp() {
               <button onClick={() => { exportCsv(); setMenuOpen(false) }}>Export CSV</button>
               <button onClick={() => { saveWorkspace(); setMenuOpen(false) }}>Save workspace</button>
               <button onClick={() => { loadWorkspace(!tauri); setMenuOpen(false) }}>Load workspace</button>
+              {tauri && (
+                <>
+                  <button onClick={() => { void loadCal(); setMenuOpen(false) }}>
+                    Load mag calibration…
+                  </button>
+                  {calLoaded && (
+                    <button onClick={() => { void clearCal(); setMenuOpen(false) }}>
+                      Clear mag calibration
+                    </button>
+                  )}
+                </>
+              )}
             </div>
           )}
         </div>
+        {calLoaded && (
+          <span className="cal-chip" title="Mag calibration active: total field is Rust-side A·(m−b) calibrated">
+            CAL
+          </span>
+        )}
         {tauri && replay?.active && (
           <>
             <span className="toolbar-sep" />
@@ -1541,20 +1621,28 @@ function mergedData(
   plot: Plot,
   buffers: Map<string, Ring>,
   maxPoints: number,
+  calActive: boolean,
 ): { data: uPlot.AlignedData; tEnd: number } | null {
   const traces = plot.traces
   const k = traces.length
   const rings = traces.map((tr) => buffers.get(tr.id))
+  // With a loaded calibration the total series is the Rust-derived
+  // MAG_TOTAL_ID column (computed in core::inspector, ADR-015) and joins the
+  // merge as one more participant; the TS sqrt below is the no-cal fallback.
+  const mag = magComponents(traces)
+  const calRing = calActive && mag ? buffers.get(MAG_TOTAL_ID) : undefined
+  const parts = calRing ? [...rings, calRing] : rings
+  const kk = parts.length
 
   // k-way merge over the (already sorted) per-trace rings.
-  const cursor = new Array<number>(k).fill(0)
+  const cursor = new Array<number>(kk).fill(0)
   const xs: number[] = []
-  const rawCols: number[][] = traces.map(() => [])
-  const filtCols: number[][] = traces.map(() => [])
+  const rawCols: number[][] = parts.map(() => [])
+  const filtCols: number[][] = parts.map(() => [])
   for (;;) {
     let minT = Infinity
-    for (let i = 0; i < k; i++) {
-      const r = rings[i]
+    for (let i = 0; i < kk; i++) {
+      const r = parts[i]
       if (r && cursor[i] < r.length) {
         const t = r.timeAt(cursor[i])
         if (t < minT) minT = t
@@ -1562,8 +1650,8 @@ function mergedData(
     }
     if (!Number.isFinite(minT)) break
     xs.push(minT)
-    for (let i = 0; i < k; i++) {
-      const r = rings[i]
+    for (let i = 0; i < kk; i++) {
+      const r = parts[i]
       const j = cursor[i]
       if (r && j < r.length && r.timeAt(j) === minT) {
         rawCols[i].push(r.rawAt(j))
@@ -1601,19 +1689,26 @@ function mergedData(
     // Only filtered traces carry a second column, matching the series list.
     if (traces[i].pipeline.length > 0) series.push(outFilt[i].map((v) => gap(v * scale)))
   }
-  // Derived total magnetic intensity √(x²+y²+z²), in the same columns as the
-  // mag components; a gap in any component is a gap in the total.
-  const mag = magComponents(traces)
+  // Derived total magnetic intensity: the calibrated curve from Rust when a
+  // calibration is loaded (MAG_TOTAL_ID, the k-th merge participant), else the
+  // plain √(x²+y²+z²) computed from the component columns; a gap in any
+  // component is a gap in the total.
   if (mag) {
-    const total = outRaw[mag.x].map((_, i) => {
-      const a = outRaw[mag.x][i]
-      const b = outRaw[mag.y][i]
-      const c = outRaw[mag.z][i]
-      return a == null || b == null || c == null
-        ? null
-        : gap(Math.sqrt(a * a + b * b + c * c))
-    })
-    series.push(total)
+    if (calActive) {
+      series.push(
+        calRing ? outRaw[k].map((v) => gap(v)) : new Array(outX.length).fill(null),
+      )
+    } else {
+      const total = outRaw[mag.x].map((_, i) => {
+        const a = outRaw[mag.x][i]
+        const b = outRaw[mag.y][i]
+        const c = outRaw[mag.z][i]
+        return a == null || b == null || c == null
+          ? null
+          : gap(Math.sqrt(a * a + b * b + c * c))
+      })
+      series.push(total)
+    }
   }
   // `tEnd` is in seconds to match the x data (uPlot scales use the data units).
   return { data: series as uPlot.AlignedData, tEnd: outX[outX.length - 1] / 1000 }

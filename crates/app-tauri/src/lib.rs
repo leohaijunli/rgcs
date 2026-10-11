@@ -69,6 +69,7 @@ pub fn run() {
             inspector_service::inspector_disconnect,
             inspector_service::inspector_status,
             inspector_service::inspector_set_traces,
+            inspector_service::inspector_set_mag_calibration,
             inspector_service::inspector_catalog,
             inspector_service::inspector_list_algorithms,
             inspector_service::inspector_open_ulog,

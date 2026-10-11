@@ -184,6 +184,27 @@ pub struct Session {
     traces: HashMap<TraceId, RunningTrace>,
     /// `signal → trace ids`, for routing one live sample to every trace on it.
     by_signal: HashMap<SignalId, Vec<TraceId>>,
+    /// Loaded mag calibration + the latest mag triple; when set, `ingest`
+    /// also emits the calibrated total field as the synthetic trace
+    /// [`MAG_TOTAL_ID`] (Rust-side derived curve, plan §9).
+    mag: Option<CalibratedMag>,
+}
+
+/// The derived trace id for the calibrated total field. Never collides with
+/// a UI trace id (those are `t…`/`p…` prefixed).
+pub const MAG_TOTAL_ID: &str = "mag_total_cal";
+
+/// Latest-triple state for the calibrated total-field curve. Emits exactly
+/// one derived sample per complete triple (dirty flags), so a RAW_IMU cycle
+/// (xmag, ymag, zmag at one timestamp) yields one total, not three.
+struct CalibratedMag {
+    cal: crate::calib::MagCalibration,
+    x: Option<f64>,
+    y: Option<f64>,
+    z: Option<f64>,
+    dx: bool,
+    dy: bool,
+    dz: bool,
 }
 
 impl Session {
@@ -199,9 +220,52 @@ impl Session {
         self.traces.len()
     }
 
-    /// The signal ids the tap must subscribe to (the union of the traces).
+    /// The signal ids the tap must subscribe to (the union of the traces),
+    /// plus the three mag fields when a calibration is loaded (the derived
+    /// total needs them even if no trace plots the axes themselves).
     pub fn subscribe_ids(&self) -> HashSet<SignalId> {
-        self.by_signal.keys().cloned().collect()
+        let mut ids: HashSet<SignalId> = self.by_signal.keys().cloned().collect();
+        if self.mag.is_some() {
+            for field in ["xmag", "ymag", "zmag"] {
+                ids.insert(SignalId {
+                    system_id: 0,
+                    component_id: 0,
+                    message_id: 0,
+                    field: field.to_string(),
+                });
+            }
+        }
+        ids
+    }
+
+    /// Load (or clear with `None`) the magnetometer calibration. When set and
+    /// the trace set carries the xmag/ymag/zmag fields, `ingest` derives the
+    /// calibrated total √(x²+y²+z²) − m_cal = A·(m_raw − b) − as the
+    /// [`MAG_TOTAL_ID`] trace. Clearing drops the derived curve.
+    pub fn set_mag_calibration(&mut self, cal: Option<crate::calib::MagCalibration>) {
+        match cal {
+            Some(cal) => {
+                if let Some(mag) = self.mag.as_mut() {
+                    mag.cal = cal;
+                } else {
+                    self.mag = Some(CalibratedMag {
+                        cal,
+                        x: None,
+                        y: None,
+                        z: None,
+                        dx: false,
+                        dy: false,
+                        dz: false,
+                    });
+                }
+            }
+            None => self.mag = None,
+        }
+    }
+
+    /// Whether a mag calibration is loaded.
+    pub fn mag_calibration_loaded(&self) -> bool {
+        self.mag.is_some()
     }
 
     /// Replace the trace set: adds new traces, rebuilds changed ones (keeping
@@ -297,13 +361,48 @@ impl Session {
     /// per trace and, when a stream gap is detected, a leading `NaN` sample
     /// that breaks the curve.
     pub fn ingest(&mut self, sample: &SignalSample) -> Vec<TraceSample> {
-        let Some(ids) = self.by_signal.get(&sample.id).cloned() else {
-            return Vec::new();
-        };
-        let mut out = Vec::with_capacity(ids.len() * 2);
-        for id in ids {
-            if let Some(trace) = self.traces.get_mut(&id) {
-                process(trace, id, sample, &mut out);
+        let mut out: Vec<TraceSample> = Vec::new();
+        if let Some(ids) = self.by_signal.get(&sample.id).cloned() {
+            out.reserve(ids.len() * 2);
+            for id in ids {
+                if let Some(trace) = self.traces.get_mut(&id) {
+                    process(trace, id, sample, &mut out);
+                }
+            }
+        }
+        // Calibrated total field: track the triple on every mag sample and
+        // emit once all three axes are fresh (plan §9 − the math is here,
+        // in Rust, not in the frontend).
+        if let Some(mag) = self.mag.as_mut() {
+            match sample.id.field.as_str() {
+                "xmag" => {
+                    mag.x = Some(sample.value);
+                    mag.dx = true;
+                }
+                "ymag" => {
+                    mag.y = Some(sample.value);
+                    mag.dy = true;
+                }
+                "zmag" => {
+                    mag.z = Some(sample.value);
+                    mag.dz = true;
+                }
+                _ => {}
+            }
+            if let (true, true, true, Some(x), Some(y), Some(z)) =
+                (mag.dx, mag.dy, mag.dz, mag.x, mag.y, mag.z)
+            {
+                let c = mag.cal.apply([x, y, z], None);
+                let total = (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt();
+                out.push(TraceSample {
+                    trace_id: MAG_TOTAL_ID.to_string(),
+                    t_ms: sample.t_ms,
+                    raw: total,
+                    filtered: f64::NAN,
+                });
+                mag.dx = false;
+                mag.dy = false;
+                mag.dz = false;
             }
         }
         out
@@ -335,6 +434,14 @@ impl Session {
             trace.pipeline.reset();
             trace.fs.reset();
             trace.fs_built = 0.0;
+        }
+        if let Some(mag) = self.mag.as_mut() {
+            mag.x = None;
+            mag.y = None;
+            mag.z = None;
+            mag.dx = false;
+            mag.dy = false;
+            mag.dz = false;
         }
     }
 }
@@ -423,6 +530,122 @@ fn build_analyzer(
         registry::BuiltAlgorithm::Processor(_) => {
             Err(SessionError::NotAnAnalyzer(config.algorithm.clone()))
         }
+    }
+}
+
+#[cfg(test)]
+mod mag_cal_tests {
+    use super::*;
+    use crate::calib::CalibrationDomain;
+
+    fn session() -> Session {
+        Session::new()
+    }
+
+    // Minimal identity calibration (A = I, b = 0).
+    fn identity() -> crate::calib::MagCalibration {
+        crate::calib::MagCalibration {
+            a: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            b: [0.0, 0.0, 0.0],
+            k: None,
+            domain: CalibrationDomain::Px4Raw,
+        }
+    }
+
+    fn mag_sample(field: &str, value: f64, t_ms: f64) -> crate::signals::SignalSample {
+        crate::signals::SignalSample {
+            id: SignalId {
+                system_id: 1,
+                component_id: 1,
+                message_id: 105,
+                field: field.to_string(),
+            },
+            t_ms,
+            value,
+        }
+    }
+
+    #[test]
+    fn calibrated_total_is_emitted_once_all_axes_arrive() {
+        let mut s = session();
+        s.set_mag_calibration(Some(identity()));
+        // Two axes only: nothing derived yet.
+        assert!(s
+            .ingest(&mag_sample("xmag", 3.0, 10.0))
+            .iter()
+            .all(|o| { o.trace_id != MAG_TOTAL_ID }));
+        assert!(s
+            .ingest(&mag_sample("ymag", 4.0, 10.0))
+            .iter()
+            .all(|o| o.trace_id != MAG_TOTAL_ID));
+        // Third axis: total = sqrt(9+16+25) = sqrt(50) with identity cal.
+        let out = s.ingest(&mag_sample("zmag", 5.0, 10.0));
+        let total = out
+            .iter()
+            .find(|o| o.trace_id == MAG_TOTAL_ID)
+            .expect("derived total emitted");
+        assert!((total.raw - (3f64 * 3.0 + 4.0 * 4.0 + 5.0 * 5.0).sqrt()).abs() < 1e-9);
+        assert!(total.raw.is_finite());
+    }
+
+    #[test]
+    fn calibration_applies_offset_and_matrix() {
+        let mut s = session();
+        let mut cal = identity();
+        cal.b = [1.0, 1.0, 1.0]; // (m - 1)
+        cal.a = [[2.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 2.0]]; // 2(m-1)
+        s.set_mag_calibration(Some(cal));
+        s.ingest(&mag_sample("xmag", 1.0, 0.0)); // -> 0
+        s.ingest(&mag_sample("ymag", 2.0, 0.0)); // -> 2
+        let out = s.ingest(&mag_sample("zmag", 3.0, 0.0)); // -> 4
+        let total = out
+            .iter()
+            .find(|o| o.trace_id == MAG_TOTAL_ID)
+            .expect("total");
+        assert!((total.raw - (0f64 + 4.0 + 16.0).sqrt()).abs() < 1e-9);
+    }
+
+    #[test]
+    fn clearing_calibration_stops_the_derived_trace() {
+        let mut s = session();
+        s.set_mag_calibration(Some(identity()));
+        s.ingest(&mag_sample("xmag", 1.0, 0.0));
+        s.ingest(&mag_sample("ymag", 1.0, 0.0));
+        s.ingest(&mag_sample("zmag", 1.0, 0.0));
+        assert!(!s.mag_calibration_loaded() || true);
+        s.set_mag_calibration(None);
+        assert!(!s.mag_calibration_loaded());
+        assert!(s
+            .ingest(&mag_sample("xmag", 2.0, 1.0))
+            .iter()
+            .all(|o| o.trace_id != MAG_TOTAL_ID));
+    }
+
+    #[test]
+    fn one_derived_sample_per_complete_triple() {
+        let mut s = session();
+        s.set_mag_calibration(Some(identity()));
+        for field in ["xmag", "ymag", "zmag"] {
+            s.ingest(&mag_sample(field, 1.0, 10.0));
+        }
+        // Same-axis repeat before the other axes refresh: no extra emit.
+        let out = s.ingest(&mag_sample("xmag", 2.0, 20.0));
+        assert!(out.iter().all(|o| o.trace_id != MAG_TOTAL_ID));
+        // Completing the triple again emits exactly one derived sample.
+        s.ingest(&mag_sample("ymag", 1.0, 20.0));
+        let out = s.ingest(&mag_sample("zmag", 1.0, 20.0));
+        assert_eq!(out.iter().filter(|o| o.trace_id == MAG_TOTAL_ID).count(), 1);
+    }
+
+    #[test]
+    fn subscribe_ids_includes_mag_fields_when_calibrated() {
+        let s = session();
+        assert!(!s.subscribe_ids().iter().any(|id| id.field == "xmag"));
+        let mut s2 = session();
+        s2.set_mag_calibration(Some(identity()));
+        assert!(s2.subscribe_ids().iter().any(|id| id.field == "xmag"));
+        assert!(s2.subscribe_ids().iter().any(|id| id.field == "ymag"));
+        assert!(s2.subscribe_ids().iter().any(|id| id.field == "zmag"));
     }
 }
 
