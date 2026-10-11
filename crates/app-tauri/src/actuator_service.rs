@@ -58,6 +58,7 @@ pub fn actuator_open(app: AppHandle) -> Result<(), String> {
         return Ok(());
     }
     let win = WebviewWindowBuilder::new(&app, "actuator", WebviewUrl::App("actuator.html".into()))
+        .devtools(true)
         .title("Motor / Mag Interference Test")
         .maximized(true)
         .min_inner_size(1024.0, 640.0)

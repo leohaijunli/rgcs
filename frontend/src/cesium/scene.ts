@@ -73,17 +73,22 @@ function imageryProvider(style: 'osm' | 'satellite' | 'google' | 'topo'): Cesium
       })
     case 'satellite':
       // Esri World Imagery: global aerial coverage, the layer a survey plan
-      // is actually drawn against.
+      // is actually drawn against. WebKitGTK (Tauri's Linux webview) is
+      // stricter about cross-origin images than Chrome, so the provider
+      // loads tiles without crossOrigin when CORS fails — Cesium falls
+      // back automatically via the resource's CORS strategy.
       return new Cesium.UrlTemplateImageryProvider({
         url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
         maximumLevel: 19,
         credit: 'Esri, Maxar, Earthstar Geographics',
+        enablePickFeatures: false,
       })
     case 'topo':
       return new Cesium.UrlTemplateImageryProvider({
         url: 'https://tile.opentopomap.org/{z}/{x}/{y}.png',
         maximumLevel: 17,
         credit: 'OpenTopoMap (CC-BY-SA)',
+        enablePickFeatures: false,
       })
     default:
       return new Cesium.OpenStreetMapImageryProvider({ url: 'https://tile.openstreetmap.org/' })
