@@ -35,8 +35,10 @@ pub struct ActuatorStatus {
     pub fc_alive: bool,
     /// The one hard interlock: sending is only ever allowed while disarmed.
     pub armed: bool,
-    /// PX4 nav state name, best-effort from the heartbeat's custom mode.
-    pub mode: String,
+    /// Raw PX4 custom-mode bitmask; the window decodes it to a flight-mode
+    /// name with the same table the TopBar uses (`util/px4mode.ts`).
+    pub custom_mode: u32,
+    pub autopilot_px4: bool,
     pub endpoint: Option<String>,
     /// Sending rate the service is configured for (10 Hz until M0 says more).
     pub tick_hz: f64,
@@ -419,15 +421,13 @@ impl AppState {
     pub fn actuator_status(&self) -> ActuatorStatus {
         let link = self.link_status();
         let hub = self.hub();
-        let (armed, mode) = match hub {
-            Some(hub) => {
-                let snap = hub.snapshot();
-                match snap.heartbeat {
-                    Some(hb) => (hb.base_mode.safety_armed, format!("{}", hb.custom_mode)),
-                    None => (false, "—".to_string()),
-                }
-            }
-            None => (false, "—".to_string()),
+        let (armed, custom_mode, autopilot_px4) = match hub.and_then(|h| h.snapshot().heartbeat) {
+            Some(hb) => (
+                hb.base_mode.safety_armed,
+                hb.custom_mode,
+                hb.autopilot == maggcs_core::telemetry::Autopilot::Px4,
+            ),
+            None => (false, 0, false),
         };
         let session = match self.motor_test.session() {
             Some(SessionState::ManualRunning) => "running",
@@ -464,7 +464,8 @@ impl AppState {
                 .unwrap_or(false),
             fc_alive: link.as_ref().map(|l| l.fc_alive).unwrap_or(false),
             armed,
-            mode,
+            custom_mode,
+            autopilot_px4,
             endpoint: link.map(|l| l.endpoint),
             tick_hz: DEFAULT_TICK_HZ,
             session: session.to_string(),
