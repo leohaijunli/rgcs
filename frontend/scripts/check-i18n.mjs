@@ -49,7 +49,8 @@ async function walk(dir) {
   return files
 }
 
-const keys = flatten(await loadEnglish())
+const english = await loadEnglish()
+const keys = flatten(english)
 
 // i18next resolves plurals via `_one` / `_other` suffixes, so a literal call
 // like t('link.error.dropped', { count }) is satisfied by those variants.
@@ -61,6 +62,21 @@ function hasKey(key) {
 const sources = (await walk(srcDir)).filter(
   (f) => !f.endsWith(join('i18n', 'en.ts')),
 )
+
+// A9 gate (ui-layout plan): user-facing strings must never announce future
+// phases — "arrives in Phase 4" style copy is a placeholder leaking into the
+// UI. Fail on any value matching /Phase \d/ or /arrives/i.
+const phaseOffenders = []
+function collectOffenders(obj, prefix) {
+  for (const [k, v] of Object.entries(obj)) {
+    const path = prefix ? `${prefix}.${k}` : k
+    if (v && typeof v === 'object') {
+      collectOffenders(v, path)
+    } else if (typeof v === 'string' && /Phase \d|arrives/i.test(v)) {
+      phaseOffenders.push(`${path}: ${v}`)
+    }
+  }
+}
 
 const missing = []
 const prefixes = new Set()
@@ -81,6 +97,13 @@ const unknownPrefixes = [...prefixes].filter(
   (p) => ![...keys].some((k) => k.startsWith(p)),
 )
 for (const p of unknownPrefixes) missing.push(`template prefix: ${p}*`)
+
+collectOffenders(english, '')
+if (phaseOffenders.length > 0) {
+  console.error(`check:i18n FAILED — ${phaseOffenders.length} placeholder string(s) announcing future phases (A9):`)
+  for (const m of phaseOffenders) console.error(`  ${m}`)
+  process.exit(1)
+}
 
 if (missing.length > 0) {
   console.error(`check:i18n FAILED — ${missing.length} missing key(s):`)

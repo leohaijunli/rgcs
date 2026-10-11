@@ -340,7 +340,7 @@ export default {
       fixHint: 'Installs a udev rule granting read/write on the USB serial devices above — a system password prompt follows. Undo by deleting /etc/udev/rules.d/99-maggcs.rules.',
     },
     logs: {
-      placeholder: 'Log download arrives in Phase 5 (MAVLink LOG protocol).',
+      placeholder: 'Log download over the MAVLink LOG protocol is not available yet.',
       refresh: 'Refresh list',
       download: 'Download',
       erase: 'Erase',

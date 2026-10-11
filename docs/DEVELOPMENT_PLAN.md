@@ -137,15 +137,22 @@ maggcs/
 - A high-contrast light theme is provided (outdoor sunlight); touch targets are
   ≥ 44 px; en + zh i18n from day one.
 
-**Layout (inspired by UgCS; its icons, colors and assets are not copied)**
+**Layout (revised 2026-10-10, `ui-layout-optimization-plan.md`; inspired by
+UgCS — its icons, colors and assets are not copied)**
 
-- Center: full-screen 3D/2D map.
-- Top: mode switch (Plan / Flight / Data) + link status bar (FC, RTK, devices).
-- Left: mission/survey-line list, vehicle list, layer manager.
-- Right: properties panel for the selected object (waypoint, survey line,
-  region parameters).
-- Bottom (collapsible): terrain/AGL profile along the survey line; switches to
-  a realtime QC curve in flight.
+- Center: full-screen 3D/2D map (imagery style selectable: OSM streets /
+  Esri satellite / Google satellite / OpenTopoMap, over an offline grid).
+- Top: mode switch (Plan / Flight) + status pills (armed, mode, RTK, battery)
+  + a LINK popover (vehicle identity, endpoint, connect) + Tools menu (Signal
+  Inspector, Motor test).
+- Left: none (the drawer/rail were removed — data inspection lives in the
+  Signal Inspector window, D1).
+- Right (task panel, per view): Plan = step-by-step workflow (area → pattern
+  → waypoints → sync); Fly = commands (takeoff/land/RTL) → mission progress
+  → active-line list.
+- Bottom dock: content-gated only (Phase 3b+); placeholder tabs removed.
+- Map overlays never overlap: tool strip top-left, HUD + hints per corner
+  ownership (§4.3 of the plan).
 
 **Implementation note (ADR-010 confirmed)**: React + TypeScript strict mode,
 Zustand, Tailwind + Radix (unstyled primitives), uPlot (high-frequency realtime
@@ -155,7 +162,8 @@ switching changes tokens only.
 **UI acceptance**
 
 - At 1920×1080 and 1366×768, no critical information is occluded; each view has
-  a screenshot baseline (Playwright visual regression).
+  a screenshot baseline (Playwright visual regression) — acceptance A1–A11 of
+  `ui-layout-optimization-plan.md`.
 - No hardcoded colors in code (lint check); both themes pass the contrast check.
 - The map stays ≥ 30 fps with side panels open (reference hardware).
 
