@@ -211,9 +211,12 @@ export function ParamsApp() {
     for (const [name, v] of staged) {
       try {
         const m = meta.get(name)
-        const ptype =
-          m?.type === 'Float32' ? 'Real32' : 'Int32'
-        const value = m?.type === 'Float32' ? { real: v } : { int: v }
+        // The pulled ParamEntry is the authoritative type (u8…real32 — the
+        // ts-rs literal union matches serde's rename_all); PX4 metadata only
+        // distinguishes Float32/Int32, so it is just the never-read fallback.
+        const ptype = values.get(name)?.ptype ?? (m?.type === 'Float32' ? 'real32' : 'i32')
+        const num = Number(v)
+        const value = ptype === 'real32' ? { real: num } : { int: num }
         const echo = await invoke<{ status: string }>('params_set', { name, value, ptype })
         if (echo.status === 'clamped') errors.push(`${name}: clamped`)
         else if (echo.status === 'timeout') errors.push(`${name}: timeout`)
