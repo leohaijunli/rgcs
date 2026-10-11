@@ -1,7 +1,12 @@
 {
   "identifier": "default",
   "description": "Default capability for the main window",
-  "windows": ["main", "inspector", "actuator"],
+  "windows": [
+    "main",
+    "inspector",
+    "actuator",
+    "params"
+  ],
   "permissions": [
     "core:default",
     "dialog:default",

@@ -477,6 +477,7 @@ async fn run_worker(
                         frame.header.sequence = seq;
                         seq = seq.wrapping_add(1);
                         if let Err(e) = conn.send(&frame.header, &frame.message).await {
+
                             let _ = events.send(ConnectionEvent::LinkError(LinkFailure::from(
                                 &MavlinkError::Protocol(e.to_string()),
                             )));

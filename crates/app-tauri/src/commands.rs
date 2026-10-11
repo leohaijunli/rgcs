@@ -128,6 +128,10 @@ pub async fn connect(
     if let Some(h) = state.connection() {
         crate::actuator_service::attach_motor_telemetry(&app, h);
     }
+    // The parameters window's protocol task rides the same link (PM3).
+    if let Some(h) = state.connection() {
+        state.params.attach(&app, h);
+    }
 
     Ok(ConnectResponse {
         ok: true,

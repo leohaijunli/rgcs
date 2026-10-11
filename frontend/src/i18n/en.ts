@@ -12,6 +12,7 @@ export default {
   tools: {
     popover: 'Tools',
     motorTest: 'Motor test',
+    parameters: 'Parameters',
   },
   link: {
     fc: 'FC',

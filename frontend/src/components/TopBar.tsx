@@ -1,4 +1,4 @@
-import { ChevronDown, Gauge, LineChart, Settings } from 'lucide-react'
+import { ChevronDown, Gauge, LineChart, Settings, SlidersHorizontal } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { invoke } from '@tauri-apps/api/core'
@@ -85,6 +85,14 @@ export default function TopBar() {
     }
   }
 
+  const openParams = () => {
+    if (isTauri()) {
+      void invoke('params_open')
+    } else {
+      window.open('params.html', '_blank')
+    }
+  }
+
   const armed = heartbeat?.base_mode.safety_armed === true
   const mode = modeLabel(t, heartbeat)
   const rtk = gps?.fix_type ?? null
@@ -138,7 +146,11 @@ export default function TopBar() {
 
         {/* Tools ▾ groups the window launchers (motor-test plan §2.2-10) so
          * the TopBar stays pills + two icons. */}
-        <ToolsPopover onInspector={openInspector} onMotorTest={openMotorTest} />
+        <ToolsPopover
+          onInspector={openInspector}
+          onMotorTest={openMotorTest}
+          onParams={openParams}
+        />
         <button
           aria-label={t('settings.menu')}
           onClick={() => setSettingsOpen(true)}
@@ -176,9 +188,11 @@ function fixKey(fix: string): string {
 function ToolsPopover({
   onInspector,
   onMotorTest,
+  onParams,
 }: {
   onInspector: () => void
   onMotorTest: () => void
+  onParams: () => void
 }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
@@ -233,6 +247,16 @@ function ToolsPopover({
           >
             <Gauge size={14} />
             {t('tools.motorTest')}
+          </button>
+          <button
+            onClick={() => {
+              setOpen(false)
+              onParams()
+            }}
+            className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-sm text-ink hover:bg-canvas"
+          >
+            <SlidersHorizontal size={14} />
+            {t('tools.parameters')}
           </button>
         </div>
       )}
