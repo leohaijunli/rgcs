@@ -1,6 +1,5 @@
 import { useTranslation } from 'react-i18next'
 import PlanSteps from './panels/plan/PlanSteps'
-import FlightCommands from './FlightCommands'
 import { useMissionStore } from '../stores/mission'
 import { useUiStore, VIEW_CONFIG } from '../stores/ui'
 import { useMissionProgress } from '../hooks/useMissionProgress'
@@ -57,7 +56,6 @@ function FlightInspector() {
 
   return (
     <div className="space-y-2">
-      <FlightCommands />
       {/* Auto-fetch notice: the FC is flying a mission the local (memory-only)
        * plan does not hold yet; the store fetches it on the first
        * MISSION_CURRENT and this fills in the progress. */}

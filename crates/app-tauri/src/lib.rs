@@ -11,6 +11,7 @@ mod inspector_service;
 mod mission_service;
 mod motor_test_state;
 mod params_service;
+mod rtk_service;
 mod state;
 mod telemetry_pump;
 
@@ -37,6 +38,9 @@ pub fn run() {
             commands::mission_set_current,
             commands::survey_generate_sweep,
             commands::survey_generate_cloverleaf,
+            rtk_service::rtk_start_serial,
+            rtk_service::rtk_stop,
+            rtk_service::rtk_last_stats,
             commands::send_command,
             commands::flight_mode_table,
             commands::send_set_mode,

@@ -8,6 +8,7 @@ import { isTauri } from '../inspector/mock'
 import SettingsDialog, { type SettingsTab } from './dialogs/SettingsDialog'
 import LinkPopover from './LinkPopover'
 import ModePopover from './ModePopover'
+import FlightCommands from './FlightCommands'
 
 const VIEWS: View[] = ['planning', 'flight']
 
@@ -134,6 +135,7 @@ export default function TopBar() {
           <span className={`h-1.5 w-1.5 rounded-full ${armed ? 'bg-ok-ink' : 'bg-muted'}`} />
           {armed ? t('link.armed') : t('link.disarmed')}
         </div>
+        <FlightCommands variant="bar" />
         <ModePopover />
         <Pill
           label={t('link.rtk')}

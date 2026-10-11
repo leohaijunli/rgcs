@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use maggcs_core::mavlink::connection::LinkStatus;
 use maggcs_core::mavlink::ConnectionHandle;
@@ -18,6 +19,7 @@ use parking_lot::Mutex;
 use crate::inspector_service::InspectorState;
 use crate::motor_test_state::MotorTestState;
 use crate::params_service::ParamsState;
+use crate::rtk_service::RtkState;
 
 /// Stable identifier for one connection/vehicle session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -65,6 +67,8 @@ pub struct AppState {
     /// service itself stops with its link and is re-spawned on the next
     /// start).
     pub motor_test: MotorTestState,
+    /// RTK injection service handle + 1 Hz stats forwarder (R4).
+    pub rtk: Arc<RtkState>,
     /// Held for the whole duration of a `connect`/`disconnect` command so the
     /// link swap is atomic with respect to other commands (issues.md #21).
     ops: tokio::sync::Mutex<()>,

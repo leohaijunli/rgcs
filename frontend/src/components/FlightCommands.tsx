@@ -20,9 +20,10 @@ const RESULT_LABELS: Record<string, string> = {
   failed: 'plan.cmd.rejected',
 }
 
-/** Flight commands, as the first block of the Fly panel (P4: no longer
- * absolutely positioned over the map, where it covered the tool strip). */
-export default function FlightCommands() {
+/** Flight commands. `panel` = the Fly panel block (tall, wrapped rows);
+ * `bar` = the TopBar inline group (operator request 2026-10-11: the three
+ * flight buttons don't need the sidebar, they live on the nav bar). */
+export default function FlightCommands({ variant = 'panel' }: { variant?: 'panel' | 'bar' } = {}) {
   const { t } = useTranslation()
   const link = useLinkStore((s) => s.link)
   const armed = useTelemetryStore((s) => s.snapshot?.heartbeat?.base_mode.safety_armed === true)
@@ -82,9 +83,10 @@ export default function FlightCommands() {
     : statusLine(t, lastEvent)
 
   const armConfirming = confirming === 'arm_disarm'
+  const isBar = variant === 'bar'
 
   return (
-    <div className="panel rounded p-2">
+    <div className={isBar ? 'flex items-center gap-1.5' : 'panel rounded p-2'}>
       <div className="flex flex-wrap items-center gap-1.5">
         {(['takeoff', 'land', 'rtl'] as const).map((name) => {
           const armed = confirming === name
@@ -96,7 +98,7 @@ export default function FlightCommands() {
               key={name}
               onClick={() => press(name)}
               disabled={pending !== null}
-              className={`flex-1 touch-target rounded-md border border-line px-2 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
+              className={`${isBar ? '' : 'flex-1'} touch-target rounded-md border border-line px-2 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
                 armed
                   ? 'bg-warn text-canvas'
                   : 'bg-canvas text-ink hover:bg-accent hover:text-canvas'
@@ -107,11 +109,11 @@ export default function FlightCommands() {
           )
         })}
       </div>
-      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+      <div className={isBar ? 'flex items-center' : 'mt-1.5 flex flex-wrap items-center gap-1.5'}>
         <button
           onClick={pressArm}
           disabled={pending !== null}
-          className={`flex-1 touch-target rounded-md border px-2 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${
+          className={`${isBar ? '' : 'flex-1'} touch-target rounded-md border px-2 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${
             armConfirming
               ? armed
                 ? 'border-line bg-canvas text-ink'
@@ -126,7 +128,11 @@ export default function FlightCommands() {
             : t(armed ? 'plan.cmd.disarm' : 'plan.cmd.arm')}
         </button>
       </div>
-      {status && <div className={`mt-1 text-xs ${status.tone}`}>{status.text}</div>}
+      {status && (
+        <div className={`text-xs ${isBar ? 'max-w-40 truncate' : 'mt-1'} ${status.tone}`}>
+          {status.text}
+        </div>
+      )}
     </div>
   )
 }
