@@ -16,10 +16,12 @@
 //! `stop` transition (plan §8.3) so every failure mode behaves identically.
 
 pub mod interlock;
+pub mod mag_alarm;
 pub mod service;
 pub mod source;
 
 pub use interlock::{Interlock, SafetyLimits, HEARTBEAT_STALE};
+pub use mag_alarm::{MagAlarm, MagAlarmConfig, MagAlarmState};
 pub use service::{MotorTestCommand, MotorTestEvent, MotorTestService, StopReason};
 pub use source::{
     AnySource, ManualSource, MotorSlot, PresetKind, PresetSource, RpmSource, SenderConfig,
@@ -278,10 +280,8 @@ impl MotorTestSession<source::AnySource> {
     /// latest normalized outputs of the source vehicle (SITL); the session
     /// reads it each tick and stops itself when the feed goes stale.
     pub fn start_forward(&mut self, slot: source::ForwardSlot, now: Instant) {
-        self.source = source::AnySource::Forward(source::ForwardSource::new(
-            slot,
-            self.last_values.len(),
-        ));
+        self.source =
+            source::AnySource::Forward(source::ForwardSource::new(slot, self.last_values.len()));
         self.start(now);
     }
 

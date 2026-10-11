@@ -248,7 +248,7 @@ impl RpmSource for ForwardSource {
     fn value(&mut self, _t_s: f64, motor: usize) -> Option<f32> {
         let now = now_epoch_s();
         let Ok(guard) = self.slot.lock() else {
-            return Some(0.0) // poisoned lock: idle, never spin
+            return Some(0.0); // poisoned lock: idle, never spin
         };
         let fresh = guard
             .last_update_s

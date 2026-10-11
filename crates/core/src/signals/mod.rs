@@ -18,6 +18,7 @@
 //! with a reference count, so no work happens while the inspector is closed.
 
 pub mod catalog;
+pub mod derived;
 pub mod extract;
 pub mod tap;
 

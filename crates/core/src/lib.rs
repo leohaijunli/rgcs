@@ -8,6 +8,7 @@
 //! Absolute heights are never represented as bare `f64`. Use [`height::Height`],
 //! which carries a [`height::HeightDatum`] tag. See ADR-006.
 
+pub mod calib;
 pub mod commands;
 pub mod devices;
 pub mod dsp;
