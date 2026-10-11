@@ -293,6 +293,20 @@ pub fn survey_generate_cloverleaf(pattern: CloverleafPattern) -> Result<PatternP
 pub async fn send_command(name: String, state: State<'_, AppState>) -> Result<(), String> {
     let service = state.command().ok_or_else(|| "not connected".to_string())?;
     let (command, params) = named_command(&name)?;
+    // Takeoff needs the vehicle's current AMSL: PX4 interprets param7 as an
+    // absolute altitude, and we want a relative 10 m climb.
+    let params = if name == "takeoff" {
+        let alt = state
+            .hub()
+            .and_then(|h| h.snapshot().global_position)
+            .map(|p| p.altitude.meters())
+            .ok_or_else(|| {
+                "no position fix yet — cannot compute the takeoff altitude".to_string()
+            })?;
+        takeoff_params(alt)
+    } else {
+        params
+    };
     service
         .send(command, params)
         .await
@@ -307,6 +321,19 @@ pub fn flight_mode_table(
     context: maggcs_core::telemetry::px4_mode::ModeContext,
 ) -> Vec<maggcs_core::telemetry::px4_mode::ModeAvailability> {
     maggcs_core::telemetry::px4_mode::available_modes(&context)
+}
+
+/// Relative takeoff altitude (operator setting, 2026-10-11).
+const TAKEOFF_ALTITUDE_M: f32 = 10.0;
+
+/// `MAV_CMD_NAV_TAKEOFF` parameters. PX4 reads `param7` as an **AMSL**
+/// altitude (`navigator_main.cpp`: `rep->current.alt = cmd.param7`), so the
+/// GCS must add the relative 10 m to the vehicle's current AMSL (telemetry).
+/// `param5/6` stay 0 = the current position.
+fn takeoff_params(current_amsl_m: f64) -> [f32; 7] {
+    let mut params = [0.0; 7];
+    params[6] = (current_amsl_m as f32) + TAKEOFF_ALTITUDE_M;
+    params
 }
 
 /// `MAV_CMD_DO_SET_MODE` parameters (ADR-017): `param1` must set
@@ -487,6 +514,14 @@ mod tests {
             arm_disarm_params(false),
             [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         );
+    }
+
+    #[test]
+    fn takeoff_params_add_relative_altitude_to_amsl() {
+        // 583.25 m AMSL + 10 m relative = 593.25 m AMSL in param7.
+        let params = takeoff_params(583.25);
+        assert_eq!(params[6], 593.25);
+        assert_eq!(&params[..6], &[0.0; 6]);
     }
 
     #[test]

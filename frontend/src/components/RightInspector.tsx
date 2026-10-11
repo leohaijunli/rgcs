@@ -1,8 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import PlanSteps from './panels/plan/PlanSteps'
-import { useMissionStore } from '../stores/mission'
 import { useUiStore, VIEW_CONFIG } from '../stores/ui'
-import { useMissionProgress } from '../hooks/useMissionProgress'
 
 export default function RightInspector() {
   const { t } = useTranslation()
@@ -40,30 +38,9 @@ export default function RightInspector() {
         </button>
       </div>
       <div className="flex-1 overflow-y-auto p-3">
-        {view === 'planning' ? <PlanSteps /> : <FlightInspector />}
+        {view === 'planning' ? <PlanSteps /> : null}
       </div>
     </aside>
   )
 }
 
-/** Fly panel (operator request 2026-10-11): commands + the auto-fetch
- * notice only. The waypoint list and the progress readout are gone — the
- * FC's target waypoint blinks on the map (cesium/entities.ts), progress and
- * flight dynamics live in the TopBar and the HUD. */
-function FlightInspector() {
-  const { items } = useMissionProgress()
-  const syncState = useMissionStore((s) => s.syncState)
-
-  return (
-    <div className="space-y-2">
-      {/* Auto-fetch notice: the FC is flying a mission the local (memory-only)
-       * plan does not hold yet; the store fetches it on the first
-       * MISSION_CURRENT and this fills in the progress. */}
-      {items.length === 0 && syncState === 'downloading' && (
-        <div className="rounded border border-line bg-canvas px-2 py-1 text-xs text-muted">
-          Fetching the FC mission…
-        </div>
-      )}
-    </div>
-  )
-}

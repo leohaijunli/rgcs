@@ -7,6 +7,7 @@ import { useUiStore, type View } from '../stores/ui'
 import { isTauri } from '../inspector/mock'
 import SettingsDialog, { type SettingsTab } from './dialogs/SettingsDialog'
 import LinkPopover from './LinkPopover'
+import RtkDrawer from './RtkDrawer'
 import ModePopover from './ModePopover'
 import FlightCommands from './FlightCommands'
 
@@ -59,6 +60,7 @@ export default function TopBar() {
   const { t } = useTranslation()
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('connection')
+  const [rtkDrawerOpen, setRtkDrawerOpen] = useState(false)
   const view = useUiStore((s) => s.view)
   const setView = useUiStore((s) => s.setView)
   const heartbeat = useTelemetryStore((s) => s.snapshot?.heartbeat ?? null)
@@ -141,6 +143,8 @@ export default function TopBar() {
           label={t('link.rtk')}
           value={gps ? `${t(`hud.fix.${fixKey(rtk ?? 'NO_GPS')}`)} ${gps.satellites_visible}sv` : '—'}
           tone={rtkTone}
+          onClick={() => setRtkDrawerOpen(true)}
+          title={t('rtk.title')}
         />
         <Pill label={t('link.batt')} value={batteryText} tone={batteryTone} />
         <LinkPopover onOpenSettings={openConnection} />
@@ -160,6 +164,7 @@ export default function TopBar() {
           <Settings size={16} />
         </button>
       </div>
+      <RtkDrawer open={rtkDrawerOpen} onClose={() => setRtkDrawerOpen(false)} />
       <SettingsDialog
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
