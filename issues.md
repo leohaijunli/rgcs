@@ -398,7 +398,7 @@
 - 备注：涉及提权（AGENTS 规则 5），实现前需先做失败/风险分析（错误设备、错误规则、恢复路径），polkit/pkexec 或 systemd 单元方案对比后定。
 
 ### #43 [P2][frontend] 设置菜单应提供 UAV 3D 模型朝向的设置（pitch/roll/yaw 偏移）
-**状态**：待处理（操作员要求，2026-10-10）
+**状态**：✅ 已完成（2026-10-10）
 - 现象：UAV 3D 模型的朝向校正是硬编码的 `cesium/constants.ts::UAV_MODEL_NOSE_YAW_OFFSET_DEG = -90`（仅 yaw）。换模型文件或换机型后，机头/水平姿态可能对不上，需要改代码才能调。
 - 期望：Settings → Vehicle 增加 "Model orientation offset" 三个输入（pitch/roll/yaw，度），持久化（同 initialPosition 的 localStorage/prefs 模式），地图渲染（`cesium/uav.ts` 的模型姿态合成）应用这三个偏移；默认值保持现行为（yaw −90°，pitch/roll 0）。
 
