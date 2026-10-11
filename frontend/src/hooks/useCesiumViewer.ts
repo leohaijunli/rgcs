@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import * as Cesium from 'cesium'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
-import { applyLayerVisibility, createViewer } from '../cesium/scene'
+import { applyLayerVisibility, createViewer, setImageryStyle as applyImageryStyle } from '../cesium/scene'
 import {
   createCenterHandle,
   createDroneLayer,
@@ -56,7 +56,8 @@ export interface CesiumViewerHandle {
   /** Apply a telemetry snapshot: marker, attitude, trail and projection. */
   setSnapshot(snapshot: TelemetrySnapshot | null): void
   /** Re-render the mission waypoint layer. */
-  setLayers(showImagery: boolean, showGrid: boolean): void
+  setLayers(showGrid: boolean): void
+  setImageryStyle(style: 'osm' | 'satellite' | 'topo'): void
   setMission(
     items: MissionItem[],
     selectedSeq: number | null,
@@ -325,11 +326,16 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
     })
   }, [])
 
-  const setLayers = useCallback((showImagery: boolean, showGrid: boolean) => {
+  const setLayers = useCallback((showGrid: boolean) => {
     const viewer = viewerRef.current
     if (!viewer) return
-    applyLayerVisibility(viewer, showImagery, showGrid)
+    applyLayerVisibility(viewer, showGrid)
   }, [])
 
-  return { initError, setSnapshot, setMission, setLayers, goHome, lookNorth }
+  const setImageryStyle = useCallback((style: 'osm' | 'satellite' | 'topo') => {
+    const viewer = viewerRef.current
+    if (!viewer) return
+    applyImageryStyle(viewer, style)
+  }, [])
+  return { initError, setSnapshot, setMission, setLayers, setImageryStyle, goHome, lookNorth }
 }

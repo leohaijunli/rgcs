@@ -35,8 +35,8 @@ export default function MapToolbar({ onGoHome, onNorth }: Props) {
   const toggleFollow = useUiStore((s) => s.toggleFollow)
   const map3d = useUiStore((s) => s.map3d)
   const toggleMap3d = useUiStore((s) => s.toggleMap3d)
-  const showImagery = useUiStore((s) => s.showImagery)
-  const toggleImagery = useUiStore((s) => s.toggleImagery)
+  const imageryStyle = useUiStore((s) => s.imageryStyle)
+  const setImageryStyle = useUiStore((s) => s.setImageryStyle)
   const showGrid = useUiStore((s) => s.showGrid)
   const toggleGrid = useUiStore((s) => s.toggleGrid)
   const showHeights = useUiStore((s) => s.showHeights)
@@ -116,7 +116,21 @@ export default function MapToolbar({ onGoHome, onNorth }: Props) {
 
       {popover === 'layers' && (
         <Popover>
-          <PopoverToggle label={t('terrain.imagery')} on={showImagery} onToggle={toggleImagery} />
+          <div className="flex rounded border border-line bg-canvas p-0.5">
+            {(['osm', 'satellite', 'topo'] as const).map((style) => (
+              <button
+                key={style}
+                className={`flex-1 rounded px-1.5 py-1 text-[11px] transition-colors ${
+                  imageryStyle === style
+                    ? 'bg-accent text-accent-ink'
+                    : 'text-muted hover:text-ink'
+                }`}
+                onClick={() => setImageryStyle(style)}
+              >
+                {t(`terrain.${style}`)}
+              </button>
+            ))}
+          </div>
           <PopoverToggle label={t('terrain.grid')} on={showGrid} onToggle={toggleGrid} />
           <PopoverToggle label={t('map.heights')} on={showHeights} onToggle={toggleHeights} />
         </Popover>

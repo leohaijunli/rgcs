@@ -1,5 +1,6 @@
-// Cesium viewer bootstrap: WebGL guard, offline grid + OSM imagery, initial
-// camera. Extracted from `MapView.tsx` (issues.md #29).
+// Cesium viewer bootstrap: WebGL guard, offline grid + selectable imagery
+// (OSM streets / Esri satellite / OpenTopoMap), initial camera. Extracted
+// from `MapView.tsx` (issues.md #29).
 
 import * as Cesium from 'cesium'
 import { cssVar } from '../design-system/theme'
@@ -37,7 +38,6 @@ export function createViewer(
     backgroundColor: Cesium.Color.fromCssColorString(cssVar('--mg-grid-bg')),
     canvasSize: 256,
   })
-  const osm = new Cesium.OpenStreetMapImageryProvider({ url: 'https://tile.openstreetmap.org/' })
   const viewer = new Cesium.Viewer(container, {
     baseLayer: new Cesium.ImageryLayer(grid),
     animation: false,
@@ -51,27 +51,59 @@ export function createViewer(
     infoBox: false,
     selectionIndicator: false,
   })
-  viewer.imageryLayers.addImageryProvider(osm, 1)
+  viewer.imageryLayers.addImageryProvider(imageryProvider('osm'), 1)
   viewer.camera.setView({
     destination: Cesium.Cartesian3.fromDegrees(initial.lon, initial.lat, 12000),
   })
   return viewer
 }
 
+/** The imagery providers (operator request: satellite + topo in addition to
+ * the street map; no grid-only mode — imagery is always shown). */
+function imageryProvider(style: 'osm' | 'satellite' | 'topo'): Cesium.ImageryProvider {
+  switch (style) {
+    case 'satellite':
+      // Esri World Imagery: global aerial coverage, the layer a survey plan
+      // is actually drawn against.
+      return new Cesium.UrlTemplateImageryProvider({
+        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        maximumLevel: 19,
+        credit: 'Esri, Maxar, Earthstar Geographics',
+      })
+    case 'topo':
+      return new Cesium.UrlTemplateImageryProvider({
+        url: 'https://tile.opentopomap.org/{z}/{x}/{y}.png',
+        maximumLevel: 17,
+        credit: 'OpenTopoMap (CC-BY-SA)',
+      })
+    default:
+      return new Cesium.OpenStreetMapImageryProvider({ url: 'https://tile.openstreetmap.org/' })
+  }
+}
+
+/**
+ * Swap the imagery layer's provider (layer 1 keeps its stack position above
+ * the offline grid; `imageryProvider` itself is read-only, so the layer is
+ * replaced).
+ */
+export function setImageryStyle(
+  viewer: Cesium.Viewer,
+  style: 'osm' | 'satellite' | 'topo',
+): void {
+  const layers = viewer.imageryLayers
+  if (layers.length < 2) return
+  layers.remove(layers.get(1))
+  layers.addImageryProvider(imageryProvider(style), 1)
+}
+
 /**
  * Show or hide the two base layers created by [`createViewer`].
  *
- * Layer 0 is the offline graticule, layer 1 the OSM imagery on top of it; the
- * Layers panel toggles them so the operator can fall back to the grid when the
- * tile server is unreachable (or read the graticule under the imagery).
+ * Layer 0 is the offline graticule, layer 1 the imagery on top of it; the
+ * Layers panel toggles the grid (imagery is always shown — no grid-only
+ * mode, operator request 2026-10-10).
  */
-export function applyLayerVisibility(
-  viewer: Cesium.Viewer,
-  showImagery: boolean,
-  showGrid: boolean,
-): void {
+export function applyLayerVisibility(viewer: Cesium.Viewer, showGrid: boolean): void {
   const grid = viewer.imageryLayers.get(0)
-  const imagery = viewer.imageryLayers.get(1)
   if (grid) grid.show = showGrid
-  if (imagery) imagery.show = showImagery
 }

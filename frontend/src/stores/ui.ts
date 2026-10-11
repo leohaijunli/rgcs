@@ -8,6 +8,8 @@ export type PlanStep = 'area' | 'pattern' | 'waypoints' | 'sync'
 /** Active map tool. `add` places a new waypoint on click; `polygon` draws a
  * survey boundary (both planning view only). */
 export type MapTool = 'select' | 'add' | 'polygon'
+/** Basemap imagery on top of the offline grid. */
+export type ImageryStyle = 'osm' | 'satellite' | 'topo'
 
 export interface ViewConfig {
   rightTab: string
@@ -38,8 +40,9 @@ interface UiState {
   /** Draw a height stick and an AGL chip on every map waypoint (default on:
    * clearance is the number a survey plan is checked against). */
   showHeights: boolean
-  /** OSM imagery layer on top of the offline grid. */
-  showImagery: boolean
+  /** Imagery style on top of the offline grid (always shown; no
+   * grid-only mode — operator request 2026-10-10). */
+  imageryStyle: ImageryStyle
   /** Offline graticule base layer. */
   showGrid: boolean
   setView: (v: View) => void
@@ -56,7 +59,7 @@ interface UiState {
   setMapCenter: (c: { lat: number; lon: number }) => void
   setMapTool: (tool: MapTool) => void
   toggleHeights: () => void
-  toggleImagery: () => void
+  setImageryStyle: (style: ImageryStyle) => void
   toggleGrid: () => void
 }
 
@@ -96,7 +99,7 @@ export const useUiStore = create<UiState>((set) => ({
   mapCenter: null,
   mapTool: 'select',
   showHeights: true,
-  showImagery: true,
+  imageryStyle: 'osm',
   showGrid: true,
   setView: (view) =>
     set(() => ({
@@ -121,7 +124,7 @@ export const useUiStore = create<UiState>((set) => ({
   setMapCenter: (mapCenter) => set({ mapCenter }),
   setMapTool: (mapTool) => set({ mapTool }),
   toggleHeights: () => set((s) => ({ showHeights: !s.showHeights })),
-  toggleImagery: () => set((s) => ({ showImagery: !s.showImagery })),
+  setImageryStyle: (imageryStyle) => set({ imageryStyle }),
   toggleGrid: () => set((s) => ({ showGrid: !s.showGrid })),
 }))
 

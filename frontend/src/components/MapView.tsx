@@ -14,7 +14,7 @@ import MapToolbar from './MapToolbar'
 export default function MapView() {
   const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
-  const { initError, setSnapshot, setMission, setLayers, goHome, lookNorth } =
+  const { initError, setSnapshot, setMission, setLayers, setImageryStyle, goHome, lookNorth } =
     useCesiumViewer(containerRef)
   const mapTool = useUiStore((s) => s.mapTool)
   const view = useUiStore((s) => s.view)
@@ -53,11 +53,14 @@ export default function MapView() {
       ),
     [waypoints, altitudeMode, home, blocks, planBase],
   )
-  const showImagery = useUiStore((s) => s.showImagery)
+  const imageryStyle = useUiStore((s) => s.imageryStyle)
   const showGrid = useUiStore((s) => s.showGrid)
   useEffect(() => {
-    setLayers(showImagery, showGrid)
-  }, [showImagery, showGrid, setLayers])
+    setLayers(showGrid)
+  }, [showGrid, setLayers])
+  useEffect(() => {
+    setImageryStyle(imageryStyle)
+  }, [imageryStyle, setImageryStyle])
 
   const kinds = useMemo(() => kindsBySeq(lastPattern?.lines ?? []), [lastPattern])
   useEffect(() => {

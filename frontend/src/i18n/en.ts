@@ -230,7 +230,9 @@ export default {
     export: 'Export',
   },
   terrain: {
-    imagery: 'Imagery',
+    osm: 'Streets',
+    satellite: 'Satellite',
+    topo: 'Topo',
     grid: 'Grid',
   },
   dock: {
