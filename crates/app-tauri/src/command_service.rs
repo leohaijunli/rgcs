@@ -26,6 +26,8 @@ pub struct CommandEventPayload {
 pub fn command_name(command: MavCmd) -> &'static str {
     match command {
         MavCmd::MAV_CMD_NAV_RETURN_TO_LAUNCH => "rtl",
+        MavCmd::MAV_CMD_DO_SET_MODE => "set_mode",
+        MavCmd::MAV_CMD_COMPONENT_ARM_DISARM => "arm_disarm",
         _ => "unknown",
     }
 }
@@ -99,6 +101,11 @@ mod tests {
     #[test]
     fn maps_known_commands_and_falls_back_to_unknown() {
         assert_eq!(command_name(MavCmd::MAV_CMD_NAV_RETURN_TO_LAUNCH), "rtl");
+        assert_eq!(command_name(MavCmd::MAV_CMD_DO_SET_MODE), "set_mode");
+        assert_eq!(
+            command_name(MavCmd::MAV_CMD_COMPONENT_ARM_DISARM),
+            "arm_disarm"
+        );
         assert_eq!(command_name(MavCmd::MAV_CMD_NAV_TAKEOFF), "unknown");
     }
 

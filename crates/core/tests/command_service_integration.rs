@@ -420,3 +420,100 @@ async fn send_await_times_out_without_terminal_ack() {
 
     h.handle.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn set_mode_sends_custom_flag_and_acks() {
+    let mut h = harness().await;
+    // Hold = Auto(4)/Loiter(3): param1 must carry the CUSTOM_MODE bit.
+    const MAIN_AUTO: u8 = 4;
+    const SUB_LOITER: u8 = 3;
+    h.svc
+        .send(
+            mavlink::common::MavCmd::MAV_CMD_DO_SET_MODE,
+            [1.0, MAIN_AUTO as f32, SUB_LOITER as f32, 0.0, 0.0, 0.0, 0.0],
+        )
+        .await
+        .expect("enqueue");
+
+    let cmd = peer_recv_command_long(&mut h.peer).await;
+    assert_eq!(cmd.command, mavlink::common::MavCmd::MAV_CMD_DO_SET_MODE);
+    assert_eq!(cmd.param1, 1.0);
+    assert_eq!(cmd.param2, MAIN_AUTO as f32);
+    assert_eq!(cmd.param3, SUB_LOITER as f32);
+
+    peer_send_ack(
+        &mut h.peer,
+        cmd.command,
+        mavlink::common::MavResult::MAV_RESULT_ACCEPTED,
+    )
+    .await;
+
+    let e = wait_for(&mut h.evt, Duration::from_secs(2), |e| {
+        matches!(
+            e,
+            CommandEvent::Completed {
+                result: CommandResult::Accepted,
+                ..
+            }
+        )
+    })
+    .await;
+    assert_eq!(
+        e,
+        CommandEvent::Completed {
+            command: mavlink::common::MavCmd::MAV_CMD_DO_SET_MODE,
+            result: CommandResult::Accepted,
+        }
+    );
+
+    h.handle.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn arming_denial_surfaces_temporarily_rejected() {
+    let mut h = harness().await;
+    // PX4 denies external GCS arming through its preflight checks with
+    // TEMPORARILY_REJECTED (ADR-017) — the denial must arrive as data.
+    h.svc
+        .send(
+            mavlink::common::MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
+            [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        )
+        .await
+        .expect("enqueue");
+
+    let cmd = peer_recv_command_long(&mut h.peer).await;
+    assert_eq!(
+        cmd.command,
+        mavlink::common::MavCmd::MAV_CMD_COMPONENT_ARM_DISARM
+    );
+    assert_eq!(cmd.param1, 1.0);
+    assert_eq!(cmd.param2, 0.0, "the 21196 kill code must never be sent");
+
+    peer_send_ack(
+        &mut h.peer,
+        cmd.command,
+        mavlink::common::MavResult::MAV_RESULT_TEMPORARILY_REJECTED,
+    )
+    .await;
+
+    let e = wait_for(&mut h.evt, Duration::from_secs(2), |e| {
+        matches!(
+            e,
+            CommandEvent::Completed {
+                result: CommandResult::TemporarilyRejected,
+                ..
+            }
+        )
+    })
+    .await;
+    assert_eq!(
+        e,
+        CommandEvent::Completed {
+            command: mavlink::common::MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
+            result: CommandResult::TemporarilyRejected,
+        }
+    );
+
+    h.handle.shutdown().await;
+}

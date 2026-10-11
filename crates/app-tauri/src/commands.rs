@@ -291,6 +291,51 @@ pub async fn send_command(name: String, state: State<'_, AppState>) -> Result<()
         .map_err(|e| e.to_string())
 }
 
+/// `MAV_CMD_DO_SET_MODE` parameters (ADR-017): `param1` must set
+/// `MAV_MODE_FLAG_CUSTOM_MODE_ENABLED`, then PX4 main/sub mode.
+fn set_mode_params(main_mode: u8, sub_mode: u8) -> [f32; 7] {
+    [1.0, main_mode as f32, sub_mode as f32, 0.0, 0.0, 0.0, 0.0]
+}
+
+/// `MAV_CMD_COMPONENT_ARM_DISARM` parameters (ADR-017): `param1` 1 = arm /
+/// 0 = disarm; we never send the 21196 kill code from the UI.
+fn arm_disarm_params(arm: bool) -> [f32; 7] {
+    [if arm { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+}
+
+/// Switch the PX4 flight mode (`MAV_CMD_DO_SET_MODE`, ADR-017). Fire and
+/// forget through the command service like the other flight commands: the
+/// ack verdict arrives on the `"command"` event (`set_mode`), the UI
+/// additionally confirms via the heartbeat readback (MS3).
+#[tauri::command]
+pub async fn send_set_mode(
+    main_mode: u8,
+    sub_mode: u8,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let service = state.command().ok_or_else(|| "not connected".to_string())?;
+    service
+        .send(
+            MavCmd::MAV_CMD_DO_SET_MODE,
+            set_mode_params(main_mode, sub_mode),
+        )
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Arm or disarm the vehicle (`MAV_CMD_COMPONENT_ARM_DISARM`, ADR-017).
+/// PX4 runs its own preflight checks for external GCS arming and denies
+/// with `TEMPORARILY_REJECTED` (+ statustext reason); the verdict arrives
+/// on the `"command"` event (`arm_disarm`).
+#[tauri::command]
+pub async fn send_arm_disarm(arm: bool, state: State<'_, AppState>) -> Result<(), String> {
+    let service = state.command().ok_or_else(|| "not connected".to_string())?;
+    service
+        .send(MavCmd::MAV_CMD_COMPONENT_ARM_DISARM, arm_disarm_params(arm))
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Map a stream-rate request to `MAV_CMD_SET_MESSAGE_INTERVAL` parameters.
 ///
 /// `interval_us` is already in microseconds; the special values 0 (default)
@@ -409,6 +454,21 @@ mod tests {
         let (command, params) = named_command("rtl").expect("rtl");
         assert_eq!(command, MavCmd::MAV_CMD_NAV_RETURN_TO_LAUNCH);
         assert_eq!(params, [0.0; 7]);
+    }
+
+    #[test]
+    fn set_mode_params_set_custom_mode_flag() {
+        let p = set_mode_params(4, 3); // Auto / Loiter = Hold
+        assert_eq!(p, [1.0, 4.0, 3.0, 0.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn arm_disarm_params_never_carry_the_kill_code() {
+        assert_eq!(arm_disarm_params(true), [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(
+            arm_disarm_params(false),
+            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        );
     }
 
     #[test]
