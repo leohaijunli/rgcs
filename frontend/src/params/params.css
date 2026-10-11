@@ -3,6 +3,24 @@
 
 @import '../design-system/index.css';
 
+/* Native controls (WebKitGTK in the app, Chromium in the browser) follow
+ * the OS theme unless told otherwise, which shows up as white selects/inputs
+ * with grey text on the dark UI. `color-scheme` themes the closed control,
+ * the popup list and the scrollbars; the explicit `option` rule covers the
+ * popup list on engines that ignore inherited colors there. */
+html {
+  color-scheme: dark;
+}
+
+html[data-theme='light'] {
+  color-scheme: light;
+}
+
+option {
+  background: var(--mg-bg);
+  color: var(--mg-ink);
+}
+
 html,
 body,
 #root {
@@ -464,6 +482,7 @@ body,
   border-radius: 5px;
   background: var(--mg-bg);
   color: var(--mg-ink);
+  -webkit-text-fill-color: var(--mg-ink);
   font-size: 13px;
   font-family: var(--mg-font-mono, monospace);
 }

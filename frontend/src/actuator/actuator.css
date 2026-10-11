@@ -1,6 +1,21 @@
 /* Motor-test window: reuses the design tokens via the shared stylesheet. */
 @import '../design-system/index.css';
 
+/* Native controls follow the OS theme unless told otherwise (white selects
+ * with grey text on the dark UI otherwise). Mirrors inspector.css. */
+html {
+  color-scheme: dark;
+}
+
+html[data-theme='light'] {
+  color-scheme: light;
+}
+
+option {
+  background: var(--mg-bg);
+  color: var(--mg-ink);
+}
+
 html,
 body,
 #root {
