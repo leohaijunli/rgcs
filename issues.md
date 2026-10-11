@@ -383,17 +383,17 @@
 - 验收：`check:planfile` 新增用例覆盖 `heightRuns(items, groundM)`（落地基准 + 各自净空，9 个用例全通过）；`npm run typecheck`、`check:colors`、`check:contrast`、`npm run build` 通过。
 
 ### #40 [P2][app/devices] 串口列表不自动刷新
-**状态**：待处理（操作员报告，2026-10-10；电机测试任务结束后处理）
+**状态**：✅ 已完成（2026-10-10）
 - 现象：串口连接界面里，插拔 USB 串口设备后列表不更新，需要手动刷新。
 - 备注：`core::devices::DeviceManager` 已有 `watch`/`DeviceEvent`（Added/Removed）骨架（manager.rs，含事件差分单测），但 `app-tauri::commands::enumerate_devices` 只做一次性枚举，Settings → Devices / Connection 串口下拉没有订阅它。修法：app 侧起一个 watch 任务，把 diff 以 Tauri 事件推送，前端下拉实时更新。
 
 ### #41 [P2][app/devices] 串口列表应只显示 ttyACM* / ttyUSB*
-**状态**：待处理（操作员报告，2026-10-10；电机测试任务结束后处理）
+**状态**：✅ 已完成（2026-10-10）
 - 现象：`enumerate_devices` 把 `serialport::available_ports()` 全部列出（含 ttyS*、PCI 口等），干扰选择。
 - 备注：按操作员要求只保留 `/dev/ttyACM*` 与 `/dev/ttyUSB*`（USB CDC/FTDI 等），过滤放在 `DeviceManager::enumerate` 或命令层，Windows 对应 `COM*` 不受影响。
 
 ### #42 [P1][helper] udev 规则/权限自动安装助手未实现
-**状态**：待处理（操作员报告，2026-10-10；电机测试任务结束后处理）
+**状态**：✅ 已完成（2026-10-10，ADR-009 Implemented）
 - 现象：非 root 下打开串口常因权限失败；"自动添加设备规则、自动处理权限和连接"的功能没有实现（`helpers/udev-installer/` 只有 README 占位，ADR-009/DEVELOPMENT_PLAN §9）。
 - 备注：涉及提权（AGENTS 规则 5），实现前需先做失败/风险分析（错误设备、错误规则、恢复路径），polkit/pkexec 或 systemd 单元方案对比后定。
 
