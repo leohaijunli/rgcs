@@ -52,6 +52,14 @@ always-visible panel header.
 - **Commands**: Takeoff / Land / RTL — each behind a two-click confirm; ack
   outcome shown inline. (Pause/Continue removed: PX4 v1.17 NACKs
   `MAV_CMD_DO_PAUSE_CONTINUE`.)
+- **Arm / Disarm**: two-click confirm, same status line; PX4 runs its own
+  preflight checks for GCS arming and denies with `temporarily_rejected`
+  plus a reason (ADR-017). The 21196 kill code is never sent from the UI.
+- **Mode switching**: the MODE pill is a popover (`MODE ▾`). Entries and
+  their grey-out reasons (link, mission sync, armed, home, RC) resolve in
+  core (ADR-017); Return/Land need the confirm click; the switch shows
+  "Switching…" until the heartbeat readback matches — never an optimistic
+  display. Manual/Acro/Offboard sit behind the "Advanced modes" checkbox.
 - **Mission progress**: active waypoint, distance/ETA, target altitude — the
   FC's mission is auto-fetched when the local plan is empty (e.g. after a
   restart or a QGC upload).
@@ -60,6 +68,29 @@ always-visible panel header.
   heading, speed, altitudes — all angles in degrees. Collapsible.
 - Top bar: armed / mode (decoded PX4 flight mode) / RTK / battery pills;
   alert banners for mock data and link errors.
+
+## Parameters (Tools ▸)
+
+Separate window; three panes: PX4 groups + operator **custom groups**
+(create/rename/note/delete; right-click a parameter to add it) on the left,
+a virtualized parameter table in the middle, and the editor/detail panel on
+the right.
+
+- **Metadata-first**: the bundled PX4 v1.17 metadata (units, enum values,
+  descriptions, reboot flags) renders the full list without a link; the FC
+  value of the selected row is fetched lazily. "Pull all" stays explicit for
+  snapshot/diff workflows, and a lost list request self-heals (re-issued
+  within the retry budget).
+- **Version guard**: the FC's `AUTOPILOT_VERSION` is checked against the
+  bundled 1.17.0 metadata — mismatches show a notice (descriptions may be
+  outdated).
+- **Editing**: inline type-aware editor (enum dropdowns show
+  `value · description`; numbers carry units), Stage → staging tray →
+  Apply with echo confirmation.
+- **Reboot**: parameters flagged `rebootRequired` show a note; after Apply
+  the banner lists them with a Reboot FC button
+  (`MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN`) that reports the FC's real verdict
+  — SITL denies it (a NuttX-only code path), the UI says so.
 
 ## Motor / mag interference test (Tools ▸)
 
