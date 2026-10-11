@@ -25,6 +25,7 @@ pub const PARAM_MESSAGE_IDS: &[u32] = &[
     ::mavlink::common::PARAM_VALUE_DATA::ID,        // 22
     ::mavlink::common::PARAM_REQUEST_READ_DATA::ID, // 20
     ::mavlink::common::PARAM_SET_DATA::ID,          // 23
+    ::mavlink::common::AUTOPILOT_VERSION_DATA::ID,  // 148
 ];
 
 /// Seconds of stream silence before a fill round (plan §4.2: 默认 2 s).
@@ -62,6 +63,8 @@ pub enum ParamEvent {
     },
     /// A param changed that this GCS did not initiate (QGC or the FC).
     ExternalChange(ParamEntry),
+    /// The FC's AUTOPILOT_VERSION arrived (e.g. "1.17.0").
+    FcVersion(String),
 }
 
 /// Errors surfaced through the command channel.
@@ -105,6 +108,7 @@ enum Command {
     Cancel,
     Set(Box<SetRequest>),
     Read(Box<ReadRequest>),
+    RequestFcVersion,
 }
 
 struct ReadRequest {
@@ -117,6 +121,24 @@ struct ReadRequest {
 pub struct ParamService {
     cmd_tx: mpsc::Sender<Command>,
     cache: ParamCache,
+    fc_version: FcVersion,
+}
+
+/// The FC's reported AUTOPILOT_VERSION (shared slot, set once on request).
+#[derive(Clone, Default)]
+pub struct FcVersion {
+    inner: Arc<StdMutex<Option<String>>>,
+}
+
+impl FcVersion {
+    fn set(&self, v: String) {
+        if let Ok(mut g) = self.inner.lock() {
+            *g = Some(v);
+        }
+    }
+    pub fn get(&self) -> Option<String> {
+        self.inner.lock().ok().and_then(|g| g.clone())
+    }
 }
 
 impl ParamService {
@@ -127,18 +149,32 @@ impl ParamService {
         target_sys: u8,
         target_comp: u8,
     ) -> (Self, broadcast::Receiver<ParamEvent>) {
-        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (tx, cmd_rx) = mpsc::channel(8);
         let (evt_tx, evt_rx) = broadcast::channel(256);
         let cache = ParamCache::default();
+        let fc_version = FcVersion::default();
         tokio::spawn(run(
             handle,
             cmd_rx,
             evt_tx,
             cache.clone(),
+            fc_version.clone(),
             target_sys,
             target_comp,
         ));
-        (Self { cmd_tx, cache }, evt_rx)
+        (
+            Self {
+                cmd_tx: tx,
+                cache,
+                fc_version,
+            },
+            evt_rx,
+        )
+    }
+
+    /// The FC's firmware version ("" until AUTOPILOT_VERSION arrives).
+    pub fn fc_version(&self) -> Option<String> {
+        self.fc_version.get()
     }
 
     /// Read-only cache view (other services use this, PM9).
@@ -158,6 +194,15 @@ impl ParamService {
     /// Cancel the running transaction (idempotent).
     pub async fn cancel(&self) {
         let _ = self.cmd_tx.send(Command::Cancel).await;
+    }
+
+    /// Ask the FC for AUTOPILOT_VERSION (fire-and-forget: the version arrives
+    /// as a routed frame and lands in `fc_version()`/`FcVersion` events).
+    pub async fn request_fc_version(&self) -> Result<(), ParamError> {
+        if self.cmd_tx.send(Command::RequestFcVersion).await.is_err() {
+            return Err(ParamError::NotConnected);
+        }
+        Ok(())
     }
 
     /// Read one parameter by name (lazy load); resolves with the FC's value.
@@ -234,6 +279,7 @@ async fn run(
     mut cmd_rx: mpsc::Receiver<Command>,
     evt_tx: broadcast::Sender<ParamEvent>,
     cache: ParamCache,
+    fc_version: FcVersion,
     target_sys: u8,
     target_comp: u8,
 ) {
@@ -294,6 +340,27 @@ async fn run(
                             let _ = reply.send(Err(ParamError::Timeout));
                         }
                     }
+                    Command::RequestFcVersion => {
+                        // MAV_CMD_REQUEST_MESSAGE param1 = 148 (AUTOPILOT_VERSION).
+                        let frame = MavMessage::COMMAND_LONG(
+                            ::mavlink::common::COMMAND_LONG_DATA {
+                                param1: 148.0,
+                                param2: 0.0,
+                                param3: 0.0,
+                                param4: 0.0,
+                                param5: 0.0,
+                                param6: 0.0,
+                                param7: 0.0,
+                                command: ::mavlink::common::MavCmd::MAV_CMD_REQUEST_MESSAGE,
+                                target_system: target_sys,
+                                target_component: target_comp,
+                                confirmation: 0,
+                            },
+                        );
+                        if handle.send(frame).await.is_err() {
+                            return;
+                        }
+                    }
                     Command::Read(req) => match session.start_read(&req.name) {
                         Ok(out) => {
                             read_deadline = Some(tokio::time::Instant::now() + SET_TIMEOUT);
@@ -332,6 +399,18 @@ async fn run(
             ev = events.recv() => {
                 match ev {
                     Ok(ConnectionEvent::Message(env)) => {
+                        if let MavMessage::AUTOPILOT_VERSION(v) = &env.message {
+                            // 4 bytes MSB→LSB: major.minor.patch.type.
+                            let f = v.flight_sw_version;
+                            let ver = format!(
+                                "{}.{}.{}",
+                                (f >> 24) & 0xFF,
+                                (f >> 16) & 0xFF,
+                                (f >> 8) & 0xFF
+                            );
+                            fc_version.set(ver.clone());
+                            let _ = evt_tx.send(ParamEvent::FcVersion(ver));
+                        }
                         if let MavMessage::PARAM_VALUE(v) = &env.message {
                             let Some(ptype) = ParamType::from_mav(v.param_type) else {
                                 continue;

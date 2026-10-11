@@ -80,6 +80,7 @@ async fn forward_events(app: AppHandle, mut rx: tokio::sync::broadcast::Receiver
                 value: entry.value,
                 ptype: entry.ptype,
             },
+            E::FcVersion(v) => ParamsEvent::FcVersion { version: v.clone() },
         };
         let _ = app.emit("params_event", &payload);
     }
@@ -107,6 +108,9 @@ pub enum ParamsEvent {
         name: String,
         value: ParamValue,
         ptype: ParamType,
+    },
+    FcVersion {
+        version: String,
     },
 }
 
@@ -200,6 +204,34 @@ pub struct SetEcho {
     pub actual: ParamValue,
     /// Present only when clamped: what we asked for.
     pub requested: Option<ParamValue>,
+}
+
+/// Reboot the flight controller (MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN,
+/// param1 = 1). The link drops and comes back per the ADR-011 state model;
+/// the window should re-pull after reconnecting.
+#[tauri::command]
+pub async fn params_reboot(state: State<'_, AppState>) -> Result<(), String> {
+    let service = state.command().ok_or("not connected")?;
+    maggcs_core::CommandService::send(
+        &service,
+        ::mavlink::common::MavCmd::MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN,
+        [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// The FC's firmware version ("" until AUTOPILOT_VERSION arrives). Requests
+/// it as a side effect when empty (the reply lands on `params_event`).
+#[tauri::command]
+pub async fn params_fc_version(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    let Some(svc) = state.params.service() else {
+        return Ok(None);
+    };
+    if svc.fc_version().is_none() {
+        let _ = svc.request_fc_version().await;
+    }
+    Ok(svc.fc_version())
 }
 
 /// Lazy-load one parameter's current value from the FC (by name). The

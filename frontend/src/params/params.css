@@ -16,7 +16,7 @@ body,
 
 .p-grid {
   display: grid;
-  grid-template-rows: 40px 1fr;
+  grid-template-rows: 40px 1fr auto;
   height: 100%;
 }
 
@@ -451,4 +451,189 @@ body,
 
 .mono {
   font-family: var(--mg-font-mono, monospace);
+}
+
+
+/* Edit controls */
+.p-edit-input,
+.p-edit-select {
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--mg-border);
+  border-radius: 5px;
+  background: var(--mg-bg);
+  color: var(--mg-ink);
+  font-size: 13px;
+  font-family: var(--mg-font-mono, monospace);
+}
+
+.p-edit-input:focus,
+.p-edit-select:focus {
+  outline: 1px solid var(--mg-accent);
+}
+
+.p-edit-error {
+  border-color: var(--mg-error);
+}
+
+.p-edit-error-text {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--mg-error);
+}
+
+/* Staging tray */
+.p-tray {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-top: 1px solid var(--mg-border);
+  background: var(--mg-bg-raised);
+}
+
+.p-tray-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.p-tray-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border: 1px solid var(--mg-border);
+  border-radius: 4px;
+  font-size: 11px;
+  background: var(--mg-bg);
+}
+
+.p-tray-arrow {
+  color: var(--mg-muted);
+}
+
+.p-tray-del {
+  border: none;
+  background: transparent;
+  color: var(--mg-muted);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.p-tray-del:hover {
+  color: var(--mg-error);
+}
+
+.p-tray-apply {
+  background: var(--mg-accent);
+  color: var(--mg-accent-ink);
+  border-color: var(--mg-accent);
+  font-weight: 600;
+}
+
+/* Context menu */
+.p-ctx-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+}
+
+.p-ctx {
+  position: fixed;
+  z-index: 91;
+  min-width: 220px;
+  max-width: 320px;
+  padding: 4px;
+  border: 1px solid var(--mg-border);
+  border-radius: 6px;
+  background: var(--mg-panel, var(--mg-bg-raised));
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+.p-ctx-item {
+  display: block;
+  width: 100%;
+  padding: 5px 8px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--mg-ink);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.p-ctx-item:hover {
+  background: var(--mg-accent);
+  color: var(--mg-accent-ink);
+}
+
+.p-ctx-sep {
+  height: 1px;
+  margin: 3px 4px;
+  background: var(--mg-border);
+}
+
+
+/* Reboot-required note in the editor */
+.p-reboot-note {
+  margin-bottom: 8px;
+  padding: 4px 8px;
+  border: 1px solid var(--mg-warn);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--mg-warn) 12%, transparent);
+  color: var(--mg-ink);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+
+/* Version strip */
+.p-version-note {
+  padding: 3px 10px;
+  font-size: 11px;
+  background: color-mix(in srgb, var(--mg-warn) 14%, transparent);
+  border-bottom: 1px solid var(--mg-border);
+  color: var(--mg-ink);
+}
+
+.p-version-ok {
+  padding: 2px 10px;
+  font-size: 10px;
+  color: var(--mg-muted);
+  border-bottom: 1px solid var(--mg-border);
+  background: var(--mg-bg-raised);
+}
+
+/* Post-apply reboot banner */
+.p-reboot-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 10px;
+  font-size: 12px;
+  border-top: 1px solid var(--mg-warn);
+  background: color-mix(in srgb, var(--mg-warn) 16%, transparent);
+}
+
+.p-reboot-banner-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.p-reboot-go {
+  background: var(--mg-accent);
+  color: var(--mg-accent-ink);
+  border-color: var(--mg-accent);
+  font-weight: 600;
 }

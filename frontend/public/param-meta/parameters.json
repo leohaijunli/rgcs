@@ -420,7 +420,8 @@
   "type": "Int32",
   "default": 1,
   "min": 1,
-  "max": 5
+  "max": 5,
+  "units": "SD"
  },
  {
   "name": "ASPD_BETA_NOISE",
@@ -431,7 +432,9 @@
   "type": "Float",
   "default": 0.15,
   "min": 0.0,
-  "max": 1.0
+  "max": 1.0,
+  "units": "rad",
+  "decimalPlaces": 3
  },
  {
   "name": "ASPD_DO_CHECKS",
@@ -496,7 +499,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 2.0,
-  "min": 0.0
+  "min": 0.0,
+  "units": "s",
+  "decimalPlaces": 1
  },
  {
   "name": "ASPD_FS_INNOV",
@@ -507,7 +512,9 @@
   "type": "Float",
   "default": 5.0,
   "min": 0.5,
-  "max": 10.0
+  "max": 10.0,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "ASPD_FS_INTEG",
@@ -518,7 +525,9 @@
   "type": "Float",
   "default": 10.0,
   "min": 0.0,
-  "max": 50.0
+  "max": 50.0,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "ASPD_FS_T_START",
@@ -528,7 +537,9 @@
   "category": "Standard",
   "type": "Float",
   "default": -1.0,
-  "min": -1.0
+  "min": -1.0,
+  "units": "s",
+  "decimalPlaces": 1
  },
  {
   "name": "ASPD_FS_T_STOP",
@@ -538,7 +549,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 1.0,
-  "min": 0.0
+  "min": 0.0,
+  "units": "s",
+  "decimalPlaces": 1
  },
  {
   "name": "ASPD_PRIMARY",
@@ -581,7 +594,8 @@
   "default": 1.0,
   "min": 0.5,
   "max": 2.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "decimalPlaces": 2
  },
  {
   "name": "ASPD_SCALE_2",
@@ -593,7 +607,8 @@
   "default": 1.0,
   "min": 0.5,
   "max": 2.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "decimalPlaces": 2
  },
  {
   "name": "ASPD_SCALE_3",
@@ -605,7 +620,8 @@
   "default": 1.0,
   "min": 0.5,
   "max": 2.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "decimalPlaces": 2
  },
  {
   "name": "ASPD_SCALE_APPLY",
@@ -638,7 +654,9 @@
   "type": "Float",
   "default": 0.0001,
   "min": 0.0,
-  "max": 0.1
+  "max": 0.1,
+  "units": "1/s/sqrt(Hz)",
+  "decimalPlaces": 5
  },
  {
   "name": "ASPD_TAS_GATE",
@@ -649,7 +667,8 @@
   "type": "Int32",
   "default": 4,
   "min": 1,
-  "max": 5
+  "max": 5,
+  "units": "SD"
  },
  {
   "name": "ASPD_TAS_NOISE",
@@ -660,7 +679,9 @@
   "type": "Float",
   "default": 1.4,
   "min": 0.0,
-  "max": 4.0
+  "max": 4.0,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "ASPD_WERR_THR",
@@ -671,7 +692,9 @@
   "type": "Float",
   "default": 2.0,
   "min": 0.01,
-  "max": 5.0
+  "max": 5.0,
+  "units": "m/s",
+  "decimalPlaces": 2
  },
  {
   "name": "ASPD_WIND_NSD",
@@ -682,7 +705,9 @@
   "type": "Float",
   "default": 0.1,
   "min": 0.0,
-  "max": 1.0
+  "max": 1.0,
+  "units": "m/s^2/sqrt(Hz)",
+  "decimalPlaces": 2
  },
  {
   "name": "ATT_ACC_COMP",
@@ -710,7 +735,9 @@
   "type": "Float",
   "default": 0.05,
   "min": 0.0,
-  "max": 2.0
+  "max": 2.0,
+  "units": "rad/s",
+  "decimalPlaces": 3
  },
  {
   "name": "ATT_EN",
@@ -763,7 +790,9 @@
   "group": "Attitude Q estimator",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "deg",
+  "decimalPlaces": 2
  },
  {
   "name": "ATT_MAG_DECL_A",
@@ -791,7 +820,8 @@
   "type": "Float",
   "default": 0.2,
   "min": 0.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "ATT_W_EXT_HDG",
@@ -811,7 +841,8 @@
   "type": "Float",
   "default": 0.1,
   "min": 0.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "ATT_W_MAG",
@@ -822,7 +853,8 @@
   "type": "Float",
   "default": 0.1,
   "min": 0.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "BAT1_CAPACITY",
@@ -835,7 +867,9 @@
   "min": -1.0,
   "max": 100000.0,
   "increment": 50.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "mAh",
+  "decimalPlaces": 0
  },
  {
   "name": "BAT1_N_CELLS",
@@ -927,7 +961,9 @@
   "min": -1.0,
   "max": 0.2,
   "increment": 0.0005,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "Ohm",
+  "decimalPlaces": 4
  },
  {
   "name": "BAT1_SOURCE",
@@ -966,7 +1002,9 @@
   "type": "Float",
   "default": 4.05,
   "increment": 0.01,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "V",
+  "decimalPlaces": 2
  },
  {
   "name": "BAT1_V_EMPTY",
@@ -977,7 +1015,9 @@
   "type": "Float",
   "default": 3.6,
   "increment": 0.01,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "V",
+  "decimalPlaces": 2
  },
  {
   "name": "BAT2_CAPACITY",
@@ -990,7 +1030,9 @@
   "min": -1.0,
   "max": 100000.0,
   "increment": 50.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "mAh",
+  "decimalPlaces": 0
  },
  {
   "name": "BAT2_N_CELLS",
@@ -1082,7 +1124,9 @@
   "min": -1.0,
   "max": 0.2,
   "increment": 0.0005,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "Ohm",
+  "decimalPlaces": 4
  },
  {
   "name": "BAT2_SOURCE",
@@ -1121,7 +1165,9 @@
   "type": "Float",
   "default": 4.05,
   "increment": 0.01,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "V",
+  "decimalPlaces": 2
  },
  {
   "name": "BAT2_V_EMPTY",
@@ -1132,7 +1178,9 @@
   "type": "Float",
   "default": 3.6,
   "increment": 0.01,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "V",
+  "decimalPlaces": 2
  },
  {
   "name": "BAT3_CAPACITY",
@@ -1145,7 +1193,9 @@
   "min": -1.0,
   "max": 100000.0,
   "increment": 50.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "mAh",
+  "decimalPlaces": 0
  },
  {
   "name": "BAT3_N_CELLS",
@@ -1237,7 +1287,9 @@
   "min": -1.0,
   "max": 0.2,
   "increment": 0.0005,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "Ohm",
+  "decimalPlaces": 4
  },
  {
   "name": "BAT3_SOURCE",
@@ -1276,7 +1328,9 @@
   "type": "Float",
   "default": 4.05,
   "increment": 0.01,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "V",
+  "decimalPlaces": 2
  },
  {
   "name": "BAT3_V_EMPTY",
@@ -1287,7 +1341,9 @@
   "type": "Float",
   "default": 3.6,
   "increment": 0.01,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "V",
+  "decimalPlaces": 2
  },
  {
   "name": "BAT_AVRG_CURRENT",
@@ -1299,7 +1355,9 @@
   "default": 15.0,
   "min": 0.0,
   "max": 500.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "A",
+  "decimalPlaces": 2
  },
  {
   "name": "BAT_CRIT_THR",
@@ -1311,7 +1369,9 @@
   "default": 0.07,
   "min": 0.05,
   "max": 0.5,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "norm",
+  "decimalPlaces": 2
  },
  {
   "name": "BAT_EMERGEN_THR",
@@ -1323,7 +1383,9 @@
   "default": 0.05,
   "min": 0.03,
   "max": 0.5,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "norm",
+  "decimalPlaces": 2
  },
  {
   "name": "BAT_LOW_THR",
@@ -1335,7 +1397,9 @@
   "default": 0.15,
   "min": 0.12,
   "max": 0.5,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "norm",
+  "decimalPlaces": 2
  },
  {
   "name": "CAL_ACC0_ID",
@@ -1344,7 +1408,8 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Int32",
-  "default": 0
+  "default": 0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC0_PRIO",
@@ -1382,7 +1447,8 @@
     "description": "Max",
     "value": 100
    }
-  ]
+  ],
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC0_ROT",
@@ -1571,7 +1637,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "m/s^2",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC0_XSCALE",
@@ -1581,7 +1649,8 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 3.0
+  "max": 3.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC0_YOFF",
@@ -1589,7 +1658,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "m/s^2",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC0_YSCALE",
@@ -1599,7 +1670,8 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 3.0
+  "max": 3.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC0_ZOFF",
@@ -1607,7 +1679,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "m/s^2",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC0_ZSCALE",
@@ -1617,7 +1691,8 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 3.0
+  "max": 3.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC1_ID",
@@ -1626,7 +1701,8 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Int32",
-  "default": 0
+  "default": 0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC1_PRIO",
@@ -1664,7 +1740,8 @@
     "description": "Max",
     "value": 100
    }
-  ]
+  ],
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC1_ROT",
@@ -1853,7 +1930,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "m/s^2",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC1_XSCALE",
@@ -1863,7 +1942,8 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 3.0
+  "max": 3.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC1_YOFF",
@@ -1871,7 +1951,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "m/s^2",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC1_YSCALE",
@@ -1881,7 +1963,8 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 3.0
+  "max": 3.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC1_ZOFF",
@@ -1889,7 +1972,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "m/s^2",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC1_ZSCALE",
@@ -1899,7 +1984,8 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 3.0
+  "max": 3.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC2_ID",
@@ -1908,7 +1994,8 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Int32",
-  "default": 0
+  "default": 0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC2_PRIO",
@@ -1946,7 +2033,8 @@
     "description": "Max",
     "value": 100
    }
-  ]
+  ],
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC2_ROT",
@@ -2135,7 +2223,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "m/s^2",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC2_XSCALE",
@@ -2145,7 +2235,8 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 3.0
+  "max": 3.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC2_YOFF",
@@ -2153,7 +2244,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "m/s^2",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC2_YSCALE",
@@ -2163,7 +2256,8 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 3.0
+  "max": 3.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC2_ZOFF",
@@ -2171,7 +2265,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "m/s^2",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC2_ZSCALE",
@@ -2181,7 +2277,8 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 3.0
+  "max": 3.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC3_ID",
@@ -2190,7 +2287,8 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Int32",
-  "default": 0
+  "default": 0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC3_PRIO",
@@ -2228,7 +2326,8 @@
     "description": "Max",
     "value": 100
    }
-  ]
+  ],
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC3_ROT",
@@ -2417,7 +2516,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "m/s^2",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC3_XSCALE",
@@ -2427,7 +2528,8 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 3.0
+  "max": 3.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC3_YOFF",
@@ -2435,7 +2537,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "m/s^2",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC3_YSCALE",
@@ -2445,7 +2549,8 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 3.0
+  "max": 3.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC3_ZOFF",
@@ -2453,7 +2558,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "m/s^2",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_ACC3_ZSCALE",
@@ -2463,7 +2570,8 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 3.0
+  "max": 3.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_AIR_CMODEL",
@@ -2496,7 +2604,8 @@
   "type": "Float",
   "default": 1.5,
   "min": 1.5,
-  "max": 100.0
+  "max": 100.0,
+  "units": "mm"
  },
  {
   "name": "CAL_AIR_TUBELEN",
@@ -2507,7 +2616,8 @@
   "type": "Float",
   "default": 0.2,
   "min": 0.01,
-  "max": 2.0
+  "max": 2.0,
+  "units": "m"
  },
  {
   "name": "CAL_BARO0_ID",
@@ -2524,7 +2634,8 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_BARO0_PRIO",
@@ -2579,7 +2690,8 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_BARO1_PRIO",
@@ -2634,7 +2746,8 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_BARO2_PRIO",
@@ -2689,7 +2802,8 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_BARO3_PRIO",
@@ -2963,7 +3077,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "rad/s",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_GYRO0_YOFF",
@@ -2971,7 +3087,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "rad/s",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_GYRO0_ZOFF",
@@ -2979,7 +3097,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "rad/s",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_GYRO1_ID",
@@ -3215,7 +3335,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "rad/s",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_GYRO1_YOFF",
@@ -3223,7 +3345,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "rad/s",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_GYRO1_ZOFF",
@@ -3231,7 +3355,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "rad/s",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_GYRO2_ID",
@@ -3467,7 +3593,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "rad/s",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_GYRO2_YOFF",
@@ -3475,7 +3603,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "rad/s",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_GYRO2_ZOFF",
@@ -3483,7 +3613,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "rad/s",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_GYRO3_ID",
@@ -3719,7 +3851,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "rad/s",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_GYRO3_YOFF",
@@ -3727,7 +3861,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "rad/s",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_GYRO3_ZOFF",
@@ -3735,7 +3871,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "rad/s",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG0_ID",
@@ -3755,7 +3893,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -180.0,
-  "max": 180.0
+  "max": 180.0,
+  "units": "deg"
  },
  {
   "name": "CAL_MAG0_PRIO",
@@ -3804,7 +3943,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -180.0,
-  "max": 180.0
+  "max": 180.0,
+  "units": "deg"
  },
  {
   "name": "CAL_MAG0_ROT",
@@ -3998,7 +4138,8 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG0_XODIAG",
@@ -4006,7 +4147,8 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG0_XOFF",
@@ -4014,7 +4156,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "gauss",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG0_XSCALE",
@@ -4024,7 +4168,8 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 3.0
+  "max": 3.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG0_YAW",
@@ -4035,7 +4180,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -180.0,
-  "max": 180.0
+  "max": 180.0,
+  "units": "deg"
  },
  {
   "name": "CAL_MAG0_YCOMP",
@@ -4044,7 +4190,8 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG0_YODIAG",
@@ -4052,7 +4199,8 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG0_YOFF",
@@ -4060,7 +4208,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "gauss",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG0_YSCALE",
@@ -4070,7 +4220,8 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 3.0
+  "max": 3.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG0_ZCOMP",
@@ -4079,7 +4230,8 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG0_ZODIAG",
@@ -4095,7 +4247,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "gauss",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG0_ZSCALE",
@@ -4105,7 +4259,8 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 3.0
+  "max": 3.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG1_ID",
@@ -4125,7 +4280,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -180.0,
-  "max": 180.0
+  "max": 180.0,
+  "units": "deg"
  },
  {
   "name": "CAL_MAG1_PRIO",
@@ -4174,7 +4330,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -180.0,
-  "max": 180.0
+  "max": 180.0,
+  "units": "deg"
  },
  {
   "name": "CAL_MAG1_ROT",
@@ -4368,7 +4525,8 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG1_XODIAG",
@@ -4376,7 +4534,8 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG1_XOFF",
@@ -4384,7 +4543,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "gauss",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG1_XSCALE",
@@ -4394,7 +4555,8 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 3.0
+  "max": 3.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG1_YAW",
@@ -4405,7 +4567,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -180.0,
-  "max": 180.0
+  "max": 180.0,
+  "units": "deg"
  },
  {
   "name": "CAL_MAG1_YCOMP",
@@ -4414,7 +4577,8 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG1_YODIAG",
@@ -4422,7 +4586,8 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG1_YOFF",
@@ -4430,7 +4595,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "gauss",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG1_YSCALE",
@@ -4440,7 +4607,8 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 3.0
+  "max": 3.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG1_ZCOMP",
@@ -4449,7 +4617,8 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG1_ZODIAG",
@@ -4465,7 +4634,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "gauss",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG1_ZSCALE",
@@ -4475,7 +4646,8 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 3.0
+  "max": 3.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG2_ID",
@@ -4495,7 +4667,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -180.0,
-  "max": 180.0
+  "max": 180.0,
+  "units": "deg"
  },
  {
   "name": "CAL_MAG2_PRIO",
@@ -4544,7 +4717,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -180.0,
-  "max": 180.0
+  "max": 180.0,
+  "units": "deg"
  },
  {
   "name": "CAL_MAG2_ROT",
@@ -4738,7 +4912,8 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG2_XODIAG",
@@ -4746,7 +4921,8 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG2_XOFF",
@@ -4754,7 +4930,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "gauss",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG2_XSCALE",
@@ -4764,7 +4942,8 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 3.0
+  "max": 3.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG2_YAW",
@@ -4775,7 +4954,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -180.0,
-  "max": 180.0
+  "max": 180.0,
+  "units": "deg"
  },
  {
   "name": "CAL_MAG2_YCOMP",
@@ -4784,7 +4964,8 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG2_YODIAG",
@@ -4792,7 +4973,8 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG2_YOFF",
@@ -4800,7 +4982,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "gauss",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG2_YSCALE",
@@ -4810,7 +4994,8 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 3.0
+  "max": 3.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG2_ZCOMP",
@@ -4819,7 +5004,8 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG2_ZODIAG",
@@ -4835,7 +5021,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "gauss",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG2_ZSCALE",
@@ -4845,7 +5033,8 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 3.0
+  "max": 3.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG3_ID",
@@ -4865,7 +5054,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -180.0,
-  "max": 180.0
+  "max": 180.0,
+  "units": "deg"
  },
  {
   "name": "CAL_MAG3_PRIO",
@@ -4914,7 +5104,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -180.0,
-  "max": 180.0
+  "max": 180.0,
+  "units": "deg"
  },
  {
   "name": "CAL_MAG3_ROT",
@@ -5108,7 +5299,8 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG3_XODIAG",
@@ -5116,7 +5308,8 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG3_XOFF",
@@ -5124,7 +5317,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "gauss",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG3_XSCALE",
@@ -5134,7 +5329,8 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 3.0
+  "max": 3.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG3_YAW",
@@ -5145,7 +5341,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -180.0,
-  "max": 180.0
+  "max": 180.0,
+  "units": "deg"
  },
  {
   "name": "CAL_MAG3_YCOMP",
@@ -5154,7 +5351,8 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG3_YODIAG",
@@ -5162,7 +5360,8 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG3_YOFF",
@@ -5170,7 +5369,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "gauss",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG3_YSCALE",
@@ -5180,7 +5381,8 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 3.0
+  "max": 3.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG3_ZCOMP",
@@ -5189,7 +5391,8 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG3_ZODIAG",
@@ -5205,7 +5408,9 @@
   "group": "Sensor Calibration",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "gauss",
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG3_ZSCALE",
@@ -5215,7 +5420,8 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 3.0
+  "max": 3.0,
+  "decimalPlaces": 3
  },
  {
   "name": "CAL_MAG_COMP_TYP",
@@ -5356,7 +5562,8 @@
   "default": -0.05,
   "min": -1.0,
   "max": 1.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_HELI_PITCH_C1",
@@ -5368,7 +5575,8 @@
   "default": 0.0725,
   "min": -1.0,
   "max": 1.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_HELI_PITCH_C2",
@@ -5380,7 +5588,8 @@
   "default": 0.2,
   "min": -1.0,
   "max": 1.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_HELI_PITCH_C3",
@@ -5392,7 +5601,8 @@
   "default": 0.325,
   "min": -1.0,
   "max": 1.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_HELI_PITCH_C4",
@@ -5404,7 +5614,8 @@
   "default": 0.45,
   "min": -1.0,
   "max": 1.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_HELI_RPM_I",
@@ -5416,7 +5627,8 @@
   "default": 0.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_HELI_RPM_P",
@@ -5428,7 +5640,8 @@
   "default": 0.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_HELI_RPM_SP",
@@ -5440,7 +5653,8 @@
   "default": 1500.0,
   "min": 100.0,
   "max": 10000.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "decimalPlaces": 0
  },
  {
   "name": "CA_HELI_THR_C0",
@@ -5452,7 +5666,8 @@
   "default": 1.0,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_HELI_THR_C1",
@@ -5464,7 +5679,8 @@
   "default": 1.0,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_HELI_THR_C2",
@@ -5476,7 +5692,8 @@
   "default": 1.0,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_HELI_THR_C3",
@@ -5488,7 +5705,8 @@
   "default": 1.0,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_HELI_THR_C4",
@@ -5500,7 +5718,8 @@
   "default": 1.0,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_HELI_YAW_CCW",
@@ -5531,7 +5750,8 @@
   "default": 0.0,
   "min": -2.0,
   "max": 2.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_HELI_YAW_CP_S",
@@ -5543,7 +5763,8 @@
   "default": 0.0,
   "min": -2.0,
   "max": 2.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_HELI_YAW_TH_S",
@@ -5555,7 +5776,8 @@
   "default": 0.0,
   "min": -2.0,
   "max": 2.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_MAX_SVO_THROW",
@@ -5567,7 +5789,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 75.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "deg",
+  "decimalPlaces": 1
  },
  {
   "name": "CA_METHOD",
@@ -5602,7 +5826,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_R10_SLEW",
@@ -5614,7 +5840,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_R11_SLEW",
@@ -5626,7 +5854,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_R1_SLEW",
@@ -5638,7 +5868,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_R2_SLEW",
@@ -5650,7 +5882,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_R3_SLEW",
@@ -5662,7 +5896,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_R4_SLEW",
@@ -5674,7 +5910,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_R5_SLEW",
@@ -5686,7 +5924,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_R6_SLEW",
@@ -5698,7 +5938,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_R7_SLEW",
@@ -5710,7 +5952,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_R8_SLEW",
@@ -5722,7 +5966,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_R9_SLEW",
@@ -5734,7 +5980,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR0_AX",
@@ -5746,7 +5994,8 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR0_AY",
@@ -5758,7 +6007,8 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR0_AZ",
@@ -5770,7 +6020,8 @@
   "default": -1.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR0_CT",
@@ -5782,7 +6033,8 @@
   "default": 6.5,
   "min": 0.0,
   "max": 100.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "decimalPlaces": 1
  },
  {
   "name": "CA_ROTOR0_KM",
@@ -5794,7 +6046,8 @@
   "default": 0.05,
   "min": -1.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_ROTOR0_PX",
@@ -5805,7 +6058,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR0_PY",
@@ -5816,7 +6071,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR0_PZ",
@@ -5827,7 +6084,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR0_TILT",
@@ -5870,7 +6129,8 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR10_AY",
@@ -5882,7 +6142,8 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR10_AZ",
@@ -5894,7 +6155,8 @@
   "default": -1.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR10_CT",
@@ -5906,7 +6168,8 @@
   "default": 6.5,
   "min": 0.0,
   "max": 100.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "decimalPlaces": 1
  },
  {
   "name": "CA_ROTOR10_KM",
@@ -5918,7 +6181,8 @@
   "default": 0.05,
   "min": -1.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_ROTOR10_PX",
@@ -5929,7 +6193,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR10_PY",
@@ -5940,7 +6206,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR10_PZ",
@@ -5951,7 +6219,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR10_TILT",
@@ -5994,7 +6264,8 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR11_AY",
@@ -6006,7 +6277,8 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR11_AZ",
@@ -6018,7 +6290,8 @@
   "default": -1.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR11_CT",
@@ -6030,7 +6303,8 @@
   "default": 6.5,
   "min": 0.0,
   "max": 100.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "decimalPlaces": 1
  },
  {
   "name": "CA_ROTOR11_KM",
@@ -6042,7 +6316,8 @@
   "default": 0.05,
   "min": -1.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_ROTOR11_PX",
@@ -6053,7 +6328,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR11_PY",
@@ -6064,7 +6341,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR11_PZ",
@@ -6075,7 +6354,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR11_TILT",
@@ -6118,7 +6399,8 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR1_AY",
@@ -6130,7 +6412,8 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR1_AZ",
@@ -6142,7 +6425,8 @@
   "default": -1.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR1_CT",
@@ -6154,7 +6438,8 @@
   "default": 6.5,
   "min": 0.0,
   "max": 100.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "decimalPlaces": 1
  },
  {
   "name": "CA_ROTOR1_KM",
@@ -6166,7 +6451,8 @@
   "default": 0.05,
   "min": -1.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_ROTOR1_PX",
@@ -6177,7 +6463,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR1_PY",
@@ -6188,7 +6476,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR1_PZ",
@@ -6199,7 +6489,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR1_TILT",
@@ -6242,7 +6534,8 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR2_AY",
@@ -6254,7 +6547,8 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR2_AZ",
@@ -6266,7 +6560,8 @@
   "default": -1.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR2_CT",
@@ -6278,7 +6573,8 @@
   "default": 6.5,
   "min": 0.0,
   "max": 100.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "decimalPlaces": 1
  },
  {
   "name": "CA_ROTOR2_KM",
@@ -6290,7 +6586,8 @@
   "default": 0.05,
   "min": -1.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_ROTOR2_PX",
@@ -6301,7 +6598,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR2_PY",
@@ -6312,7 +6611,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR2_PZ",
@@ -6323,7 +6624,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR2_TILT",
@@ -6366,7 +6669,8 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR3_AY",
@@ -6378,7 +6682,8 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR3_AZ",
@@ -6390,7 +6695,8 @@
   "default": -1.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR3_CT",
@@ -6402,7 +6708,8 @@
   "default": 6.5,
   "min": 0.0,
   "max": 100.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "decimalPlaces": 1
  },
  {
   "name": "CA_ROTOR3_KM",
@@ -6414,7 +6721,8 @@
   "default": 0.05,
   "min": -1.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_ROTOR3_PX",
@@ -6425,7 +6733,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR3_PY",
@@ -6436,7 +6746,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR3_PZ",
@@ -6447,7 +6759,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR3_TILT",
@@ -6490,7 +6804,8 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR4_AY",
@@ -6502,7 +6817,8 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR4_AZ",
@@ -6514,7 +6830,8 @@
   "default": -1.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR4_CT",
@@ -6526,7 +6843,8 @@
   "default": 6.5,
   "min": 0.0,
   "max": 100.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "decimalPlaces": 1
  },
  {
   "name": "CA_ROTOR4_KM",
@@ -6538,7 +6856,8 @@
   "default": 0.05,
   "min": -1.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_ROTOR4_PX",
@@ -6549,7 +6868,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR4_PY",
@@ -6560,7 +6881,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR4_PZ",
@@ -6571,7 +6894,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR4_TILT",
@@ -6614,7 +6939,8 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR5_AY",
@@ -6626,7 +6952,8 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR5_AZ",
@@ -6638,7 +6965,8 @@
   "default": -1.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR5_CT",
@@ -6650,7 +6978,8 @@
   "default": 6.5,
   "min": 0.0,
   "max": 100.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "decimalPlaces": 1
  },
  {
   "name": "CA_ROTOR5_KM",
@@ -6662,7 +6991,8 @@
   "default": 0.05,
   "min": -1.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_ROTOR5_PX",
@@ -6673,7 +7003,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR5_PY",
@@ -6684,7 +7016,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR5_PZ",
@@ -6695,7 +7029,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR5_TILT",
@@ -6738,7 +7074,8 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR6_AY",
@@ -6750,7 +7087,8 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR6_AZ",
@@ -6762,7 +7100,8 @@
   "default": -1.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR6_CT",
@@ -6774,7 +7113,8 @@
   "default": 6.5,
   "min": 0.0,
   "max": 100.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "decimalPlaces": 1
  },
  {
   "name": "CA_ROTOR6_KM",
@@ -6786,7 +7126,8 @@
   "default": 0.05,
   "min": -1.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_ROTOR6_PX",
@@ -6797,7 +7138,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR6_PY",
@@ -6808,7 +7151,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR6_PZ",
@@ -6819,7 +7164,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR6_TILT",
@@ -6862,7 +7209,8 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR7_AY",
@@ -6874,7 +7222,8 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR7_AZ",
@@ -6886,7 +7235,8 @@
   "default": -1.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR7_CT",
@@ -6898,7 +7248,8 @@
   "default": 6.5,
   "min": 0.0,
   "max": 100.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "decimalPlaces": 1
  },
  {
   "name": "CA_ROTOR7_KM",
@@ -6910,7 +7261,8 @@
   "default": 0.05,
   "min": -1.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_ROTOR7_PX",
@@ -6921,7 +7273,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR7_PY",
@@ -6932,7 +7286,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR7_PZ",
@@ -6943,7 +7299,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR7_TILT",
@@ -6986,7 +7344,8 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR8_AY",
@@ -6998,7 +7357,8 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR8_AZ",
@@ -7010,7 +7370,8 @@
   "default": -1.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR8_CT",
@@ -7022,7 +7383,8 @@
   "default": 6.5,
   "min": 0.0,
   "max": 100.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "decimalPlaces": 1
  },
  {
   "name": "CA_ROTOR8_KM",
@@ -7034,7 +7396,8 @@
   "default": 0.05,
   "min": -1.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_ROTOR8_PX",
@@ -7045,7 +7408,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR8_PY",
@@ -7056,7 +7421,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR8_PZ",
@@ -7067,7 +7434,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR8_TILT",
@@ -7110,7 +7479,8 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR9_AY",
@@ -7122,7 +7492,8 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR9_AZ",
@@ -7134,7 +7505,8 @@
   "default": -1.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR9_CT",
@@ -7146,7 +7518,8 @@
   "default": 6.5,
   "min": 0.0,
   "max": 100.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "decimalPlaces": 1
  },
  {
   "name": "CA_ROTOR9_KM",
@@ -7158,7 +7531,8 @@
   "default": 0.05,
   "min": -1.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_ROTOR9_PX",
@@ -7169,7 +7543,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR9_PY",
@@ -7180,7 +7556,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR9_PZ",
@@ -7191,7 +7569,9 @@
   "default": 0.0,
   "min": -100.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_ROTOR9_TILT",
@@ -7357,7 +7737,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 360.0,
-  "increment": 10.0
+  "increment": 10.0,
+  "units": "deg",
+  "decimalPlaces": 0
  },
  {
   "name": "CA_SP0_ANG1",
@@ -7369,7 +7751,9 @@
   "default": 140.0,
   "min": 0.0,
   "max": 360.0,
-  "increment": 10.0
+  "increment": 10.0,
+  "units": "deg",
+  "decimalPlaces": 0
  },
  {
   "name": "CA_SP0_ANG2",
@@ -7381,7 +7765,9 @@
   "default": 220.0,
   "min": 0.0,
   "max": 360.0,
-  "increment": 10.0
+  "increment": 10.0,
+  "units": "deg",
+  "decimalPlaces": 0
  },
  {
   "name": "CA_SP0_ANG3",
@@ -7393,7 +7779,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 360.0,
-  "increment": 10.0
+  "increment": 10.0,
+  "units": "deg",
+  "decimalPlaces": 0
  },
  {
   "name": "CA_SP0_ARM_L0",
@@ -7405,7 +7793,8 @@
   "default": 1.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_SP0_ARM_L1",
@@ -7417,7 +7806,8 @@
   "default": 1.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_SP0_ARM_L2",
@@ -7429,7 +7819,8 @@
   "default": 1.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_SP0_ARM_L3",
@@ -7441,7 +7832,8 @@
   "default": 1.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 3
  },
  {
   "name": "CA_SP0_COUNT",
@@ -7475,7 +7867,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.05
+  "increment": 0.05,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV1_SLEW",
@@ -7487,7 +7881,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.05
+  "increment": 0.05,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV2_SLEW",
@@ -7499,7 +7895,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.05
+  "increment": 0.05,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV3_SLEW",
@@ -7511,7 +7909,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.05
+  "increment": 0.05,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV4_SLEW",
@@ -7523,7 +7923,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.05
+  "increment": 0.05,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV5_SLEW",
@@ -7535,7 +7937,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.05
+  "increment": 0.05,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV6_SLEW",
@@ -7547,7 +7951,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.05
+  "increment": 0.05,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV7_SLEW",
@@ -7559,7 +7965,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.05
+  "increment": 0.05,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS0_FLAP",
@@ -7569,7 +7977,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS0_SPOIL",
@@ -7579,7 +7988,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS0_TRIM",
@@ -7590,7 +8000,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS0_TRQ_P",
@@ -7598,7 +8009,8 @@
   "group": "Geometry",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS0_TRQ_R",
@@ -7606,7 +8018,8 @@
   "group": "Geometry",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS0_TRQ_Y",
@@ -7614,7 +8027,8 @@
   "group": "Geometry",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS0_TYPE",
@@ -7710,7 +8124,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS1_SPOIL",
@@ -7720,7 +8135,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS1_TRIM",
@@ -7731,7 +8147,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS1_TRQ_P",
@@ -7739,7 +8156,8 @@
   "group": "Geometry",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS1_TRQ_R",
@@ -7747,7 +8165,8 @@
   "group": "Geometry",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS1_TRQ_Y",
@@ -7755,7 +8174,8 @@
   "group": "Geometry",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS1_TYPE",
@@ -7851,7 +8271,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS2_SPOIL",
@@ -7861,7 +8282,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS2_TRIM",
@@ -7872,7 +8294,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS2_TRQ_P",
@@ -7880,7 +8303,8 @@
   "group": "Geometry",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS2_TRQ_R",
@@ -7888,7 +8312,8 @@
   "group": "Geometry",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS2_TRQ_Y",
@@ -7896,7 +8321,8 @@
   "group": "Geometry",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS2_TYPE",
@@ -7992,7 +8418,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS3_SPOIL",
@@ -8002,7 +8429,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS3_TRIM",
@@ -8013,7 +8441,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS3_TRQ_P",
@@ -8021,7 +8450,8 @@
   "group": "Geometry",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS3_TRQ_R",
@@ -8029,7 +8459,8 @@
   "group": "Geometry",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS3_TRQ_Y",
@@ -8037,7 +8468,8 @@
   "group": "Geometry",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS3_TYPE",
@@ -8133,7 +8565,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS4_SPOIL",
@@ -8143,7 +8576,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS4_TRIM",
@@ -8154,7 +8588,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS4_TRQ_P",
@@ -8162,7 +8597,8 @@
   "group": "Geometry",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS4_TRQ_R",
@@ -8170,7 +8606,8 @@
   "group": "Geometry",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS4_TRQ_Y",
@@ -8178,7 +8615,8 @@
   "group": "Geometry",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS4_TYPE",
@@ -8274,7 +8712,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS5_SPOIL",
@@ -8284,7 +8723,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS5_TRIM",
@@ -8295,7 +8735,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS5_TRQ_P",
@@ -8303,7 +8744,8 @@
   "group": "Geometry",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS5_TRQ_R",
@@ -8311,7 +8753,8 @@
   "group": "Geometry",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS5_TRQ_Y",
@@ -8319,7 +8762,8 @@
   "group": "Geometry",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS5_TYPE",
@@ -8415,7 +8859,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS6_SPOIL",
@@ -8425,7 +8870,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS6_TRIM",
@@ -8436,7 +8882,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS6_TRQ_P",
@@ -8444,7 +8891,8 @@
   "group": "Geometry",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS6_TRQ_R",
@@ -8452,7 +8900,8 @@
   "group": "Geometry",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS6_TRQ_Y",
@@ -8460,7 +8909,8 @@
   "group": "Geometry",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS6_TYPE",
@@ -8556,7 +9006,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS7_SPOIL",
@@ -8566,7 +9017,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS7_TRIM",
@@ -8577,7 +9029,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS7_TRQ_P",
@@ -8585,7 +9038,8 @@
   "group": "Geometry",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS7_TRQ_R",
@@ -8593,7 +9047,8 @@
   "group": "Geometry",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS7_TRQ_Y",
@@ -8601,7 +9056,8 @@
   "group": "Geometry",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "CA_SV_CS7_TYPE",
@@ -8771,7 +9227,9 @@
   "type": "Float",
   "default": 90.0,
   "min": -90.0,
-  "max": 90.0
+  "max": 90.0,
+  "units": "deg",
+  "decimalPlaces": 0
  },
  {
   "name": "CA_SV_TL0_MINA",
@@ -8782,7 +9240,9 @@
   "type": "Float",
   "default": 0.0,
   "min": -90.0,
-  "max": 90.0
+  "max": 90.0,
+  "units": "deg",
+  "decimalPlaces": 0
  },
  {
   "name": "CA_SV_TL0_TD",
@@ -8841,7 +9301,9 @@
   "type": "Float",
   "default": 90.0,
   "min": -90.0,
-  "max": 90.0
+  "max": 90.0,
+  "units": "deg",
+  "decimalPlaces": 0
  },
  {
   "name": "CA_SV_TL1_MINA",
@@ -8852,7 +9314,9 @@
   "type": "Float",
   "default": 0.0,
   "min": -90.0,
-  "max": 90.0
+  "max": 90.0,
+  "units": "deg",
+  "decimalPlaces": 0
  },
  {
   "name": "CA_SV_TL1_TD",
@@ -8911,7 +9375,9 @@
   "type": "Float",
   "default": 90.0,
   "min": -90.0,
-  "max": 90.0
+  "max": 90.0,
+  "units": "deg",
+  "decimalPlaces": 0
  },
  {
   "name": "CA_SV_TL2_MINA",
@@ -8922,7 +9388,9 @@
   "type": "Float",
   "default": 0.0,
   "min": -90.0,
-  "max": 90.0
+  "max": 90.0,
+  "units": "deg",
+  "decimalPlaces": 0
  },
  {
   "name": "CA_SV_TL2_TD",
@@ -8981,7 +9449,9 @@
   "type": "Float",
   "default": 90.0,
   "min": -90.0,
-  "max": 90.0
+  "max": 90.0,
+  "units": "deg",
+  "decimalPlaces": 0
  },
  {
   "name": "CA_SV_TL3_MINA",
@@ -8992,7 +9462,9 @@
   "type": "Float",
   "default": 0.0,
   "min": -90.0,
-  "max": 90.0
+  "max": 90.0,
+  "units": "deg",
+  "decimalPlaces": 0
  },
  {
   "name": "CA_SV_TL3_TD",
@@ -9220,7 +9692,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 1.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "s",
+  "decimalPlaces": 1
  },
  {
   "name": "COM_ARM_BAT_MIN",
@@ -9232,7 +9706,9 @@
   "default": -1.0,
   "min": -1.0,
   "max": 0.9,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "norm",
+  "decimalPlaces": 2
  },
  {
   "name": "COM_ARM_CHK_ESCS",
@@ -9281,7 +9757,9 @@
   "default": 0.7,
   "min": 0.1,
   "max": 1.0,
-  "increment": 0.05
+  "increment": 0.05,
+  "units": "m/s^2",
+  "decimalPlaces": 2
  },
  {
   "name": "COM_ARM_IMU_GYR",
@@ -9292,7 +9770,9 @@
   "default": 0.25,
   "min": 0.02,
   "max": 0.3,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "rad/s",
+  "decimalPlaces": 3
  },
  {
   "name": "COM_ARM_MAG_ANG",
@@ -9303,7 +9783,8 @@
   "type": "Int32",
   "default": 60,
   "min": 3,
-  "max": 180
+  "max": 180,
+  "units": "deg"
  },
  {
   "name": "COM_ARM_MAG_STR",
@@ -9445,7 +9926,8 @@
   "default": 95.0,
   "min": -1.0,
   "max": 100.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "%"
  },
  {
   "name": "COM_DISARM_LAND",
@@ -9455,7 +9937,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 2.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "s",
+  "decimalPlaces": 1
  },
  {
   "name": "COM_DISARM_MAN",
@@ -9484,7 +9968,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 10.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "s",
+  "decimalPlaces": 1
  },
  {
   "name": "COM_DLL_EXCEPT",
@@ -9521,7 +10007,9 @@
   "default": 10,
   "min": 5,
   "max": 300,
-  "increment": 1
+  "increment": 1,
+  "units": "s",
+  "decimalPlaces": 1
  },
  {
   "name": "COM_FAIL_ACT_T",
@@ -9532,7 +10020,9 @@
   "type": "Float",
   "default": 5.0,
   "min": 0.0,
-  "max": 25.0
+  "max": 25.0,
+  "units": "s",
+  "decimalPlaces": 1
  },
  {
   "name": "COM_FLIGHT_UUID",
@@ -10245,7 +10735,8 @@
   "category": "Standard",
   "type": "Int32",
   "default": -1,
-  "min": -1
+  "min": -1,
+  "units": "s"
  },
  {
   "name": "COM_FORCE_SAFETY",
@@ -10275,7 +10766,8 @@
   "type": "Int32",
   "default": 120,
   "min": 60,
-  "max": 3600
+  "max": 3600,
+  "units": "s"
  },
  {
   "name": "COM_HLDL_REG_T",
@@ -10286,7 +10778,8 @@
   "type": "Int32",
   "default": 0,
   "min": 0,
-  "max": 60
+  "max": 60,
+  "units": "s"
  },
  {
   "name": "COM_HOME_EN",
@@ -10365,7 +10858,8 @@
   "default": 5.0,
   "min": 0.0,
   "max": 30.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "s"
  },
  {
   "name": "COM_LKDOWN_TKO",
@@ -10376,7 +10870,9 @@
   "type": "Float",
   "default": 3.0,
   "min": -1.0,
-  "max": 5.0
+  "max": 5.0,
+  "units": "s",
+  "decimalPlaces": 3
  },
  {
   "name": "COM_LOW_BAT_ACT",
@@ -10520,7 +11016,8 @@
   "default": 5.0,
   "min": 0.0,
   "max": 60.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "s"
  },
  {
   "name": "COM_OBL_RC_ACT",
@@ -10575,7 +11072,8 @@
   "default": 1.0,
   "min": 0.0,
   "max": 60.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "s"
  },
  {
   "name": "COM_PARACHUTE",
@@ -10604,7 +11102,9 @@
   "type": "Float",
   "default": 5.0,
   "min": -1.0,
-  "max": 400.0
+  "max": 400.0,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "COM_POS_LOW_ACT",
@@ -10651,7 +11151,8 @@
   "type": "Float",
   "default": -1.0,
   "min": -1.0,
-  "max": 1000.0
+  "max": 1000.0,
+  "units": "m"
  },
  {
   "name": "COM_POWER_COUNT",
@@ -10723,7 +11224,8 @@
   "default": 95.0,
   "min": -1.0,
   "max": 100.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "%"
  },
  {
   "name": "COM_RCL_EXCEPT",
@@ -10767,7 +11269,8 @@
   "type": "Int32",
   "default": 1000,
   "min": 100,
-  "max": 1500
+  "max": 1500,
+  "units": "ms"
  },
  {
   "name": "COM_RC_IN_MODE",
@@ -10828,7 +11331,9 @@
   "default": 0.5,
   "min": 0.0,
   "max": 35.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "s",
+  "decimalPlaces": 1
  },
  {
   "name": "COM_RC_OVERRIDE",
@@ -10861,7 +11366,9 @@
   "default": 30.0,
   "min": 5.0,
   "max": 80.0,
-  "increment": 0.05
+  "increment": 0.05,
+  "units": "%",
+  "decimalPlaces": 0
  },
  {
   "name": "COM_SPOOLUP_TIME",
@@ -10873,7 +11380,9 @@
   "default": 1.0,
   "min": 0.0,
   "max": 30.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "s",
+  "decimalPlaces": 1
  },
  {
   "name": "COM_TAKEOFF_ACT",
@@ -10922,7 +11431,9 @@
   "type": "Float",
   "default": 5.0,
   "min": 0.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "COM_VEL_FS_EVH",
@@ -10932,7 +11443,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 1.0,
-  "min": 0.0
+  "min": 0.0,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "COM_WIND_MAX",
@@ -10943,7 +11456,9 @@
   "type": "Float",
   "default": -1.0,
   "min": -1.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "COM_WIND_MAX_ACT",
@@ -10990,7 +11505,9 @@
   "type": "Float",
   "default": -1.0,
   "min": -1.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "CP_DELAY",
@@ -11001,7 +11518,8 @@
   "type": "Float",
   "default": 0.4,
   "min": 0.0,
-  "max": 1.0
+  "max": 1.0,
+  "units": "s"
  },
  {
   "name": "CP_DIST",
@@ -11012,7 +11530,8 @@
   "type": "Float",
   "default": -1.0,
   "min": -1.0,
-  "max": 15.0
+  "max": 15.0,
+  "units": "m"
  },
  {
   "name": "CP_GO_NO_DATA",
@@ -11042,7 +11561,8 @@
   "type": "Float",
   "default": 30.0,
   "min": 0.0,
-  "max": 90.0
+  "max": 90.0,
+  "units": "deg"
  },
  {
   "name": "EKF2_ABIAS_INIT",
@@ -11053,7 +11573,9 @@
   "default": 0.2,
   "min": 0.0,
   "max": 0.5,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "m/s^2",
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_ABL_ACCLIM",
@@ -11064,7 +11586,9 @@
   "type": "Float",
   "default": 25.0,
   "min": 20.0,
-  "max": 200.0
+  "max": 200.0,
+  "units": "m/s^2",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_ABL_GYRLIM",
@@ -11075,7 +11599,9 @@
   "type": "Float",
   "default": 3.0,
   "min": 2.0,
-  "max": 20.0
+  "max": 20.0,
+  "units": "rad/s",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_ABL_LIM",
@@ -11086,7 +11612,9 @@
   "type": "Float",
   "default": 0.4,
   "min": 0.0,
-  "max": 0.8
+  "max": 0.8,
+  "units": "m/s^2",
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_ABL_TAU",
@@ -11097,7 +11625,9 @@
   "type": "Float",
   "default": 0.5,
   "min": 0.1,
-  "max": 1.0
+  "max": 1.0,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_ACC_B_NOISE",
@@ -11107,7 +11637,9 @@
   "type": "Float",
   "default": 0.003,
   "min": 0.0,
-  "max": 0.01
+  "max": 0.01,
+  "units": "m/s^3",
+  "decimalPlaces": 6
  },
  {
   "name": "EKF2_ACC_NOISE",
@@ -11117,7 +11649,9 @@
   "type": "Float",
   "default": 0.35,
   "min": 0.01,
-  "max": 1.0
+  "max": 1.0,
+  "units": "m/s^2",
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_AGP_CTRL",
@@ -11149,7 +11683,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 300.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "ms",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_AGP_GATE",
@@ -11159,7 +11695,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 3.0,
-  "min": 1.0
+  "min": 1.0,
+  "units": "SD",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_AGP_MODE",
@@ -11188,7 +11726,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.9,
-  "min": 0.01
+  "min": 0.01,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_ANGERR_INIT",
@@ -11199,7 +11739,9 @@
   "default": 0.1,
   "min": 0.0,
   "max": 0.5,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "rad",
+  "decimalPlaces": 3
  },
  {
   "name": "EKF2_ARSP_THR",
@@ -11209,7 +11751,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.0,
-  "min": 0.0
+  "min": 0.0,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_ASPD_MAX",
@@ -11219,7 +11763,9 @@
   "type": "Float",
   "default": 20.0,
   "min": 5.0,
-  "max": 50.0
+  "max": 50.0,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_ASP_DELAY",
@@ -11230,7 +11776,9 @@
   "default": 100.0,
   "min": 0.0,
   "max": 300.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "ms",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_AVEL_DELAY",
@@ -11241,7 +11789,9 @@
   "default": 5.0,
   "min": 0.0,
   "max": 300.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "ms",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_BARO_CTRL",
@@ -11271,7 +11821,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 300.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "ms",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_BARO_GATE",
@@ -11281,7 +11833,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 5.0,
-  "min": 1.0
+  "min": 1.0,
+  "units": "SD",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_BARO_NOISE",
@@ -11291,7 +11845,9 @@
   "type": "Float",
   "default": 3.5,
   "min": 0.01,
-  "max": 15.0
+  "max": 15.0,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_BCOEF_X",
@@ -11302,7 +11858,9 @@
   "type": "Float",
   "default": 100.0,
   "min": 0.0,
-  "max": 200.0
+  "max": 200.0,
+  "units": "kg/m^2",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_BCOEF_Y",
@@ -11313,7 +11871,9 @@
   "type": "Float",
   "default": 100.0,
   "min": 0.0,
-  "max": 200.0
+  "max": 200.0,
+  "units": "kg/m^2",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_BETA_GATE",
@@ -11323,7 +11883,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 5.0,
-  "min": 1.0
+  "min": 1.0,
+  "units": "SD",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_BETA_NOISE",
@@ -11333,7 +11895,9 @@
   "type": "Float",
   "default": 0.3,
   "min": 0.1,
-  "max": 1.0
+  "max": 1.0,
+  "units": "m/s",
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_DECL_TYPE",
@@ -11367,7 +11931,9 @@
   "default": 200.0,
   "min": 0.0,
   "max": 1000.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "ms",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_DRAG_CTRL",
@@ -11397,7 +11963,9 @@
   "type": "Float",
   "default": 2.5,
   "min": 0.5,
-  "max": 10.0
+  "max": 10.0,
+  "units": "(m/s^2)^2",
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_EAS_NOISE",
@@ -11407,7 +11975,9 @@
   "type": "Float",
   "default": 1.4,
   "min": 0.5,
-  "max": 5.0
+  "max": 5.0,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_EN",
@@ -11435,7 +12005,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.1,
-  "min": 0.05
+  "min": 0.05,
+  "units": "rad",
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_EVP_GATE",
@@ -11445,7 +12017,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 5.0,
-  "min": 1.0
+  "min": 1.0,
+  "units": "SD",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_EVP_NOISE",
@@ -11455,7 +12029,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.1,
-  "min": 0.01
+  "min": 0.01,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_EVV_GATE",
@@ -11465,7 +12041,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 3.0,
-  "min": 1.0
+  "min": 1.0,
+  "units": "SD",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_EVV_NOISE",
@@ -11475,7 +12053,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.1,
-  "min": 0.01
+  "min": 0.01,
+  "units": "m/s",
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_EV_CTRL",
@@ -11515,7 +12095,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 300.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "ms",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_EV_NOISE_MD",
@@ -11543,7 +12125,9 @@
   "group": "EKF2",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "EKF2_EV_POS_Y",
@@ -11552,7 +12136,9 @@
   "group": "EKF2",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "EKF2_EV_POS_Z",
@@ -11561,7 +12147,9 @@
   "group": "EKF2",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "EKF2_EV_QMIN",
@@ -11572,7 +12160,8 @@
   "type": "Int32",
   "default": 0,
   "min": 0,
-  "max": 100
+  "max": 100,
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_FUSE_BETA",
@@ -11602,7 +12191,9 @@
   "default": 0.1,
   "min": 0.0,
   "max": 0.2,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "rad/s",
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_GND_EFF_DZ",
@@ -11613,7 +12204,9 @@
   "type": "Float",
   "default": 4.0,
   "min": 0.0,
-  "max": 10.0
+  "max": 10.0,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_GND_MAX_HGT",
@@ -11624,7 +12217,9 @@
   "type": "Float",
   "default": 0.5,
   "min": 0.0,
-  "max": 5.0
+  "max": 5.0,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_GPS_CHECK",
@@ -11721,7 +12316,9 @@
   "default": 110.0,
   "min": 0.0,
   "max": 300.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "ms",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_GPS_MODE",
@@ -11749,7 +12346,9 @@
   "group": "EKF2",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "EKF2_GPS_POS_Y",
@@ -11758,7 +12357,9 @@
   "group": "EKF2",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "EKF2_GPS_POS_Z",
@@ -11767,7 +12368,9 @@
   "group": "EKF2",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "EKF2_GPS_P_GATE",
@@ -11777,7 +12380,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 5.0,
-  "min": 1.0
+  "min": 1.0,
+  "units": "SD",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_GPS_P_NOISE",
@@ -11787,7 +12392,9 @@
   "type": "Float",
   "default": 0.5,
   "min": 0.01,
-  "max": 10.0
+  "max": 10.0,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_GPS_V_GATE",
@@ -11797,7 +12404,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 5.0,
-  "min": 1.0
+  "min": 1.0,
+  "units": "SD",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_GPS_V_NOISE",
@@ -11807,7 +12416,9 @@
   "type": "Float",
   "default": 0.3,
   "min": 0.01,
-  "max": 5.0
+  "max": 5.0,
+  "units": "m/s",
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_GPS_YAW_OFF",
@@ -11817,7 +12428,9 @@
   "type": "Float",
   "default": 0.0,
   "min": 0.0,
-  "max": 360.0
+  "max": 360.0,
+  "units": "deg",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_GRAV_NOISE",
@@ -11827,7 +12440,9 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 10.0
+  "max": 10.0,
+  "units": "g0",
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_GSF_TAS",
@@ -11838,7 +12453,9 @@
   "type": "Float",
   "default": 15.0,
   "min": 0.0,
-  "max": 100.0
+  "max": 100.0,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_GYR_B_LIM",
@@ -11849,7 +12466,9 @@
   "type": "Float",
   "default": 0.15,
   "min": 0.0,
-  "max": 0.4
+  "max": 0.4,
+  "units": "rad/s",
+  "decimalPlaces": 3
  },
  {
   "name": "EKF2_GYR_B_NOISE",
@@ -11859,7 +12478,9 @@
   "type": "Float",
   "default": 0.001,
   "min": 0.0,
-  "max": 0.01
+  "max": 0.01,
+  "units": "rad/s^2",
+  "decimalPlaces": 6
  },
  {
   "name": "EKF2_GYR_NOISE",
@@ -11869,7 +12490,9 @@
   "type": "Float",
   "default": 0.015,
   "min": 0.0001,
-  "max": 0.1
+  "max": 0.1,
+  "units": "rad/s",
+  "decimalPlaces": 4
  },
  {
   "name": "EKF2_HDG_GATE",
@@ -11879,7 +12502,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 2.6,
-  "min": 1.0
+  "min": 1.0,
+  "units": "SD",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_HEAD_NOISE",
@@ -11889,7 +12514,9 @@
   "type": "Float",
   "default": 0.3,
   "min": 0.01,
-  "max": 1.0
+  "max": 1.0,
+  "units": "rad",
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_HGT_REF",
@@ -11950,7 +12577,9 @@
   "group": "EKF2",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "EKF2_IMU_POS_Y",
@@ -11959,7 +12588,9 @@
   "group": "EKF2",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "EKF2_IMU_POS_Z",
@@ -11968,7 +12599,9 @@
   "group": "EKF2",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "EKF2_LOG_VERBOSE",
@@ -11997,7 +12630,9 @@
   "type": "Float",
   "default": 0.5,
   "min": 0.0,
-  "max": 5.0
+  "max": 5.0,
+  "units": "m/s^2",
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_MAG_B_NOISE",
@@ -12007,7 +12642,9 @@
   "type": "Float",
   "default": 0.0001,
   "min": 0.0,
-  "max": 0.1
+  "max": 0.1,
+  "units": "gauss/s",
+  "decimalPlaces": 6
  },
  {
   "name": "EKF2_MAG_CHECK",
@@ -12043,7 +12680,9 @@
   "type": "Float",
   "default": 20.0,
   "min": 0.0,
-  "max": 90.0
+  "max": 90.0,
+  "units": "deg",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_MAG_CHK_STR",
@@ -12054,7 +12693,9 @@
   "type": "Float",
   "default": 0.2,
   "min": 0.0,
-  "max": 1.0
+  "max": 1.0,
+  "units": "gauss",
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_MAG_DECL",
@@ -12062,7 +12703,9 @@
   "group": "EKF2",
   "category": "System",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "deg",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_MAG_DELAY",
@@ -12073,7 +12716,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 300.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "ms",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_MAG_E_NOISE",
@@ -12083,7 +12728,9 @@
   "type": "Float",
   "default": 0.001,
   "min": 0.0,
-  "max": 0.1
+  "max": 0.1,
+  "units": "gauss/s",
+  "decimalPlaces": 6
  },
  {
   "name": "EKF2_MAG_GATE",
@@ -12093,7 +12740,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 3.0,
-  "min": 1.0
+  "min": 1.0,
+  "units": "SD",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_MAG_NOISE",
@@ -12103,7 +12752,9 @@
   "type": "Float",
   "default": 0.05,
   "min": 0.001,
-  "max": 1.0
+  "max": 1.0,
+  "units": "gauss",
+  "decimalPlaces": 3
  },
  {
   "name": "EKF2_MAG_TYPE",
@@ -12142,7 +12793,9 @@
   "type": "Float",
   "default": 0.15,
   "min": 0.0,
-  "max": 1.0
+  "max": 1.0,
+  "units": "1/s",
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_MIN_RNG",
@@ -12152,7 +12805,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.01,
-  "min": 0.01
+  "min": 0.01,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_MULTI_IMU",
@@ -12186,7 +12841,9 @@
   "type": "Float",
   "default": 10.0,
   "min": 0.5,
-  "max": 50.0
+  "max": 50.0,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_NOAID_TOUT",
@@ -12197,7 +12854,8 @@
   "type": "Int32",
   "default": 5000000,
   "min": 500000,
-  "max": 10000000
+  "max": 10000000,
+  "units": "us"
  },
  {
   "name": "EKF2_OF_CTRL",
@@ -12228,7 +12886,9 @@
   "default": 20.0,
   "min": 0.0,
   "max": 300.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "ms",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_OF_GATE",
@@ -12238,7 +12898,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 3.0,
-  "min": 1.0
+  "min": 1.0,
+  "units": "SD",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_OF_GYR_SRC",
@@ -12267,7 +12929,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.5,
-  "min": 0.05
+  "min": 0.05,
+  "units": "rad/s",
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_OF_N_MIN",
@@ -12277,7 +12941,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.15,
-  "min": 0.05
+  "min": 0.05,
+  "units": "rad/s",
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_OF_POS_X",
@@ -12286,7 +12952,9 @@
   "group": "EKF2",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "EKF2_OF_POS_Y",
@@ -12295,7 +12963,9 @@
   "group": "EKF2",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "EKF2_OF_POS_Z",
@@ -12304,7 +12974,9 @@
   "group": "EKF2",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "EKF2_OF_QMIN",
@@ -12337,7 +13009,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -0.5,
-  "max": 0.5
+  "max": 0.5,
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_PCOEF_XP",
@@ -12348,7 +13021,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -0.5,
-  "max": 0.5
+  "max": 0.5,
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_PCOEF_YN",
@@ -12359,7 +13033,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -0.5,
-  "max": 0.5
+  "max": 0.5,
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_PCOEF_YP",
@@ -12370,7 +13045,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -0.5,
-  "max": 0.5
+  "max": 0.5,
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_PCOEF_Z",
@@ -12381,7 +13057,8 @@
   "type": "Float",
   "default": 0.0,
   "min": -0.5,
-  "max": 0.5
+  "max": 0.5,
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_PREDICT_US",
@@ -12392,7 +13069,8 @@
   "type": "Int32",
   "default": 10000,
   "min": 1000,
-  "max": 20000
+  "max": 20000,
+  "units": "us"
  },
  {
   "name": "EKF2_REQ_EPH",
@@ -12402,7 +13080,9 @@
   "type": "Float",
   "default": 3.0,
   "min": 2.0,
-  "max": 100.0
+  "max": 100.0,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_REQ_EPV",
@@ -12412,7 +13092,9 @@
   "type": "Float",
   "default": 5.0,
   "min": 2.0,
-  "max": 100.0
+  "max": 100.0,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_REQ_FIX",
@@ -12462,7 +13144,9 @@
   "type": "Float",
   "default": 10.0,
   "min": 0.1,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "s",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_REQ_HDRIFT",
@@ -12472,7 +13156,9 @@
   "type": "Float",
   "default": 0.1,
   "min": 0.1,
-  "max": 1.0
+  "max": 1.0,
+  "units": "m/s",
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_REQ_NSATS",
@@ -12492,7 +13178,8 @@
   "type": "Float",
   "default": 2.5,
   "min": 1.5,
-  "max": 5.0
+  "max": 5.0,
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_REQ_SACC",
@@ -12502,7 +13189,9 @@
   "type": "Float",
   "default": 0.5,
   "min": 0.5,
-  "max": 5.0
+  "max": 5.0,
+  "units": "m/s",
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_REQ_VDRIFT",
@@ -12512,7 +13201,9 @@
   "type": "Float",
   "default": 0.2,
   "min": 0.1,
-  "max": 1.5
+  "max": 1.5,
+  "units": "m/s",
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_RNG_A_HMAX",
@@ -12523,7 +13214,8 @@
   "type": "Float",
   "default": 5.0,
   "min": 1.0,
-  "max": 10.0
+  "max": 10.0,
+  "units": "m"
  },
  {
   "name": "EKF2_RNG_A_VMAX",
@@ -12534,7 +13226,8 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 2.0
+  "max": 2.0,
+  "units": "m/s"
  },
  {
   "name": "EKF2_RNG_CTRL",
@@ -12568,7 +13261,9 @@
   "default": 5.0,
   "min": 0.0,
   "max": 300.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "ms",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_RNG_FOG",
@@ -12579,7 +13274,9 @@
   "type": "Float",
   "default": 3.0,
   "min": 0.0,
-  "max": 20.0
+  "max": 20.0,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_RNG_GATE",
@@ -12589,7 +13286,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 5.0,
-  "min": 1.0
+  "min": 1.0,
+  "units": "SD",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_RNG_K_GATE",
@@ -12600,7 +13299,8 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 5.0
+  "max": 5.0,
+  "units": "SD"
  },
  {
   "name": "EKF2_RNG_NOISE",
@@ -12609,7 +13309,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.1,
-  "min": 0.01
+  "min": 0.01,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_RNG_PITCH",
@@ -12619,7 +13321,9 @@
   "type": "Float",
   "default": 0.0,
   "min": -0.75,
-  "max": 0.75
+  "max": 0.75,
+  "units": "rad",
+  "decimalPlaces": 3
  },
  {
   "name": "EKF2_RNG_POS_X",
@@ -12628,7 +13332,9 @@
   "group": "EKF2",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "EKF2_RNG_POS_Y",
@@ -12637,7 +13343,9 @@
   "group": "EKF2",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "EKF2_RNG_POS_Z",
@@ -12646,7 +13354,9 @@
   "group": "EKF2",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "EKF2_RNG_QLTY_T",
@@ -12657,7 +13367,8 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 5.0
+  "max": 5.0,
+  "units": "s"
  },
  {
   "name": "EKF2_RNG_SFE",
@@ -12668,7 +13379,8 @@
   "type": "Float",
   "default": 0.05,
   "min": 0.0,
-  "max": 0.2
+  "max": 0.2,
+  "units": "m/m"
  },
  {
   "name": "EKF2_SEL_ERR_RED",
@@ -12686,7 +13398,8 @@
   "group": "EKF2",
   "category": "Standard",
   "type": "Float",
-  "default": 1.0
+  "default": 1.0,
+  "units": "m/s^2"
  },
  {
   "name": "EKF2_SEL_IMU_ANG",
@@ -12695,7 +13408,8 @@
   "group": "EKF2",
   "category": "Standard",
   "type": "Float",
-  "default": 15.0
+  "default": 15.0,
+  "units": "deg"
  },
  {
   "name": "EKF2_SEL_IMU_RAT",
@@ -12704,7 +13418,8 @@
   "group": "EKF2",
   "category": "Standard",
   "type": "Float",
-  "default": 7.0
+  "default": 7.0,
+  "units": "deg/s"
  },
  {
   "name": "EKF2_SEL_IMU_VEL",
@@ -12713,7 +13428,8 @@
   "group": "EKF2",
   "category": "Standard",
   "type": "Float",
-  "default": 2.0
+  "default": 2.0,
+  "units": "m/s"
  },
  {
   "name": "EKF2_SYNT_MAG_Z",
@@ -12742,7 +13458,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 5.0,
-  "min": 1.0
+  "min": 1.0,
+  "units": "SD",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_TAU_POS",
@@ -12753,7 +13471,9 @@
   "type": "Float",
   "default": 0.25,
   "min": 0.1,
-  "max": 1.0
+  "max": 1.0,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_TAU_VEL",
@@ -12762,7 +13482,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.25,
-  "max": 1.0
+  "max": 1.0,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_TERR_GRAD",
@@ -12771,7 +13493,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.5,
-  "min": 0.0
+  "min": 0.0,
+  "units": "m/m",
+  "decimalPlaces": 2
  },
  {
   "name": "EKF2_TERR_NOISE",
@@ -12780,7 +13504,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 5.0,
-  "min": 0.5
+  "min": 0.5,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_VEL_LIM",
@@ -12789,7 +13515,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 100.0,
-  "max": 299792458.0
+  "max": 299792458.0,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "EKF2_WIND_NSD",
@@ -12800,7 +13528,9 @@
   "type": "Float",
   "default": 0.05,
   "min": 0.0,
-  "max": 1.0
+  "max": 1.0,
+  "units": "m/s^2/sqrt(Hz)",
+  "decimalPlaces": 3
  },
  {
   "name": "EV_TSK_RC_LOSS",
@@ -12872,7 +13602,9 @@
   "default": 2.0,
   "min": 0.0,
   "max": 50.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "A/%",
+  "decimalPlaces": 2
  },
  {
   "name": "FD_ACT_MOT_THR",
@@ -12884,7 +13616,9 @@
   "default": 0.2,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "norm",
+  "decimalPlaces": 2
  },
  {
   "name": "FD_ACT_MOT_TOUT",
@@ -12896,7 +13630,8 @@
   "default": 100,
   "min": 10,
   "max": 10000,
-  "increment": 100
+  "increment": 100,
+  "units": "ms"
  },
  {
   "name": "FD_ESCS_EN",
@@ -12944,7 +13679,9 @@
   "group": "Failure Detector",
   "category": "Standard",
   "type": "Int32",
-  "default": 1900
+  "default": 1900,
+  "units": "us",
+  "decimalPlaces": 2
  },
  {
   "name": "FD_FAIL_P",
@@ -12955,7 +13692,8 @@
   "type": "Int32",
   "default": 60,
   "min": 0,
-  "max": 180
+  "max": 180,
+  "units": "deg"
  },
  {
   "name": "FD_FAIL_P_TTRI",
@@ -12966,7 +13704,9 @@
   "type": "Float",
   "default": 0.3,
   "min": 0.02,
-  "max": 5.0
+  "max": 5.0,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "FD_FAIL_R",
@@ -12977,7 +13717,8 @@
   "type": "Int32",
   "default": 60,
   "min": 0,
-  "max": 180
+  "max": 180,
+  "units": "deg"
  },
  {
   "name": "FD_FAIL_R_TTRI",
@@ -12988,7 +13729,9 @@
   "type": "Float",
   "default": 0.3,
   "min": 0.02,
-  "max": 5.0
+  "max": 5.0,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "FD_IMB_PROP_THR",
@@ -13033,7 +13776,8 @@
   "category": "Standard",
   "type": "Float",
   "default": 8.0,
-  "min": 1.0
+  "min": 1.0,
+  "units": "m"
  },
  {
   "name": "FLW_TGT_FA",
@@ -13054,7 +13798,8 @@
   "category": "Standard",
   "type": "Float",
   "default": 8.0,
-  "min": 8.0
+  "min": 8.0,
+  "units": "m"
  },
  {
   "name": "FLW_TGT_MAX_VEL",
@@ -13065,7 +13810,8 @@
   "type": "Float",
   "default": 5.0,
   "min": 0.0,
-  "max": 20.0
+  "max": 20.0,
+  "decimalPlaces": 1
  },
  {
   "name": "FLW_TGT_RS",
@@ -13076,7 +13822,8 @@
   "type": "Float",
   "default": 0.1,
   "min": 0.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "FW_ACRO_X_MAX",
@@ -13086,7 +13833,8 @@
   "type": "Float",
   "default": 90.0,
   "min": 10.0,
-  "max": 720.0
+  "max": 720.0,
+  "units": "deg"
  },
  {
   "name": "FW_ACRO_YAW_EN",
@@ -13115,7 +13863,8 @@
   "type": "Float",
   "default": 90.0,
   "min": 10.0,
-  "max": 720.0
+  "max": 720.0,
+  "units": "deg"
  },
  {
   "name": "FW_ACRO_Z_MAX",
@@ -13125,7 +13874,8 @@
   "type": "Float",
   "default": 45.0,
   "min": 10.0,
-  "max": 720.0
+  "max": 720.0,
+  "units": "deg"
  },
  {
   "name": "FW_AIRSPD_FLP_SC",
@@ -13137,7 +13887,8 @@
   "default": 1.0,
   "min": 0.5,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 2
  },
  {
   "name": "FW_AIRSPD_MAX",
@@ -13148,7 +13899,9 @@
   "type": "Float",
   "default": 20.0,
   "min": 0.5,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_AIRSPD_MIN",
@@ -13159,7 +13912,9 @@
   "type": "Float",
   "default": 10.0,
   "min": 0.5,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_AIRSPD_STALL",
@@ -13170,7 +13925,9 @@
   "type": "Float",
   "default": 7.0,
   "min": 0.5,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_AIRSPD_TRIM",
@@ -13181,7 +13938,9 @@
   "type": "Float",
   "default": 15.0,
   "min": 0.5,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_ARSP_SCALE_EN",
@@ -13319,7 +14078,9 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 30.0
+  "max": 30.0,
+  "units": "Hz",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_AT_SYSID_F1",
@@ -13330,7 +14091,9 @@
   "type": "Float",
   "default": 10.0,
   "min": 0.1,
-  "max": 30.0
+  "max": 30.0,
+  "units": "Hz",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_AT_SYSID_TIME",
@@ -13341,7 +14104,9 @@
   "type": "Float",
   "default": 10.0,
   "min": 5.0,
-  "max": 120.0
+  "max": 120.0,
+  "units": "s",
+  "decimalPlaces": 0
  },
  {
   "name": "FW_AT_SYSID_TYPE",
@@ -13395,7 +14160,8 @@
   "default": 0.0,
   "min": -0.5,
   "max": 0.5,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 2
  },
  {
   "name": "FW_DTRIM_P_VMIN",
@@ -13407,7 +14173,8 @@
   "default": 0.0,
   "min": -0.5,
   "max": 0.5,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 2
  },
  {
   "name": "FW_DTRIM_R_VMAX",
@@ -13419,7 +14186,8 @@
   "default": 0.0,
   "min": -0.5,
   "max": 0.5,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 2
  },
  {
   "name": "FW_DTRIM_R_VMIN",
@@ -13431,7 +14199,8 @@
   "default": 0.0,
   "min": -0.5,
   "max": 0.5,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 2
  },
  {
   "name": "FW_DTRIM_Y_VMAX",
@@ -13443,7 +14212,8 @@
   "default": 0.0,
   "min": -0.5,
   "max": 0.5,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 2
  },
  {
   "name": "FW_DTRIM_Y_VMIN",
@@ -13455,7 +14225,8 @@
   "default": 0.0,
   "min": -0.5,
   "max": 0.5,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 2
  },
  {
   "name": "FW_FLAPS_LND_SCL",
@@ -13467,7 +14238,9 @@
   "default": 1.0,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "norm",
+  "decimalPlaces": 2
  },
  {
   "name": "FW_FLAPS_TO_SCL",
@@ -13479,7 +14252,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "norm",
+  "decimalPlaces": 2
  },
  {
   "name": "FW_GND_SPD_MIN",
@@ -13491,7 +14266,9 @@
   "default": 5.0,
   "min": 0.0,
   "max": 40.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_GPSF_LT",
@@ -13501,7 +14278,8 @@
   "category": "Standard",
   "type": "Int32",
   "default": 30,
-  "min": 0
+  "min": 0,
+  "units": "s"
  },
  {
   "name": "FW_GPSF_R",
@@ -13513,7 +14291,9 @@
   "default": 15.0,
   "min": 0.0,
   "max": 60.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "deg",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_LAUN_AC_T",
@@ -13525,7 +14305,9 @@
   "default": 0.05,
   "min": 0.0,
   "max": 5.0,
-  "increment": 0.05
+  "increment": 0.05,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "FW_LAUN_AC_THLD",
@@ -13536,7 +14318,9 @@
   "type": "Float",
   "default": 30.0,
   "min": 0.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "m/s^2",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_LAUN_DETCN_ON",
@@ -13567,7 +14351,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "s",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_LND_ABORT",
@@ -13599,7 +14385,9 @@
   "type": "Float",
   "default": -1.0,
   "min": -1.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_LND_ANG",
@@ -13611,7 +14399,9 @@
   "default": 5.0,
   "min": 1.0,
   "max": 45.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "deg",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_LND_EARLYCFG",
@@ -13641,7 +14431,9 @@
   "type": "Float",
   "default": 0.5,
   "min": 0.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_LND_FL_PMAX",
@@ -13653,7 +14445,9 @@
   "default": 15.0,
   "min": 0.0,
   "max": 45.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "deg",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_LND_FL_PMIN",
@@ -13665,7 +14459,9 @@
   "default": 2.5,
   "min": -5.0,
   "max": 15.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "deg",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_LND_FL_SINK",
@@ -13677,7 +14473,9 @@
   "default": 0.25,
   "min": 0.0,
   "max": 2.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m/s",
+  "decimalPlaces": 2
  },
  {
   "name": "FW_LND_FL_TIME",
@@ -13689,7 +14487,9 @@
   "default": 1.0,
   "min": 0.1,
   "max": 5.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "s",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_LND_NUDGE",
@@ -13725,7 +14525,9 @@
   "default": 3.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_LND_TD_TIME",
@@ -13737,7 +14539,9 @@
   "default": -1.0,
   "min": -1.0,
   "max": 5.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "s",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_LND_THRTC_SC",
@@ -13749,7 +14553,9 @@
   "default": 1.0,
   "min": 0.2,
   "max": 1.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_LND_USETER",
@@ -13786,7 +14592,9 @@
   "default": 30.0,
   "min": 0.0,
   "max": 90.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "deg",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_MAN_P_SC",
@@ -13797,7 +14605,9 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "norm",
+  "decimalPlaces": 2
  },
  {
   "name": "FW_MAN_R_MAX",
@@ -13809,7 +14619,9 @@
   "default": 45.0,
   "min": 0.0,
   "max": 90.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "deg",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_MAN_R_SC",
@@ -13821,7 +14633,9 @@
   "default": 1.0,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "norm",
+  "decimalPlaces": 2
  },
  {
   "name": "FW_MAN_YR_MAX",
@@ -13832,7 +14646,9 @@
   "type": "Float",
   "default": 30.0,
   "min": 0.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "deg/s",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_MAN_Y_SC",
@@ -13843,7 +14659,9 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "norm",
+  "decimalPlaces": 2
  },
  {
   "name": "FW_PN_R_SLEW_MAX",
@@ -13854,7 +14672,9 @@
   "type": "Float",
   "default": 90.0,
   "min": 0.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "deg/s",
+  "decimalPlaces": 0
  },
  {
   "name": "FW_POS_STK_CONF",
@@ -13887,7 +14707,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.005
+  "increment": 0.005,
+  "units": "%/rad/s",
+  "decimalPlaces": 3
  },
  {
   "name": "FW_PR_FF",
@@ -13899,7 +14721,9 @@
   "default": 0.5,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.05
+  "increment": 0.05,
+  "units": "%/rad/s",
+  "decimalPlaces": 2
  },
  {
   "name": "FW_PR_I",
@@ -13910,7 +14734,9 @@
   "default": 0.1,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.005
+  "increment": 0.005,
+  "units": "%/rad",
+  "decimalPlaces": 3
  },
  {
   "name": "FW_PR_IMAX",
@@ -13921,7 +14747,8 @@
   "default": 0.4,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.05
+  "increment": 0.05,
+  "decimalPlaces": 2
  },
  {
   "name": "FW_PR_P",
@@ -13932,7 +14759,9 @@
   "default": 0.08,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.005
+  "increment": 0.005,
+  "units": "%/rad/s",
+  "decimalPlaces": 3
  },
  {
   "name": "FW_PSP_OFF",
@@ -13944,7 +14773,9 @@
   "default": 0.0,
   "min": -90.0,
   "max": 90.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "deg",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_P_LIM_MAX",
@@ -13956,7 +14787,9 @@
   "default": 30.0,
   "min": 0.0,
   "max": 80.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "deg",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_P_LIM_MIN",
@@ -13968,7 +14801,9 @@
   "default": -30.0,
   "min": -60.0,
   "max": 0.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "deg",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_P_RMAX_NEG",
@@ -13979,7 +14814,9 @@
   "default": 60.0,
   "min": 0.0,
   "max": 180.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "deg/s",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_P_RMAX_POS",
@@ -13990,7 +14827,9 @@
   "default": 60.0,
   "min": 0.0,
   "max": 180.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "deg/s",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_P_TC",
@@ -14002,7 +14841,9 @@
   "default": 0.4,
   "min": 0.2,
   "max": 1.0,
-  "increment": 0.05
+  "increment": 0.05,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "FW_RLL_TO_YAW_FF",
@@ -14013,7 +14854,8 @@
   "type": "Float",
   "default": 0.0,
   "min": 0.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 1
  },
  {
   "name": "FW_RR_D",
@@ -14024,7 +14866,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.005
+  "increment": 0.005,
+  "units": "%/rad/s",
+  "decimalPlaces": 3
  },
  {
   "name": "FW_RR_FF",
@@ -14036,7 +14880,9 @@
   "default": 0.5,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.05
+  "increment": 0.05,
+  "units": "%/rad/s",
+  "decimalPlaces": 2
  },
  {
   "name": "FW_RR_I",
@@ -14047,7 +14893,9 @@
   "default": 0.1,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "%/rad",
+  "decimalPlaces": 2
  },
  {
   "name": "FW_RR_IMAX",
@@ -14058,7 +14906,8 @@
   "default": 0.2,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.05
+  "increment": 0.05,
+  "decimalPlaces": 2
  },
  {
   "name": "FW_RR_P",
@@ -14069,7 +14918,9 @@
   "default": 0.05,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.005
+  "increment": 0.005,
+  "units": "%/rad/s",
+  "decimalPlaces": 3
  },
  {
   "name": "FW_R_LIM",
@@ -14081,7 +14932,9 @@
   "default": 50.0,
   "min": 35.0,
   "max": 75.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "deg",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_R_RMAX",
@@ -14092,7 +14945,9 @@
   "default": 70.0,
   "min": 0.0,
   "max": 180.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "deg/s",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_R_TC",
@@ -14104,7 +14959,9 @@
   "default": 0.4,
   "min": 0.2,
   "max": 1.0,
-  "increment": 0.05
+  "increment": 0.05,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "FW_SERVICE_CEIL",
@@ -14115,7 +14972,9 @@
   "type": "Float",
   "default": -1.0,
   "min": -1.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "m",
+  "decimalPlaces": 0
  },
  {
   "name": "FW_SPOILERS_LND",
@@ -14126,7 +14985,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "norm",
+  "decimalPlaces": 2
  },
  {
   "name": "FW_SPOILERS_MAN",
@@ -14161,7 +15022,8 @@
   "default": 0.0,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 2
  },
  {
   "name": "FW_THR_ASPD_MIN",
@@ -14173,7 +15035,8 @@
   "default": 0.0,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 2
  },
  {
   "name": "FW_THR_IDLE",
@@ -14185,7 +15048,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "norm",
+  "decimalPlaces": 2
  },
  {
   "name": "FW_THR_MAX",
@@ -14197,7 +15062,9 @@
   "default": 1.0,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "norm",
+  "decimalPlaces": 2
  },
  {
   "name": "FW_THR_MIN",
@@ -14209,7 +15076,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "norm",
+  "decimalPlaces": 2
  },
  {
   "name": "FW_THR_SLEW_MAX",
@@ -14221,7 +15090,8 @@
   "default": 0.0,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 2
  },
  {
   "name": "FW_THR_TRIM",
@@ -14233,7 +15103,9 @@
   "default": 0.6,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "norm",
+  "decimalPlaces": 2
  },
  {
   "name": "FW_TKO_AIRSPD",
@@ -14244,7 +15116,9 @@
   "type": "Float",
   "default": -1.0,
   "min": -1.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_TKO_PITCH_MIN",
@@ -14255,7 +15129,9 @@
   "default": 10.0,
   "min": -5.0,
   "max": 80.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "deg",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_T_ALT_TC",
@@ -14265,7 +15141,8 @@
   "type": "Float",
   "default": 5.0,
   "min": 2.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "decimalPlaces": 2
  },
  {
   "name": "FW_T_CLMB_MAX",
@@ -14276,7 +15153,9 @@
   "type": "Float",
   "default": 5.0,
   "min": 1.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_T_CLMB_R_SP",
@@ -14287,7 +15166,9 @@
   "type": "Float",
   "default": 3.0,
   "min": 0.1,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "m/s",
+  "decimalPlaces": 2
  },
  {
   "name": "FW_T_F_ALT_ERR",
@@ -14297,7 +15178,8 @@
   "category": "Standard",
   "type": "Float",
   "default": -1.0,
-  "min": -1.0
+  "min": -1.0,
+  "decimalPlaces": 0
  },
  {
   "name": "FW_T_HRATE_FF",
@@ -14308,7 +15190,8 @@
   "default": 0.3,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.05
+  "increment": 0.05,
+  "decimalPlaces": 2
  },
  {
   "name": "FW_T_I_GAIN_PIT",
@@ -14320,7 +15203,8 @@
   "default": 0.1,
   "min": 0.0,
   "max": 2.0,
-  "increment": 0.05
+  "increment": 0.05,
+  "decimalPlaces": 2
  },
  {
   "name": "FW_T_PTCH_DAMP",
@@ -14331,7 +15215,8 @@
   "default": 0.1,
   "min": 0.0,
   "max": 2.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "FW_T_RLL2THR",
@@ -14343,7 +15228,8 @@
   "default": 15.0,
   "min": 0.0,
   "max": 20.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "decimalPlaces": 1
  },
  {
   "name": "FW_T_SEB_R_FF",
@@ -14354,7 +15240,8 @@
   "default": 1.0,
   "min": 0.5,
   "max": 3.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 2
  },
  {
   "name": "FW_T_SINK_MAX",
@@ -14365,7 +15252,9 @@
   "default": 5.0,
   "min": 1.0,
   "max": 15.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_T_SINK_MIN",
@@ -14376,7 +15265,9 @@
   "type": "Float",
   "default": 2.0,
   "min": 1.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_T_SINK_R_SP",
@@ -14387,7 +15278,9 @@
   "type": "Float",
   "default": 2.0,
   "min": 0.1,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "m/s",
+  "decimalPlaces": 2
  },
  {
   "name": "FW_T_SPDWEIGHT",
@@ -14399,7 +15292,8 @@
   "default": 1.0,
   "min": 0.0,
   "max": 2.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "decimalPlaces": 1
  },
  {
   "name": "FW_T_SPD_DEV_STD",
@@ -14411,7 +15305,9 @@
   "default": 0.2,
   "min": 0.01,
   "max": 10.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m/s^2",
+  "decimalPlaces": 2
  },
  {
   "name": "FW_T_SPD_PRC_STD",
@@ -14423,7 +15319,9 @@
   "default": 0.2,
   "min": 0.01,
   "max": 10.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m/s^2",
+  "decimalPlaces": 2
  },
  {
   "name": "FW_T_SPD_STD",
@@ -14435,7 +15333,9 @@
   "default": 0.07,
   "min": 0.01,
   "max": 10.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m/s",
+  "decimalPlaces": 2
  },
  {
   "name": "FW_T_STE_R_TC",
@@ -14447,7 +15347,8 @@
   "default": 0.4,
   "min": 0.0,
   "max": 2.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 2
  },
  {
   "name": "FW_T_TAS_TC",
@@ -14457,7 +15358,8 @@
   "type": "Float",
   "default": 5.0,
   "min": 2.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "decimalPlaces": 2
  },
  {
   "name": "FW_T_THR_DAMPING",
@@ -14469,7 +15371,8 @@
   "default": 0.05,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 3
  },
  {
   "name": "FW_T_THR_INTEG",
@@ -14481,7 +15384,8 @@
   "default": 0.02,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.005
+  "increment": 0.005,
+  "decimalPlaces": 3
  },
  {
   "name": "FW_T_THR_LOW_HGT",
@@ -14492,7 +15396,9 @@
   "type": "Float",
   "default": -1.0,
   "min": -1.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "m",
+  "decimalPlaces": 0
  },
  {
   "name": "FW_T_VERT_ACC",
@@ -14504,7 +15410,9 @@
   "default": 7.0,
   "min": 1.0,
   "max": 10.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "m/s^2",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_USE_AIRSPD",
@@ -14534,7 +15442,8 @@
   "type": "Float",
   "default": 0.0,
   "min": 0.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 2
  },
  {
   "name": "FW_WING_HEIGHT",
@@ -14545,7 +15454,9 @@
   "type": "Float",
   "default": 0.5,
   "min": 0.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_WING_SPAN",
@@ -14556,7 +15467,9 @@
   "type": "Float",
   "default": 3.0,
   "min": 0.1,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_WR_FF",
@@ -14567,7 +15480,9 @@
   "default": 0.2,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.05
+  "increment": 0.05,
+  "units": "%/rad/s",
+  "decimalPlaces": 2
  },
  {
   "name": "FW_WR_I",
@@ -14579,7 +15494,9 @@
   "default": 0.1,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.005
+  "increment": 0.005,
+  "units": "%/rad",
+  "decimalPlaces": 3
  },
  {
   "name": "FW_WR_IMAX",
@@ -14590,7 +15507,8 @@
   "default": 0.4,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.05
+  "increment": 0.05,
+  "decimalPlaces": 2
  },
  {
   "name": "FW_WR_P",
@@ -14602,7 +15520,9 @@
   "default": 0.5,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.005
+  "increment": 0.005,
+  "units": "%/rad/s",
+  "decimalPlaces": 3
  },
  {
   "name": "FW_W_EN",
@@ -14633,7 +15553,9 @@
   "default": 30.0,
   "min": 0.0,
   "max": 90.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "deg/s",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_YR_D",
@@ -14644,7 +15566,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.005
+  "increment": 0.005,
+  "units": "%/rad/s",
+  "decimalPlaces": 3
  },
  {
   "name": "FW_YR_FF",
@@ -14656,7 +15580,9 @@
   "default": 0.3,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.05
+  "increment": 0.05,
+  "units": "%/rad/s",
+  "decimalPlaces": 2
  },
  {
   "name": "FW_YR_I",
@@ -14667,7 +15593,9 @@
   "default": 0.1,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "%/rad",
+  "decimalPlaces": 1
  },
  {
   "name": "FW_YR_IMAX",
@@ -14678,7 +15606,8 @@
   "default": 0.2,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.05
+  "increment": 0.05,
+  "decimalPlaces": 2
  },
  {
   "name": "FW_YR_P",
@@ -14689,7 +15618,9 @@
   "default": 0.05,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.005
+  "increment": 0.005,
+  "units": "%/rad/s",
+  "decimalPlaces": 3
  },
  {
   "name": "FW_Y_RMAX",
@@ -14700,7 +15631,9 @@
   "default": 50.0,
   "min": 0.0,
   "max": 180.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "deg/s",
+  "decimalPlaces": 1
  },
  {
   "name": "GF_ACTION",
@@ -14749,7 +15682,8 @@
   "default": 0.0,
   "min": 0.0,
   "max": 10000.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "m"
  },
  {
   "name": "GF_MAX_VER_DIST",
@@ -14761,7 +15695,8 @@
   "default": 0.0,
   "min": 0.0,
   "max": 10000.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "m"
  },
  {
   "name": "GF_PREDICT",
@@ -15037,7 +15972,8 @@
   "type": "Int32",
   "default": 230400,
   "min": 0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "B/s"
  },
  {
   "name": "GPS_UBX_CFG_INTF",
@@ -15162,7 +16098,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 360.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "deg",
+  "decimalPlaces": 3
  },
  {
   "name": "HTE_ACC_GATE",
@@ -15173,7 +16111,9 @@
   "type": "Float",
   "default": 3.0,
   "min": 1.0,
-  "max": 10.0
+  "max": 10.0,
+  "units": "SD",
+  "decimalPlaces": 1
  },
  {
   "name": "HTE_HT_ERR_INIT",
@@ -15184,7 +16124,9 @@
   "type": "Float",
   "default": 0.1,
   "min": 0.0,
-  "max": 1.0
+  "max": 1.0,
+  "units": "normalized_thrust",
+  "decimalPlaces": 3
  },
  {
   "name": "HTE_HT_NOISE",
@@ -15195,7 +16137,9 @@
   "type": "Float",
   "default": 0.0036,
   "min": 0.0001,
-  "max": 1.0
+  "max": 1.0,
+  "units": "normalized_thrust/s",
+  "decimalPlaces": 4
  },
  {
   "name": "HTE_THR_RANGE",
@@ -15206,7 +16150,9 @@
   "type": "Float",
   "default": 0.2,
   "min": 0.01,
-  "max": 0.4
+  "max": 0.4,
+  "units": "normalized_thrust",
+  "decimalPlaces": 2
  },
  {
   "name": "HTE_VXY_THR",
@@ -15217,7 +16163,9 @@
   "type": "Float",
   "default": 10.0,
   "min": 1.0,
-  "max": 20.0
+  "max": 20.0,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "HTE_VZ_THR",
@@ -15228,7 +16176,9 @@
   "type": "Float",
   "default": 2.0,
   "min": 1.0,
-  "max": 10.0
+  "max": 10.0,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "IMU_ACCEL_CUTOFF",
@@ -15240,7 +16190,8 @@
   "default": 30.0,
   "min": 0.0,
   "max": 1000.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "Hz"
  },
  {
   "name": "IMU_DGYRO_CUTOFF",
@@ -15253,7 +16204,9 @@
   "min": 0.0,
   "max": 1000.0,
   "increment": 0.1,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "Hz",
+  "decimalPlaces": 1
  },
  {
   "name": "IMU_GYRO_CAL_EN",
@@ -15285,7 +16238,9 @@
   "min": 0.0,
   "max": 1000.0,
   "increment": 0.1,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "Hz",
+  "decimalPlaces": 1
  },
  {
   "name": "IMU_GYRO_DNF_BW",
@@ -15297,7 +16252,9 @@
   "default": 15.0,
   "min": 5.0,
   "max": 30.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "Hz",
+  "decimalPlaces": 1
  },
  {
   "name": "IMU_GYRO_DNF_EN",
@@ -15339,7 +16296,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 25.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "Hz",
+  "decimalPlaces": 1
  },
  {
   "name": "IMU_GYRO_FFT_EN",
@@ -15385,7 +16344,8 @@
     "description": "4096",
     "value": 4096
    }
-  ]
+  ],
+  "units": "Hz"
  },
  {
   "name": "IMU_GYRO_FFT_MAX",
@@ -15396,7 +16356,8 @@
   "default": 150.0,
   "min": 1.0,
   "max": 1000.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "Hz"
  },
  {
   "name": "IMU_GYRO_FFT_MIN",
@@ -15407,7 +16368,8 @@
   "default": 30.0,
   "min": 1.0,
   "max": 1000.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "Hz"
  },
  {
   "name": "IMU_GYRO_FFT_SNR",
@@ -15430,7 +16392,9 @@
   "min": 0.0,
   "max": 100.0,
   "increment": 0.1,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "Hz",
+  "decimalPlaces": 1
  },
  {
   "name": "IMU_GYRO_NF0_FRQ",
@@ -15443,7 +16407,9 @@
   "min": 0.0,
   "max": 1000.0,
   "increment": 0.1,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "Hz",
+  "decimalPlaces": 1
  },
  {
   "name": "IMU_GYRO_NF1_BW",
@@ -15456,7 +16422,9 @@
   "min": 0.0,
   "max": 100.0,
   "increment": 0.1,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "Hz",
+  "decimalPlaces": 1
  },
  {
   "name": "IMU_GYRO_NF1_FRQ",
@@ -15469,7 +16437,9 @@
   "min": 0.0,
   "max": 1000.0,
   "increment": 0.1,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "Hz",
+  "decimalPlaces": 1
  },
  {
   "name": "IMU_GYRO_RATEMAX",
@@ -15507,7 +16477,8 @@
     "description": "2000 Hz",
     "value": 2000
    }
-  ]
+  ],
+  "units": "Hz"
  },
  {
   "name": "IMU_INTEG_RATE",
@@ -15537,7 +16508,8 @@
     "description": "400 Hz",
     "value": 400
    }
-  ]
+  ],
+  "units": "Hz"
  },
  {
   "name": "LNDFW_AIRSPD_MAX",
@@ -15548,7 +16520,9 @@
   "type": "Float",
   "default": 6.0,
   "min": 2.0,
-  "max": 30.0
+  "max": 30.0,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "LNDFW_ROT_MAX",
@@ -15557,7 +16531,9 @@
   "group": "Land Detector",
   "category": "Standard",
   "type": "Float",
-  "default": 0.5
+  "default": 0.5,
+  "units": "deg/s",
+  "decimalPlaces": 1
  },
  {
   "name": "LNDFW_TRIG_TIME",
@@ -15568,7 +16544,9 @@
   "type": "Float",
   "default": 2.0,
   "min": 0.1,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "s",
+  "decimalPlaces": 1
  },
  {
   "name": "LNDFW_VEL_XY_MAX",
@@ -15579,7 +16557,9 @@
   "type": "Float",
   "default": 5.0,
   "min": 0.5,
-  "max": 20.0
+  "max": 20.0,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "LNDFW_VEL_Z_MAX",
@@ -15590,7 +16570,9 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 20.0
+  "max": 20.0,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "LNDFW_XYACC_MAX",
@@ -15601,7 +16583,9 @@
   "type": "Float",
   "default": 8.0,
   "min": 2.0,
-  "max": 30.0
+  "max": 30.0,
+  "units": "m/s^2",
+  "decimalPlaces": 1
  },
  {
   "name": "LNDMC_ALT_GND",
@@ -15611,7 +16595,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 2.0,
-  "min": -1.0
+  "min": -1.0,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "LNDMC_ROT_MAX",
@@ -15620,7 +16606,9 @@
   "group": "Land Detector",
   "category": "Standard",
   "type": "Float",
-  "default": 20.0
+  "default": 20.0,
+  "units": "deg/s",
+  "decimalPlaces": 1
  },
  {
   "name": "LNDMC_TRIG_TIME",
@@ -15631,7 +16619,9 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "max": 10.0
+  "max": 10.0,
+  "units": "s",
+  "decimalPlaces": 1
  },
  {
   "name": "LNDMC_XY_VEL_MAX",
@@ -15640,7 +16630,9 @@
   "group": "Land Detector",
   "category": "Standard",
   "type": "Float",
-  "default": 1.5
+  "default": 1.5,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "LNDMC_Z_VEL_MAX",
@@ -15650,7 +16642,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.25,
-  "min": 0.0
+  "min": 0.0,
+  "units": "m/s",
+  "decimalPlaces": 2
  },
  {
   "name": "LND_FLIGHT_T_HI",
@@ -15681,7 +16675,9 @@
   "type": "Float",
   "default": 0.012,
   "min": 1e-05,
-  "max": 2.0
+  "max": 2.0,
+  "units": "m/s^2/sqrt(Hz)",
+  "decimalPlaces": 4
  },
  {
   "name": "LPE_ACC_Z",
@@ -15692,7 +16688,9 @@
   "type": "Float",
   "default": 0.02,
   "min": 1e-05,
-  "max": 2.0
+  "max": 2.0,
+  "units": "m/s^2/sqrt(Hz)",
+  "decimalPlaces": 4
  },
  {
   "name": "LPE_BAR_Z",
@@ -15702,7 +16700,9 @@
   "type": "Float",
   "default": 3.0,
   "min": 0.01,
-  "max": 100.0
+  "max": 100.0,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "LPE_EN",
@@ -15730,7 +16730,9 @@
   "type": "Float",
   "default": 3.0,
   "min": 1.0,
-  "max": 5.0
+  "max": 5.0,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "LPE_EPV_MAX",
@@ -15740,7 +16742,9 @@
   "type": "Float",
   "default": 5.0,
   "min": 1.0,
-  "max": 5.0
+  "max": 5.0,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "LPE_FAKE_ORIGIN",
@@ -15761,7 +16765,9 @@
   "type": "Float",
   "default": 0.001,
   "min": 0.0,
-  "max": 2.0
+  "max": 2.0,
+  "units": "Hz",
+  "decimalPlaces": 3
  },
  {
   "name": "LPE_FLW_OFF_Z",
@@ -15771,7 +16777,9 @@
   "type": "Float",
   "default": 0.0,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "LPE_FLW_QMIN",
@@ -15791,7 +16799,9 @@
   "type": "Float",
   "default": 7.0,
   "min": 0.1,
-  "max": 10.0
+  "max": 10.0,
+  "units": "m/s/rad",
+  "decimalPlaces": 3
  },
  {
   "name": "LPE_FLW_RR",
@@ -15801,7 +16811,9 @@
   "type": "Float",
   "default": 7.0,
   "min": 0.0,
-  "max": 10.0
+  "max": 10.0,
+  "units": "m/rad",
+  "decimalPlaces": 3
  },
  {
   "name": "LPE_FLW_SCALE",
@@ -15811,7 +16823,9 @@
   "type": "Float",
   "default": 1.3,
   "min": 0.1,
-  "max": 10.0
+  "max": 10.0,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "LPE_FUSION",
@@ -15866,7 +16880,9 @@
   "type": "Float",
   "default": 0.29,
   "min": 0.0,
-  "max": 0.4
+  "max": 0.4,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "LPE_GPS_VXY",
@@ -15877,7 +16893,9 @@
   "type": "Float",
   "default": 0.25,
   "min": 0.01,
-  "max": 2.0
+  "max": 2.0,
+  "units": "m/s",
+  "decimalPlaces": 3
  },
  {
   "name": "LPE_GPS_VZ",
@@ -15887,7 +16905,9 @@
   "type": "Float",
   "default": 0.25,
   "min": 0.01,
-  "max": 2.0
+  "max": 2.0,
+  "units": "m/s",
+  "decimalPlaces": 3
  },
  {
   "name": "LPE_GPS_XY",
@@ -15897,7 +16917,9 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.01,
-  "max": 5.0
+  "max": 5.0,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "LPE_GPS_Z",
@@ -15907,7 +16929,9 @@
   "type": "Float",
   "default": 3.0,
   "min": 0.01,
-  "max": 200.0
+  "max": 200.0,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "LPE_LAND_VXY",
@@ -15917,7 +16941,9 @@
   "type": "Float",
   "default": 0.05,
   "min": 0.01,
-  "max": 10.0
+  "max": 10.0,
+  "units": "m/s",
+  "decimalPlaces": 3
  },
  {
   "name": "LPE_LAND_Z",
@@ -15927,7 +16953,9 @@
   "type": "Float",
   "default": 0.03,
   "min": 0.001,
-  "max": 10.0
+  "max": 10.0,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "LPE_LAT",
@@ -15937,7 +16965,9 @@
   "type": "Float",
   "default": 47.397742,
   "min": -90.0,
-  "max": 90.0
+  "max": 90.0,
+  "units": "deg",
+  "decimalPlaces": 8
  },
  {
   "name": "LPE_LDR_OFF_Z",
@@ -15947,7 +16977,9 @@
   "type": "Float",
   "default": 0.0,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "LPE_LDR_Z",
@@ -15957,7 +16989,9 @@
   "type": "Float",
   "default": 0.03,
   "min": 0.01,
-  "max": 1.0
+  "max": 1.0,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "LPE_LON",
@@ -15967,7 +17001,9 @@
   "type": "Float",
   "default": 8.545594,
   "min": -180.0,
-  "max": 180.0
+  "max": 180.0,
+  "units": "deg",
+  "decimalPlaces": 8
  },
  {
   "name": "LPE_LT_COV",
@@ -15977,7 +17013,9 @@
   "type": "Float",
   "default": 0.0001,
   "min": 0.0,
-  "max": 10.0
+  "max": 10.0,
+  "units": "m^2",
+  "decimalPlaces": 2
  },
  {
   "name": "LPE_PN_B",
@@ -15987,7 +17025,9 @@
   "type": "Float",
   "default": 0.001,
   "min": 0.0,
-  "max": 1.0
+  "max": 1.0,
+  "units": "m/s^3/sqrt(Hz)",
+  "decimalPlaces": 8
  },
  {
   "name": "LPE_PN_P",
@@ -15998,7 +17038,9 @@
   "type": "Float",
   "default": 0.1,
   "min": 0.0,
-  "max": 1.0
+  "max": 1.0,
+  "units": "m/s/sqrt(Hz)",
+  "decimalPlaces": 8
  },
  {
   "name": "LPE_PN_T",
@@ -16008,7 +17050,9 @@
   "type": "Float",
   "default": 0.001,
   "min": 0.0,
-  "max": 1.0
+  "max": 1.0,
+  "units": "m/s/sqrt(Hz)",
+  "decimalPlaces": 3
  },
  {
   "name": "LPE_PN_V",
@@ -16019,7 +17063,9 @@
   "type": "Float",
   "default": 0.1,
   "min": 0.0,
-  "max": 1.0
+  "max": 1.0,
+  "units": "m/s^2/sqrt(Hz)",
+  "decimalPlaces": 8
  },
  {
   "name": "LPE_SNR_OFF_Z",
@@ -16029,7 +17075,9 @@
   "type": "Float",
   "default": 0.0,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "LPE_SNR_Z",
@@ -16039,7 +17087,9 @@
   "type": "Float",
   "default": 0.05,
   "min": 0.01,
-  "max": 1.0
+  "max": 1.0,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "LPE_T_MAX_GRADE",
@@ -16050,7 +17100,9 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.0,
-  "max": 100.0
+  "max": 100.0,
+  "units": "%",
+  "decimalPlaces": 3
  },
  {
   "name": "LPE_VIC_P",
@@ -16060,7 +17112,9 @@
   "type": "Float",
   "default": 0.001,
   "min": 0.0001,
-  "max": 1.0
+  "max": 1.0,
+  "units": "m",
+  "decimalPlaces": 4
  },
  {
   "name": "LPE_VIS_DELAY",
@@ -16071,7 +17125,9 @@
   "type": "Float",
   "default": 0.1,
   "min": 0.0,
-  "max": 0.1
+  "max": 0.1,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "LPE_VIS_XY",
@@ -16081,7 +17137,9 @@
   "type": "Float",
   "default": 0.1,
   "min": 0.01,
-  "max": 1.0
+  "max": 1.0,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "LPE_VIS_Z",
@@ -16091,7 +17149,9 @@
   "type": "Float",
   "default": 0.5,
   "min": 0.01,
-  "max": 100.0
+  "max": 100.0,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "LPE_VXY_PUB",
@@ -16101,7 +17161,9 @@
   "type": "Float",
   "default": 0.3,
   "min": 0.01,
-  "max": 1.0
+  "max": 1.0,
+  "units": "m/s",
+  "decimalPlaces": 3
  },
  {
   "name": "LPE_X_LP",
@@ -16111,7 +17173,9 @@
   "type": "Float",
   "default": 5.0,
   "min": 5.0,
-  "max": 1000.0
+  "max": 1000.0,
+  "units": "Hz",
+  "decimalPlaces": 0
  },
  {
   "name": "LPE_Z_PUB",
@@ -16121,7 +17185,9 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.3,
-  "max": 5.0
+  "max": 5.0,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "LTEST_ACC_UNC",
@@ -16131,7 +17197,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 10.0,
-  "min": 0.01
+  "min": 0.01,
+  "units": "(m/s^2)^2",
+  "decimalPlaces": 2
  },
  {
   "name": "LTEST_MEAS_UNC",
@@ -16140,7 +17208,9 @@
   "group": "Landing Target Estimator",
   "category": "Standard",
   "type": "Float",
-  "default": 0.005
+  "default": 0.005,
+  "units": "tan(rad)^2",
+  "decimalPlaces": 4
  },
  {
   "name": "LTEST_MODE",
@@ -16171,7 +17241,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.1,
-  "min": 0.001
+  "min": 0.001,
+  "units": "m^2",
+  "decimalPlaces": 3
  },
  {
   "name": "LTEST_SCALE_X",
@@ -16181,7 +17253,8 @@
   "category": "Standard",
   "type": "Float",
   "default": 1.0,
-  "min": 0.01
+  "min": 0.01,
+  "decimalPlaces": 3
  },
  {
   "name": "LTEST_SCALE_Y",
@@ -16191,7 +17264,8 @@
   "category": "Standard",
   "type": "Float",
   "default": 1.0,
-  "min": 0.01
+  "min": 0.01,
+  "decimalPlaces": 3
  },
  {
   "name": "LTEST_SENS_POS_X",
@@ -16200,7 +17274,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "LTEST_SENS_POS_Y",
@@ -16209,7 +17285,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "LTEST_SENS_POS_Z",
@@ -16218,7 +17296,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "LTEST_SENS_ROT",
@@ -16274,7 +17354,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.1,
-  "min": 0.001
+  "min": 0.001,
+  "units": "(m/s)^2",
+  "decimalPlaces": 3
  },
  {
   "name": "MAN_ARM_GESTURE",
@@ -16305,7 +17387,8 @@
   "default": 0.1,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 2
  },
  {
   "name": "MAN_KILL_GEST_T",
@@ -16316,7 +17399,9 @@
   "type": "Float",
   "default": -1.0,
   "min": -1.0,
-  "max": 15.0
+  "max": 15.0,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "MAV_0_BROADCAST",
@@ -16396,7 +17481,9 @@
   "min": 0.0,
   "max": 50.0,
   "increment": 0.001,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "Hz",
+  "decimalPlaces": 3
  },
  {
   "name": "MAV_0_MODE",
@@ -16487,7 +17574,8 @@
   "type": "Int32",
   "default": 1200,
   "min": 0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "B/s"
  },
  {
   "name": "MAV_0_REMOTE_PRT",
@@ -16587,7 +17675,9 @@
   "min": 0.0,
   "max": 50.0,
   "increment": 0.001,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "Hz",
+  "decimalPlaces": 3
  },
  {
   "name": "MAV_1_MODE",
@@ -16678,7 +17768,8 @@
   "type": "Int32",
   "default": 0,
   "min": 0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "B/s"
  },
  {
   "name": "MAV_1_REMOTE_PRT",
@@ -16778,7 +17869,9 @@
   "min": 0.0,
   "max": 50.0,
   "increment": 0.001,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "Hz",
+  "decimalPlaces": 3
  },
  {
   "name": "MAV_2_MODE",
@@ -16869,7 +17962,8 @@
   "type": "Int32",
   "default": 0,
   "min": 0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "B/s"
  },
  {
   "name": "MAV_2_REMOTE_PRT",
@@ -16986,7 +18080,8 @@
   "type": "Int32",
   "default": 5,
   "min": 1,
-  "max": 250
+  "max": 250,
+  "units": "s"
  },
  {
   "name": "MAV_SIK_RADIO_ID",
@@ -17199,7 +18294,8 @@
   "default": 18.0,
   "min": 0.1,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 1
  },
  {
   "name": "MC_ACRO_EXPO",
@@ -17210,7 +18306,8 @@
   "type": "Float",
   "default": 0.0,
   "min": 0.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "MC_ACRO_EXPO_Y",
@@ -17221,7 +18318,8 @@
   "type": "Float",
   "default": 0.0,
   "min": 0.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "MC_ACRO_P_MAX",
@@ -17233,7 +18331,9 @@
   "default": 100.0,
   "min": 0.0,
   "max": 1800.0,
-  "increment": 5.0
+  "increment": 5.0,
+  "units": "deg/s",
+  "decimalPlaces": 1
  },
  {
   "name": "MC_ACRO_R_MAX",
@@ -17245,7 +18345,9 @@
   "default": 100.0,
   "min": 0.0,
   "max": 1800.0,
-  "increment": 5.0
+  "increment": 5.0,
+  "units": "deg/s",
+  "decimalPlaces": 1
  },
  {
   "name": "MC_ACRO_SUPEXPO",
@@ -17256,7 +18358,8 @@
   "type": "Float",
   "default": 0.0,
   "min": 0.0,
-  "max": 0.95
+  "max": 0.95,
+  "decimalPlaces": 2
  },
  {
   "name": "MC_ACRO_SUPEXPOY",
@@ -17267,7 +18370,8 @@
   "type": "Float",
   "default": 0.0,
   "min": 0.0,
-  "max": 0.95
+  "max": 0.95,
+  "decimalPlaces": 2
  },
  {
   "name": "MC_ACRO_Y_MAX",
@@ -17279,7 +18383,9 @@
   "default": 100.0,
   "min": 0.0,
   "max": 1800.0,
-  "increment": 5.0
+  "increment": 5.0,
+  "units": "deg/s",
+  "decimalPlaces": 1
  },
  {
   "name": "MC_AIRMODE",
@@ -17353,7 +18459,9 @@
   "type": "Float",
   "default": 0.14,
   "min": 0.01,
-  "max": 0.5
+  "max": 0.5,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "MC_AT_START",
@@ -17382,7 +18490,8 @@
   "type": "Float",
   "default": 0.7,
   "min": 0.1,
-  "max": 6.0
+  "max": 6.0,
+  "decimalPlaces": 1
  },
  {
   "name": "MC_BAT_SCALE_EN",
@@ -17412,7 +18521,9 @@
   "type": "Float",
   "default": 0.0,
   "min": 0.0,
-  "max": 2.0
+  "max": 2.0,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "MC_ORBIT_RAD_MAX",
@@ -17423,7 +18534,9 @@
   "default": 1000.0,
   "min": 1.0,
   "max": 10000.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "MC_ORBIT_YAW_MOD",
@@ -17464,7 +18577,8 @@
   "type": "Float",
   "default": 0.003,
   "min": 0.0,
-  "increment": 0.0005
+  "increment": 0.0005,
+  "decimalPlaces": 4
  },
  {
   "name": "MC_PITCHRATE_FF",
@@ -17474,7 +18588,8 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.0,
-  "min": 0.0
+  "min": 0.0,
+  "decimalPlaces": 4
  },
  {
   "name": "MC_PITCHRATE_I",
@@ -17485,7 +18600,8 @@
   "type": "Float",
   "default": 0.2,
   "min": 0.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 3
  },
  {
   "name": "MC_PITCHRATE_K",
@@ -17497,7 +18613,8 @@
   "default": 1.0,
   "min": 0.01,
   "max": 5.0,
-  "increment": 0.0005
+  "increment": 0.0005,
+  "decimalPlaces": 4
  },
  {
   "name": "MC_PITCHRATE_MAX",
@@ -17509,7 +18626,9 @@
   "default": 220.0,
   "min": 0.0,
   "max": 1800.0,
-  "increment": 5.0
+  "increment": 5.0,
+  "units": "deg/s",
+  "decimalPlaces": 1
  },
  {
   "name": "MC_PITCHRATE_P",
@@ -17521,7 +18640,8 @@
   "default": 0.15,
   "min": 0.01,
   "max": 0.6,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 3
  },
  {
   "name": "MC_PITCH_P",
@@ -17533,7 +18653,8 @@
   "default": 4.0,
   "min": 0.0,
   "max": 12.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "MC_PR_INT_LIM",
@@ -17544,7 +18665,8 @@
   "type": "Float",
   "default": 0.3,
   "min": 0.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 2
  },
  {
   "name": "MC_ROLLRATE_D",
@@ -17556,7 +18678,8 @@
   "default": 0.003,
   "min": 0.0,
   "max": 0.01,
-  "increment": 0.0005
+  "increment": 0.0005,
+  "decimalPlaces": 4
  },
  {
   "name": "MC_ROLLRATE_FF",
@@ -17566,7 +18689,8 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.0,
-  "min": 0.0
+  "min": 0.0,
+  "decimalPlaces": 4
  },
  {
   "name": "MC_ROLLRATE_I",
@@ -17577,7 +18701,8 @@
   "type": "Float",
   "default": 0.2,
   "min": 0.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 3
  },
  {
   "name": "MC_ROLLRATE_K",
@@ -17589,7 +18714,8 @@
   "default": 1.0,
   "min": 0.01,
   "max": 5.0,
-  "increment": 0.0005
+  "increment": 0.0005,
+  "decimalPlaces": 4
  },
  {
   "name": "MC_ROLLRATE_MAX",
@@ -17601,7 +18727,9 @@
   "default": 220.0,
   "min": 0.0,
   "max": 1800.0,
-  "increment": 5.0
+  "increment": 5.0,
+  "units": "deg/s",
+  "decimalPlaces": 1
  },
  {
   "name": "MC_ROLLRATE_P",
@@ -17613,7 +18741,8 @@
   "default": 0.15,
   "min": 0.01,
   "max": 0.5,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 3
  },
  {
   "name": "MC_ROLL_P",
@@ -17625,7 +18754,8 @@
   "default": 4.0,
   "min": 0.0,
   "max": 12.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "MC_RR_INT_LIM",
@@ -17636,7 +18766,8 @@
   "type": "Float",
   "default": 0.3,
   "min": 0.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 2
  },
  {
   "name": "MC_SLOW_DEF_HVEL",
@@ -17647,7 +18778,9 @@
   "type": "Float",
   "default": 3.0,
   "min": 0.1,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m/s",
+  "decimalPlaces": 2
  },
  {
   "name": "MC_SLOW_DEF_VVEL",
@@ -17658,7 +18791,9 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m/s",
+  "decimalPlaces": 2
  },
  {
   "name": "MC_SLOW_DEF_YAWR",
@@ -17669,7 +18804,9 @@
   "type": "Float",
   "default": 45.0,
   "min": 1.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "deg/s",
+  "decimalPlaces": 0
  },
  {
   "name": "MC_SLOW_MAP_HVEL",
@@ -17832,7 +18969,9 @@
   "type": "Float",
   "default": 0.3,
   "min": 0.1,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m/s",
+  "decimalPlaces": 2
  },
  {
   "name": "MC_SLOW_MIN_VVEL",
@@ -17843,7 +18982,9 @@
   "type": "Float",
   "default": 0.3,
   "min": 0.1,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m/s",
+  "decimalPlaces": 2
  },
  {
   "name": "MC_SLOW_MIN_YAWR",
@@ -17854,7 +18995,9 @@
   "type": "Float",
   "default": 3.0,
   "min": 1.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "deg/s",
+  "decimalPlaces": 0
  },
  {
   "name": "MC_YAWRATE_D",
@@ -17865,7 +19008,8 @@
   "type": "Float",
   "default": 0.0,
   "min": 0.0,
-  "increment": 0.0005
+  "increment": 0.0005,
+  "decimalPlaces": 4
  },
  {
   "name": "MC_YAWRATE_FF",
@@ -17875,7 +19019,8 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.0,
-  "min": 0.0
+  "min": 0.0,
+  "decimalPlaces": 4
  },
  {
   "name": "MC_YAWRATE_I",
@@ -17886,7 +19031,8 @@
   "type": "Float",
   "default": 0.1,
   "min": 0.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 3
  },
  {
   "name": "MC_YAWRATE_K",
@@ -17898,7 +19044,8 @@
   "default": 1.0,
   "min": 0.01,
   "max": 5.0,
-  "increment": 0.0005
+  "increment": 0.0005,
+  "decimalPlaces": 4
  },
  {
   "name": "MC_YAWRATE_MAX",
@@ -17909,7 +19056,9 @@
   "default": 200.0,
   "min": 0.0,
   "max": 1800.0,
-  "increment": 5.0
+  "increment": 5.0,
+  "units": "deg/s",
+  "decimalPlaces": 1
  },
  {
   "name": "MC_YAWRATE_P",
@@ -17921,7 +19070,8 @@
   "default": 0.2,
   "min": 0.0,
   "max": 0.6,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 3
  },
  {
   "name": "MC_YAW_P",
@@ -17933,7 +19083,8 @@
   "default": 2.8,
   "min": 0.0,
   "max": 5.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "MC_YAW_TQ_CUTOFF",
@@ -17944,7 +19095,9 @@
   "type": "Float",
   "default": 2.0,
   "min": 0.0,
-  "max": 10.0
+  "max": 10.0,
+  "units": "Hz",
+  "decimalPlaces": 3
  },
  {
   "name": "MC_YAW_WEIGHT",
@@ -17956,7 +19109,8 @@
   "default": 0.4,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "MC_YR_INT_LIM",
@@ -17967,7 +19121,8 @@
   "type": "Float",
   "default": 0.3,
   "min": 0.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 2
  },
  {
   "name": "MIS_COMMAND_TOUT",
@@ -17977,7 +19132,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.0,
-  "min": 0.0
+  "min": 0.0,
+  "units": "s",
+  "decimalPlaces": 1
  },
  {
   "name": "MIS_DIST_1WP",
@@ -17989,7 +19146,9 @@
   "default": 10000.0,
   "min": -1.0,
   "max": 100000.0,
-  "increment": 100.0
+  "increment": 100.0,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "MIS_LND_ABRT_ALT",
@@ -17999,7 +19158,8 @@
   "category": "Standard",
   "type": "Int32",
   "default": 30,
-  "min": 0
+  "min": 0,
+  "units": "m"
  },
  {
   "name": "MIS_MNT_YAW_CTL",
@@ -18031,7 +19191,9 @@
   "type": "Float",
   "default": 2.5,
   "min": 0.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "MIS_TKO_LAND_REQ",
@@ -18077,7 +19239,9 @@
   "default": 12.0,
   "min": 0.0,
   "max": 90.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "deg",
+  "decimalPlaces": 1
  },
  {
   "name": "MIS_YAW_TMT",
@@ -18089,7 +19253,9 @@
   "default": -1.0,
   "min": -1.0,
   "max": 20.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "s",
+  "decimalPlaces": 1
  },
  {
   "name": "MNT_DO_STAB",
@@ -18124,7 +19290,9 @@
   "type": "Float",
   "default": 90.0,
   "min": -90.0,
-  "max": 90.0
+  "max": 90.0,
+  "units": "deg",
+  "decimalPlaces": 1
  },
  {
   "name": "MNT_LND_P_MIN",
@@ -18134,7 +19302,9 @@
   "type": "Float",
   "default": -90.0,
   "min": -90.0,
-  "max": 90.0
+  "max": 90.0,
+  "units": "deg",
+  "decimalPlaces": 1
  },
  {
   "name": "MNT_MAN_PITCH",
@@ -18346,7 +19516,9 @@
   "type": "Float",
   "default": 0.0,
   "min": -360.0,
-  "max": 360.0
+  "max": 360.0,
+  "units": "deg",
+  "decimalPlaces": 1
  },
  {
   "name": "MNT_OFF_ROLL",
@@ -18356,7 +19528,9 @@
   "type": "Float",
   "default": 0.0,
   "min": -360.0,
-  "max": 360.0
+  "max": 360.0,
+  "units": "deg",
+  "decimalPlaces": 1
  },
  {
   "name": "MNT_OFF_YAW",
@@ -18366,7 +19540,9 @@
   "type": "Float",
   "default": 0.0,
   "min": -360.0,
-  "max": 360.0
+  "max": 360.0,
+  "units": "deg",
+  "decimalPlaces": 1
  },
  {
   "name": "MNT_RANGE_PITCH",
@@ -18376,7 +19552,9 @@
   "type": "Float",
   "default": 90.0,
   "min": 1.0,
-  "max": 720.0
+  "max": 720.0,
+  "units": "deg",
+  "decimalPlaces": 1
  },
  {
   "name": "MNT_RANGE_ROLL",
@@ -18386,7 +19564,9 @@
   "type": "Float",
   "default": 90.0,
   "min": 1.0,
-  "max": 720.0
+  "max": 720.0,
+  "units": "deg",
+  "decimalPlaces": 1
  },
  {
   "name": "MNT_RANGE_YAW",
@@ -18396,7 +19576,9 @@
   "type": "Float",
   "default": 360.0,
   "min": 1.0,
-  "max": 720.0
+  "max": 720.0,
+  "units": "deg",
+  "decimalPlaces": 1
  },
  {
   "name": "MNT_RATE_PITCH",
@@ -18407,7 +19589,8 @@
   "type": "Float",
   "default": 30.0,
   "min": 1.0,
-  "max": 90.0
+  "max": 90.0,
+  "units": "deg/s"
  },
  {
   "name": "MNT_RATE_YAW",
@@ -18418,7 +19601,8 @@
   "type": "Float",
   "default": 30.0,
   "min": 1.0,
-  "max": 90.0
+  "max": 90.0,
+  "units": "deg/s"
  },
  {
   "name": "MNT_RC_IN_MODE",
@@ -18468,7 +19652,9 @@
   "default": 3.0,
   "min": 2.0,
   "max": 15.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "m/s^2",
+  "decimalPlaces": 1
  },
  {
   "name": "MPC_ACC_HOR",
@@ -18480,7 +19666,9 @@
   "default": 3.0,
   "min": 2.0,
   "max": 15.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "m/s^2",
+  "decimalPlaces": 1
  },
  {
   "name": "MPC_ACC_HOR_MAX",
@@ -18492,7 +19680,9 @@
   "default": 5.0,
   "min": 2.0,
   "max": 15.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "m/s^2",
+  "decimalPlaces": 2
  },
  {
   "name": "MPC_ACC_UP_MAX",
@@ -18503,7 +19693,9 @@
   "default": 4.0,
   "min": 2.0,
   "max": 15.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "m/s^2",
+  "decimalPlaces": 1
  },
  {
   "name": "MPC_ALT_MODE",
@@ -18539,7 +19731,9 @@
   "type": "Float",
   "default": 0.8,
   "min": 0.0,
-  "max": 3.0
+  "max": 3.0,
+  "units": "m/s",
+  "decimalPlaces": 2
  },
  {
   "name": "MPC_HOLD_MAX_Z",
@@ -18550,7 +19744,9 @@
   "type": "Float",
   "default": 0.6,
   "min": 0.0,
-  "max": 3.0
+  "max": 3.0,
+  "units": "m/s",
+  "decimalPlaces": 2
  },
  {
   "name": "MPC_JERK_AUTO",
@@ -18562,7 +19758,9 @@
   "default": 4.0,
   "min": 1.0,
   "max": 80.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "m/s^3",
+  "decimalPlaces": 1
  },
  {
   "name": "MPC_JERK_MAX",
@@ -18574,7 +19772,9 @@
   "default": 8.0,
   "min": 0.5,
   "max": 500.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "m/s^3",
+  "decimalPlaces": 0
  },
  {
   "name": "MPC_LAND_ALT1",
@@ -18585,7 +19785,9 @@
   "type": "Float",
   "default": 10.0,
   "min": 0.0,
-  "max": 122.0
+  "max": 122.0,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "MPC_LAND_ALT2",
@@ -18596,7 +19798,9 @@
   "type": "Float",
   "default": 5.0,
   "min": 0.0,
-  "max": 122.0
+  "max": 122.0,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "MPC_LAND_ALT3",
@@ -18607,7 +19811,9 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.0,
-  "max": 122.0
+  "max": 122.0,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "MPC_LAND_CRWL",
@@ -18617,7 +19823,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.3,
-  "min": 0.1
+  "min": 0.1,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "MPC_LAND_RADIUS",
@@ -18628,7 +19836,9 @@
   "type": "Float",
   "default": 1000.0,
   "min": 0.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "m",
+  "decimalPlaces": 0
  },
  {
   "name": "MPC_LAND_RC_HELP",
@@ -18658,7 +19868,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.7,
-  "min": 0.6
+  "min": 0.6,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "MPC_MANTHR_MIN",
@@ -18670,7 +19882,9 @@
   "default": 0.08,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "norm",
+  "decimalPlaces": 2
  },
  {
   "name": "MPC_MAN_TILT_MAX",
@@ -18681,7 +19895,9 @@
   "default": 35.0,
   "min": 1.0,
   "max": 70.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "deg",
+  "decimalPlaces": 0
  },
  {
   "name": "MPC_MAN_Y_MAX",
@@ -18692,7 +19908,9 @@
   "default": 150.0,
   "min": 0.0,
   "max": 400.0,
-  "increment": 10.0
+  "increment": 10.0,
+  "units": "deg/s",
+  "decimalPlaces": 0
  },
  {
   "name": "MPC_MAN_Y_TAU",
@@ -18704,7 +19922,9 @@
   "default": 0.08,
   "min": 0.0,
   "max": 5.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "MPC_POS_MODE",
@@ -18758,7 +19978,9 @@
   "default": 0.5,
   "min": 0.1,
   "max": 0.8,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "norm",
+  "decimalPlaces": 2
  },
  {
   "name": "MPC_THR_MAX",
@@ -18770,7 +19992,9 @@
   "default": 1.0,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.05
+  "increment": 0.05,
+  "units": "norm",
+  "decimalPlaces": 2
  },
  {
   "name": "MPC_THR_MIN",
@@ -18782,7 +20006,9 @@
   "default": 0.12,
   "min": 0.05,
   "max": 0.5,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "norm",
+  "decimalPlaces": 2
  },
  {
   "name": "MPC_THR_XY_MARG",
@@ -18794,7 +20020,9 @@
   "default": 0.3,
   "min": 0.0,
   "max": 0.5,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "norm",
+  "decimalPlaces": 2
  },
  {
   "name": "MPC_TILTMAX_AIR",
@@ -18806,7 +20034,9 @@
   "default": 45.0,
   "min": 20.0,
   "max": 89.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "deg",
+  "decimalPlaces": 0
  },
  {
   "name": "MPC_TILTMAX_LND",
@@ -18818,7 +20048,9 @@
   "default": 12.0,
   "min": 5.0,
   "max": 89.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "deg",
+  "decimalPlaces": 0
  },
  {
   "name": "MPC_TKO_RAMP_T",
@@ -18829,7 +20061,8 @@
   "type": "Float",
   "default": 3.0,
   "min": 0.0,
-  "max": 5.0
+  "max": 5.0,
+  "units": "s"
  },
  {
   "name": "MPC_TKO_SPEED",
@@ -18839,7 +20072,9 @@
   "type": "Float",
   "default": 1.5,
   "min": 1.0,
-  "max": 5.0
+  "max": 5.0,
+  "units": "m/s",
+  "decimalPlaces": 2
  },
  {
   "name": "MPC_USE_HTE",
@@ -18870,7 +20105,9 @@
   "default": 5.0,
   "min": 0.0,
   "max": 50.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "Hz",
+  "decimalPlaces": 1
  },
  {
   "name": "MPC_VEL_LP",
@@ -18882,7 +20119,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 50.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "Hz",
+  "decimalPlaces": 1
  },
  {
   "name": "MPC_VEL_MANUAL",
@@ -18894,7 +20133,9 @@
   "default": 10.0,
   "min": 3.0,
   "max": 20.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "MPC_VEL_MAN_BACK",
@@ -18906,7 +20147,9 @@
   "default": -1.0,
   "min": -1.0,
   "max": 20.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "MPC_VEL_MAN_SIDE",
@@ -18918,7 +20161,9 @@
   "default": -1.0,
   "min": -1.0,
   "max": 20.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "MPC_VEL_NF_BW",
@@ -18930,7 +20175,9 @@
   "default": 5.0,
   "min": 0.0,
   "max": 50.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "Hz",
+  "decimalPlaces": 1
  },
  {
   "name": "MPC_VEL_NF_FRQ",
@@ -18942,7 +20189,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 50.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "Hz",
+  "decimalPlaces": 1
  },
  {
   "name": "MPC_XY_CRUISE",
@@ -18954,7 +20203,9 @@
   "default": 5.0,
   "min": 3.0,
   "max": 20.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "m/s",
+  "decimalPlaces": 0
  },
  {
   "name": "MPC_XY_ERR_MAX",
@@ -18966,7 +20217,8 @@
   "default": 2.0,
   "min": 0.1,
   "max": 10.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "decimalPlaces": 1
  },
  {
   "name": "MPC_XY_P",
@@ -18978,7 +20230,8 @@
   "default": 0.95,
   "min": 0.0,
   "max": 2.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "MPC_XY_TRAJ_P",
@@ -18989,7 +20242,8 @@
   "default": 0.5,
   "min": 0.1,
   "max": 1.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 1
  },
  {
   "name": "MPC_XY_VEL_ALL",
@@ -19001,7 +20255,8 @@
   "default": -10.0,
   "min": -20.0,
   "max": 20.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "decimalPlaces": 1
  },
  {
   "name": "MPC_XY_VEL_D_ACC",
@@ -19013,7 +20268,8 @@
   "default": 0.2,
   "min": 0.1,
   "max": 2.0,
-  "increment": 0.02
+  "increment": 0.02,
+  "decimalPlaces": 2
  },
  {
   "name": "MPC_XY_VEL_I_ACC",
@@ -19025,7 +20281,8 @@
   "default": 0.4,
   "min": 0.0,
   "max": 60.0,
-  "increment": 0.02
+  "increment": 0.02,
+  "decimalPlaces": 2
  },
  {
   "name": "MPC_XY_VEL_MAX",
@@ -19037,7 +20294,9 @@
   "default": 12.0,
   "min": 0.0,
   "max": 20.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "MPC_XY_VEL_P_ACC",
@@ -19049,7 +20308,8 @@
   "default": 1.8,
   "min": 1.2,
   "max": 5.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "MPC_YAWRAUTO_ACC",
@@ -19061,7 +20321,9 @@
   "default": 20.0,
   "min": 5.0,
   "max": 360.0,
-  "increment": 5.0
+  "increment": 5.0,
+  "units": "deg/s^2",
+  "decimalPlaces": 0
  },
  {
   "name": "MPC_YAWRAUTO_MAX",
@@ -19073,7 +20335,9 @@
   "default": 60.0,
   "min": 5.0,
   "max": 360.0,
-  "increment": 5.0
+  "increment": 5.0,
+  "units": "deg/s",
+  "decimalPlaces": 0
  },
  {
   "name": "MPC_YAW_MODE",
@@ -19121,7 +20385,8 @@
   "default": 1.0,
   "min": 0.1,
   "max": 1.5,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "MPC_Z_VEL_ALL",
@@ -19133,7 +20398,8 @@
   "default": -3.0,
   "min": -3.0,
   "max": 8.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "decimalPlaces": 1
  },
  {
   "name": "MPC_Z_VEL_D_ACC",
@@ -19145,7 +20411,8 @@
   "default": 0.0,
   "min": 0.0,
   "max": 2.0,
-  "increment": 0.02
+  "increment": 0.02,
+  "decimalPlaces": 2
  },
  {
   "name": "MPC_Z_VEL_I_ACC",
@@ -19157,7 +20424,8 @@
   "default": 2.0,
   "min": 0.2,
   "max": 3.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "MPC_Z_VEL_MAX_DN",
@@ -19169,7 +20437,9 @@
   "default": 1.5,
   "min": 0.5,
   "max": 4.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "MPC_Z_VEL_MAX_UP",
@@ -19181,7 +20451,9 @@
   "default": 3.0,
   "min": 0.5,
   "max": 8.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "MPC_Z_VEL_P_ACC",
@@ -19193,7 +20465,8 @@
   "default": 4.0,
   "min": 2.0,
   "max": 15.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "MPC_Z_V_AUTO_DN",
@@ -19205,7 +20478,9 @@
   "default": 1.5,
   "min": 0.5,
   "max": 4.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "MPC_Z_V_AUTO_UP",
@@ -19217,7 +20492,9 @@
   "default": 3.0,
   "min": 0.5,
   "max": 8.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "NAV_ACC_RAD",
@@ -19229,7 +20506,9 @@
   "default": 10.0,
   "min": 0.05,
   "max": 200.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "NAV_DLL_ACT",
@@ -19295,7 +20574,9 @@
   "type": "Float",
   "default": 5.0,
   "min": 0.05,
-  "max": 200.0
+  "max": 200.0,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "NAV_FW_ALT_RAD",
@@ -19307,7 +20588,9 @@
   "default": 10.0,
   "min": 0.05,
   "max": 200.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "NAV_LOITER_RAD",
@@ -19319,7 +20602,9 @@
   "default": 80.0,
   "min": -10000.0,
   "max": 10000.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "NAV_MC_ALT_RAD",
@@ -19331,7 +20616,9 @@
   "default": 0.8,
   "min": 0.05,
   "max": 200.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "NAV_MIN_GND_DIST",
@@ -19342,7 +20629,9 @@
   "type": "Float",
   "default": -1.0,
   "min": -1.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "NAV_MIN_LTR_ALT",
@@ -19353,7 +20642,9 @@
   "type": "Float",
   "default": -1.0,
   "min": -1.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "NAV_RCL_ACT",
@@ -19427,7 +20718,8 @@
   "category": "Standard",
   "type": "Float",
   "default": 500.0,
-  "min": 500.0
+  "min": 500.0,
+  "units": "m"
  },
  {
   "name": "NAV_TRAFF_A_VER",
@@ -19437,7 +20729,8 @@
   "type": "Float",
   "default": 500.0,
   "min": 10.0,
-  "max": 500.0
+  "max": 500.0,
+  "units": "m"
  },
  {
   "name": "NAV_TRAFF_COLL_T",
@@ -19448,7 +20741,8 @@
   "type": "Int32",
   "default": 60,
   "min": 1,
-  "max": 900000000
+  "max": 900000000,
+  "units": "s"
  },
  {
   "name": "NPFG_DAMPING",
@@ -19460,7 +20754,8 @@
   "default": 0.7,
   "min": 0.1,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 2
  },
  {
   "name": "NPFG_LB_PERIOD",
@@ -19491,7 +20786,9 @@
   "default": 10.0,
   "min": 1.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "s",
+  "decimalPlaces": 1
  },
  {
   "name": "NPFG_PERIOD_SF",
@@ -19503,7 +20800,8 @@
   "default": 1.5,
   "min": 1.0,
   "max": 10.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 1
  },
  {
   "name": "NPFG_ROLL_TC",
@@ -19515,7 +20813,9 @@
   "default": 0.5,
   "min": 0.0,
   "max": 2.0,
-  "increment": 0.05
+  "increment": 0.05,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "NPFG_SW_DST_MLT",
@@ -19527,7 +20827,8 @@
   "default": 0.32,
   "min": 0.1,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 2
  },
  {
   "name": "NPFG_UB_PERIOD",
@@ -19710,7 +21011,8 @@
   "category": "Standard",
   "type": "Float",
   "default": 1.0,
-  "min": 0.0
+  "min": 0.0,
+  "units": "s"
  },
  {
   "name": "PD_GRIPPER_TYPE",
@@ -19742,7 +21044,9 @@
   "default": 5.0,
   "min": 0.0,
   "max": 50.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "s",
+  "decimalPlaces": 1
  },
  {
   "name": "PLD_FAPPR_ALT",
@@ -19754,7 +21058,9 @@
   "default": 0.1,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "PLD_HACC_RAD",
@@ -19766,7 +21072,9 @@
   "default": 0.2,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "PLD_MAX_SRCH",
@@ -19789,7 +21097,9 @@
   "default": 10.0,
   "min": 0.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "PLD_SRCH_TOUT",
@@ -19801,7 +21111,9 @@
   "default": 10.0,
   "min": 0.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "s",
+  "decimalPlaces": 1
  },
  {
   "name": "PP_LOOKAHD_GAIN",
@@ -19813,7 +21125,8 @@
   "default": 1.0,
   "min": 0.1,
   "max": 100.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 2
  },
  {
   "name": "PP_LOOKAHD_MAX",
@@ -19824,7 +21137,9 @@
   "default": 10.0,
   "min": 0.1,
   "max": 100.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "PP_LOOKAHD_MIN",
@@ -19835,7 +21150,9 @@
   "default": 1.0,
   "min": 0.1,
   "max": 100.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "PWM_MAIN_FUNC1",
@@ -23364,7 +24681,8 @@
   "default": 1.0,
   "min": 1.0,
   "max": 100.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 2
  },
  {
   "name": "RA_ACC_RAD_MAX",
@@ -23376,7 +24694,9 @@
   "default": -1.0,
   "min": -1.0,
   "max": 100.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "RA_MAX_STR_ANG",
@@ -23387,7 +24707,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 1.5708,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "rad",
+  "decimalPlaces": 2
  },
  {
   "name": "RA_STR_RATE_LIM",
@@ -23399,7 +24721,9 @@
   "default": -1.0,
   "min": -1.0,
   "max": 1000.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "deg/s",
+  "decimalPlaces": 2
  },
  {
   "name": "RA_WHEEL_BASE",
@@ -23411,7 +24735,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 100.0,
-  "increment": 0.001
+  "increment": 0.001,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "RC10_MAX",
@@ -23422,7 +24748,8 @@
   "type": "Float",
   "default": 2000.0,
   "min": 1500.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC10_MIN",
@@ -23433,7 +24760,8 @@
   "type": "Float",
   "default": 1000.0,
   "min": 800.0,
-  "max": 1500.0
+  "max": 1500.0,
+  "units": "us"
  },
  {
   "name": "RC10_REV",
@@ -23465,7 +24793,8 @@
   "type": "Float",
   "default": 1500.0,
   "min": 800.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC11_MAX",
@@ -23476,7 +24805,8 @@
   "type": "Float",
   "default": 2000.0,
   "min": 1500.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC11_MIN",
@@ -23487,7 +24817,8 @@
   "type": "Float",
   "default": 1000.0,
   "min": 800.0,
-  "max": 1500.0
+  "max": 1500.0,
+  "units": "us"
  },
  {
   "name": "RC11_REV",
@@ -23519,7 +24850,8 @@
   "type": "Float",
   "default": 1500.0,
   "min": 800.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC12_MAX",
@@ -23530,7 +24862,8 @@
   "type": "Float",
   "default": 2000.0,
   "min": 1500.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC12_MIN",
@@ -23541,7 +24874,8 @@
   "type": "Float",
   "default": 1000.0,
   "min": 800.0,
-  "max": 1500.0
+  "max": 1500.0,
+  "units": "us"
  },
  {
   "name": "RC12_REV",
@@ -23573,7 +24907,8 @@
   "type": "Float",
   "default": 1500.0,
   "min": 800.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC13_MAX",
@@ -23584,7 +24919,8 @@
   "type": "Float",
   "default": 2000.0,
   "min": 1500.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC13_MIN",
@@ -23595,7 +24931,8 @@
   "type": "Float",
   "default": 1000.0,
   "min": 800.0,
-  "max": 1500.0
+  "max": 1500.0,
+  "units": "us"
  },
  {
   "name": "RC13_REV",
@@ -23627,7 +24964,8 @@
   "type": "Float",
   "default": 1500.0,
   "min": 800.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC14_MAX",
@@ -23638,7 +24976,8 @@
   "type": "Float",
   "default": 2000.0,
   "min": 1500.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC14_MIN",
@@ -23649,7 +24988,8 @@
   "type": "Float",
   "default": 1000.0,
   "min": 800.0,
-  "max": 1500.0
+  "max": 1500.0,
+  "units": "us"
  },
  {
   "name": "RC14_REV",
@@ -23681,7 +25021,8 @@
   "type": "Float",
   "default": 1500.0,
   "min": 800.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC15_MAX",
@@ -23692,7 +25033,8 @@
   "type": "Float",
   "default": 2000.0,
   "min": 1500.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC15_MIN",
@@ -23703,7 +25045,8 @@
   "type": "Float",
   "default": 1000.0,
   "min": 800.0,
-  "max": 1500.0
+  "max": 1500.0,
+  "units": "us"
  },
  {
   "name": "RC15_REV",
@@ -23735,7 +25078,8 @@
   "type": "Float",
   "default": 1500.0,
   "min": 800.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC16_MAX",
@@ -23746,7 +25090,8 @@
   "type": "Float",
   "default": 2000.0,
   "min": 1500.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC16_MIN",
@@ -23757,7 +25102,8 @@
   "type": "Float",
   "default": 1000.0,
   "min": 800.0,
-  "max": 1500.0
+  "max": 1500.0,
+  "units": "us"
  },
  {
   "name": "RC16_REV",
@@ -23789,7 +25135,8 @@
   "type": "Float",
   "default": 1500.0,
   "min": 800.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC17_MAX",
@@ -23800,7 +25147,8 @@
   "type": "Float",
   "default": 2000.0,
   "min": 1500.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC17_MIN",
@@ -23811,7 +25159,8 @@
   "type": "Float",
   "default": 1000.0,
   "min": 800.0,
-  "max": 1500.0
+  "max": 1500.0,
+  "units": "us"
  },
  {
   "name": "RC17_REV",
@@ -23843,7 +25192,8 @@
   "type": "Float",
   "default": 1500.0,
   "min": 800.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC18_MAX",
@@ -23854,7 +25204,8 @@
   "type": "Float",
   "default": 2000.0,
   "min": 1500.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC18_MIN",
@@ -23865,7 +25216,8 @@
   "type": "Float",
   "default": 1000.0,
   "min": 800.0,
-  "max": 1500.0
+  "max": 1500.0,
+  "units": "us"
  },
  {
   "name": "RC18_REV",
@@ -23897,7 +25249,8 @@
   "type": "Float",
   "default": 1500.0,
   "min": 800.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC1_MAX",
@@ -23908,7 +25261,8 @@
   "type": "Float",
   "default": 2000.0,
   "min": 1500.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC1_MIN",
@@ -23919,7 +25273,8 @@
   "type": "Float",
   "default": 1000.0,
   "min": 800.0,
-  "max": 1500.0
+  "max": 1500.0,
+  "units": "us"
  },
  {
   "name": "RC1_REV",
@@ -23951,7 +25306,8 @@
   "type": "Float",
   "default": 1500.0,
   "min": 800.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC2_MAX",
@@ -23962,7 +25318,8 @@
   "type": "Float",
   "default": 2000.0,
   "min": 1500.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC2_MIN",
@@ -23973,7 +25330,8 @@
   "type": "Float",
   "default": 1000.0,
   "min": 800.0,
-  "max": 1500.0
+  "max": 1500.0,
+  "units": "us"
  },
  {
   "name": "RC2_REV",
@@ -24005,7 +25363,8 @@
   "type": "Float",
   "default": 1500.0,
   "min": 800.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC3_MAX",
@@ -24016,7 +25375,8 @@
   "type": "Float",
   "default": 2000.0,
   "min": 1500.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC3_MIN",
@@ -24027,7 +25387,8 @@
   "type": "Float",
   "default": 1000.0,
   "min": 800.0,
-  "max": 1500.0
+  "max": 1500.0,
+  "units": "us"
  },
  {
   "name": "RC3_REV",
@@ -24059,7 +25420,8 @@
   "type": "Float",
   "default": 1500.0,
   "min": 800.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC4_MAX",
@@ -24070,7 +25432,8 @@
   "type": "Float",
   "default": 2000.0,
   "min": 1500.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC4_MIN",
@@ -24081,7 +25444,8 @@
   "type": "Float",
   "default": 1000.0,
   "min": 800.0,
-  "max": 1500.0
+  "max": 1500.0,
+  "units": "us"
  },
  {
   "name": "RC4_REV",
@@ -24113,7 +25477,8 @@
   "type": "Float",
   "default": 1500.0,
   "min": 800.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC5_MAX",
@@ -24124,7 +25489,8 @@
   "type": "Float",
   "default": 2000.0,
   "min": 1500.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC5_MIN",
@@ -24135,7 +25501,8 @@
   "type": "Float",
   "default": 1000.0,
   "min": 800.0,
-  "max": 1500.0
+  "max": 1500.0,
+  "units": "us"
  },
  {
   "name": "RC5_REV",
@@ -24167,7 +25534,8 @@
   "type": "Float",
   "default": 1500.0,
   "min": 800.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC6_MAX",
@@ -24178,7 +25546,8 @@
   "type": "Float",
   "default": 2000.0,
   "min": 1500.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC6_MIN",
@@ -24189,7 +25558,8 @@
   "type": "Float",
   "default": 1000.0,
   "min": 800.0,
-  "max": 1500.0
+  "max": 1500.0,
+  "units": "us"
  },
  {
   "name": "RC6_REV",
@@ -24221,7 +25591,8 @@
   "type": "Float",
   "default": 1500.0,
   "min": 800.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC7_MAX",
@@ -24232,7 +25603,8 @@
   "type": "Float",
   "default": 2000.0,
   "min": 1500.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC7_MIN",
@@ -24243,7 +25615,8 @@
   "type": "Float",
   "default": 1000.0,
   "min": 800.0,
-  "max": 1500.0
+  "max": 1500.0,
+  "units": "us"
  },
  {
   "name": "RC7_REV",
@@ -24275,7 +25648,8 @@
   "type": "Float",
   "default": 1500.0,
   "min": 800.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC8_MAX",
@@ -24286,7 +25660,8 @@
   "type": "Float",
   "default": 2000.0,
   "min": 1500.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC8_MIN",
@@ -24297,7 +25672,8 @@
   "type": "Float",
   "default": 1000.0,
   "min": 800.0,
-  "max": 1500.0
+  "max": 1500.0,
+  "units": "us"
  },
  {
   "name": "RC8_REV",
@@ -24329,7 +25705,8 @@
   "type": "Float",
   "default": 1500.0,
   "min": 800.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC9_MAX",
@@ -24340,7 +25717,8 @@
   "type": "Float",
   "default": 2000.0,
   "min": 1500.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC9_MIN",
@@ -24351,7 +25729,8 @@
   "type": "Float",
   "default": 1000.0,
   "min": 800.0,
-  "max": 1500.0
+  "max": 1500.0,
+  "units": "us"
  },
  {
   "name": "RC9_REV",
@@ -24383,7 +25762,8 @@
   "type": "Float",
   "default": 1500.0,
   "min": 800.0,
-  "max": 2200.0
+  "max": 2200.0,
+  "units": "us"
  },
  {
   "name": "RC_ARMSWITCH_TH",
@@ -24394,7 +25774,8 @@
   "type": "Float",
   "default": 0.75,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "RC_CHAN_CNT",
@@ -24416,7 +25797,8 @@
   "type": "Float",
   "default": 0.75,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "RC_FAILS_THR",
@@ -24427,7 +25809,8 @@
   "type": "Int32",
   "default": 0,
   "min": 0,
-  "max": 2200
+  "max": 2200,
+  "units": "us"
  },
  {
   "name": "RC_GEAR_TH",
@@ -24438,7 +25821,8 @@
   "type": "Float",
   "default": 0.75,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "RC_KILLSWITCH_TH",
@@ -24449,7 +25833,8 @@
   "type": "Float",
   "default": 0.75,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "RC_LOITER_TH",
@@ -24460,7 +25845,8 @@
   "type": "Float",
   "default": 0.75,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "RC_MAP_ARM_SW",
@@ -26945,7 +28331,8 @@
   "type": "Float",
   "default": 0.75,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "RC_PAYLOAD_MIDTH",
@@ -26956,7 +28343,8 @@
   "type": "Float",
   "default": 0.25,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "RC_PAYLOAD_TH",
@@ -26967,7 +28355,8 @@
   "type": "Float",
   "default": 0.75,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "RC_RETURN_TH",
@@ -26978,7 +28367,8 @@
   "type": "Float",
   "default": 0.75,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "RC_RSSI_PWM_CHAN",
@@ -27100,7 +28490,8 @@
   "type": "Float",
   "default": 0.75,
   "min": -1.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "RD_TRANS_DRV_TRN",
@@ -27112,7 +28503,9 @@
   "default": 0.174533,
   "min": 0.001,
   "max": 3.14159,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "rad",
+  "decimalPlaces": 3
  },
  {
   "name": "RD_TRANS_TRN_DRV",
@@ -27124,7 +28517,9 @@
   "default": 0.0872665,
   "min": 0.001,
   "max": 3.14159,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "rad",
+  "decimalPlaces": 3
  },
  {
   "name": "RD_WHEEL_TRACK",
@@ -27136,7 +28531,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 100.0,
-  "increment": 0.001
+  "increment": 0.001,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "RD_YAW_STK_GAIN",
@@ -27148,7 +28545,8 @@
   "default": 1.0,
   "min": 0.1,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 3
  },
  {
   "name": "RM_COURSE_CTL_TH",
@@ -27160,7 +28558,9 @@
   "default": 0.17,
   "min": 0.0,
   "max": 3.14,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "rad",
+  "decimalPlaces": 2
  },
  {
   "name": "RM_WHEEL_TRACK",
@@ -27172,7 +28572,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 100.0,
-  "increment": 0.001
+  "increment": 0.001,
+  "units": "m",
+  "decimalPlaces": 3
  },
  {
   "name": "RM_YAW_STK_GAIN",
@@ -27184,7 +28586,8 @@
   "default": 1.0,
   "min": 0.1,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 3
  },
  {
   "name": "RO_ACCEL_LIM",
@@ -27196,7 +28599,9 @@
   "default": -1.0,
   "min": -1.0,
   "max": 100.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "m/s^2",
+  "decimalPlaces": 2
  },
  {
   "name": "RO_DECEL_LIM",
@@ -27208,7 +28613,9 @@
   "default": -1.0,
   "min": -1.0,
   "max": 100.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "m/s^2",
+  "decimalPlaces": 2
  },
  {
   "name": "RO_JERK_LIM",
@@ -27220,7 +28627,9 @@
   "default": -1.0,
   "min": -1.0,
   "max": 100.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "m/s^3",
+  "decimalPlaces": 2
  },
  {
   "name": "RO_MAX_THR_SPEED",
@@ -27232,7 +28641,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 100.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "m/s",
+  "decimalPlaces": 2
  },
  {
   "name": "RO_SPEED_I",
@@ -27243,7 +28654,8 @@
   "default": 0.0,
   "min": 0.0,
   "max": 100.0,
-  "increment": 0.001
+  "increment": 0.001,
+  "decimalPlaces": 3
  },
  {
   "name": "RO_SPEED_LIM",
@@ -27255,7 +28667,9 @@
   "default": -1.0,
   "min": -1.0,
   "max": 100.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "m/s",
+  "decimalPlaces": 2
  },
  {
   "name": "RO_SPEED_P",
@@ -27266,7 +28680,8 @@
   "default": 0.0,
   "min": 0.0,
   "max": 100.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 2
  },
  {
   "name": "RO_SPEED_RED",
@@ -27278,7 +28693,8 @@
   "default": -1.0,
   "min": -1.0,
   "max": 100.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 2
  },
  {
   "name": "RO_SPEED_TH",
@@ -27290,7 +28706,9 @@
   "default": 0.1,
   "min": 0.0,
   "max": 100.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "m/s",
+  "decimalPlaces": 2
  },
  {
   "name": "RO_YAW_ACCEL_LIM",
@@ -27302,7 +28720,9 @@
   "default": -1.0,
   "min": -1.0,
   "max": 10000.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "deg/s^2",
+  "decimalPlaces": 2
  },
  {
   "name": "RO_YAW_DECEL_LIM",
@@ -27314,7 +28734,9 @@
   "default": -1.0,
   "min": -1.0,
   "max": 10000.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "deg/s^2",
+  "decimalPlaces": 2
  },
  {
   "name": "RO_YAW_EXPO",
@@ -27325,7 +28747,8 @@
   "type": "Float",
   "default": 0.0,
   "min": 0.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "RO_YAW_P",
@@ -27336,7 +28759,8 @@
   "default": 0.0,
   "min": 0.0,
   "max": 100.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 3
  },
  {
   "name": "RO_YAW_RATE_CORR",
@@ -27348,7 +28772,8 @@
   "default": 1.0,
   "min": 0.01,
   "max": 10000.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 2
  },
  {
   "name": "RO_YAW_RATE_I",
@@ -27359,7 +28784,8 @@
   "default": 0.0,
   "min": 0.0,
   "max": 100.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 3
  },
  {
   "name": "RO_YAW_RATE_LIM",
@@ -27371,7 +28797,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 10000.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "deg/s",
+  "decimalPlaces": 2
  },
  {
   "name": "RO_YAW_RATE_P",
@@ -27382,7 +28810,8 @@
   "default": 0.0,
   "min": 0.0,
   "max": 100.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 3
  },
  {
   "name": "RO_YAW_RATE_TH",
@@ -27394,7 +28823,9 @@
   "default": 3.0,
   "min": 0.0,
   "max": 100.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "deg/s",
+  "decimalPlaces": 2
  },
  {
   "name": "RO_YAW_STICK_DZ",
@@ -27406,7 +28837,8 @@
   "default": 0.1,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 2
  },
  {
   "name": "RO_YAW_SUPEXPO",
@@ -27417,7 +28849,8 @@
   "type": "Float",
   "default": 0.0,
   "min": 0.0,
-  "max": 0.95
+  "max": 0.95,
+  "decimalPlaces": 2
  },
  {
   "name": "RTL_APPR_FORCE",
@@ -27473,7 +28906,8 @@
     "description": "Only climb to at least RTL_DESCEND_ALT above destination.",
     "value": 90
    }
-  ]
+  ],
+  "units": "deg"
  },
  {
   "name": "RTL_DESCEND_ALT",
@@ -27484,7 +28918,9 @@
   "type": "Float",
   "default": 30.0,
   "min": 0.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "RTL_LAND_DELAY",
@@ -27495,7 +28931,9 @@
   "type": "Float",
   "default": 0.0,
   "min": -1.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "s",
+  "decimalPlaces": 1
  },
  {
   "name": "RTL_LOITER_RAD",
@@ -27506,7 +28944,9 @@
   "type": "Float",
   "default": 80.0,
   "min": 25.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "RTL_MIN_DIST",
@@ -27517,7 +28957,9 @@
   "type": "Float",
   "default": 10.0,
   "min": 0.5,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "RTL_PLD_MD",
@@ -27551,7 +28993,9 @@
   "type": "Float",
   "default": 60.0,
   "min": 0.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "RTL_TIME_FACTOR",
@@ -27563,7 +29007,8 @@
   "default": 1.1,
   "min": 1.0,
   "max": 2.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 1
  },
  {
   "name": "RTL_TIME_MARGIN",
@@ -27575,7 +29020,9 @@
   "default": 100,
   "min": 0,
   "max": 3600,
-  "increment": 1
+  "increment": 1,
+  "units": "s",
+  "decimalPlaces": 1
  },
  {
   "name": "RTL_TYPE",
@@ -27617,7 +29064,9 @@
   "default": 1.0,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "norm",
+  "decimalPlaces": 2
  },
  {
   "name": "RWTO_NUDGE",
@@ -27648,7 +29097,9 @@
   "default": 0.0,
   "min": -10.0,
   "max": 20.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "deg",
+  "decimalPlaces": 1
  },
  {
   "name": "RWTO_RAMP_TIME",
@@ -27659,7 +29110,9 @@
   "default": 2.0,
   "min": 1.0,
   "max": 15.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "RWTO_ROT_AIRSPD",
@@ -27670,7 +29123,9 @@
   "type": "Float",
   "default": -1.0,
   "min": -1.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m/s",
+  "decimalPlaces": 1
  },
  {
   "name": "RWTO_ROT_TIME",
@@ -27681,7 +29136,9 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.1,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "s",
+  "decimalPlaces": 1
  },
  {
   "name": "RWTO_TKOFF",
@@ -27881,7 +29338,8 @@
   "type": "Int32",
   "default": 0,
   "min": -1000,
-  "max": 1000
+  "max": 1000,
+  "units": "min"
  },
  {
   "name": "SDLOG_UUID",
@@ -27910,7 +29368,8 @@
   "type": "Float",
   "default": 1013.25,
   "min": 500.0,
-  "max": 1500.0
+  "max": 1500.0,
+  "units": "hPa"
  },
  {
   "name": "SENS_BARO_RATE",
@@ -27921,7 +29380,8 @@
   "type": "Float",
   "default": 20.0,
   "min": 1.0,
-  "max": 200.0
+  "max": 200.0,
+  "units": "Hz"
  },
  {
   "name": "SENS_BAR_AUTOCAL",
@@ -28129,7 +29589,9 @@
   "type": "Float",
   "default": 0.0,
   "min": -45.0,
-  "max": 45.0
+  "max": 45.0,
+  "units": "deg",
+  "decimalPlaces": 1
  },
  {
   "name": "SENS_BOARD_Y_OFF",
@@ -28140,7 +29602,9 @@
   "type": "Float",
   "default": 0.0,
   "min": -45.0,
-  "max": 45.0
+  "max": 45.0,
+  "units": "deg",
+  "decimalPlaces": 1
  },
  {
   "name": "SENS_BOARD_Z_OFF",
@@ -28151,7 +29615,9 @@
   "type": "Float",
   "default": 0.0,
   "min": -45.0,
-  "max": 45.0
+  "max": 45.0,
+  "units": "deg",
+  "decimalPlaces": 1
  },
  {
   "name": "SENS_DPRES_ANSC",
@@ -28346,7 +29812,9 @@
   "default": 100.0,
   "min": 1.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "SENS_FLOW_MAXR",
@@ -28356,7 +29824,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 8.0,
-  "min": 1.0
+  "min": 1.0,
+  "units": "rad/s",
+  "decimalPlaces": 2
  },
  {
   "name": "SENS_FLOW_MINHGT",
@@ -28368,7 +29838,9 @@
   "default": 0.08,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "SENS_FLOW_RATE",
@@ -28380,7 +29852,8 @@
   "default": 70.0,
   "min": 1.0,
   "max": 200.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "Hz"
  },
  {
   "name": "SENS_FLOW_ROT",
@@ -28433,7 +29906,8 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.5,
-  "max": 1.5
+  "max": 1.5,
+  "decimalPlaces": 2
  },
  {
   "name": "SENS_GPS_MASK",
@@ -28480,7 +29954,9 @@
   "type": "Float",
   "default": 10.0,
   "min": 1.0,
-  "max": 100.0
+  "max": 100.0,
+  "units": "s",
+  "decimalPlaces": 1
  },
  {
   "name": "SENS_IMU_AUTOCAL",
@@ -28626,7 +30102,8 @@
   "default": 15.0,
   "min": 1.0,
   "max": 200.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "Hz"
  },
  {
   "name": "SENS_MAG_SIDES",
@@ -28906,7 +30383,9 @@
   "default": 0.0,
   "min": -90.0,
   "max": 90.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "deg",
+  "decimalPlaces": 3
  },
  {
   "name": "SEP_SAT_INFO",
@@ -28962,7 +30441,9 @@
   "default": 0.0,
   "min": -360.0,
   "max": 360.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "deg",
+  "decimalPlaces": 3
  },
  {
   "name": "SIH_DISTSNSR_MAX",
@@ -28973,7 +30454,9 @@
   "default": 100.0,
   "min": 0.0,
   "max": 1000.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "m",
+  "decimalPlaces": 4
  },
  {
   "name": "SIH_DISTSNSR_MIN",
@@ -28984,7 +30467,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 10.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "m",
+  "decimalPlaces": 4
  },
  {
   "name": "SIH_DISTSNSR_OVR",
@@ -28993,7 +30478,8 @@
   "group": "Simulation In Hardware",
   "category": "Standard",
   "type": "Float",
-  "default": -1.0
+  "default": -1.0,
+  "units": "m"
  },
  {
   "name": "SIH_IXX",
@@ -29004,7 +30490,9 @@
   "type": "Float",
   "default": 0.025,
   "min": 0.0,
-  "increment": 0.005
+  "increment": 0.005,
+  "units": "kg m^2",
+  "decimalPlaces": 3
  },
  {
   "name": "SIH_IXY",
@@ -29014,7 +30502,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.0,
-  "increment": 0.005
+  "increment": 0.005,
+  "units": "kg m^2",
+  "decimalPlaces": 3
  },
  {
   "name": "SIH_IXZ",
@@ -29024,7 +30514,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.0,
-  "increment": 0.005
+  "increment": 0.005,
+  "units": "kg m^2",
+  "decimalPlaces": 3
  },
  {
   "name": "SIH_IYY",
@@ -29035,7 +30527,9 @@
   "type": "Float",
   "default": 0.025,
   "min": 0.0,
-  "increment": 0.005
+  "increment": 0.005,
+  "units": "kg m^2",
+  "decimalPlaces": 3
  },
  {
   "name": "SIH_IYZ",
@@ -29045,7 +30539,9 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.0,
-  "increment": 0.005
+  "increment": 0.005,
+  "units": "kg m^2",
+  "decimalPlaces": 3
  },
  {
   "name": "SIH_IZZ",
@@ -29056,7 +30552,9 @@
   "type": "Float",
   "default": 0.03,
   "min": 0.0,
-  "increment": 0.005
+  "increment": 0.005,
+  "units": "kg m^2",
+  "decimalPlaces": 3
  },
  {
   "name": "SIH_KDV",
@@ -29067,7 +30565,9 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.0,
-  "increment": 0.05
+  "increment": 0.05,
+  "units": "N/(m/s)",
+  "decimalPlaces": 2
  },
  {
   "name": "SIH_KDW",
@@ -29078,7 +30578,9 @@
   "type": "Float",
   "default": 0.025,
   "min": 0.0,
-  "increment": 0.005
+  "increment": 0.005,
+  "units": "Nm/(rad/s)",
+  "decimalPlaces": 3
  },
  {
   "name": "SIH_LOC_H0",
@@ -29090,7 +30592,9 @@
   "default": 489.4,
   "min": -420.0,
   "max": 8848.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "SIH_LOC_LAT0",
@@ -29101,7 +30605,8 @@
   "type": "Float",
   "default": 47.397742,
   "min": -90.0,
-  "max": 90.0
+  "max": 90.0,
+  "units": "deg"
  },
  {
   "name": "SIH_LOC_LON0",
@@ -29112,7 +30617,8 @@
   "type": "Float",
   "default": 8.545594,
   "min": -180.0,
-  "max": 180.0
+  "max": 180.0,
+  "units": "deg"
  },
  {
   "name": "SIH_L_PITCH",
@@ -29123,7 +30629,9 @@
   "type": "Float",
   "default": 0.2,
   "min": 0.0,
-  "increment": 0.05
+  "increment": 0.05,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "SIH_L_ROLL",
@@ -29134,7 +30642,9 @@
   "type": "Float",
   "default": 0.2,
   "min": 0.0,
-  "increment": 0.05
+  "increment": 0.05,
+  "units": "m",
+  "decimalPlaces": 2
  },
  {
   "name": "SIH_MASS",
@@ -29145,7 +30655,9 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "kg",
+  "decimalPlaces": 2
  },
  {
   "name": "SIH_Q_MAX",
@@ -29156,7 +30668,9 @@
   "type": "Float",
   "default": 0.1,
   "min": 0.0,
-  "increment": 0.05
+  "increment": 0.05,
+  "units": "Nm",
+  "decimalPlaces": 3
  },
  {
   "name": "SIH_T_MAX",
@@ -29167,7 +30681,9 @@
   "type": "Float",
   "default": 5.0,
   "min": 0.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "N",
+  "decimalPlaces": 2
  },
  {
   "name": "SIH_T_TAU",
@@ -29176,7 +30692,8 @@
   "group": "Simulation In Hardware",
   "category": "Standard",
   "type": "Float",
-  "default": 0.05
+  "default": 0.05,
+  "units": "s"
  },
  {
   "name": "SIH_VEHICLE_TYPE",
@@ -29269,7 +30786,8 @@
   "group": "Simulator",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "celcius"
  },
  {
   "name": "SIM_BAT_DRAIN",
@@ -29280,7 +30798,8 @@
   "default": 60.0,
   "min": 1.0,
   "max": 86400.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "s"
  },
  {
   "name": "SIM_BAT_ENABLE",
@@ -29311,7 +30830,8 @@
   "default": 50.0,
   "min": 0.0,
   "max": 100.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "%"
  },
  {
   "name": "SIM_GPS_USED",
@@ -29329,7 +30849,8 @@
   "group": "Simulator",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "gauss"
  },
  {
   "name": "SIM_MAG_OFFSET_Y",
@@ -29337,7 +30858,8 @@
   "group": "Simulator",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "gauss"
  },
  {
   "name": "SIM_MAG_OFFSET_Z",
@@ -29345,7 +30867,8 @@
   "group": "Simulator",
   "category": "Standard",
   "type": "Float",
-  "default": 0.0
+  "default": 0.0,
+  "units": "gauss"
  },
  {
   "name": "SYS_AUTOCONFIG",
@@ -29439,7 +30962,8 @@
   "category": "Standard",
   "type": "Int32",
   "default": 24,
-  "min": 10
+  "min": 10,
+  "units": "celcius"
  },
  {
   "name": "SYS_CAL_TMAX",
@@ -29448,7 +30972,8 @@
   "group": "System",
   "category": "Standard",
   "type": "Int32",
-  "default": 10
+  "default": 10,
+  "units": "celcius"
  },
  {
   "name": "SYS_CAL_TMIN",
@@ -29457,7 +30982,8 @@
   "group": "System",
   "category": "Standard",
   "type": "Int32",
-  "default": 5
+  "default": 5,
+  "units": "celcius"
  },
  {
   "name": "SYS_DM_BACKEND",
@@ -29653,7 +31179,8 @@
   "group": "System",
   "category": "Standard",
   "type": "Float",
-  "default": 1.0
+  "default": 1.0,
+  "units": "%"
  },
  {
   "name": "SYS_STCK_EN",
@@ -29683,7 +31210,8 @@
   "default": -0.4,
   "min": -1.0,
   "max": 1.0,
-  "increment": 0.05
+  "increment": 0.05,
+  "decimalPlaces": 2
  },
  {
   "name": "TC_A0_ID",
@@ -31771,7 +33299,8 @@
   "default": 0.0,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 1
  },
  {
   "name": "TRIG_ACT_TIME",
@@ -31783,7 +33312,9 @@
   "default": 40.0,
   "min": 0.1,
   "max": 3000.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "ms",
+  "decimalPlaces": 1
  },
  {
   "name": "TRIG_DISTANCE",
@@ -31795,7 +33326,9 @@
   "default": 25.0,
   "min": 0.0,
   "increment": 1.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "TRIG_INTERFACE",
@@ -31835,7 +33368,9 @@
   "default": 40.0,
   "min": 4.0,
   "max": 10000.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "ms",
+  "decimalPlaces": 1
  },
  {
   "name": "TRIG_MIN_INTERVA",
@@ -31847,7 +33382,9 @@
   "default": 1.0,
   "min": 1.0,
   "max": 10000.0,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "ms",
+  "decimalPlaces": 1
  },
  {
   "name": "TRIG_MODE",
@@ -31913,7 +33450,8 @@
   "default": 1500,
   "min": 1000,
   "max": 2000,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "us"
  },
  {
   "name": "TRIG_PWM_SHOOT",
@@ -31924,7 +33462,8 @@
   "default": 1900,
   "min": 1000,
   "max": 2000,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "us"
  },
  {
   "name": "TRIM_PITCH",
@@ -31936,7 +33475,8 @@
   "default": 0.0,
   "min": -0.5,
   "max": 0.5,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 2
  },
  {
   "name": "TRIM_ROLL",
@@ -31948,7 +33488,8 @@
   "default": 0.0,
   "min": -0.5,
   "max": 0.5,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 2
  },
  {
   "name": "TRIM_YAW",
@@ -31960,7 +33501,8 @@
   "default": 0.0,
   "min": -0.5,
   "max": 0.5,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 2
  },
  {
   "name": "UUV_GAIN_X_D",
@@ -32017,7 +33559,8 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.05,
-  "min": 0.0
+  "min": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "UUV_MGM_ROLL",
@@ -32026,7 +33569,8 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.05,
-  "min": 0.0
+  "min": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "UUV_MGM_THRTL",
@@ -32035,7 +33579,8 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.1,
-  "min": 0.0
+  "min": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "UUV_MGM_YAW",
@@ -32044,7 +33589,8 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.05,
-  "min": 0.0
+  "min": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "UUV_PGM_VEL",
@@ -32060,7 +33606,8 @@
   "group": "UUV Attitude Control",
   "category": "Standard",
   "type": "Float",
-  "default": 2.0
+  "default": 2.0,
+  "decimalPlaces": 2
  },
  {
   "name": "UUV_PITCH_P",
@@ -32068,7 +33615,8 @@
   "group": "UUV Attitude Control",
   "category": "Standard",
   "type": "Float",
-  "default": 4.0
+  "default": 4.0,
+  "decimalPlaces": 2
  },
  {
   "name": "UUV_POS_MODE",
@@ -32103,7 +33651,8 @@
   "category": "Standard",
   "type": "Float",
   "default": 100.0,
-  "min": 0.0
+  "min": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "UUV_RGM_ROLL",
@@ -32112,7 +33661,8 @@
   "category": "Standard",
   "type": "Float",
   "default": 100.0,
-  "min": 0.0
+  "min": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "UUV_RGM_THRTL",
@@ -32121,7 +33671,8 @@
   "category": "Standard",
   "type": "Float",
   "default": 10.0,
-  "min": 0.0
+  "min": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "UUV_RGM_YAW",
@@ -32130,7 +33681,8 @@
   "category": "Standard",
   "type": "Float",
   "default": 100.0,
-  "min": 0.0
+  "min": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "UUV_ROLL_D",
@@ -32138,7 +33690,8 @@
   "group": "UUV Attitude Control",
   "category": "Standard",
   "type": "Float",
-  "default": 1.5
+  "default": 1.5,
+  "decimalPlaces": 2
  },
  {
   "name": "UUV_ROLL_P",
@@ -32146,7 +33699,8 @@
   "group": "UUV Attitude Control",
   "category": "Standard",
   "type": "Float",
-  "default": 4.0
+  "default": 4.0,
+  "decimalPlaces": 2
  },
  {
   "name": "UUV_SGM_PITCH",
@@ -32155,7 +33709,8 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.5,
-  "min": 0.0
+  "min": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "UUV_SGM_ROLL",
@@ -32164,7 +33719,8 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.5,
-  "min": 0.0
+  "min": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "UUV_SGM_THRTL",
@@ -32173,7 +33729,8 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.1,
-  "min": 0.0
+  "min": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "UUV_SGM_YAW",
@@ -32182,7 +33739,8 @@
   "category": "Standard",
   "type": "Float",
   "default": 0.5,
-  "min": 0.0
+  "min": 0.0,
+  "decimalPlaces": 2
  },
  {
   "name": "UUV_SP_MAX_AGE",
@@ -32218,7 +33776,8 @@
   "type": "Float",
   "default": 0.1,
   "min": 0.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "UUV_TORQUE_SAT",
@@ -32228,7 +33787,8 @@
   "type": "Float",
   "default": 0.3,
   "min": 0.0,
-  "max": 1.0
+  "max": 1.0,
+  "decimalPlaces": 2
  },
  {
   "name": "UUV_YAW_D",
@@ -32236,7 +33796,8 @@
   "group": "UUV Attitude Control",
   "category": "Standard",
   "type": "Float",
-  "default": 2.0
+  "default": 2.0,
+  "decimalPlaces": 2
  },
  {
   "name": "UUV_YAW_P",
@@ -32244,7 +33805,8 @@
   "group": "UUV Attitude Control",
   "category": "Standard",
   "type": "Float",
-  "default": 4.0
+  "default": 4.0,
+  "decimalPlaces": 2
  },
  {
   "name": "UXRCE_DDS_AG_IP",
@@ -32334,7 +33896,8 @@
   "category": "System",
   "type": "Int32",
   "default": -1,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "s"
  },
  {
   "name": "UXRCE_DDS_SYNCC",
@@ -32384,7 +33947,8 @@
   "category": "System",
   "type": "Int32",
   "default": 3,
-  "rebootRequired": true
+  "rebootRequired": true,
+  "units": "s"
  },
  {
   "name": "VTO_LOITER_ALT",
@@ -32396,7 +33960,9 @@
   "default": 80.0,
   "min": 20.0,
   "max": 300.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "VT_ARSP_BLEND",
@@ -32408,7 +33974,9 @@
   "default": 8.0,
   "min": 0.0,
   "max": 30.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "m/s",
+  "decimalPlaces": 2
  },
  {
   "name": "VT_ARSP_TRANS",
@@ -32420,7 +33988,9 @@
   "default": 10.0,
   "min": 0.0,
   "max": 30.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "m/s",
+  "decimalPlaces": 2
  },
  {
   "name": "VT_BT_TILT_DUR",
@@ -32432,7 +34002,9 @@
   "default": 1.0,
   "min": 0.1,
   "max": 10.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "s",
+  "decimalPlaces": 1
  },
  {
   "name": "VT_B_DEC_I",
@@ -32443,7 +34015,9 @@
   "default": 0.1,
   "min": 0.0,
   "max": 0.3,
-  "increment": 0.05
+  "increment": 0.05,
+  "units": "rad s/m",
+  "decimalPlaces": 2
  },
  {
   "name": "VT_B_DEC_MSS",
@@ -32455,7 +34029,9 @@
   "default": 2.0,
   "min": 0.5,
   "max": 10.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "m/s^2",
+  "decimalPlaces": 2
  },
  {
   "name": "VT_B_TRANS_DUR",
@@ -32467,7 +34043,9 @@
   "default": 10.0,
   "min": 0.1,
   "max": 20.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "VT_B_TRANS_RAMP",
@@ -32479,7 +34057,9 @@
   "default": 3.0,
   "min": 0.0,
   "max": 20.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "s",
+  "decimalPlaces": 1
  },
  {
   "name": "VT_ELEV_MC_LOCK",
@@ -32549,7 +34129,8 @@
   "default": 0.7,
   "min": 0.0,
   "max": 5.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 2
  },
  {
   "name": "VT_FW_DIFTHR_EN",
@@ -32586,7 +34167,8 @@
   "default": 1.0,
   "min": 0.0,
   "max": 2.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "VT_FW_DIFTHR_S_R",
@@ -32598,7 +34180,8 @@
   "default": 1.0,
   "min": 0.0,
   "max": 2.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "VT_FW_DIFTHR_S_Y",
@@ -32610,7 +34193,8 @@
   "default": 0.1,
   "min": 0.0,
   "max": 2.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "decimalPlaces": 2
  },
  {
   "name": "VT_FW_MIN_ALT",
@@ -32622,7 +34206,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 200.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "VT_FW_QC_HMAX",
@@ -32633,7 +34219,8 @@
   "type": "Int32",
   "default": 0,
   "min": 0,
-  "increment": 1
+  "increment": 1,
+  "units": "m"
  },
  {
   "name": "VT_FW_QC_P",
@@ -32644,7 +34231,8 @@
   "type": "Int32",
   "default": 0,
   "min": 0,
-  "max": 180
+  "max": 180,
+  "units": "deg"
  },
  {
   "name": "VT_FW_QC_R",
@@ -32655,7 +34243,8 @@
   "type": "Int32",
   "default": 0,
   "min": 0,
-  "max": 180
+  "max": 180,
+  "units": "deg"
  },
  {
   "name": "VT_F_TRANS_DUR",
@@ -32667,7 +34256,9 @@
   "default": 5.0,
   "min": 0.1,
   "max": 20.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "VT_F_TRANS_THR",
@@ -32678,7 +34269,8 @@
   "default": 1.0,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 3
  },
  {
   "name": "VT_F_TR_OL_TM",
@@ -32690,7 +34282,9 @@
   "default": 6.0,
   "min": 1.0,
   "max": 30.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "s",
+  "decimalPlaces": 1
  },
  {
   "name": "VT_LND_PITCH_MIN",
@@ -32702,7 +34296,9 @@
   "default": -5.0,
   "min": -10.0,
   "max": 45.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "deg",
+  "decimalPlaces": 1
  },
  {
   "name": "VT_PITCH_MIN",
@@ -32714,7 +34310,9 @@
   "default": -5.0,
   "min": -10.0,
   "max": 45.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "deg",
+  "decimalPlaces": 1
  },
  {
   "name": "VT_PSHER_SLEW",
@@ -32725,7 +34323,9 @@
   "type": "Float",
   "default": 0.33,
   "min": 0.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "1/s",
+  "decimalPlaces": 2
  },
  {
   "name": "VT_QC_ALT_LOSS",
@@ -32737,7 +34337,9 @@
   "default": 0.0,
   "min": 0.0,
   "max": 200.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "VT_QC_T_ALT_LOSS",
@@ -32749,7 +34351,9 @@
   "default": 20.0,
   "min": 0.0,
   "max": 50.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "m",
+  "decimalPlaces": 1
  },
  {
   "name": "VT_SPOILER_MC_LD",
@@ -32760,7 +34364,9 @@
   "default": 0.0,
   "min": -1.0,
   "max": 1.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "norm",
+  "decimalPlaces": 1
  },
  {
   "name": "VT_TILT_FW",
@@ -32771,7 +34377,8 @@
   "default": 1.0,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 3
  },
  {
   "name": "VT_TILT_MC",
@@ -32782,7 +34389,8 @@
   "default": 0.0,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 3
  },
  {
   "name": "VT_TILT_TRANS",
@@ -32793,7 +34401,8 @@
   "default": 0.4,
   "min": 0.0,
   "max": 1.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "decimalPlaces": 3
  },
  {
   "name": "VT_TRANS_MIN_TM",
@@ -32805,7 +34414,9 @@
   "default": 2.0,
   "min": 0.0,
   "max": 20.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "s",
+  "decimalPlaces": 1
  },
  {
   "name": "VT_TRANS_P2_DUR",
@@ -32817,7 +34428,9 @@
   "default": 0.5,
   "min": 0.1,
   "max": 5.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "s",
+  "decimalPlaces": 3
  },
  {
   "name": "VT_TRANS_TIMEOUT",
@@ -32829,7 +34442,9 @@
   "default": 15.0,
   "min": 0.1,
   "max": 30.0,
-  "increment": 1.0
+  "increment": 1.0,
+  "units": "s",
+  "decimalPlaces": 2
  },
  {
   "name": "VT_TYPE",
@@ -32864,7 +34479,9 @@
   "category": "Standard",
   "type": "Float",
   "default": -1.0,
-  "increment": 0.5
+  "increment": 0.5,
+  "units": "kg",
+  "decimalPlaces": 1
  },
  {
   "name": "WEIGHT_GROSS",
@@ -32874,7 +34491,9 @@
   "category": "Standard",
   "type": "Float",
   "default": -1.0,
-  "increment": 0.1
+  "increment": 0.1,
+  "units": "kg",
+  "decimalPlaces": 1
  },
  {
   "name": "WV_EN",
@@ -32904,7 +34523,9 @@
   "default": 1.0,
   "min": 0.0,
   "max": 3.0,
-  "increment": 0.01
+  "increment": 0.01,
+  "units": "Hz",
+  "decimalPlaces": 3
  },
  {
   "name": "WV_ROLL_MIN",
@@ -32914,7 +34535,8 @@
   "type": "Float",
   "default": 1.0,
   "min": 0.0,
-  "max": 5.0
+  "max": 5.0,
+  "units": "deg"
  },
  {
   "name": "WV_YRATE_MAX",
@@ -32924,6 +34546,7 @@
   "type": "Float",
   "default": 90.0,
   "min": 0.0,
-  "max": 120.0
+  "max": 120.0,
+  "units": "deg/s"
  }
 ]

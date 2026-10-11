@@ -17,6 +17,8 @@ export interface ParamMeta {
   min?: number
   max?: number
   increment?: number
+  units?: string
+  decimalPlaces?: number
   rebootRequired?: boolean
   values?: Array<{ value: number; description: string }>
   bitmask?: Array<{ value: number; description: string }>
@@ -78,6 +80,8 @@ interface ParamsState {
   metaGroups: Map<string, string[]>
   /** User-defined groups (persisted). */
   groups: ParamGroup[]
+  /** FC firmware version from AUTOPILOT_VERSION ("" until it arrives). */
+  fcVersion: string | null
   /** Staged changes (name → new value); PM6 applies them. */
   staged: Map<string, number | string>
 
@@ -101,6 +105,7 @@ export type ParamsIpcEvent =
   | { kind: 'progress'; received: number; total: number }
   | { kind: 'pull_done'; received: number; total: number }
   | { kind: 'external_change'; name: string; value: unknown; ptype: string }
+  | { kind: 'fc_version'; version: string }
 
 export const useParamsStore = create<ParamsState>((set, get) => ({
   values: new Map(),
@@ -109,6 +114,7 @@ export const useParamsStore = create<ParamsState>((set, get) => ({
   meta: new Map(),
   metaGroups: new Map(),
   groups: loadGroups(),
+  fcVersion: null,
   staged: new Map(),
 
   setMeta: (list) => {
@@ -140,6 +146,8 @@ export const useParamsStore = create<ParamsState>((set, get) => ({
       const existing = values.get(ev.name)
       if (existing) values.set(ev.name, existing)
       set({ values })
+    } else if (ev.kind === 'fc_version') {
+      set({ fcVersion: ev.version })
     }
   },
 
