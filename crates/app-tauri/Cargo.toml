@@ -21,7 +21,7 @@ serde.workspace = true
 tauri = { version = "2" }
 tauri-plugin-dialog = "2.8.1"
 tauri-plugin-fs = "2.6.0"
-tokio.workspace = true
+tokio = { workspace = true, features = ["process"] }
 
 [dev-dependencies]
 serde_json = "1"

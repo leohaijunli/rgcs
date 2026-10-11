@@ -26,6 +26,19 @@ pub enum DeviceEvent {
 /// Event bus capacity for hotplug events.
 pub const EVENT_CAPACITY: usize = 128;
 
+/// Whether `port_name` is the kind of port an operator plugs a FC/RTK device
+/// into (issues.md #41): `/dev/ttyACM*` / `/dev/ttyUSB*` on Unix, `COM*` on
+/// Windows. ttyS*/PCI/Bluetooth ports are noise for this application.
+pub fn is_operator_port(port_name: &str) -> bool {
+    if let Some(index) = port_name.strip_prefix("COM") {
+        // Windows COM ports: "COM" + at least one digit.
+        if !index.is_empty() && index.chars().all(|c| c.is_ascii_digit()) {
+            return true;
+        }
+    }
+    port_name.starts_with("/dev/ttyACM") || port_name.starts_with("/dev/ttyUSB")
+}
+
 /// Manages serial device enumeration and hotplug watching.
 #[derive(Debug, Clone)]
 pub struct DeviceManager {
@@ -60,10 +73,15 @@ impl DeviceManager {
     }
 
     /// Enumerate currently attached serial ports with identity metadata.
+    ///
+    /// Filtered to the ports an operator can actually plug a FC/RTK device
+    /// into (issues.md #41): `/dev/ttyACM*` and `/dev/ttyUSB*` on Linux,
+    /// `COM*` on Windows. Everything else (ttyS*, PCI, Bluetooth…) is noise.
     pub fn enumerate(&self) -> Result<Vec<SerialDeviceInfo>, DeviceError> {
         let ports = serialport::available_ports()?;
         Ok(ports
             .into_iter()
+            .filter(|p| is_operator_port(&p.port_name))
             .map(|p| {
                 let (transport, device_id, serial_number, manufacturer, product) = match p.port_type
                 {
@@ -216,6 +234,26 @@ mod tests {
         // The first successful enumeration only establishes the baseline.
         let current = vec![dev("/dev/ttyUSB0")];
         assert_eq!(hotplug_events(&[], &current, false), None);
+    }
+
+    #[test]
+    fn operator_port_filter_matches_pluggable_ports_only() {
+        // Linux: USB CDC (FC over USB) and USB-serial adapters pass.
+        assert!(is_operator_port("/dev/ttyACM0"));
+        assert!(is_operator_port("/dev/ttyACM3"));
+        assert!(is_operator_port("/dev/ttyUSB0"));
+        assert!(is_operator_port("/dev/ttyUSB12"));
+        // Everything else is noise (issue #41).
+        assert!(!is_operator_port("/dev/ttyS0"));
+        assert!(!is_operator_port("/dev/ttyS31"));
+        assert!(!is_operator_port("/dev/pts/3"));
+        assert!(!is_operator_port("/dev/cu.usbmodem123"));
+        // Windows: COM ports with a numeric index.
+        assert!(is_operator_port("COM3"));
+        assert!(!is_operator_port("COM"));
+        assert!(!is_operator_port("COMX"));
+        // Windows builds run on Unix paths too — the COM check is prefix-safe
+        // on Unix (a Linux file named COM3 is not a thing).
     }
 
     #[test]

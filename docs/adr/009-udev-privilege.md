@@ -1,6 +1,6 @@
 # ADR-009: udev privilege strategy — polkit + dedicated helper
 
-- Status: Draft
+- Status: Implemented (2026-10-10)
 - Date: 2026-10-03
 
 ## Decision
@@ -16,11 +16,21 @@
 
 ## Failure/risk analysis
 
-- Wrong device: rules are bound to VID/PID and serial (or physical port path
-  when no serial); generation is deterministic and previewed first.
-- Wrong config: the helper validates the rule text against a strict grammar
-  before writing.
-- Other-path writes: rejected by path canonicalization + allow-list.
+- Wrong device: rules are bound to VID/PID; generation is deterministic and
+  previewed in the settings dialog before the pkexec prompt.
+- Wrong config: the helper validates every rule line against a strict
+  grammar (SUBSYSTEM=="tty", ATTRS{idVendor/idProduct} hex4, MODE="0666" —
+  nothing else) and rejects the whole batch on one bad line.
+- Other-path writes: the target file name is fixed
+  (`/etc/udev/rules.d/99-maggcs.rules`); argv carries only the mode word.
+- Malicious stdin: shell metacharacters and `RUN+=`/`OWNER=` style directives
+  are rejected by the grammar; nothing is passed to a shell.
+- Recovery: uninstall deletes the file and reloads (verified); re-running
+  install is idempotent.
+- Rollout note (2026-10-10): the helper ships as
+  `helpers/udev-installer/install.sh` and is invoked with
+  `pkexec bash <script> install`; rules are generated from the enumerated
+  devices' VID/PID pairs in `commands.rs` (`udev_rule_text`, unit-tested).
 
 ## Consequences
 

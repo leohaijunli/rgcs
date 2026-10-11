@@ -499,19 +499,71 @@ function LogsTab() {
 function DevicesTab() {
   const { t } = useTranslation()
   const devices = useDevicesStore((s) => s.devices)
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
+
+  // USB devices with a known VID/PID are the udev-rule candidates
+  // (issues.md #42): the rule grants world-read/write so the app can open
+  // the port without root.
+  const usbDevices = devices.filter((d) => d.device_id != null)
+  const vidPids = usbDevices.map(
+    (d) =>
+      [
+        d.device_id!.vendor_id.toString(16).padStart(4, '0'),
+        d.device_id!.product_id.toString(16).padStart(4, '0'),
+      ] as [string, string],
+  )
+
+  const install = async () => {
+    setBusy(true)
+    setResult(null)
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      const text = await invoke<string>('install_udev_rules', { vidPids })
+      setResult({ ok: true, text })
+    } catch (e) {
+      setResult({ ok: false, text: String(e) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <div className="text-sm">
       <div className="mb-2 text-xs text-muted">{t('settings.devices.hint')}</div>
       {devices.length === 0 ? (
         <div className="rounded border border-line bg-canvas p-3 text-muted">{t('settings.devices.none')}</div>
       ) : (
-        <ul className="space-y-1">
-          {devices.map((d) => (
-            <li key={d.port_name} className="mono rounded border border-line bg-canvas px-3 py-2 text-xs">
-              {d.port_name} · {d.device_id ? `${d.device_id.vendor_id.toString(16)}:${d.device_id.product_id.toString(16)}` : d.transport}
-            </li>
-          ))}
-        </ul>
+        <>
+          <ul className="space-y-1">
+            {devices.map((d) => (
+              <li key={d.port_name} className="mono rounded border border-line bg-canvas px-3 py-2 text-xs">
+                {d.port_name} · {d.device_id ? `${d.device_id.vendor_id.toString(16)}:${d.device_id.product_id.toString(16)}` : d.transport}
+              </li>
+            ))}
+          </ul>
+          {usbDevices.length > 0 && (
+            <div className="mt-3">
+              <button
+                onClick={() => void install()}
+                disabled={busy}
+                className="touch-target h-11 w-full rounded border border-line px-4 text-muted hover:text-ink disabled:opacity-50"
+              >
+                {busy ? '…' : t('settings.devices.fixPermissions')}
+              </button>
+              <div className="mt-1 text-xs text-muted">{t('settings.devices.fixHint')}</div>
+              {result && (
+                <div
+                  className={`mt-2 rounded border px-3 py-2 text-xs ${
+                    result.ok ? 'border-ok bg-ok/10 text-ok' : 'border-error bg-error/10 text-error'
+                  }`}
+                >
+                  {result.text}
+                </div>
+              )}
+            </div>
+          )}
+        </>
       )}
     </div>
   )

@@ -29,6 +29,7 @@ pub fn run() {
             commands::get_snapshot,
             commands::enumerate_devices,
             commands::set_sitl_home,
+            commands::install_udev_rules,
             commands::mission_upload,
             commands::mission_download,
             commands::mission_clear,
@@ -66,6 +67,34 @@ pub fn run() {
             inspector_service::inspector_use_live,
             inspector_service::inspector_source
         ])
+        .setup(|app| {
+            // Serial hotplug watcher (issues.md #40): pushes a fresh device
+            // list to the frontend whenever a port appears or disappears, so
+            // the connection dropdown stays live without a manual refresh.
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                use maggcs_core::devices::{DeviceDatabase, DeviceManager};
+                use tauri::Emitter;
+                let watcher = DeviceManager::new(DeviceDatabase::builtin()).spawn_watcher();
+                let mut events = watcher.subscribe();
+                loop {
+                    match events.recv().await {
+                        Ok(_) => {
+                            let manager = DeviceManager::new(DeviceDatabase::builtin());
+                            match manager.enumerate() {
+                                Ok(devices) => {
+                                    let _ = app_handle.emit("devices_changed", &devices);
+                                }
+                                Err(_) => continue,
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                    }
+                }
+            });
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

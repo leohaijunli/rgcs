@@ -336,6 +336,8 @@ export default {
     devices: {
       hint: 'Serial ports visible to the helper; RTK base and FC links can be selected in Connection.',
       none: 'No serial devices detected.',
+      fixPermissions: 'Fix USB permissions (sudo)',
+      fixHint: 'Installs a udev rule granting read/write on the USB serial devices above — a system password prompt follows. Undo by deleting /etc/udev/rules.d/99-maggcs.rules.',
     },
     logs: {
       placeholder: 'Log download arrives in Phase 5 (MAVLink LOG protocol).',

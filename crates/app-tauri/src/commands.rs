@@ -320,6 +320,66 @@ pub async fn set_message_interval(
         .map_err(|e| e.to_string())
 }
 
+/// Generate the udev rule text for a list of `(vendor_id, product_id)` pairs
+/// (issues.md #42, ADR-009). One line per pair, bound to the tty subsystem,
+/// world-readable. Pure function — unit-tested, previewed in the UI before
+/// the pkexec prompt.
+pub fn udev_rule_text(vid_pids: &[(String, String)]) -> String {
+    let mut out = String::new();
+    for (vid, pid) in vid_pids {
+        out.push_str(&format!(
+            "SUBSYSTEM==\"tty\", ATTRS{{idVendor}}==\"{vid}\", ATTRS{{idProduct}}==\"{pid}\", MODE=\"0666\"\n"
+        ));
+    }
+    out
+}
+
+/// Install the udev rules for the given devices through polkit (ADR-009):
+/// the helper script validates the rules again (defense in depth) before
+/// writing the fixed rules file. Linux only.
+#[tauri::command]
+pub async fn install_udev_rules(vid_pids: Vec<(String, String)>) -> Result<String, String> {
+    if !cfg!(target_os = "linux") {
+        return Err("udev rules only apply on Linux".into());
+    }
+    if vid_pids.is_empty() {
+        return Err("no devices selected".into());
+    }
+    let rules = udev_rule_text(&vid_pids);
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../helpers/udev-installer/install.sh");
+    let script = script
+        .canonicalize()
+        .map_err(|e| format!("helper script not found: {e}"))?;
+    use std::process::Stdio;
+    let mut child = tokio::process::Command::new("pkexec")
+        .args(["bash", &script.to_string_lossy(), "install"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("pkexec failed (is polkit installed?): {e}"))?;
+    // Write the rule text to the helper's stdin (ADR-009: never on argv).
+    if let Some(mut stdin) = child.stdin.take() {
+        use tokio::io::AsyncWriteExt;
+        stdin
+            .write_all(rules.as_bytes())
+            .await
+            .map_err(|e| e.to_string())?;
+        stdin.shutdown().await.map_err(|e| e.to_string())?;
+        drop(stdin); // EOF so the helper's `cat` returns
+    }
+    let output = child.wait_with_output().await.map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        Err(format!(
+            "helper rejected the rules: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
+}
+
 /// Map a UI command name to its MAVLink command and parameters.
 fn named_command(name: &str) -> Result<(MavCmd, [f32; 7]), String> {
     let command = match name {
