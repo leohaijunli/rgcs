@@ -26,6 +26,7 @@ import { useLinkStore } from '../stores/link'
 import { useMissionStore } from '../stores/mission'
 import { useTelemetryStore } from '../stores/telemetry'
 import { startMockFeed } from '../telemetry/mock'
+import { startDeviceWatcher } from '../stores/devices'
 
 function inTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -44,6 +45,9 @@ export function useTelemetryBridge() {
         mockTimer = startMockFeed()
         return
       }
+      // Serial hotplug subscription (issues.md #40): keeps the connection
+      // dropdown live when ports appear or disappear.
+      startDeviceWatcher()
       const un1 = await listen<TelemetrySnapshot>('telemetry', (e) => {
         useTelemetryStore.getState().applySnapshot(e.payload)
       })

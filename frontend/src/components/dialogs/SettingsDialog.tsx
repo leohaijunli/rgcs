@@ -349,6 +349,8 @@ function VehicleTab() {
   const { t } = useTranslation()
   const saved = usePrefsStore((s) => s.initialPosition)
   const setInitialPosition = usePrefsStore((s) => s.setInitialPosition)
+  const modelOrientation = usePrefsStore((s) => s.modelOrientation)
+  const setModelOrientation = usePrefsStore((s) => s.setModelOrientation)
   const mapCenter = useUiStore((s) => s.mapCenter)
   const [lat, setLat] = useState(() => formatDeg(saved.lat))
   const [lon, setLon] = useState(() => formatDeg(saved.lon))
@@ -418,6 +420,29 @@ function VehicleTab() {
       </button>
       <div className="mono mt-3 text-xs text-muted">
         {formatDeg(saved.lat)}, {formatDeg(saved.lon)}
+      </div>
+
+      {/* UAV model orientation offsets (issues.md #43): added to the MAVLink
+       * attitude when the 3D model is drawn, so a model whose nose is not the
+       * asset's default axis can be re-aligned without touching code. */}
+      <div className="mt-5 mb-1 text-xs text-muted">{t('settings.modelOrientation.title')}</div>
+      <div className="mb-3 text-xs text-muted">{t('settings.modelOrientation.hint')}</div>
+      <div className="grid grid-cols-3 gap-3">
+        {(['pitch', 'roll', 'yaw'] as const).map((axis) => (
+          <label key={axis} className="block">
+            <span className="text-xs text-muted">{t(`settings.modelOrientation.${axis}`)}</span>
+            <input
+              value={modelOrientation[axis]}
+              inputMode="decimal"
+              type="number"
+              step="1"
+              onChange={(e) =>
+                setModelOrientation({ ...modelOrientation, [axis]: Number(e.target.value) })
+              }
+              className={field}
+            />
+          </label>
+        ))}
       </div>
     </div>
   )

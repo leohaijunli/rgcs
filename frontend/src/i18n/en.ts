@@ -283,6 +283,13 @@ export default {
       noFc: 'Data, no FC heartbeat',
       online: 'FC online',
     },
+    modelOrientation: {
+      title: 'UAV model orientation',
+      hint: 'Offsets (degrees) added to the 3D model attitude — re-align a model whose nose is not the asset default. Yaw −90 is the asset default correction.',
+      pitch: 'Pitch (°)',
+      roll: 'Roll (°)',
+      yaw: 'Yaw (°)',
+    },
     initialPosition: {
       title: 'Initial vehicle position',
       hint: 'Used for the mock feed, the HOME marker and the initial camera until a vehicle reports its own fix. Leave it at the default for the SITL/survey area.',

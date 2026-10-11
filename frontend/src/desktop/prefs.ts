@@ -10,11 +10,46 @@ import { DEFAULT_ENDPOINT } from './endpoint'
 const ENDPOINT_KEY = 'maggcs.endpoint'
 const AUTOCONNECT_KEY = 'maggcs.autoconnect'
 const POSITION_KEY = 'maggcs.initialPosition'
+const MODEL_ORIENTATION_KEY = 'maggcs.modelOrientation'
 
 /** Geographic position in degrees (WGS84). */
 export interface LatLon {
   lat: number
   lon: number
+}
+
+/** UAV 3D-model orientation offsets in degrees (issues.md #43): added to the
+ * MAVLink attitude before the model quaternion is composed, so a model whose
+ * nose is not the asset's default axis can be re-aligned from Settings. */
+export interface ModelOrientation {
+  pitch: number
+  roll: number
+  yaw: number
+}
+
+/** Defaults keep the pre-setting behaviour (yaw −90 = asset nose correction). */
+export const DEFAULT_MODEL_ORIENTATION: ModelOrientation = { pitch: 0, roll: 0, yaw: -90 }
+
+function parseModelOrientation(raw: string | null): ModelOrientation {
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as Partial<ModelOrientation>
+      const { pitch, roll, yaw } = parsed
+      if (
+        typeof pitch === 'number' &&
+        Number.isFinite(pitch) &&
+        typeof roll === 'number' &&
+        Number.isFinite(roll) &&
+        typeof yaw === 'number' &&
+        Number.isFinite(yaw)
+      ) {
+        return { pitch, roll, yaw }
+      }
+    } catch {
+      /* corrupt entry: fall through to the default */
+    }
+  }
+  return { ...DEFAULT_MODEL_ORIENTATION }
 }
 
 /**
@@ -88,6 +123,8 @@ interface PrefsState {
   endpoint: string
   autoConnect: boolean
   initialPosition: LatLon
+  modelOrientation: ModelOrientation
+  setModelOrientation: (o: ModelOrientation) => void
   setEndpoint: (endpoint: string) => void
   setAutoConnect: (autoConnect: boolean) => void
   /** Ignored unless the position is a valid lat/lon. */
@@ -98,9 +135,14 @@ export const usePrefsStore = create<PrefsState>((set) => ({
   endpoint: read(ENDPOINT_KEY, DEFAULT_ENDPOINT),
   autoConnect: read(AUTOCONNECT_KEY, 'true') !== 'false',
   initialPosition: parseInitialPosition(read(POSITION_KEY, '')),
+  modelOrientation: parseModelOrientation(read(MODEL_ORIENTATION_KEY, '')),
   setEndpoint: (endpoint) => {
     write(ENDPOINT_KEY, endpoint)
     set({ endpoint })
+  },
+  setModelOrientation: (modelOrientation) => {
+    write(MODEL_ORIENTATION_KEY, JSON.stringify(modelOrientation))
+    set({ modelOrientation })
   },
   setAutoConnect: (autoConnect) => {
     write(AUTOCONNECT_KEY, String(autoConnect))

@@ -35,4 +35,3 @@ export const FOLLOW_PITCH_DEG = -35
 // +X nose 90 degrees clockwise of north when yaw is 0; passing `yaw - 90`
 // puts the nose back on the reported heading.
 export const UAV_MODEL_URI = '/model/scene-static.gltf'
-export const UAV_MODEL_NOSE_YAW_OFFSET_DEG = -90

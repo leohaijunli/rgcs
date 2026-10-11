@@ -39,7 +39,6 @@ import {
   PREDICT_STEP_S,
   TRAIL_EVERY,
   TRAIL_MAX,
-  UAV_MODEL_NOSE_YAW_OFFSET_DEG,
 } from '../cesium/constants'
 import { groundSpeedMps, projectAhead, uavOrientation } from '../cesium/uav'
 import { DEFAULT_ALT_AGL_M } from '../mission/compile'
@@ -255,12 +254,16 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
       new Cesium.Cartesian3(),
     )
     followRef.current?.setFix({ cart, vel, atMs: performance.now() })
+    // Model orientation offsets (issues.md #43, Settings → Vehicle): the
+    // yaw default keeps the asset-nose correction the constant used to
+    // hard-code.
+    const model = usePrefsStore.getState().modelOrientation
     layer.droneOrientation.setValue(
       uavOrientation(
         cart,
-        (attitude?.yaw_deg ?? pos.heading_deg) + UAV_MODEL_NOSE_YAW_OFFSET_DEG,
-        attitude?.pitch_deg ?? 0,
-        attitude?.roll_deg ?? 0,
+        (attitude?.yaw_deg ?? pos.heading_deg) + model.yaw,
+        (attitude?.pitch_deg ?? 0) + model.pitch,
+        (attitude?.roll_deg ?? 0) + model.roll,
       ),
     )
     layer.drone.show = true
