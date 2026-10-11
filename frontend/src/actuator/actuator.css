@@ -302,3 +302,14 @@ body,
 .mag-alarm-active {
   border-color: var(--mg-error) !important;
 }
+
+/* PM9: COM_MOT_TEST_EN disabled banner. */
+.mot-en-gate {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--mg-warn);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--mg-warn) 14%, transparent);
+  font-size: 12px;
+  color: var(--mg-ink);
+}

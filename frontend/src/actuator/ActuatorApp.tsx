@@ -13,7 +13,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import type { ParamEntry } from '../generated-types/ParamEntry'
 import { isTauri } from '../inspector/mock'
+
+/** The parameter that gates motor tests on the FC (parameters plan PM9). */
+const MOT_TEST_EN = 'COM_MOT_TEST_EN'
+/** Poll period for the parameter cache check. */
+const MOT_TEST_EN_POLL_MS = 2000
 
 /** Prop load selected for this test. Operator-declared — there is no
  * sensor that can tell the types apart (operator decision 2026-10-10). */
@@ -106,6 +112,9 @@ export function ActuatorApp() {
   const [unlocked, setUnlocked] = useState(false)
   /** Latched emergency: stays until an explicit reset, never auto-clears. */
   const [emergency, setEmergency] = useState(false)
+  /** `COM_MOT_TEST_EN` from the parameter cache: true/false, null = unknown
+   * (never pulled). false disables motor tests and offers the jump. */
+  const [motTestEn, setMotTestEn] = useState<boolean | null>(null)
   // Manual source state.
   const [values, setValues] = useState<number[]>(() => new Array(MOTOR_COUNT).fill(0))
   const [sync, setSync] = useState(true)
@@ -193,6 +202,26 @@ export function ActuatorApp() {
       disposed = true
       un?.()
     }
+  }, [tauri])
+
+  // PM9 (parameters plan): read COM_MOT_TEST_EN from the parameter cache —
+  // the value lands there after a Pull all or a lazy read in the Parameters
+  // window. null = not in the cache yet (never pulled), false = disabled.
+  useEffect(() => {
+    if (!tauri) return
+    const poll = async () => {
+      try {
+        const entry = await invoke<ParamEntry | null>('params_cache_get', {
+          name: MOT_TEST_EN,
+        })
+        setMotTestEn(entry ? Number('int' in entry.value ? entry.value.int : entry.value.real) !== 0 : null)
+      } catch {
+        /* not connected: keep the last known state */
+      }
+    }
+    void poll()
+    const id = setInterval(poll, MOT_TEST_EN_POLL_MS)
+    return () => clearInterval(id)
   }, [tauri])
 
   /** Alarm beep: a synthesized square wave through WebAudio — works on
@@ -776,11 +805,34 @@ export function ActuatorApp() {
           )}
         </div>
 
+        <MotTestEnGate motTestEn={motTestEn} />
+
         <div className="estop-note">
           Tests run while the FC is disarmed; PX4 denies ACTUATOR_TEST otherwise
           (enable COM_MOT_TEST_EN=1 on the FC).
         </div>
       </aside>
+    </div>
+  )
+}
+/** PM9 gate: when the parameter cache says COM_MOT_TEST_EN=0, motor tests
+ * are FC-denied anyway — say so up front and offer the jump to the
+ * Parameters window (open-or-focus, same entry the TopBar uses). Unknown
+ * (never pulled) renders nothing: the estop note below covers it. */
+function MotTestEnGate({ motTestEn }: { motTestEn: boolean | null }) {
+  if (motTestEn !== false) return null
+  const openParams = () => {
+    void invoke('params_open').catch(() => {})
+  }
+  return (
+    <div className="mot-en-gate">
+      <span>
+        COM_MOT_TEST_EN=0 — the FC rejects every motor-test command. Set it to
+        1 in Parameters (reboot required after Apply).
+      </span>
+      <button className="mode-btn" style={{ width: '100%', marginTop: 6 }} onClick={openParams}>
+        Open Parameters
+      </button>
     </div>
   )
 }
