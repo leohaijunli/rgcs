@@ -57,7 +57,7 @@ export interface CesiumViewerHandle {
   setSnapshot(snapshot: TelemetrySnapshot | null): void
   /** Re-render the mission waypoint layer. */
   setLayers(showGrid: boolean): void
-  setImageryStyle(style: 'osm' | 'satellite' | 'topo'): void
+  setImageryStyle(style: 'osm' | 'satellite' | 'google' | 'topo'): void
   setMission(
     items: MissionItem[],
     selectedSeq: number | null,
@@ -332,7 +332,7 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
     applyLayerVisibility(viewer, showGrid)
   }, [])
 
-  const setImageryStyle = useCallback((style: 'osm' | 'satellite' | 'topo') => {
+  const setImageryStyle = useCallback((style: 'osm' | 'satellite' | 'google' | 'topo') => {
     const viewer = viewerRef.current
     if (!viewer) return
     applyImageryStyle(viewer, style)

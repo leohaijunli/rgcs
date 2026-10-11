@@ -117,7 +117,7 @@ export default function MapToolbar({ onGoHome, onNorth }: Props) {
       {popover === 'layers' && (
         <Popover>
           <div className="flex rounded border border-line bg-canvas p-0.5">
-            {(['osm', 'satellite', 'topo'] as const).map((style) => (
+            {(['osm', 'satellite', 'google', 'topo'] as const).map((style) => (
               <button
                 key={style}
                 className={`flex-1 rounded px-1.5 py-1 text-[11px] transition-colors ${

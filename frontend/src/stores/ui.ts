@@ -9,7 +9,7 @@ export type PlanStep = 'area' | 'pattern' | 'waypoints' | 'sync'
  * survey boundary (both planning view only). */
 export type MapTool = 'select' | 'add' | 'polygon'
 /** Basemap imagery on top of the offline grid. */
-export type ImageryStyle = 'osm' | 'satellite' | 'topo'
+export type ImageryStyle = 'osm' | 'satellite' | 'google' | 'topo'
 
 export interface ViewConfig {
   rightTab: string

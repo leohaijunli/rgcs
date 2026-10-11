@@ -231,7 +231,8 @@ export default {
   },
   terrain: {
     osm: 'Streets',
-    satellite: 'Satellite',
+    satellite: 'Esri',
+    google: 'Google',
     topo: 'Topo',
     grid: 'Grid',
   },

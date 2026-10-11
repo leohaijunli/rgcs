@@ -60,8 +60,17 @@ export function createViewer(
 
 /** The imagery providers (operator request: satellite + topo in addition to
  * the street map; no grid-only mode — imagery is always shown). */
-function imageryProvider(style: 'osm' | 'satellite' | 'topo'): Cesium.ImageryProvider {
+function imageryProvider(style: 'osm' | 'satellite' | 'google' | 'topo'): Cesium.ImageryProvider {
   switch (style) {
+    case 'google':
+      // Google satellite tiles (lyrs=s): WGS84-aligned like the waypoints.
+      // Unreachable from mainland China without a proxy.
+      return new Cesium.UrlTemplateImageryProvider({
+        url: 'https://mt{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
+        subdomains: ['0', '1', '2', '3'],
+        maximumLevel: 20,
+        credit: 'Google',
+      })
     case 'satellite':
       // Esri World Imagery: global aerial coverage, the layer a survey plan
       // is actually drawn against.
@@ -88,7 +97,7 @@ function imageryProvider(style: 'osm' | 'satellite' | 'topo'): Cesium.ImageryPro
  */
 export function setImageryStyle(
   viewer: Cesium.Viewer,
-  style: 'osm' | 'satellite' | 'topo',
+  style: 'osm' | 'satellite' | 'google' | 'topo',
 ): void {
   const layers = viewer.imageryLayers
   if (layers.length < 2) return
