@@ -104,6 +104,15 @@ export function ActuatorApp() {
   // Confirmation state.
   const [phrase, setPhrase] = useState('')
   const [holdProgress, setHoldProgress] = useState(0)
+  // Mag alarm (A4b): enable + threshold are operator inputs; the debounce/
+  // hysteresis/cooldown state machine runs in core. `magAlarm` mirrors the
+  // core state via the actuator_telemetry/alarm events.
+  const [alarmEnabled, setAlarmEnabled] = useState(false)
+  const [alarmThreshold, setAlarmThreshold] = useState(55_000)
+  const [magAlarm, setMagAlarm] = useState(false)
+  const [magTotal, setMagTotal] = useState<number | null>(null)
+  const audioCtxRef = useRef<AudioContext | null>(null)
+  const beepTimer = useRef<number | undefined>(undefined)
 
   const valuesRef = useRef(values)
   valuesRef.current = values
@@ -170,6 +179,88 @@ export function ActuatorApp() {
       un?.()
     }
   }, [tauri])
+
+  /** Alarm beep: a synthesized square wave through WebAudio — works on
+   * Ubuntu and Windows alike, no bundled asset. */
+  const beep = useCallback(() => {
+    try {
+      audioCtxRef.current ??= new AudioContext()
+      const ctx = audioCtxRef.current
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'square'
+      osc.frequency.value = 880
+      gain.gain.value = 0.08
+      osc.connect(gain).connect(ctx.destination)
+      osc.start()
+      osc.stop(ctx.currentTime + 0.18)
+    } catch {
+      /* no audio device: the visual alarm still runs */
+    }
+  }, [])
+
+  /** Alarm audio loop: beep at ~2 Hz while latched. */
+  useEffect(() => {
+    if (!magAlarm || !alarmEnabled) return
+    beep()
+    beepTimer.current = window.setInterval(beep, 500)
+    return () => {
+      if (beepTimer.current !== undefined) {
+        window.clearInterval(beepTimer.current)
+        beepTimer.current = undefined
+      }
+    }
+  }, [magAlarm, alarmEnabled, beep])
+
+  const acknowledgeAlarm = () => {
+    setMagAlarm(false)
+    if (tauri) void invoke('actuator_acknowledge_alarm').catch(() => {})
+  }
+
+  // Mag telemetry + alarm events; the threshold change is pushed to core.
+  useEffect(() => {
+    if (!tauri) return
+    let disposed = false
+    let unTelemetry: (() => void) | undefined
+    let unAlarm: (() => void) | undefined
+    void (async () => {
+      try {
+        unTelemetry = await listen<{
+          mag_total_nt: number | null
+          alarm: string
+        }>('actuator_telemetry', (e) => {
+          if (disposed) return
+          setMagTotal(e.payload.mag_total_nt)
+          setMagAlarm(e.payload.alarm === 'alarm')
+        })
+        unAlarm = await listen('actuator_alarm', () => {
+          if (disposed) return
+          setMagAlarm(true)
+        })
+      } catch {
+        /* events unavailable */
+      }
+    })()
+    return () => {
+      disposed = true
+      unTelemetry?.()
+      unAlarm?.()
+    }
+  }, [tauri])
+
+  // Push the threshold (and enable) to the core watchdog when they change.
+  useEffect(() => {
+    if (!tauri) return
+    void invoke('actuator_set_alarm_config', {
+      config: {
+        threshold_nt: alarmEnabled ? alarmThreshold : Number.MAX_SAFE_INTEGER,
+        debounce_s: 1.0,
+        hysteresis_nt: 50.0,
+        cooldown_s: 30.0,
+        ema_alpha: 0.2,
+      },
+    }).catch(() => {})
+  }, [tauri, alarmEnabled, alarmThreshold])
 
   const pushValues = useCallback(
     (next: number[]) => {
@@ -266,7 +357,7 @@ export function ActuatorApp() {
   useEffect(() => cancelHold, [])
 
   return (
-    <div className="actuator-grid">
+    <div className={`actuator-grid ${magAlarm && alarmEnabled ? 'mag-alarm-flash' : ''}`}>
       <header className="actuator-header">
         <strong style={{ fontSize: 13 }}>Motor / Mag Interference Test</strong>
         <span className="row" style={{ gap: 6 }}>
@@ -579,6 +670,53 @@ export function ActuatorApp() {
             <span className="mono">{status.session}</span>
           </div>
         </div>
+
+        {/* Mag alarm (A4b, plan §9.1): threshold watchdog over the calibrated
+         * total field, with debounce + hysteresis + cooldown in core. */}
+        <div className={`card ${magAlarm ? 'mag-alarm-active' : ''}`}>
+          <h3>Mag alarm</h3>
+          <label className="row" style={{ marginBottom: 6 }}>
+            <span>Enabled</span>
+            <input
+              type="checkbox"
+              checked={alarmEnabled}
+              onChange={(e) => setAlarmEnabled(e.target.checked)}
+            />
+          </label>
+          <label className="motor-row">
+            <span className="motor-label" style={{ width: 52 }}>Thr.</span>
+            <input
+              className="phrase-input"
+              style={{ flex: 1, margin: 0 }}
+              type="number"
+              min={0}
+              step={100}
+              value={alarmThreshold}
+              onChange={(e) => setAlarmThreshold(Number(e.target.value))}
+            />
+            <span className="mono motor-value">nT</span>
+          </label>
+          <div className="row">
+            <span className="text-muted">Total field</span>
+            <span className="mono">{magTotal != null ? `${magTotal.toFixed(1)} nT` : '—'}</span>
+          </div>
+          <div className="row">
+            <span className="text-muted">State</span>
+            <span className={`mono ${magAlarm ? 'text-error' : 'text-ok'}`}>
+              {magAlarm ? 'ALARM' : 'armed'}
+            </span>
+          </div>
+          {magAlarm && (
+            <button
+              className="mode-btn"
+              style={{ width: '100%', marginTop: 6 }}
+              onClick={acknowledgeAlarm}
+            >
+              Acknowledge (silence)
+            </button>
+          )}
+        </div>
+
         <div className="estop-note">
           Tests run while the FC is disarmed; PX4 denies ACTUATOR_TEST otherwise
           (enable COM_MOT_TEST_EN=1 on the FC).

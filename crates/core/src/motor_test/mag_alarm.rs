@@ -18,7 +18,8 @@
 //! I/O, so every branch is unit-testable.
 
 /// Tunables (defaults are pre-M0 starting points, plan §9.1).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct MagAlarmConfig {
     /// Threshold the smoothed total field must exceed, nT.
     pub threshold_nt: f64,

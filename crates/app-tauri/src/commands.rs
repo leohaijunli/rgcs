@@ -124,6 +124,10 @@ pub async fn connect(
             state.attach_inspector(h);
         }
     }
+    // The motor-test window's mag/ESC tap rides the same link (A4 wiring).
+    if let Some(h) = state.connection() {
+        crate::actuator_service::attach_motor_telemetry(&app, h);
+    }
 
     Ok(ConnectResponse {
         ok: true,

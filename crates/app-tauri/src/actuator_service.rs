@@ -70,6 +70,7 @@ pub fn actuator_open(app: AppHandle) -> Result<(), String> {
             let state = app_for_cleanup.state::<AppState>();
             stop_running_session(&state);
             state.motor_test.running.lock().take();
+            detach_motor_telemetry(&state);
         }
     });
     Ok(())
@@ -80,6 +81,7 @@ pub fn actuator_open(app: AppHandle) -> Result<(), String> {
 pub fn actuator_close(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     stop_running_session(&state);
     state.motor_test.running.lock().take();
+    detach_motor_telemetry(&state);
     if let Some(win) = app.get_webview_window("actuator") {
         let _ = win.close();
     }
@@ -470,4 +472,171 @@ impl AppState {
             sitl_feed_age_s,
         }
     }
+}
+
+/// Attach the mag/ESC telemetry tap to a link (A4 wiring): subscribes to
+/// `HIGHRES_IMU` (105, mag triple) and `ESC_STATUS` (291), applies the loaded
+/// calibration, drives the alarm state machine, and emits
+/// `actuator_telemetry` events for the window's curves. Called from
+/// `connect` after the link comes up.
+pub fn attach_motor_telemetry(app: &AppHandle, handle: maggcs_core::mavlink::ConnectionHandle) {
+    let state = app.state::<AppState>();
+    // (Re)attach stops a previous tap and resets the alarm clock; the loaded
+    // calibration survives (it is a file, not link state).
+    if let Some(old) = state.motor_test.telemetry_tap.lock().take() {
+        old.abort();
+    }
+    *state.motor_test.telemetry.lock() = Some(crate::motor_test_state::MotorTelemetry {
+        esc: maggcs_core::signals::derived::EscAggregator::new(8),
+        alarm: maggcs_core::motor_test::MagAlarm::new(Default::default()),
+        calib: None,
+        last_mag_total_nt: None,
+    });
+    let tap_app = app.clone();
+    let task = tauri::async_runtime::spawn(run_motor_telemetry_tap(tap_app, handle));
+    *state.motor_test.telemetry_tap.lock() = Some(task);
+}
+
+/// The telemetry tap: `HIGHRES_IMU` (105) → calibrated `mag_total` → alarm;
+/// `ESC_STATUS` (291) → the ESC aggregator. Emits `actuator_telemetry`
+/// (aggregated snapshot) at ~10 Hz.
+async fn run_motor_telemetry_tap(app: AppHandle, handle: maggcs_core::mavlink::ConnectionHandle) {
+    let mut events = handle.subscribe_route(MessageRoute::messages(&[105, 291]));
+    let mut last_emit = tokio::time::Instant::now();
+    loop {
+        match events.recv().await {
+            Ok(ConnectionEvent::Message(env)) => {
+                let Some(state) = app.try_state::<AppState>() else {
+                    return;
+                };
+                let mut guard = state.motor_test.telemetry.lock();
+                let Some(telemetry) = guard.as_mut() else {
+                    return; // detached
+                };
+                match &env.message {
+                    MavMessage::HIGHRES_IMU(imu) => {
+                        // Apply the loaded calibration (A·(raw−b), optional
+                        // K·I) — none loaded: raw pass-through.
+                        let raw = [imu.xmag as f64, imu.ymag as f64, imu.zmag as f64];
+                        let calibrated = match &telemetry.calib {
+                            Some(cal) => cal.apply(raw, None),
+                            None => raw,
+                        };
+                        let total = (calibrated[0] * calibrated[0]
+                            + calibrated[1] * calibrated[1]
+                            + calibrated[2] * calibrated[2])
+                            .sqrt();
+                        telemetry.last_mag_total_nt = Some(total);
+                        if telemetry.alarm.feed(total, now_epoch_s()) {
+                            // Transition into Alarm: fire the audio + flash.
+                            let _ = app.emit("actuator_alarm", total);
+                        }
+                    }
+                    MavMessage::ESC_STATUS(esc) => {
+                        telemetry.esc.feed(
+                            esc.index,
+                            &[
+                                esc.rpm[0] as i16,
+                                esc.rpm[1] as i16,
+                                esc.rpm[2] as i16,
+                                esc.rpm[3] as i16,
+                            ],
+                            &esc.voltage,
+                            &esc.current,
+                        );
+                    }
+                    _ => {}
+                }
+                // Batch the UI pushes at ~10 Hz.
+                if last_emit.elapsed() >= Duration::from_millis(100) {
+                    last_emit = tokio::time::Instant::now();
+                    let payload = telemetry_payload(telemetry);
+                    let _ = app.emit("actuator_telemetry", &payload);
+                }
+            }
+            Ok(_) => {}
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+        }
+    }
+}
+
+/// Serializable telemetry snapshot for the window (mag + ESC + alarm).
+#[derive(Debug, Clone, Serialize)]
+pub struct MotorTelemetryPayload {
+    pub mag_total_nt: Option<f64>,
+    pub alarm: &'static str,
+    pub esc: Vec<(String, f64)>,
+}
+
+fn telemetry_payload(t: &crate::motor_test_state::MotorTelemetry) -> MotorTelemetryPayload {
+    MotorTelemetryPayload {
+        mag_total_nt: t.last_mag_total_nt,
+        alarm: match t.alarm.state() {
+            maggcs_core::motor_test::MagAlarmState::Armed => "armed",
+            maggcs_core::motor_test::MagAlarmState::Alarm => "alarm",
+        },
+        esc: t.esc.signals(),
+    }
+}
+
+fn now_epoch_s() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
+}
+
+/// Load (or clear with `null`) the magnetometer calibration JSON.
+#[tauri::command]
+pub fn actuator_load_mag_calibration(
+    state: State<'_, AppState>,
+    json: Option<String>,
+) -> Result<(), String> {
+    let mut guard_opt = state.motor_test.telemetry.lock();
+    let Some(telemetry) = guard_opt.as_mut() else {
+        return Err("no telemetry tap attached".into());
+    };
+    match json {
+        None => telemetry.calib = None,
+        Some(json) => {
+            let cal =
+                maggcs_core::calib::MagCalibration::from_json(&json).map_err(|e| e.to_string())?;
+            telemetry.calib = Some(cal);
+        }
+    }
+    Ok(())
+}
+
+/// Update the alarm tunables (threshold/debounce/hysteresis/cooldown/α).
+#[tauri::command]
+pub fn actuator_set_alarm_config(
+    state: State<'_, AppState>,
+    config: maggcs_core::motor_test::MagAlarmConfig,
+) -> Result<(), String> {
+    let mut guard_opt = state.motor_test.telemetry.lock();
+    let Some(telemetry) = guard_opt.as_mut() else {
+        return Err("no telemetry tap attached".into());
+    };
+    telemetry.alarm.set_config(config);
+    Ok(())
+}
+
+/// Operator acknowledge: the audio + flash stop; the state machine keeps
+/// its level tracking (re-fires only per §9.1 rules).
+#[tauri::command]
+pub fn actuator_acknowledge_alarm(state: State<'_, AppState>) -> Result<(), String> {
+    // The window silences itself; the state machine has nothing to reset
+    // (the hysteresis + cooldown own the re-arm). Reserved for a future
+    // acknowledge-required latch mode.
+    let _ = state;
+    Ok(())
+}
+
+/// Detach the telemetry tap (window close / link teardown).
+pub fn detach_motor_telemetry(state: &AppState) {
+    if let Some(old) = state.motor_test.telemetry_tap.lock().take() {
+        old.abort();
+    }
+    *state.motor_test.telemetry.lock() = None;
 }

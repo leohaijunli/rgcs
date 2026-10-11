@@ -6,9 +6,12 @@
 use parking_lot::Mutex as PLMutex;
 use std::time::Duration;
 
+use maggcs_core::calib::mag::MagCalibration;
 use maggcs_core::mavlink::ConnectionHandle;
+use maggcs_core::motor_test::mag_alarm::MagAlarm;
 use maggcs_core::motor_test::source::ForwardSlot;
 use maggcs_core::motor_test::{MotorTestService, SafetyLimits, SessionState};
+use maggcs_core::signals::derived::EscAggregator;
 
 /// The live service handle (plus the event-forwarder task handle, so the
 /// forwarder dies with the entry).
@@ -30,6 +33,17 @@ pub struct SitlLink {
     pub endpoint: String,
 }
 
+/// Live mag/ESC telemetry for the motor-test window (A4 wiring): the tap
+/// updates the aggregator + alarm; the window polls or receives events.
+pub struct MotorTelemetry {
+    pub esc: EscAggregator,
+    pub alarm: MagAlarm,
+    /// Loaded calibration (`None` = apply none — raw pass-through).
+    pub calib: Option<MagCalibration>,
+    /// Latest calibrated total field, nT (`None` = no mag sample yet).
+    pub last_mag_total_nt: Option<f64>,
+}
+
 /// Process-wide holder; `Default` = nothing running. `last_state` mirrors the
 /// newest event so the status poll stays cheap (no service round-trip).
 #[derive(Default)]
@@ -37,6 +51,10 @@ pub struct MotorTestState {
     pub running: PLMutex<Option<RunningMotorTest>>,
     pub last_state: PLMutex<Option<SessionState>>,
     pub sitl: PLMutex<Option<SitlLink>>,
+    /// Telemetry tap (mag/ESC) — `None` until a link attaches.
+    pub telemetry: PLMutex<Option<MotorTelemetry>>,
+    /// Abort handle for the telemetry tap task.
+    pub telemetry_tap: PLMutex<Option<tauri::async_runtime::JoinHandle<()>>>,
 }
 
 impl MotorTestState {
