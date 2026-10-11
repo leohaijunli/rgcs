@@ -107,3 +107,4 @@ traffic bypasses the single-slot command service).
 | 014 | Map tools |
 | 015 | DSP in core |
 | 016 | Inspector window + channel |
+| 017 | Flight mode switching and arming |
