@@ -482,13 +482,22 @@ async fn run(
                 if session.pull_active() {
                     if let Some(deadline) = quiet_deadline {
                         if tokio::time::Instant::now() >= deadline {
-                            if let Some(update) = session.on_pull_timeout() {
-                                if let super::session::PullUpdate::Done { received, total } = update {
-                                    flush_batch(&mut batch, &mut batch_names, &evt_tx);
-                                    let _ = evt_tx.send(ParamEvent::PullDone { received, total });
-                                }
+                            let (update, resend) = session.on_pull_timeout();
+                            if let Some(super::session::PullUpdate::Done { received, total }) = update {
+                                flush_batch(&mut batch, &mut batch_names, &evt_tx);
+                                let _ = evt_tx.send(ParamEvent::PullDone { received, total });
                                 quiet_deadline = None;
                             } else {
+                                // A fill round started, or the lost list
+                                // request is being re-issued: re-arm the
+                                // quiet window either way.
+                                if let Some(req) = resend {
+                                    if let Some(frame) = outbound_frame(&req, target_sys, target_comp) {
+                                        if handle.send(frame).await.is_err() {
+                                            return;
+                                        }
+                                    }
+                                }
                                 quiet_deadline = Some(tokio::time::Instant::now() + PULL_QUIET);
                             }
                         }

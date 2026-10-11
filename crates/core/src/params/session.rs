@@ -254,18 +254,42 @@ impl ParamSession {
         )
     }
 
-    /// A pull tick with no new entries for `PULL_QUIET`: request the missing
-    /// indexes (a capped fill round), or declare Done.
-    pub fn on_pull_timeout(&mut self) -> Option<PullUpdate> {
+    /// A pull tick with no new entries for `PULL_QUIET`. Three cases:
+    ///
+    /// 1. Not even the first `PARAM_VALUE` (and thus the total) arrived —
+    ///    the `PARAM_REQUEST_LIST` itself was lost (a `udpin` link drops
+    ///    sends until its first inbound frame teaches it the peer): re-issue
+    ///    it, bounded by the round budget so a dead link still ends in Done.
+    /// 2. Fill round budget exhausted: declare Done.
+    /// 3. Otherwise: queue the missing indexes (the shell drains them one
+    ///    per tick).
+    pub fn on_pull_timeout(&mut self) -> (Option<PullUpdate>, Option<Outbound>) {
         if !self.pulling {
-            return None;
+            return (None, None);
+        }
+        if self.total.is_none() {
+            self.fill_round += 1;
+            if self.fill_round >= MAX_FILL_ROUNDS {
+                self.pulling = false;
+                return (
+                    Some(PullUpdate::Done {
+                        received: self.received.len() as u16,
+                        total: 0,
+                    }),
+                    None,
+                );
+            }
+            return (None, Some(Outbound::RequestList));
         }
         if self.fill_round >= MAX_FILL_ROUNDS {
             self.pulling = false;
-            return Some(PullUpdate::Done {
-                received: self.received.len() as u16,
-                total: self.total.unwrap_or(0),
-            });
+            return (
+                Some(PullUpdate::Done {
+                    received: self.received.len() as u16,
+                    total: self.total.unwrap_or(0),
+                }),
+                None,
+            );
         }
         self.fill_round += 1;
         let total = self.total.unwrap_or(0);
@@ -276,7 +300,7 @@ impl ParamSession {
             }
         }
         // The shell drains `next_fill_request` one tick at a time.
-        None
+        (None, None)
     }
 
     /// Pop the next fill request (rate-limit friendly: one per call).
@@ -395,5 +419,85 @@ impl ParamSession {
     /// FC prefers it).
     pub fn name_of(&self, index: u16) -> Option<String> {
         self.received.get(&index).map(|e| e.name.clone())
+    }
+}
+
+#[cfg(test)]
+mod pull_reissue_tests {
+    use super::*;
+
+    fn session() -> ParamSession {
+        ParamSession::new(IntEncoding::ByteConcat)
+    }
+
+    #[test]
+    fn lost_list_request_is_reissued_until_budget_ends() {
+        let mut s = session();
+        s.start_pull().expect("idle");
+        // No PARAM_VALUE ever arrives (the list request was dropped by a
+        // link still learning its peer): every quiet window re-issues
+        // PARAM_REQUEST_LIST until the round budget turns it into Done.
+        for expect_done in [false, false, true] {
+            let (update, resend) = s.on_pull_timeout();
+            if expect_done {
+                assert!(matches!(
+                    update,
+                    Some(PullUpdate::Done {
+                        received: 0,
+                        total: 0
+                    })
+                ));
+                assert!(resend.is_none());
+            } else {
+                assert_eq!(update, None);
+                assert_eq!(resend, Some(Outbound::RequestList));
+            }
+        }
+        assert!(!s.pull_active());
+    }
+
+    #[test]
+    fn quiet_window_with_known_total_builds_a_fill_round() {
+        let mut s = session();
+        s.start_pull().expect("idle");
+        // First entry teaches the total; entries 1 and 2 stay missing.
+        let _ = s.on_param_value(IncomingParam {
+            index: 0,
+            count: 3,
+            name: "P_0000".into(),
+            raw_value: 0.0,
+            ptype: ParamType::I32,
+        });
+        let (update, resend) = s.on_pull_timeout();
+        assert_eq!(update, None);
+        assert!(resend.is_none());
+        // The fill queue holds the missing indexes, drained one per call.
+        let mut requested = Vec::new();
+        while let Some(out) = s.next_fill_request() {
+            if let Outbound::RequestRead { index } = out {
+                requested.push(index);
+            }
+        }
+        assert_eq!(requested, vec![2, 1]);
+    }
+
+    #[test]
+    fn a_late_first_answer_stops_the_reissue() {
+        let mut s = session();
+        s.start_pull().expect("idle");
+        let (_, resend) = s.on_pull_timeout();
+        assert_eq!(resend, Some(Outbound::RequestList));
+        // The re-issued request gets heard: the answer sets the total and
+        // the next quiet window fills instead of re-requesting the list.
+        let _ = s.on_param_value(IncomingParam {
+            index: 0,
+            count: 1,
+            name: "P_0000".into(),
+            raw_value: 1.0,
+            ptype: ParamType::I32,
+        });
+        let (update, resend) = s.on_pull_timeout();
+        assert_eq!(update, None);
+        assert!(resend.is_none());
     }
 }

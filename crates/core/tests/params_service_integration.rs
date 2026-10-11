@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use ::mavlink::common::{MavParamType, PARAM_VALUE_DATA};
 use ::mavlink::MavHeader;
-use maggcs_core::mavlink::connection::{spawn_connection, ConnectionConfig};
+use maggcs_core::mavlink::connection::{spawn_connection, ConnectionConfig, ConnectionEvent};
 use maggcs_core::mavlink::endpoint::Endpoint;
 use maggcs_core::mavlink::MavMessage;
 use maggcs_core::params::model::{ParamType, ParamValue};
@@ -73,7 +73,7 @@ async fn lossy_dup_reordered_pull_converges_and_set_echoes() {
     const TOTAL: u16 = 50;
     let port = free_udp_port();
     let config = config_for_port(port);
-    let (handle, _rx, first_result) = spawn_connection(config.clone()).await.expect("spawn");
+    let (handle, mut rx, first_result) = spawn_connection(config.clone()).await.expect("spawn");
     match timeout(Duration::from_secs(3), first_result).await {
         Ok(Ok(Ok(()))) => {}
         _ => panic!("listener never came up"),
@@ -85,10 +85,23 @@ async fn lossy_dup_reordered_pull_converges_and_set_echoes() {
     peer.set_protocol_version(mavlink::MavlinkVersion::V2);
 
     // Bootstrap: a udpin listener only learns the peer address from an
-    // inbound frame — the fake FC speaks first.
+    // inbound frame — the fake FC speaks first. Wait until the worker has
+    // actually processed that frame before pulling: a send before the peer
+    // address is learned is silently dropped by the transport, and the test
+    // must not race that (the service re-issues the list request in
+    // production, but the test measures the request latency directly).
     peer.send(&FC_HEADER, &fc_param(0, TOTAL))
         .await
         .expect("bootstrap");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match timeout(remaining, rx.recv()).await {
+            Ok(Ok(ConnectionEvent::Message(_))) => break,
+            Ok(Ok(_)) => {}
+            _ => panic!("bootstrap frame never reached the worker"),
+        }
+    }
 
     let (svc, mut evt) = ParamService::spawn(handle.clone(), 1, 1);
 
