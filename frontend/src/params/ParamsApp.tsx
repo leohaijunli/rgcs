@@ -168,6 +168,14 @@ export function ParamsApp() {
     return () => ro.disconnect()
   }, [])
 
+  // A group/pane switch changes the row set: snap back to the top, or a
+  // deep scroll position renders past the end of a short group and the
+  // list looks like it never switched.
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0
+    setScrollTop(0)
+  }, [activeGroup, groupPane])
+
   const selectedMeta = selected ? meta.get(selected) : undefined
   const selectedValue = selected ? values.get(selected) : undefined
 
@@ -183,13 +191,29 @@ export function ParamsApp() {
       <div className="p-left-tabs">
         <button
           className={`p-tab ${leftTab === 'px4' ? 'active' : ''}`}
-          onClick={() => setLeftTab('px4')}
+          onClick={() => {
+            setLeftTab('px4')
+            // Coming from a custom group: back to All (a custom selection
+            // has no meaning in the PX4 tree).
+            if (groupPane === 'custom') {
+              setActiveGroup(null)
+              setGroupPane('px4')
+            }
+          }}
         >
           PX4
         </button>
         <button
           className={`p-tab ${leftTab === 'custom' ? 'active' : ''}`}
-          onClick={() => setLeftTab('custom')}
+          onClick={() => {
+            setLeftTab('custom')
+            // Coming from a PX4 view: jump to the first custom group (or
+            // clear, when none exist) so the pane and the list agree.
+            if (groupPane !== 'custom') {
+              setActiveGroup(groups.length > 0 ? groups[0].id : null)
+              setGroupPane('custom')
+            }
+          }}
         >
           Custom
         </button>
@@ -347,7 +371,6 @@ export function ParamsApp() {
             <span>Value</span>
             <span>Default</span>
             <span>Description</span>
-            <span />
           </div>
           <div
             className="p-scroll"
@@ -372,7 +395,7 @@ export function ParamsApp() {
                   return (
                     <div
                       key={name}
-                      className={`p-row ${isSel ? 'sel' : ''}`}
+        className={`p-row ${isSel ? 'sel' : ''}`}
                       style={{ position: 'absolute', top: (first + i) * ROW_H, height: ROW_H }}
                       onClick={() => selectRow(name)}
                     >
@@ -392,27 +415,6 @@ export function ParamsApp() {
                       <span className="mono p-default">{m.default ?? '—'}</span>
                       <span className="p-desc" title={m.longDesc ?? m.shortDesc ?? ''}>
                         {m.shortDesc ?? ''}
-                      </span>
-                      <span className="p-addbtn">
-                        {groups.length > 0 && (
-                          <select
-                            className="p-addsel"
-                            title="Add to custom group"
-                            value=""
-                            onClick={(e) => e.stopPropagation()}
-                            onChange={(e) => {
-                              if (e.target.value)
-                                store.getState().addToGroup(e.target.value, name)
-                            }}
-                          >
-                            <option value="">+</option>
-                            {groups.map((g) => (
-                              <option key={g.id} value={g.id}>
-                                {g.name}
-                              </option>
-                            ))}
-                          </select>
-                        )}
                       </span>
                     </div>
                   )
@@ -476,12 +478,36 @@ export function ParamsApp() {
                   ))}
                 </div>
               )}
-              <button
-                className="p-btn p-copy"
-                onClick={() => void navigator.clipboard?.writeText(selected)}
-              >
-                Copy name
-              </button>
+              <div className="p-detail-actions">
+                <button
+                  className="p-btn"
+                  onClick={() => void navigator.clipboard?.writeText(selected)}
+                >
+                  Copy name
+                </button>
+                {groups.length > 0 && (
+                  <select
+                    className="p-addsel"
+                    title="Add to custom group"
+                    value=""
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        store.getState().addToGroup(e.target.value, selected)
+                        setNotice(`${selected} added to ${
+                          groups.find((g) => g.id === e.target.value)?.name ?? ''
+                        }`)
+                      }
+                    }}
+                  >
+                    <option value="">Add to group…</option>
+                    {groups.map((g) => (
+                      <option key={g.id} value={g.id}>
+                        {g.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
             </>
           ) : (
             <div className="p-detail-empty">

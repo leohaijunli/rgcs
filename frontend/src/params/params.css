@@ -287,7 +287,7 @@ body,
 
 .p-thead {
   display: grid;
-  grid-template-columns: minmax(160px, 1.3fr) 90px 70px minmax(120px, 1fr) 56px;
+  grid-template-columns: minmax(160px, 1.3fr) 90px 70px minmax(120px, 1fr);
   gap: 6px;
   padding: 4px 8px;
   font-size: 10px;
@@ -306,7 +306,7 @@ body,
 
 .p-row {
   display: grid;
-  grid-template-columns: minmax(160px, 1.3fr) 90px 70px minmax(120px, 1fr) 56px;
+  grid-template-columns: minmax(160px, 1.3fr) 90px 70px minmax(120px, 1fr);
   gap: 6px;
   align-items: center;
   padding: 0 8px;
@@ -352,15 +352,17 @@ body,
   color: var(--mg-muted);
 }
 
-.p-addbtn {
-  text-align: center;
+.p-detail-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
 }
 
 .p-addsel {
-  height: 20px;
+  height: 28px;
   font-size: 11px;
   border: 1px solid var(--mg-border);
-  border-radius: 4px;
+  border-radius: 5px;
   background: var(--mg-bg);
   color: var(--mg-muted);
   cursor: pointer;
