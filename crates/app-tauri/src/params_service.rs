@@ -202,6 +202,28 @@ pub struct SetEcho {
     pub requested: Option<ParamValue>,
 }
 
+/// Lazy-load one parameter's current value from the FC (by name). The
+/// window fetches values on selection instead of pulling the whole set
+/// (operator request 2026-10-11).
+#[tauri::command]
+pub async fn params_read(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<Option<maggcs_core::params::model::ParamEntry>, String> {
+    let Some(svc) = state.params.service() else {
+        return Err("no link — connect first".into());
+    };
+    // Serve from the cache when fresh (a value already pulled/read).
+    if let Some(entry) = svc.cache().get(&name) {
+        return Ok(Some(entry));
+    }
+    match svc.read(&name).await {
+        Ok(entry) => Ok(Some(entry)),
+        Err(maggcs_core::params::service::ParamError::Timeout) => Ok(None),
+        Err(e) => Err(format!("{e:?}")),
+    }
+}
+
 /// Read one parameter's cached value (PM9 integration point).
 #[tauri::command]
 pub fn params_cache_get(

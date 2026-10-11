@@ -90,10 +90,18 @@ pub struct ParamSession {
     fill_retry: HashMap<u16, u32>,
     /// Active set transaction (one at a time, §4.2).
     pending_set: Option<PendingSet>,
+    /// Active single read (by name, operator lazy-load request).
+    pending_read: Option<PendingRead>,
     /// `true` while a pull is active (between RequestList and Done).
     pulling: bool,
     /// Outcome of the last set echo, consumed by the shell.
     last_set_outcome: Option<(String, SetOutcome)>,
+}
+
+#[derive(Debug)]
+struct PendingRead {
+    name: String,
+    retries: u32,
 }
 
 #[derive(Debug)]
@@ -120,6 +128,7 @@ impl ParamSession {
             fill_queue: Vec::new(),
             fill_retry: HashMap::new(),
             pending_set: None,
+            pending_read: None,
             pulling: false,
             last_set_outcome: None,
         }
@@ -132,7 +141,7 @@ impl ParamSession {
     }
 
     pub fn is_busy(&self) -> bool {
-        self.pulling || self.pending_set.is_some()
+        self.pulling || self.pending_set.is_some() || self.pending_read.is_some()
     }
 
     // ---- Pull ------------------------------------------------------------
@@ -153,7 +162,24 @@ impl ParamSession {
 
     /// One `PARAM_VALUE` arrived. Returns the batch to push (when the caller
     /// should flush) and progress.
-    pub fn on_param_value(&mut self, p: IncomingParam) -> (Option<PullUpdate>, Option<Outbound>) {
+    pub fn on_param_value(
+        &mut self,
+        p: IncomingParam,
+    ) -> (Option<ParamEntry>, Option<PullUpdate>, Option<Outbound>) {
+        // A single read (by name) resolves on the first matching reply.
+        if let Some(pending) = &self.pending_read {
+            if pending.name == p.name {
+                self.pending_read = None;
+                let entry = ParamEntry {
+                    name: p.name,
+                    index: p.index,
+                    value: codec::decode(p.raw_value, p.ptype, self.encoding),
+                    ptype: p.ptype,
+                };
+                self.received.insert(p.index, entry.clone());
+                return (Some(entry), None, None);
+            }
+        }
         // A set echo also arrives as PARAM_VALUE; route it first.
         if let Some(pending) = &self.pending_set {
             if pending.name == p.name {
@@ -173,25 +199,25 @@ impl ParamSession {
                     value: actual,
                     ptype: p.ptype,
                 };
-                self.received.insert(p.index, entry);
+                self.received.insert(p.index, entry.clone());
                 // Not part of the pull stream: report the set result via the
                 // shell (the shell reads `take_set_result` after this call).
                 self.last_set_outcome = Some((pending.name.clone(), outcome));
-                return (None, None);
+                return (Some(entry), None, None);
             }
         }
 
         if !self.pulling {
             // Unsolicited broadcast (e.g. another GCS changed a param):
-            // store it, the caller polls updates.
+            // store it and hand it to the shell (external change).
             let entry = ParamEntry {
                 name: p.name,
                 index: p.index,
                 value: codec::decode(p.raw_value, p.ptype, self.encoding),
                 ptype: p.ptype,
             };
-            self.received.insert(p.index, entry);
-            return (None, None);
+            self.received.insert(p.index, entry.clone());
+            return (Some(entry), None, None);
         }
 
         // Update the declared total whenever it appears.
@@ -208,16 +234,24 @@ impl ParamSession {
             value: codec::decode(p.raw_value, p.ptype, self.encoding),
             ptype: p.ptype,
         };
-        self.received.insert(p.index, entry);
+        self.received.insert(p.index, entry.clone());
         let received = self.received.len() as u16;
         let total = p.count;
         if received >= total {
             // Complete: no fill round needed.
             self.pulling = false;
             self.fill_queue.clear();
-            return (Some(PullUpdate::Done { received, total }), None);
+            return (
+                Some(entry),
+                Some(PullUpdate::Done { received, total }),
+                None,
+            );
         }
-        (Some(PullUpdate::Progress { received, total }), None)
+        (
+            Some(entry),
+            Some(PullUpdate::Progress { received, total }),
+            None,
+        )
     }
 
     /// A pull tick with no new entries for `PULL_QUIET`: request the missing
@@ -271,9 +305,44 @@ impl ParamSession {
         self.pulling = false;
         self.fill_queue.clear();
         self.pending_set = None;
+        self.pending_read = None;
     }
 
     // ---- Set -------------------------------------------------------------
+
+    /// Begin a single-parameter read by name (lazy load). `Err` when
+    /// another transaction is running.
+    pub fn start_read(&mut self, name: &str) -> Result<Vec<Outbound>, &'static str> {
+        if self.is_busy() {
+            return Err("a parameter transaction is already running");
+        }
+        self.pending_read = Some(PendingRead {
+            name: name.to_string(),
+            retries: 0,
+        });
+        Ok(vec![Outbound::RequestReadByName {
+            name: name.to_string(),
+        }])
+    }
+
+    /// Read timeout: retry up to the budget, then give up silently (the
+    /// shell resolves its waiter with an error).
+    pub fn on_read_timeout(&mut self) -> bool {
+        let Some(pending) = self.pending_read.as_mut() else {
+            return false;
+        };
+        if pending.retries >= MAX_READ_RETRIES {
+            self.pending_read = None;
+            return false; // gave up
+        }
+        pending.retries += 1;
+        true // caller re-sends the request
+    }
+
+    /// The name being read, if any (for the shell's retry frame).
+    pub fn reading_name(&self) -> Option<String> {
+        self.pending_read.as_ref().map(|r| r.name.clone())
+    }
 
     /// Begin a set transaction. `Err` if another transaction is running.
     pub fn start_set(

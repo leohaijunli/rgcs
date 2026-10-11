@@ -58,6 +58,7 @@ pub fn run() {
             params_service::params_pull,
             params_service::params_cancel,
             params_service::params_set,
+            params_service::params_read,
             params_service::params_cache_get,
             params_service::params_cache_len,
             inspector_service::inspector_open,

@@ -13,7 +13,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 
 use super::codec::{decode_param_id, encode_param_id};
 use super::model::{ParamEntry, ParamType, ParamValue};
-use super::session::{IncomingParam, ParamSession, PullUpdate, SetOutcome};
+use super::session::{IncomingParam, ParamSession, SetOutcome};
 
 use crate::mavlink::connection::{ConnectionEvent, ConnectionHandle};
 use crate::mavlink::router::MessageRoute;
@@ -104,6 +104,12 @@ enum Command {
     Pull(oneshot::Sender<Result<(), ParamError>>),
     Cancel,
     Set(Box<SetRequest>),
+    Read(Box<ReadRequest>),
+}
+
+struct ReadRequest {
+    name: String,
+    reply: oneshot::Sender<Result<ParamEntry, ParamError>>,
 }
 
 /// Handle to the running service.
@@ -152,6 +158,24 @@ impl ParamService {
     /// Cancel the running transaction (idempotent).
     pub async fn cancel(&self) {
         let _ = self.cmd_tx.send(Command::Cancel).await;
+    }
+
+    /// Read one parameter by name (lazy load); resolves with the FC's value.
+    pub async fn read(&self, name: &str) -> Result<ParamEntry, ParamError> {
+        let (tx, rx) = oneshot::channel();
+        let req = ReadRequest {
+            name: name.to_string(),
+            reply: tx,
+        };
+        if self
+            .cmd_tx
+            .send(Command::Read(Box::new(req)))
+            .await
+            .is_err()
+        {
+            return Err(ParamError::NotConnected);
+        }
+        rx.await.unwrap_or(Err(ParamError::NotConnected))
     }
 
     /// Set one parameter; resolves on the FC's echo (or timeout).
@@ -218,10 +242,14 @@ async fn run(
     let mut events = handle.subscribe_route(MessageRoute::messages(PARAM_MESSAGE_IDS));
     let mut session = ParamSession::default();
     let mut batch: Vec<ParamEntry> = Vec::new();
-    let mut sent_names: HashMap<String, ()> = HashMap::new(); // batched so far
+    let mut batch_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut last_progress: Option<(u16, u16)> = None;
     let mut quiet_deadline: Option<tokio::time::Instant> = None;
     let mut set_deadline: Option<tokio::time::Instant> = None;
     let mut pending_set_reply = PendingReply::new();
+    let mut pending_read_reply: Option<(String, oneshot::Sender<Result<ParamEntry, ParamError>>)> =
+        None;
+    let mut read_deadline: Option<tokio::time::Instant> = None;
     let mut fill_tick = tokio::time::interval(Duration::from_millis(50));
     fill_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -261,7 +289,27 @@ async fn run(
                         session.cancel();
                         quiet_deadline = None;
                         set_deadline = None;
+                        read_deadline = None;
+                        if let Some((_, reply)) = pending_read_reply.take() {
+                            let _ = reply.send(Err(ParamError::Timeout));
+                        }
                     }
+                    Command::Read(req) => match session.start_read(&req.name) {
+                        Ok(out) => {
+                            read_deadline = Some(tokio::time::Instant::now() + SET_TIMEOUT);
+                            for r in out {
+                                if let Some(frame) = outbound_frame(&r, target_sys, target_comp) {
+                                    if handle.send(frame).await.is_err() {
+                                        return;
+                                    }
+                                }
+                            }
+                            pending_read_reply = Some((req.name, req.reply));
+                        }
+                        Err(_) => {
+                            let _ = req.reply.send(Err(ParamError::Busy));
+                        }
+                    },
                     Command::Set(req) => match session.start_set(&req.name, req.value, req.ptype)
                     {
                         Ok(out) => {
@@ -295,28 +343,51 @@ async fn run(
                                 raw_value: v.param_value,
                                 ptype,
                             };
-                            let (update, _) = session.on_param_value(incoming);
+                            // Incremental: the session hands back the single new
+                            // entry (never a full snapshot — a 1794-param pull
+                            // made the old O(n) flush per frame starve the task).
+                            let (entry, update, _) = session.on_param_value(incoming);
                             if let Some((_, outcome)) = session.take_set_outcome() {
                                 pending_set_reply.resolve(outcome);
                                 set_deadline = None;
                             }
-                            if let Some(update) = update {
-                                let is_progress = matches!(update, PullUpdate::Progress { .. });
-                                handle_pull_update(
-                                    update,
-                                    &mut session,
-                                    &mut batch,
-                                    &mut sent_names,
-                                    &evt_tx,
-                                    &cache,
-                                );
-                                if is_progress {
-                                    quiet_deadline = Some(tokio::time::Instant::now() + PULL_QUIET);
+                            // A lazy read resolves on its first matching entry.
+                            if let (Some(entry), Some((name, reply))) = (&entry, pending_read_reply.take()) {
+                                if entry.name == name {
+                                    cache.update(entry.clone());
+                                    let _ = reply.send(Ok(entry.clone()));
+                                    read_deadline = None;
+                                    let _ = evt_tx.send(ParamEvent::ExternalChange(entry.clone()));
+                                } else {
+                                    // Not our read (name mismatch): restore.
+                                    pending_read_reply = Some((name, reply));
                                 }
-                            } else {
-                                // No update: an external change or a set echo —
-                                // keep the cache current quietly.
-                                flush_entries(&mut session, &mut batch, &mut sent_names, &evt_tx, &cache);
+                            }
+                            if let Some(entry) = entry {
+                                cache.update(entry.clone());
+                                if !batch_names.contains(&entry.name) {
+                                    batch_names.insert(entry.name.clone());
+                                    batch.push(entry);
+                                }
+                                if batch.len() >= BATCH_LEN {
+                                    let _ = evt_tx.send(ParamEvent::Batch(std::mem::take(&mut batch)));
+                                    batch_names.clear();
+                                }
+                            }
+                            match update {
+                                Some(PullUpdate::Done { received, total }) => {
+                                    flush_batch(&mut batch, &mut batch_names, &evt_tx);
+                                    let _ = evt_tx.send(ParamEvent::PullDone { received, total });
+                                    quiet_deadline = None;
+                                }
+                                Some(PullUpdate::Progress { received, total }) => {
+                                    // Throttle: the tick emits progress; the
+                                    // per-frame 1794-progress storm drowned the
+                                    // event channel in practice.
+                                    quiet_deadline = Some(tokio::time::Instant::now() + PULL_QUIET);
+                                    last_progress = Some((received, total));
+                                }
+                                _ => {}
                             }
                         }
                     }
@@ -326,22 +397,39 @@ async fn run(
                 }
             }
             _ = fill_tick.tick() => {
+                if let Some((received, total)) = last_progress.take() {
+                    let _ = evt_tx.send(ParamEvent::Progress { received, total });
+                }
                 if session.pull_active() {
                     if let Some(deadline) = quiet_deadline {
                         if tokio::time::Instant::now() >= deadline {
                             if let Some(update) = session.on_pull_timeout() {
-                                handle_pull_update(
-                                    update,
-                                    &mut session,
-                                    &mut batch,
-                                    &mut sent_names,
-                                    &evt_tx,
-                                    &cache,
-                                );
+                                if let super::session::PullUpdate::Done { received, total } = update {
+                                    flush_batch(&mut batch, &mut batch_names, &evt_tx);
+                                    let _ = evt_tx.send(ParamEvent::PullDone { received, total });
+                                }
                                 quiet_deadline = None;
                             } else {
                                 quiet_deadline = Some(tokio::time::Instant::now() + PULL_QUIET);
                             }
+                        }
+                    }
+                }
+                if let Some(deadline) = read_deadline {
+                    if tokio::time::Instant::now() >= deadline {
+                        if session.on_read_timeout() {
+                            if let Some(name) = session.reading_name() {
+                                let req = super::session::Outbound::RequestReadByName { name };
+                                if let Some(frame) = outbound_frame(&req, target_sys, target_comp) {
+                                    if handle.send(frame).await.is_err() {
+                                        return;
+                                    }
+                                }
+                            }
+                            read_deadline = Some(tokio::time::Instant::now() + SET_TIMEOUT);
+                        } else if let Some((_, reply)) = pending_read_reply.take() {
+                            let _ = reply.send(Err(ParamError::Timeout));
+                            read_deadline = None;
                         }
                     }
                 }
@@ -408,48 +496,14 @@ fn outbound_frame(
     })
 }
 
-/// Snapshot session entries into the batch + cache, flushing when full.
-fn flush_entries(
-    session: &mut ParamSession,
+/// Flush the pending batch (if any) as one event.
+fn flush_batch(
     batch: &mut Vec<ParamEntry>,
-    sent: &mut HashMap<String, ()>,
+    names: &mut std::collections::HashSet<String>,
     evt_tx: &broadcast::Sender<ParamEvent>,
-    cache: &ParamCache,
 ) {
-    for entry in session.entries() {
-        cache.update(entry.clone());
-        if sent.insert(entry.name.clone(), ()).is_none() {
-            batch.push(entry);
-        }
-    }
-    if batch.len() >= BATCH_LEN {
+    if !batch.is_empty() {
         let _ = evt_tx.send(ParamEvent::Batch(std::mem::take(batch)));
-        sent.clear();
     }
-}
-
-/// Turn a session pull update into events + cache writes (shared by the
-/// frame arm and the quiet-deadline arm of the tick).
-fn handle_pull_update(
-    update: PullUpdate,
-    session: &mut ParamSession,
-    batch: &mut Vec<ParamEntry>,
-    sent: &mut HashMap<String, ()>,
-    evt_tx: &broadcast::Sender<ParamEvent>,
-    cache: &ParamCache,
-) {
-    match update {
-        PullUpdate::Batch(_) => {
-            // The session never emits Batch itself (the shell batches in
-            // flush_entries).
-        }
-        PullUpdate::Progress { received, total } => {
-            flush_entries(session, batch, sent, evt_tx, cache);
-            let _ = evt_tx.send(ParamEvent::Progress { received, total });
-        }
-        PullUpdate::Done { received, total } => {
-            flush_entries(session, batch, sent, evt_tx, cache);
-            let _ = evt_tx.send(ParamEvent::PullDone { received, total });
-        }
-    }
+    names.clear();
 }
