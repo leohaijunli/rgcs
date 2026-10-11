@@ -356,14 +356,21 @@ export function renderWaypoints(
       )
     }
     if (isActive) {
+      // Target-waypoint blink (operator request 2026-10-11): a big, deep,
+      // hard on/off ring — far more visible than a static halo, so the next
+      // waypoint is findable at a glance while flying. CallbackProperty
+      // re-evaluates every render frame (isConstant=false).
       layer.extra.push(
         viewer.entities.add({
           position,
           point: {
-            pixelSize: 22,
+            pixelSize: new Cesium.CallbackProperty(() => (blinkOn() ? 36 : 28), false),
             color: Cesium.Color.TRANSPARENT,
-            outlineColor: ok,
-            outlineWidth: 3,
+            outlineColor: new Cesium.CallbackProperty(
+              () => ok.withAlpha(blinkOn() ? 1.0 : 0.12),
+              false,
+            ),
+            outlineWidth: 4,
           },
         }),
       )
@@ -404,6 +411,13 @@ function waypointLabel(item: MissionItem, opts: WaypointRenderOptions): string {
   if (!opts.heights) return String(item.seq)
   const ground = opts.groundM ?? 0
   return `${item.seq} · ${Math.max(0, Math.round(item.z - ground))} m AGL`
+}
+
+/** Hard on/off phase of the target-waypoint blink: 0.4 s visible, 0.4 s
+ * nearly dark — a square wave reads as "blinking" far better than a slow
+ * fade, especially in sunlight. */
+function blinkOn(): boolean {
+  return Math.floor(Date.now() / 400) % 2 === 0
 }
 
 /**
