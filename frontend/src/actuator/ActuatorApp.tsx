@@ -38,7 +38,7 @@ const SOURCES: Array<{ id: Source; label: string; hint: string }> = [
   {
     id: 'forward',
     label: 'Forward',
-    hint: 'Realtime SITL→FC forwarding (pending design)',
+    hint: 'Realtime SITL→FC forwarding (SERVO_OUTPUT_RAW 1–4)'
   },
 ]
 
@@ -71,6 +71,10 @@ interface ActuatorStatus {
   endpoint: string | null
   tick_hz: number
   session: string
+  /** SITL source link (revised D3). */
+  sitl_connected: boolean
+  sitl_endpoint: string | null
+  sitl_feed_age_s: number | null
 }
 
 const IDLE: ActuatorStatus = {
@@ -81,6 +85,9 @@ const IDLE: ActuatorStatus = {
   endpoint: null,
   tick_hz: 10,
   session: 'idle',
+  sitl_connected: false,
+  sitl_endpoint: null,
+  sitl_feed_age_s: null,
 }
 
 export function ActuatorApp() {
@@ -101,6 +108,8 @@ export function ActuatorApp() {
   const [amplitude, setAmplitude] = useState(0.5)
   const [frequency, setFrequency] = useState(0.5)
   const [duration, setDuration] = useState(5)
+  // Realtime forward (revised D3): the SITL source endpoint.
+  const [sitlEndpoint, setSitlEndpoint] = useState('udpin:0.0.0.0:14540')
   // Confirmation state.
   const [phrase, setPhrase] = useState('')
   const [holdProgress, setHoldProgress] = useState(0)
@@ -319,8 +328,9 @@ export function ActuatorApp() {
           duration_s: duration,
         },
       }).catch(() => {})
+    } else if (source === 'forward') {
+      void invoke('actuator_start_forward').catch(() => {})
     }
-    // 'forward' is gated off until the forwarding work package lands.
   }
 
   // Hold-to-start (full props): pointerdown begins the ramp; release before
@@ -541,10 +551,49 @@ export function ActuatorApp() {
         {source === 'forward' && (
           <div className="card">
             <h3>Realtime forward</h3>
-            <div className="estop-note">
-              Forwards live SITL actuator commands to the FC. Pending design:
-              which SITL signal feeds it and whether the GCS carries two links
-              at once.
+            <input
+              className="phrase-input"
+              style={{ width: '100%', margin: 0 }}
+              value={sitlEndpoint}
+              onChange={(e) => setSitlEndpoint(e.target.value)}
+              placeholder="udpin:0.0.0.0:14540"
+              aria-label="SITL endpoint"
+              spellCheck={false}
+            />
+            {status.sitl_connected ? (
+              <button
+                className="mode-btn"
+                style={{ width: '100%', marginTop: 6 }}
+                onClick={() => tauri && void invoke('actuator_disconnect_sitl').catch(() => {})}
+              >
+                Disconnect SITL
+              </button>
+            ) : (
+              <button
+                className="mode-btn"
+                style={{ width: '100%', marginTop: 6 }}
+                onClick={() => tauri && void invoke('actuator_connect_sitl', { endpoint: sitlEndpoint }).catch(() => {})}
+              >
+                Connect SITL
+              </button>
+            )}
+            <div className="row" style={{ marginTop: 6 }}>
+              <span className="text-muted">Source link</span>
+              <span className={`mono ${status.sitl_connected ? 'text-ok' : 'text-error'}`}>
+                {status.sitl_connected ? 'connected' : 'down'}
+              </span>
+            </div>
+            <div className="row">
+              <span className="text-muted">Feed age</span>
+              <span className="mono">
+                {status.sitl_feed_age_s != null
+                  ? `${status.sitl_feed_age_s.toFixed(1)} s`
+                  : 'no data yet'}
+              </span>
+            </div>
+            <div className="estop-note" style={{ marginTop: 4 }}>
+              SITL main outputs 1–4 → motors 1–4. Values pass the same
+              interlocks (slew, cap, disarmed-only) as manual control.
             </div>
           </div>
         )}
@@ -577,7 +626,9 @@ export function ActuatorApp() {
             <button
               className="start-btn"
               style={{ marginTop: 8, position: 'relative' }}
-              disabled={gate !== 'ready' || source === 'forward'}
+              disabled={
+                gate !== 'ready' || (source === 'forward' && !status.sitl_connected)
+              }
               onPointerDown={beginHold}
               onPointerUp={cancelHold}
               onPointerLeave={cancelHold}
@@ -589,7 +640,7 @@ export function ActuatorApp() {
                     : gate === 'phrase'
                       ? `Type ${PROPS_PHRASE} first`
                       : source === 'forward'
-                        ? 'Forwarding arrives with its work package'
+                        ? 'Connect the SITL source first'
                         : load === 'props'
                           ? 'Hold for 3 seconds'
                           : 'Start sending'

@@ -892,7 +892,11 @@ export function InspectorApp() {
       if (!dirty.current) return
       dirty.current = false
       // Paused = freeze the view (SDI behavior); buffering continues above.
-      if (pausedRef.current) return
+      // Not following (fitted/zoomed) freezes too: every setData re-runs the
+      // min/max decimation over the sliding buffer, so the drawn vertices
+      // shift a little every frame — the fitted curve visibly trembled.
+      // New samples land outside a fixed window anyway; Follow re-enables.
+      if (pausedRef.current || !followRef.current) return
       renderAll()
     }
     raf = requestAnimationFrame(tick)
