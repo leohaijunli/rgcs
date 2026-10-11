@@ -50,6 +50,15 @@ export default {
       other: 'Error',
     },
   },
+  modePopover: {
+    title: 'Flight mode',
+    loading: 'Loading…',
+    switching: 'Switching…',
+    confirm: 'Confirm?',
+    current: 'current',
+    noReadback: 'No mode readback — check the FC',
+    advanced: 'Advanced modes (Manual/Acro/Offboard)',
+  },
   mode: {
     uninit: 'UNINIT',
     boot: 'BOOT',
@@ -216,6 +225,10 @@ export default {
     takeoff: 'Takeoff',
     land: 'Land',
     cmd: {
+      confirmArm: 'Confirm ARM?',
+      confirmDisarm: 'Confirm disarm?',
+      arm: 'Arm',
+      disarm: 'Disarm',
       confirmRtl: 'Confirm RTL?',
       confirmTakeoff: 'Confirm takeoff?',
       confirmLand: 'Confirm land?',

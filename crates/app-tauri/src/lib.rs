@@ -38,6 +38,7 @@ pub fn run() {
             commands::survey_generate_sweep,
             commands::survey_generate_cloverleaf,
             commands::send_command,
+            commands::flight_mode_table,
             commands::send_set_mode,
             commands::send_arm_disarm,
             commands::set_message_interval,

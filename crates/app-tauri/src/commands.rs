@@ -291,6 +291,16 @@ pub async fn send_command(name: String, state: State<'_, AppState>) -> Result<()
         .map_err(|e| e.to_string())
 }
 
+/// Resolve the switchable mode table against the given vehicle state
+/// (ADR-017): which entries are enabled and why. Pure core logic — the Fly
+/// view only renders the result.
+#[tauri::command]
+pub fn flight_mode_table(
+    context: maggcs_core::telemetry::px4_mode::ModeContext,
+) -> Vec<maggcs_core::telemetry::px4_mode::ModeAvailability> {
+    maggcs_core::telemetry::px4_mode::available_modes(&context)
+}
+
 /// `MAV_CMD_DO_SET_MODE` parameters (ADR-017): `param1` must set
 /// `MAV_MODE_FLAG_CUSTOM_MODE_ENABLED`, then PX4 main/sub mode.
 fn set_mode_params(main_mode: u8, sub_mode: u8) -> [f32; 7] {

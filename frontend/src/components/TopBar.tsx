@@ -5,9 +5,9 @@ import { invoke } from '@tauri-apps/api/core'
 import { useTelemetryStore } from '../stores/telemetry'
 import { useUiStore, type View } from '../stores/ui'
 import { isTauri } from '../inspector/mock'
-import { modeLabel } from '../util/modeLabel'
 import SettingsDialog, { type SettingsTab } from './dialogs/SettingsDialog'
 import LinkPopover from './LinkPopover'
+import ModePopover from './ModePopover'
 
 const VIEWS: View[] = ['planning', 'flight']
 
@@ -94,7 +94,6 @@ export default function TopBar() {
   }
 
   const armed = heartbeat?.base_mode.safety_armed === true
-  const mode = modeLabel(t, heartbeat)
   const rtk = gps?.fix_type ?? null
   const rtkTone: 'ok' | 'warn' | 'err' =
     rtk === 'RTK_FIXED' ? 'ok' : rtk === 'RTK_FLOAT' ? 'warn' : 'err'
@@ -135,7 +134,7 @@ export default function TopBar() {
           <span className={`h-1.5 w-1.5 rounded-full ${armed ? 'bg-ok-ink' : 'bg-muted'}`} />
           {armed ? t('link.armed') : t('link.disarmed')}
         </div>
-        <Pill label={t('link.mode')} value={mode ?? '—'} tone={mode ? 'ok' : 'off'} />
+        <ModePopover />
         <Pill
           label={t('link.rtk')}
           value={gps ? `${t(`hud.fix.${fixKey(rtk ?? 'NO_GPS')}`)} ${gps.satellites_visible}sv` : '—'}

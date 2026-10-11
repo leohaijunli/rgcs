@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { CommandEventPayload } from '../stores/command'
 import { useCommandStore, type CommandName } from '../stores/command'
 import { useLinkStore } from '../stores/link'
+import { useTelemetryStore } from '../stores/telemetry'
 
 /** How long a disruptive button stays armed while waiting for the second click. */
 const CONFIRM_WINDOW_MS = 5000
@@ -24,9 +25,11 @@ const RESULT_LABELS: Record<string, string> = {
 export default function FlightCommands() {
   const { t } = useTranslation()
   const link = useLinkStore((s) => s.link)
+  const armed = useTelemetryStore((s) => s.snapshot?.heartbeat?.base_mode.safety_armed === true)
   const pending = useCommandStore((s) => s.pending)
   const lastEvent = useCommandStore((s) => s.lastEvent)
   const send = useCommandStore((s) => s.send)
+  const sendArmDisarm = useCommandStore((s) => s.sendArmDisarm)
   const [confirming, setConfirming] = useState<CommandName | null>(null)
   const confirmTimer = useRef<number | undefined>(undefined)
 
@@ -55,9 +58,30 @@ export default function FlightCommands() {
     void send(name)
   }
 
+  // Arm/disarm (MS3, ADR-017): both directions behind the two-click confirm
+  // — PX4 runs its own preflight checks and answers on the ack; the armed
+  // state itself is the heartbeat readback.
+  const pressArm = () => {
+    const name: CommandName = 'arm_disarm'
+    if (confirming !== name) {
+      setConfirming(name)
+      window.clearTimeout(confirmTimer.current)
+      confirmTimer.current = window.setTimeout(
+        () => setConfirming(null),
+        CONFIRM_WINDOW_MS,
+      )
+      return
+    }
+    window.clearTimeout(confirmTimer.current)
+    setConfirming(null)
+    void sendArmDisarm(!armed)
+  }
+
   const status = pending
     ? { tone: 'text-warn', text: t('plan.cmd.sent') }
     : statusLine(t, lastEvent)
+
+  const armConfirming = confirming === 'arm_disarm'
 
   return (
     <div className="panel rounded p-2">
@@ -82,6 +106,25 @@ export default function FlightCommands() {
             </button>
           )
         })}
+      </div>
+      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+        <button
+          onClick={pressArm}
+          disabled={pending !== null}
+          className={`flex-1 touch-target rounded-md border px-2 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${
+            armConfirming
+              ? armed
+                ? 'border-line bg-canvas text-ink'
+                : 'bg-warn text-canvas'
+              : armed
+                ? 'border-ok bg-ok text-ok-ink'
+                : 'border-line bg-canvas text-ink hover:bg-accent hover:text-canvas'
+          }`}
+        >
+          {armConfirming
+            ? t(armed ? 'plan.cmd.confirmDisarm' : 'plan.cmd.confirmArm')
+            : t(armed ? 'plan.cmd.disarm' : 'plan.cmd.arm')}
+        </button>
       </div>
       {status && <div className={`mt-1 text-xs ${status.tone}`}>{status.text}</div>}
     </div>
