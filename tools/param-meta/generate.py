@@ -49,6 +49,8 @@ KEEP = (
     "rebootRequired",
     "values",
     "bitmask",
+    "units",
+    "decimalPlaces",
 )
 
 
