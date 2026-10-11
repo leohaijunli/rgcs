@@ -64,6 +64,7 @@ pub fn actuator_open(app: AppHandle) -> Result<(), String> {
         .min_inner_size(1024.0, 640.0)
         .build()
         .map_err(|e| e.to_string())?;
+    win.open_devtools();
     // Closing the window must stop the motors (plan §8.3).
     let app_for_cleanup = app.clone();
     win.on_window_event(move |event| {

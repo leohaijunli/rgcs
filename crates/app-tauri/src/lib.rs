@@ -21,6 +21,17 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(AppState::default())
+        .setup(|app| {
+            // Temporary diagnostic aid for the tile-loading investigation;
+            // remove once the imagery issue is closed.
+            use tauri::Manager;
+            for label in ["main", "inspector"] {
+                if let Some(win) = app.get_webview_window(label) {
+                    win.open_devtools();
+                }
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::connect,
             commands::disconnect,
