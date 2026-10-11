@@ -1,4 +1,4 @@
-// Persisted connection and vehicle preferences (DEVELOPMENT_PLAN Phase 0
+// Persisted connection and vehicle preferences (docs/ARCHITECTURE.md, prefs
 // addendum, task 0.8): the last endpoint, the auto-connect toggle and the
 // initial vehicle position survive a restart.
 

@@ -1,4 +1,4 @@
-//! Motor / actuator test session (motor-test-plan §7.3, §8; A2).
+//! Motor / actuator test session (motor-test session, A2).
 //!
 //! High-rate motor control over `MAV_CMD_ACTUATOR_TEST` (verified against PX4
 //! v1.17 `Commander::handleCommandActuatorTest`):

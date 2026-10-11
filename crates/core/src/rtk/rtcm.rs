@@ -1,6 +1,6 @@
 //! RTCM3 framing: the `0xD3` preamble, the 10-bit length word, CRC-24Q
 //! validation and a streaming framer that resynchronises on garbage
-//! (Phase 2, `docs/DEVELOPMENT_PLAN.md` §8).
+//! (Phase 2, `docs/ARCHITECTURE.md` (RTK/RTCM)).
 //!
 //! RTCM3 frame layout:
 //!

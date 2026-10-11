@@ -1,4 +1,4 @@
-// Coordinate entry (improve_plan WS-G G2): turn what an operator reads off a
+// Coordinate entry (coordinate entry WS-G G2): turn what an operator reads off a
 // handheld GPS, a paper map or an RTK base report into a decimal lat/lon.
 //
 // Supported forms (the two coordinates are separated by a comma or semicolon):

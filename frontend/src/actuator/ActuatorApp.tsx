@@ -1,4 +1,4 @@
-// Motor / mag interference test window — A1+A3 (motor-test-plan §5–§6, §8.2),
+// Motor / mag interference test window — A1+A3 (motor-test §5–§6, §8.2),
 // refactored to a source-driven layout (operator request 2026-10-10):
 //
 //   Header: live chips + state banner + EMERGENCY STOP

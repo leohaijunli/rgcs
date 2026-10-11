@@ -1,5 +1,5 @@
 //! Motor-test service integration over a real (loopback UDP) link
-//! (motor-test-plan T1): a fake FC streams disarmed heartbeats, the service
+//! (motor-test integration): a fake FC streams disarmed heartbeats, the service
 //! starts sending `ACTUATOR_TEST` at 10 Hz, and the moment the FC arms the
 //! service must emit release frames and `Stopped(Armed)` — within one tick.
 

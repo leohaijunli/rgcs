@@ -1,4 +1,4 @@
-// Structured MAVLink endpoint model for the settings form (DEVELOPMENT_PLAN
+// Structured MAVLink endpoint model for the settings form (docs/ARCHITECTURE.md
 // Phase 0 addendum, task 0.8). Pure functions — no React, no Tauri.
 //
 // The wire format is the address string the core `Endpoint` type round-trips:

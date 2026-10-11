@@ -1,5 +1,5 @@
 //! RTK base-station support: RTCM3 framing and forwarding to the flight
-//! controller (Phase 2, `docs/DEVELOPMENT_PLAN.md` §8).
+//! controller (Phase 2, `docs/ARCHITECTURE.md` (RTK/RTCM)).
 //!
 //! Data flow: base receiver → [`rtcm`] parses RTCM3 frames and validates their
 //! CRC → [`forward`] fragments them into MAVLink `GPS_RTCM_DATA`.

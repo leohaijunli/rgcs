@@ -1,5 +1,5 @@
 //! Fragment RTCM3 frames into MAVLink `GPS_RTCM_DATA` payloads (Phase 2,
-//! `docs/DEVELOPMENT_PLAN.md` §8).
+//! `docs/ARCHITECTURE.md` (RTK/RTCM)).
 //!
 //! A `GPS_RTCM_DATA` packet carries at most 180 bytes, so a longer RTCM frame
 //! is split into up to four numbered fragments. The FC reassembles them and

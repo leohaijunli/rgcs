@@ -1,4 +1,4 @@
-//! Motor / mag interference test window service (motor-test-plan §5, A1+A3).
+//! Motor / mag interference test window service (ADR-009 helper window; motor-test features).
 //!
 //! A thin adapter like `inspector_service` (ADR-001): the window lifecycle
 //! and the command surface live here; the safety state machine and the

@@ -1,5 +1,5 @@
 // Motor / mag interference test window entry: a separate webview without
-// Cesium (motor-test-plan §5). Boots the shared design tokens.
+// Cesium (motor-test window). Boots the shared design tokens.
 
 import './actuator.css'
 import React from 'react'
