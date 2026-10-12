@@ -42,7 +42,6 @@ export default function PatternStep({ kind, onKind, sweep, onSweep, clover, onCl
   const lastPattern = useMissionStore((s) => s.lastPattern)
   const center = useMissionStore((s) => s.patternCenter)
   const setPatternCenter = useMissionStore((s) => s.setPatternCenter)
-  const mapCenter = useUiStore((s) => s.mapCenter)
   const polygonVertices = usePolygonStore((s) => s.vertices)
   const polygonClosed = usePolygonStore((s) => s.closed)
   const polygonBad = polygonClosed && selfIntersects(polygonVertices)
