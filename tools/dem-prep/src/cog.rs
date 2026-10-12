@@ -52,20 +52,20 @@ pub fn write_geo_tiff(path: &Path, raster: &GeoRaster) -> Result<(), DemError> {
 }
 
 /// The `dem.json` sidecar (consumed by `core::terrain::CogDem`).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DemMetadata {
     pub version: String,
     pub raster_crs: String,
     pub resolution_m: f64,
     pub bounds: DemBounds,
-    pub vertical_datum: &'static str,
+    pub vertical_datum: String,
     pub source_file: String,
     pub source_points: u64,
     /// False for DTM-only fallback sources (CDEM / Copernicus).
     pub has_dsm: bool,
 }
 
-#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct DemBounds {
     pub north: f64,
     pub south: f64,

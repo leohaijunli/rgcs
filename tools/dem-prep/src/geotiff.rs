@@ -73,3 +73,81 @@ pub fn read_single_band(
     }
     Ok((values, width, height, west, north, scale[1], scale[0]))
 }
+
+/// Read a single-band float TIFF **without** requiring GeoTIFF tags: the
+/// pipeline's own `dtm.tif` carries placement only in `dem.json`, so the
+/// tileset generator pairs this with the sidecar's bounds. Samples
+/// `<= NODATA` become NaN (voids, later nearest-filled for meshing).
+///
+/// # Errors
+///
+/// [`DemError::Raster`] on decode problems or a sample-count mismatch.
+pub fn read_band_raw(path: &Path) -> Result<(Vec<f32>, usize, usize), DemError> {
+    let file = File::open(path).map_err(|e| DemError::Raster(e.to_string()))?;
+    let mut decoder =
+        Decoder::new(BufReader::new(file)).map_err(|e| DemError::Raster(e.to_string()))?;
+    let (width, height) = decoder
+        .dimensions()
+        .map_err(|e| DemError::Raster(e.to_string()))?;
+    let (width, height) = (width as usize, height as usize);
+
+    let raw: Vec<f32> = match decoder
+        .read_image()
+        .map_err(|e| DemError::Raster(e.to_string()))?
+    {
+        tiff::decoder::DecodingResult::F32(v) => v,
+        tiff::decoder::DecodingResult::F64(v) => v.into_iter().map(|v| v as f32).collect(),
+        tiff::decoder::DecodingResult::U16(v) => v.into_iter().map(f32::from).collect(),
+        tiff::decoder::DecodingResult::U32(v) => v.into_iter().map(|v| v as f32).collect(),
+        tiff::decoder::DecodingResult::U8(v) => v.into_iter().map(f32::from).collect(),
+        other => {
+            return Err(DemError::Raster(format!(
+                "unsupported sample type: {other:?}"
+            )))
+        }
+    };
+    if raw.len() != width * height {
+        return Err(DemError::Raster(format!(
+            "{}: expected {} samples, got {}",
+            path.display(),
+            width * height,
+            raw.len()
+        )));
+    }
+    let values = raw
+        .into_iter()
+        .map(|v| if v <= crate::cog::NODATA { f32::NAN } else { v })
+        .collect();
+    Ok((values, width, height))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cog;
+    use crate::grid::GeoRaster;
+
+    /// Written voids (NaN → NODATA sentinel) must come back as NaN, finite
+    /// samples unchanged — the mesh generator relies on this pairing.
+    #[test]
+    fn read_band_raw_roundtrips_values_and_voids() {
+        let dir = std::env::temp_dir().join(format!("dem-prep-raw-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("dtm.tif");
+        let mut values = vec![42.0f32; 16];
+        values[2 * 4 + 1] = f32::NAN;
+        let raster = GeoRaster {
+            width: 4,
+            height: 4,
+            values,
+            west: -123.425,
+            north: 48.65,
+        };
+        cog::write_geo_tiff(&path, &raster).expect("write");
+        let (back, w, h) = read_band_raw(&path).expect("read");
+        assert_eq!((w, h), (4, 4));
+        assert_eq!(back[0], 42.0);
+        assert!(back[2 * 4 + 1].is_nan(), "void must survive the round-trip");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

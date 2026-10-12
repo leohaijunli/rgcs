@@ -158,6 +158,8 @@ pub struct LayerJson {
     pub scheme: &'static str,
     pub projection: &'static str,
     pub tiles: Vec<String>,
+    /// Oct-encoded vertex normals (always emitted — see `mesh`).
+    pub extensions: Vec<&'static str>,
     /// `[west, south, east, north]` (GeoJSON order).
     pub bounds: [f64; 4],
     pub minzoom: u8,
@@ -178,6 +180,7 @@ pub fn layer_json(name: &str, version: &str, bounds: &DemBounds, maxzoom: u8) ->
         scheme: "tms",
         projection: "EPSG:4326",
         tiles: vec!["{z}/{x}/{y}.terrain".to_string()],
+        extensions: vec!["octvertexnormals"],
         bounds: [bounds.west, bounds.south, bounds.east, bounds.north],
         minzoom: 0,
         maxzoom,
@@ -219,6 +222,11 @@ impl PlacedRaster {
                 width * height,
                 values.len()
             )));
+        }
+        if values.iter().any(|v| v.is_infinite()) {
+            return Err(DemError::Raster(
+                "terrain raster: infinite sample (voids must be NaN)".into(),
+            ));
         }
         let finite = bounds.west.is_finite()
             && bounds.east.is_finite()
@@ -566,6 +574,7 @@ mod tests {
         assert_eq!(v["scheme"], "tms");
         assert_eq!(v["projection"], "EPSG:4326");
         assert_eq!(v["tiles"][0], "{z}/{x}/{y}.terrain");
+        assert_eq!(v["extensions"], serde_json::json!(["octvertexnormals"]));
         assert_eq!(v["minzoom"], 0);
         assert_eq!(v["maxzoom"], 19);
         assert_eq!(
@@ -639,7 +648,7 @@ mod tests {
             north: 3.0,
         };
         let mut values = vec![7.0f32; 9];
-        values[4] = f32::NAN; // centre void
+        values[4] = f32::NAN; // centre void (NaN is allowed — it's a void)
         let r = PlacedRaster::try_new(bounds, 3, 3, values).expect("valid");
         assert_eq!(r.sample(1.5, 1.5), 7.0, "centre void filled from ring");
         // A void far from any data still resolves (no NaN escapes).
@@ -685,6 +694,10 @@ mod tests {
             north: 1.0,
         };
         assert!(PlacedRaster::try_new(nonfinite, 2, 2, vec![0.0; 4]).is_err());
+        assert!(
+            PlacedRaster::try_new(ok, 2, 2, vec![f32::INFINITY; 4]).is_err(),
+            "infinite samples rejected"
+        );
     }
 
     #[test]

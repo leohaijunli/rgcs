@@ -8,6 +8,8 @@ pub enum DemError {
     Las(String),
     Projection(String),
     Raster(String),
+    /// `dem.json` / tileset manifest (JSON) problems.
+    Manifest(String),
     NoGroundPoints(PathBuf),
 }
 
@@ -17,6 +19,7 @@ impl fmt::Display for DemError {
             Self::Las(m) => write!(f, "LAS error: {m}"),
             Self::Projection(m) => write!(f, "projection error: {m}"),
             Self::Raster(m) => write!(f, "raster error: {m}"),
+            Self::Manifest(m) => write!(f, "manifest error: {m}"),
             Self::NoGroundPoints(p) => {
                 write!(
                     f,

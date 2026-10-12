@@ -7,10 +7,13 @@
 //! ```text
 //! dem-prep process <folder> [--out <dir>] [--resolution 1.0] [--ground-only-dsm false]
 //! dem-prep probe <file.laz>
+//! dem-prep terrain <processed-dir> [--out <dir>] [--maxzoom N]
 //! ```
 //!
 //! The GCS loads a tile folder (dtm.tif + dsm.tif + dem.json) through
-//! `core::terrain::CogDem` — the point clouds never reach the app.
+//! `core::terrain::CogDem` — the point clouds never reach the app. The
+//! `terrain` subcommand turns processed tile folders into a quantized-mesh
+//! tileset (layer.json + {z}/{x}/{y}.terrain) the 3D globe streams.
 
 mod cog;
 mod error;
@@ -18,9 +21,7 @@ mod geotiff;
 mod grid;
 mod hillshade;
 mod las;
-// Pure tileset math — wired to a `terrain` subcommand together with the
-// quantized-mesh encoder (next task); tests cover it meanwhile.
-#[allow(dead_code)]
+mod mesh;
 mod terrain;
 mod utm;
 
@@ -53,8 +54,33 @@ fn main() -> Result<()> {
             }
             process_folder(&folder, &out, resolution_m)
         }
+        Some("terrain") => {
+            let folder = PathBuf::from(args.next().context("terrain <processed-dir>")?);
+            let mut out = folder.join("terrain");
+            let mut maxzoom: Option<u8> = None;
+            while let Some(arg) = args.next() {
+                match arg.as_str() {
+                    "--out" => out = PathBuf::from(args.next().context("--out <dir>")?),
+                    "--maxzoom" => maxzoom = Some(args.next().context("--maxzoom <n>")?.parse()?),
+                    other => bail!("unknown argument: {other}"),
+                }
+            }
+            let stats = mesh::generate_tileset(&folder, &out, maxzoom)?;
+            println!(
+                "tileset: {} DEM tile(s) -> {} mesh tile(s) at z{}, {:.1} MiB -> {}",
+                stats.dem_tiles,
+                stats.mesh_tiles,
+                stats.maxzoom,
+                stats.bytes as f64 / (1024.0 * 1024.0),
+                out.display()
+            );
+            Ok(())
+        }
         _ => {
-            bail!("usage: dem-prep process <folder> [--out <dir>] [--resolution m] | probe <file>")
+            bail!(
+                "usage: dem-prep process <folder> [--out <dir>] [--resolution m] \
+                 | probe <file> | terrain <processed-dir> [--out <dir>] [--maxzoom n]"
+            )
         }
     }
 }
@@ -190,7 +216,7 @@ fn process_tile(tile: &Path, out: &Path, resolution_m: f64) -> Result<cog::Index
             west,
         },
         // BC LiDAR: CGVD2013 orthometric (verified from the projection VLR).
-        vertical_datum: "orthometric_cgvd2013",
+        vertical_datum: "orthometric_cgvd2013".into(),
         source_file: tile
             .file_name()
             .and_then(|s| s.to_str())
@@ -279,7 +305,7 @@ fn process_raster_tile(tile: &Path, out: &Path) -> Result<cog::IndexEntry> {
             east,
             west,
         },
-        vertical_datum: "orthometric_cgvd2013",
+        vertical_datum: "orthometric_cgvd2013".into(),
         source_file: tile
             .file_name()
             .and_then(|s| s.to_str())
