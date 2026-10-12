@@ -43,7 +43,7 @@ crates/core          maggcs_core — all domain logic (ADR-001):
 crates/app-tauri     desktop shell: Tauri commands + thin service adapters
                      (mission/command/inspector/actuator/params/rtk),
                      telemetry pump, windows: main / inspector / actuator /
-                     params
+                     params, loopback terrain tileset server (ADR-004)
 crates/server        headless REST/WebSocket (planned)
 frontend/            React app, four Vite entries (index / inspector /
                      actuator / params — separate webviews, no Cesium in
@@ -117,7 +117,7 @@ traffic bypasses the single-slot command service).
 | 001 | Logic in core, thin app adapters |
 | 002 | Frontend types via ts-rs codegen |
 | 003 | QGC coexistence (independent sys/comp ids) |
-| 004 | Terrain sources |
+| 004 | Terrain sources (+ local quantized-mesh 3D addendum) |
 | 005 | Terrain following (GCS-side, not PX4 terrain frames) |
 | 006 | Height datums |
 | 007 | License (Apache-2.0) |

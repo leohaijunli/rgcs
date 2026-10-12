@@ -41,6 +41,12 @@ in [ARCHITECTURE.md](ARCHITECTURE.md); open work in [issues.md](../issues.md).
   (hillshade.png + dem.json) and drapes the grayscale hillshade over the
   imagery by its geographic bounds, with the DEM version shown. Offline
   (ADR-004); the same folder feeds the Pattern-step drape.
+- **Terrain (3D mesh)**: Layers ▸ serves a `dem-prep terrain` tileset over
+  the local loopback (127.0.0.1:18823, ADR-004 addendum) and swaps the
+  globe's `CesiumTerrainProvider` to it — real relief offline, imagery
+  draped, areas outside the DEM stay ellipsoid. The toggle shows the
+  served folder while on, surfaces the start error, and restores the
+  previous state across reloads (ADR-004).
 - Tool strip (top-left): Select (Esc), Add waypoint (W), Draw polygon (P) in
   Plan; Follow, 2D/3D in Fly. Layers ▸ (imagery style, grid, waypoint
   heights) and View ▸ (north up, go home) popovers.
