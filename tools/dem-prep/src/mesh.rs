@@ -37,8 +37,12 @@ const TILESET_NAME: &str = "MagGCS DEM";
 const EDGE_VERTS: usize = GRID_SEGMENTS + 1;
 
 /// Encode one quantized-mesh tile as gzip-compressed `.terrain` bytes.
-/// Total on validated inputs (sampling is NaN-free, arithmetic clamped).
-pub fn encode_tile(source: &TerrainSource, t: TileCoord) -> Vec<u8> {
+///
+/// # Errors
+///
+/// [`DemError::Geoid`] when the source's geoid conversion fails (the only
+/// sampled height can no longer be a silent fallback).
+pub fn encode_tile(source: &TerrainSource, t: TileCoord) -> Result<Vec<u8>, DemError> {
     let bounds = tile_bounds(t.z, t.x, t.y);
     let width = bounds.east - bounds.west;
     let height = bounds.north - bounds.south;
@@ -61,7 +65,7 @@ pub fn encode_tile(source: &TerrainSource, t: TileCoord) -> Vec<u8> {
         for i in 0..EDGE_VERTS {
             let u = quant(i);
             let lon = bounds.west + (f64::from(u) / qmax) * width;
-            let h = f64::from(source.sample(lat, lon));
+            let h = f64::from(source.sample(lat, lon)?);
             geodetic.push([lon, lat, h]);
         }
     }
@@ -134,14 +138,15 @@ pub fn encode_tile(source: &TerrainSource, t: TileCoord) -> Vec<u8> {
         geodetic.iter().copied(),
     );
 
-    QuantizedMeshEncoder::new(header, vertices, indices, edge_indices).encode_with_options(
+    let blob = QuantizedMeshEncoder::new(header, vertices, indices, edge_indices).encode_with_options(
         &EncodeOptions {
             include_normals: true,
             normals: Some(normals),
             compression_level: GZIP_LEVEL,
             ..EncodeOptions::default()
         },
-    )
+    );
+    Ok(blob)
 }
 
 /// Unit normals in **ECEF** (the frame Cesium's globe shader combines the
@@ -211,16 +216,20 @@ pub struct TilesetStats {
 /// folder: every `<tile>/dem.json` + `dtm.tif` becomes one [`TerrainSource`]
 /// raster, then `layer.json` + `{z}/{x}/{y}.terrain` are written under `out`.
 /// `maxzoom_override` replaces the resolution-derived zoom (levels
-/// `0..=maxzoom` always include the world tiles Cesium expects).
+/// `0..=maxzoom` always include the world tiles Cesium expects). With a
+/// `geoid` model the samples are converted to WGS84 ellipsoid height
+/// (`H + N(CGG2013)`, ADR-006) and the manifest records that datum.
 ///
 /// # Errors
 ///
 /// [`DemError::Manifest`] when no tile folders exist or a `dem.json` fails
-/// to parse; [`DemError::Raster`] on TIFF/placement/write failures.
+/// to parse; [`DemError::Raster`] on TIFF/placement/write failures;
+/// [`DemError::Geoid`] when the grid is missing or does not cover the DEM.
 pub fn generate_tileset(
     processed: &Path,
     out: &Path,
     maxzoom_override: Option<u8>,
+    geoid: Option<&maggcs_core::height::GeoidGridModel>,
 ) -> Result<TilesetStats, DemError> {
     let mut tile_dirs: Vec<PathBuf> = std::fs::read_dir(processed)
         .map_err(|e| DemError::Manifest(format!("read {}: {e}", processed.display())))?
@@ -251,13 +260,17 @@ pub fn generate_tileset(
     }
 
     let source = TerrainSource::new(rasters);
+    let source = match geoid {
+        Some(model) => source.with_geoid(model.clone())?,
+        None => source,
+    };
     let union = source
         .union_bounds()
         .ok_or_else(|| DemError::Manifest("empty tileset".into()))?;
     let maxzoom = maxzoom_override.unwrap_or(maxzoom);
     let version = cog::version_of(&[versions.join("\n").as_bytes()]);
 
-    let manifest = layer_json(TILESET_NAME, &version, &union, maxzoom);
+    let manifest = layer_json(TILESET_NAME, &version, &union, maxzoom, geoid.is_some());
     let json =
         serde_json::to_string_pretty(&manifest).map_err(|e| DemError::Manifest(e.to_string()))?;
     std::fs::create_dir_all(out).map_err(io_err)?;
@@ -268,7 +281,7 @@ pub fn generate_tileset(
     for z in 0..=maxzoom {
         let coords = tiles_covering(&union, z);
         for t in &coords {
-            let blob = encode_tile(&source, *t);
+            let blob = encode_tile(&source, *t)?;
             let path = out.join(tile_url_path(t));
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).map_err(io_err)?;
@@ -296,6 +309,8 @@ fn io_err(e: std::io::Error) -> DemError {
 mod tests {
     use super::*;
     use quantized_mesh::{is_gzip, DecodedMesh};
+
+    use maggcs_core::height::GeoidModel;
 
     use crate::cog::DemBounds;
 
@@ -348,7 +363,7 @@ mod tests {
         let t = TEST_TILE;
         let tb = tile_bounds(t.z, t.x, t.y);
         let src = plane_source(&tb);
-        let bytes = encode_tile(&src, t);
+        let bytes = encode_tile(&src, t).unwrap();
         assert!(is_gzip(&bytes), "tiles are stored gzip-compressed");
 
         let mesh = DecodedMesh::decode(&bytes).expect("decode");
@@ -508,7 +523,7 @@ mod tests {
         let src = TerrainSource::new(vec![
             PlacedRaster::try_new(b, 16, 16, vec![42.5; 256]).expect("flat raster")
         ]);
-        let mesh = DecodedMesh::decode(&encode_tile(&src, t)).expect("decode");
+        let mesh = DecodedMesh::decode(&encode_tile(&src, t).unwrap()).expect("decode");
         assert_eq!(mesh.header.min_height, 42.5);
         assert_eq!(mesh.header.max_height, 42.5, "flat span stays empty");
         assert!(
@@ -563,7 +578,7 @@ mod tests {
         cog::write_metadata(&sheet.join("dem.json"), &meta).expect("dem.json");
 
         let out = root.join("tileset");
-        let stats = generate_tileset(&proc, &out, Some(8)).expect("generate");
+        let stats = generate_tileset(&proc, &out, Some(8), None).expect("generate");
         assert_eq!(stats.dem_tiles, 1);
         assert_eq!(stats.maxzoom, 8);
         // Every level contributes 1..4 tiles for a tiny bbox: 9..36 total.
@@ -628,8 +643,112 @@ mod tests {
     #[test]
     fn generate_rejects_an_empty_folder() {
         let root = temp_dir("empty");
-        let err = generate_tileset(&root, &root.join("out"), None).expect_err("no dem.json");
+        let err = generate_tileset(&root, &root.join("out"), None, None).expect_err("no dem.json");
         assert!(matches!(err, DemError::Manifest(_)), "got {err:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A processed single-sheet folder with a flat 42.0 m DTM inside the
+    /// committed CGVD2013 fixture grid (48.5..48.8 N, -123.6..-123.3 E).
+    fn flat_sheet_folder(root: &std::path::Path) -> (PathBuf, DemBounds) {
+        let proc = root.join("proc");
+        let sheet = proc.join("sheet");
+        std::fs::create_dir_all(&sheet).expect("mkdir");
+        let (west, north, cell) = (-123.5f64, 48.7f64, 0.001f64);
+        let bounds = DemBounds {
+            north,
+            south: north - 8.0 * cell,
+            east: west + 8.0 * cell,
+            west,
+        };
+        let raster = crate::grid::GeoRaster {
+            width: 8,
+            height: 8,
+            values: vec![42.0; 64],
+            west,
+            north,
+        };
+        cog::write_geo_tiff(&sheet.join("dtm.tif"), &raster).expect("tif");
+        let meta = DemMetadata {
+            version: "cafebabecafebabe".into(),
+            raster_crs: "EPSG:4326".into(),
+            resolution_m: 1.0,
+            bounds,
+            vertical_datum: "orthometric_cgvd2013".into(),
+            source_file: "sheet.laz".into(),
+            source_points: 64,
+            has_dsm: false,
+        };
+        cog::write_metadata(&sheet.join("dem.json"), &meta).expect("dem.json");
+        (proc, bounds)
+    }
+
+    /// `--geoid` converts the flat DTM to ellipsoid height: every vertex
+    /// becomes 42 + N(CGG2013), the manifest records the datum, and the
+    /// acceptance is numeric (tile min/max vs the interpolated N at the
+    /// tile corners — N is a bilinear plane, so its extrema are at corners).
+    #[test]
+    fn geoid_converts_tiles_to_ellipsoid_heights() {
+        let root = temp_dir("geoid-tileset");
+        let (proc, bounds) = flat_sheet_folder(&root);
+
+        let grid_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("testdata/geoid/cgg2013_bc_sw.mggeoid");
+        let mut model = maggcs_core::height::GeoidGridModel::new("dem-prep");
+        maggcs_core::height::load_geoid_grid(&grid_path, &mut model).expect("load fixture grid");
+
+        let out = root.join("tileset");
+        let stats = generate_tileset(&proc, &out, Some(8), Some(&model)).expect("generate");
+        assert!(stats.bytes > 0);
+
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(out.join("layer.json")).expect("layer.json"))
+                .expect("json");
+        assert_eq!(manifest["verticalDatum"], "ellipsoidWgs84");
+
+        let deepest = tiles_covering(&bounds, 8);
+        assert!(!deepest.is_empty());
+        let tile_path = out.join(tile_url_path(&deepest[0]));
+        let mesh = DecodedMesh::decode(&std::fs::read(&tile_path).expect("tile bytes"))
+            .expect("decode deepest");
+        assert_eq!(mesh.vertices.len(), EDGE_VERTS * EDGE_VERTS);
+        assert!(
+            mesh.header.min_height != 42.0 || mesh.header.max_height != 42.0,
+            "the geoid conversion must move the heights off the flat DTM"
+        );
+
+        // N is monotonic over the sheet, and every vertex outside it samples the
+        // sheet border (edge clamp in the source), so the sampled min/max
+        // == 42 + N over the DEM bounds' four corners — not the (far
+        // larger) z8 tile's corners.
+        let corners = [
+            (bounds.south, bounds.west),
+            (bounds.south, bounds.east),
+            (bounds.north, bounds.west),
+            (bounds.north, bounds.east),
+        ];
+        let mut ns: Vec<f64> = corners
+            .iter()
+            .map(|(lat, lon)| {
+                model
+                    .undulation_m(*lat, *lon, maggcs_core::height::HeightDatum::OrthometricCgvd2013)
+                    .expect("grid covers the tile")
+            })
+            .collect();
+        ns.sort_by(f64::total_cmp);
+        let expect_min = 42.0 + ns[0];
+        let expect_max = 42.0 + ns[ns.len() - 1];
+        assert!(
+            (f64::from(mesh.header.min_height) - expect_min).abs() < 0.05,
+            "min {} vs {expect_min}",
+            mesh.header.min_height
+        );
+        assert!(
+            (f64::from(mesh.header.max_height) - expect_max).abs() < 0.05,
+            "max {} vs {expect_max}",
+            mesh.header.max_height
+        );
+
         let _ = std::fs::remove_dir_all(&root);
     }
 }

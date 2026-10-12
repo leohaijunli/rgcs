@@ -670,6 +670,7 @@ dependencies = [
  "anyhow",
  "clap",
  "las",
+ "maggcs-core",
  "png 0.17.16",
  "quantized-mesh",
  "serde",

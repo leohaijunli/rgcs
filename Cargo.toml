@@ -15,6 +15,7 @@ license = "Apache-2.0"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
+maggcs-core = { path = "crates/core" }
 thiserror = "2"
 tokio = { version = "1", features = ["sync", "time", "net", "rt-multi-thread", "macros", "io-util"] }
 mavlink = { version = "0.17", features = ["std", "udp", "tcp", "direct-serial", "common", "signing", "serde", "tokio-1"] }

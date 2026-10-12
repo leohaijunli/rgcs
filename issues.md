@@ -77,9 +77,11 @@ Headless/主界面也要用副链路，需要把 SITL 连接提升到 AppState �
 ## New open issues（2026-10-11 综合方案执行后新增）
 
 ### N2 [P2][height] CGG2013 (HT2) 网格加载
-`core::height::load` 已支持任意 .mggeoid；等 BC 省发布 CGG2013 网格提取
-后加载，完成 `H + N(CGG2013) = h`、`h − N(EGM96) = AMSL` 两段验收
-（AGENTS.md 的 <0.5 m 控制点验收）。
+`core::height::load` 已支持任意 .mggeoid；**dem-prep terrain --geoid** 已实现
+`H + N(CGG2013) = h` 换算（含 fixture `cgg2013_bc_sw.mggeoid` 与网格覆盖校验，
+ADR-004/006）。剩余只差真实数据：等 BC 省发布 CGG2013 网格提取后替换 fixture，
+完成 AGENTS.md 的 <0.5 m 控制点两段验收（`H + N(CGG2013) = h`、
+`h − N(EGM96) = AMSL`）。
 
 ### N3 [P3][frontend] 磁测记录的 GCS 侧分段落地
 survey 编译器已输出 PatternLine 表（S1），`MagTrigger::GcsSide` 是默认；

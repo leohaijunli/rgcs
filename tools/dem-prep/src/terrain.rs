@@ -20,6 +20,8 @@
 
 use std::collections::VecDeque;
 
+use maggcs_core::height::{GeoidGridModel, Height, HeightDatum};
+
 use crate::cog::DemBounds;
 use crate::error::DemError;
 
@@ -189,12 +191,25 @@ pub struct LayerJson {
     pub maxzoom: u8,
     /// Per-level availability — objects, see [`AvailabilityRect`].
     pub available: Vec<Vec<AvailabilityRect>>,
+    /// Height datum of the stored vertex heights — `orthometricCgvd2013`
+    /// when `dtm.tif` values are served as-is, `ellipsoidWgs84` after a
+    /// `--geoid` conversion (`H + N(CGG2013)`). Informational: Cesium reads
+    /// the standard keys only and ignores this one.
+    #[serde(rename = "verticalDatum")]
+    pub vertical_datum: &'static str,
 }
 
 /// Build `layer.json` for a tileset covering `bounds` down to `maxzoom`.
 /// `version` is the DEM content hash — cache-busting if a client ever uses
-/// the `{version}` template (ours does not).
-pub fn layer_json(name: &str, version: &str, bounds: &DemBounds, maxzoom: u8) -> LayerJson {
+/// the `{version}` template (ours does not). `converted_to_ellipsoid`
+/// records whether `--geoid` already shifted the heights to WGS84.
+pub fn layer_json(
+    name: &str,
+    version: &str,
+    bounds: &DemBounds,
+    maxzoom: u8,
+    converted_to_ellipsoid: bool,
+) -> LayerJson {
     LayerJson {
         tilejson: "2.1.0",
         name: name.to_string(),
@@ -209,6 +224,11 @@ pub fn layer_json(name: &str, version: &str, bounds: &DemBounds, maxzoom: u8) ->
         minzoom: 0,
         maxzoom,
         available: availability_ranges(bounds, maxzoom),
+        vertical_datum: if converted_to_ellipsoid {
+            "ellipsoidWgs84"
+        } else {
+            "orthometricCgvd2013"
+        },
     }
 }
 
@@ -347,14 +367,49 @@ fn fill_voids_nearest(values: &mut [f32], width: usize, height: usize) {
 }
 
 /// The DTM source the mesh builder samples: one or more processed tile
-/// rasters (a survey area can span several BC sheets).
+/// rasters (a survey area can span several BC sheets). Heights are DTM
+/// orthometric (CGVD2013) by default; an optional geoid model converts each
+/// sample to WGS84 ellipsoid height (`H + N(CGG2013) = h`, ADR-006) — the
+/// datum the 3D globe drapes on.
 pub struct TerrainSource {
     rasters: Vec<PlacedRaster>,
+    geoid: Option<GeoidGridModel>,
 }
 
 impl TerrainSource {
     pub fn new(rasters: Vec<PlacedRaster>) -> Self {
-        Self { rasters }
+        Self { rasters, geoid: None }
+    }
+
+    /// Convert samples to ellipsoid height using `model`'s CGVD2013 grid.
+    ///
+    /// # Errors
+    ///
+    /// [`DemError::Geoid`] when the model has no CGVD2013 grid or that grid
+    /// does not cover every raster — failing at build time, never silently
+    /// extrapolating an undulation (a missing N would bias every tile).
+    pub fn with_geoid(mut self, geoid: GeoidGridModel) -> Result<Self, DemError> {
+        let grid = geoid
+            .grid(HeightDatum::OrthometricCgvd2013)
+            .ok_or_else(|| DemError::Geoid("--geoid file carries no CGVD2013 grid".into()))?;
+        let bounds = self
+            .union_bounds()
+            .ok_or_else(|| DemError::Geoid("empty tileset".into()))?;
+        const EPS_DEG: f64 = 1e-6;
+        let (min_lat, min_lon, max_lat, max_lon) = grid.bounds();
+        if bounds.south < min_lat - EPS_DEG
+            || bounds.north > max_lat + EPS_DEG
+            || bounds.west < min_lon - EPS_DEG
+            || bounds.east > max_lon + EPS_DEG
+        {
+            return Err(DemError::Geoid(format!(
+                "CGVD2013 grid covers {:.4}..{:.4} N, {:.4}..{:.4} E but the DEM spans \
+                 {:.4}..{:.4} N, {:.4}..{:.4} E — regenerate the grid extraction",
+                min_lat, max_lat, min_lon, max_lon, bounds.south, bounds.north, bounds.west, bounds.east
+            )));
+        }
+        self.geoid = Some(geoid);
+        Ok(self)
     }
 
     /// Bounding box covering every raster (`None` when empty).
@@ -371,13 +426,21 @@ impl TerrainSource {
 
     /// Height at (lat, lon): the raster containing the point, else the
     /// nearest one (slivers between sheets resolve instead of dropping to
-    /// 0.0), else 0.0 for an empty source.
-    pub fn sample(&self, lat: f64, lon: f64) -> f32 {
+    /// 0.0), else 0.0 for an empty source. With a geoid model the value is
+    /// the WGS84 ellipsoid height `H + N`; without it the raw DTM value.
+    ///
+    /// # Errors
+    ///
+    /// [`DemError::Geoid`] when a geoid model is attached but the undulation
+    /// is unavailable at the point — unreachable after [`with_geoid`], kept
+    /// as a `Result` so a future code path cannot silently drop the datum.
+    pub fn sample(&self, lat: f64, lon: f64) -> Result<f32, DemError> {
         let mut best: Option<(f64, &PlacedRaster)> = None;
         for r in &self.rasters {
             let b = &r.bounds;
             if b.west <= lon && lon < b.east && b.south <= lat && lat < b.north {
-                return r.sample(lat, lon);
+                best = Some((0.0, r));
+                break;
             }
             let d = {
                 let cl_lon = lon.clamp(b.west, b.east);
@@ -388,7 +451,31 @@ impl TerrainSource {
                 best = Some((d, r));
             }
         }
-        best.map_or(0.0, |(_, r)| r.sample(lat, lon))
+        let (r, qlat, qlon) = match best {
+            None => return Ok(0.0), // empty source — no datum to convert
+            Some((_, r)) => {
+                let b = &r.bounds;
+                // Clamp to the raster like `PlacedRaster::sample` does, and
+                // evaluate N at the SAME point: a coarse ancestor tile (z0
+                // spans the world) samples the DEM's border height, so its
+                // undulation must be the border's, not the query's.
+                let cl_lat = lat.clamp(b.south, b.north);
+                let cl_lon = lon.clamp(b.west, b.east);
+                (r, cl_lat, cl_lon)
+            }
+        };
+        let h = r.sample(qlat, qlon);
+        match &self.geoid {
+            None => Ok(h),
+            Some(model) => {
+                // h = H + N(CGG2013) — the datum conversion lives in
+                // core::height, never reimplemented here.
+                let ellipsoid = Height::new(HeightDatum::OrthometricCgvd2013, f64::from(h))
+                    .convert(HeightDatum::EllipsoidWgs84, qlat, qlon, model)
+                    .map_err(|e| DemError::Geoid(e.to_string()))?;
+                Ok(ellipsoid.meters() as f32)
+            }
+        }
     }
 }
 
@@ -598,7 +685,7 @@ mod tests {
     #[test]
     fn layer_json_is_what_cesium_parses() {
         let bb = bc_bbox();
-        let lj = layer_json("MagGCS DEM", "deadbeefdeadbeef", &bb, 19);
+        let lj = layer_json("MagGCS DEM", "deadbeefdeadbeef", &bb, 19, false);
         let v: serde_json::Value = serde_json::to_value(&lj).expect("serialise");
         // Cesium rejects formats not starting with "quantized-mesh-1.".
         assert!(v["format"]
@@ -635,6 +722,11 @@ mod tests {
         assert_eq!(level0.as_object().unwrap().len(), 4);
         assert_eq!(v["name"], "MagGCS DEM");
         assert_eq!(v["version"], "deadbeefdeadbeef");
+        // Height datum of the stored vertices: raw DTM by default, WGS84
+        // after a `--geoid` conversion. Cesium ignores this custom key.
+        assert_eq!(v["verticalDatum"], "orthometricCgvd2013");
+        let conv = layer_json("MagGCS DEM", "x", &bb, 6, true);
+        assert_eq!(serde_json::to_value(&conv).unwrap()["verticalDatum"], "ellipsoidWgs84");
     }
 
     #[test]
@@ -775,13 +867,13 @@ mod tests {
         )
         .expect("b");
         let src = TerrainSource::new(vec![a, b]);
-        assert_eq!(src.sample(0.5, 0.5), 10.0);
-        assert_eq!(src.sample(0.5, 1.5), 20.0);
+        assert_eq!(src.sample(0.5, 0.5).unwrap(), 10.0);
+        assert_eq!(src.sample(0.5, 1.5).unwrap(), 20.0);
         // Half-open: lon == 1.0 belongs to the eastern raster.
-        assert_eq!(src.sample(0.5, 1.0), 20.0);
+        assert_eq!(src.sample(0.5, 1.0).unwrap(), 20.0);
         // Outside everything → nearest raster's clamped edge, not 0.0.
-        assert_eq!(src.sample(0.5, -5.0), 10.0);
-        assert_eq!(src.sample(-5.0, 0.5), 10.0);
+        assert_eq!(src.sample(0.5, -5.0).unwrap(), 10.0);
+        assert_eq!(src.sample(-5.0, 0.5).unwrap(), 10.0);
         let u = src.union_bounds().expect("union");
         assert_eq!((u.west, u.south, u.east, u.north), (0.0, 0.0, 2.0, 1.0));
     }
@@ -790,6 +882,131 @@ mod tests {
     fn empty_terrain_source_is_harmless() {
         let src = TerrainSource::new(vec![]);
         assert!(src.union_bounds().is_none());
-        assert_eq!(src.sample(48.6, -123.4), 0.0);
+        assert_eq!(src.sample(48.6, -123.4).unwrap(), 0.0);
+    }
+
+    #[test]
+    fn geoid_conversion_adds_the_undulation() {
+        // A flat DTM at 100 m + a constant CGVD2013 grid at N = -19.79 m
+        // must sample h = H + N = 80.21 everywhere inside the grid.
+        let r = PlacedRaster::try_new(
+            DemBounds {
+                west: -123.45,
+                south: 48.60,
+                east: -123.35,
+                north: 48.70,
+            },
+            2,
+            2,
+            vec![100.0; 4],
+        )
+        .expect("raster");
+        let grid = maggcs_core::height::GeoidGrid::constant(
+            maggcs_core::height::GeoidGridSpec {
+                datum: HeightDatum::OrthometricCgvd2013,
+                lat0_deg: 48.5,
+                lon0_deg: -123.6,
+                lat_step_deg: 0.1,
+                lon_step_deg: 0.1,
+                nlat: 3,
+                nlon: 4,
+            },
+            -19.79,
+        )
+        .expect("grid");
+        let model = GeoidGridModel::new("fixture").with_grid(grid);
+        let src = TerrainSource::new(vec![r]).with_geoid(model).expect("geoid");
+        let h = f64::from(src.sample(48.65, -123.40).unwrap());
+        assert!((h - 80.21).abs() < 1e-4, "h = {h}");
+        // The conversion is per-point: a sloping grid shifts the sample by
+        // its interpolated N, not a constant.
+        let ramp = GeoidGridModel::new("ramp").with_grid(
+            maggcs_core::height::GeoidGrid::new(
+                maggcs_core::height::GeoidGridSpec {
+                    datum: HeightDatum::OrthometricCgvd2013,
+                    lat0_deg: 48.5,
+                    lon0_deg: -123.6,
+                    lat_step_deg: 0.1,
+                    lon_step_deg: 0.1,
+                    nlat: 3,
+                    nlon: 4,
+                },
+                vec![0.0, 10.0, 20.0, 30.0, 10.0, 20.0, 30.0, 40.0, 20.0, 30.0, 40.0, 50.0],
+            )
+            .expect("ramp grid"),
+        );
+        let src2 = TerrainSource::new(vec![PlacedRaster::try_new(
+            DemBounds {
+                west: -123.45,
+                south: 48.60,
+                east: -123.35,
+                north: 48.70,
+            },
+            2,
+            2,
+            vec![100.0; 4],
+        )
+        .expect("raster")])
+        .with_geoid(ramp)
+        .expect("geoid");
+        // (48.65, -123.45): interior cell (lat idx 1.5, lon idx 1.5) on the
+        // plane N = 10·i + 10·j -> N = 30, h = 130.
+        let h2 = f64::from(src2.sample(48.65, -123.45).unwrap());
+        assert!((h2 - 130.0).abs() < 1e-4, "h = {h2}");
+    }
+
+    #[test]
+    fn geoid_must_cover_the_dem_bounds() {
+        // A fresh 100 m raster for each case (the source owns it).
+        let flat = || {
+            PlacedRaster::try_new(
+                DemBounds {
+                    west: -123.45,
+                    south: 48.60,
+                    east: -123.35,
+                    north: 48.70,
+                },
+                2,
+                2,
+                vec![100.0; 4],
+            )
+            .expect("raster")
+        };
+        // Grid does not reach the DEM's north edge -> build must fail.
+        let small = GeoidGridModel::new("small").with_grid(
+            maggcs_core::height::GeoidGrid::constant(
+                maggcs_core::height::GeoidGridSpec {
+                    datum: HeightDatum::OrthometricCgvd2013,
+                    lat0_deg: 48.0,
+                    lon0_deg: -124.0,
+                    lat_step_deg: 0.1,
+                    lon_step_deg: 0.1,
+                    nlat: 3,
+                    nlon: 3,
+                },
+                0.0,
+            )
+            .expect("grid"),
+        );
+        let err = TerrainSource::new(vec![flat()]).with_geoid(small);
+        assert!(matches!(err, Err(DemError::Geoid(_))), "grid must cover the DEM");
+        // A model without a CGVD2013 grid fails too.
+        let only_egm96 = GeoidGridModel::new("egm96").with_grid(
+            maggcs_core::height::GeoidGrid::constant(
+                maggcs_core::height::GeoidGridSpec {
+                    datum: HeightDatum::AmslEgm96,
+                    lat0_deg: 48.0,
+                    lon0_deg: -124.0,
+                    lat_step_deg: 0.1,
+                    lon_step_deg: 0.1,
+                    nlat: 3,
+                    nlon: 3,
+                },
+                0.0,
+            )
+            .expect("grid"),
+        );
+        let err = TerrainSource::new(vec![flat()]).with_geoid(only_egm96);
+        assert!(matches!(err, Err(DemError::Geoid(_))), "model must carry a CGVD2013 grid");
     }
 }

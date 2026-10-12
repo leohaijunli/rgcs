@@ -11,6 +11,8 @@ pub enum DemError {
     /// `dem.json` / tileset manifest (JSON) problems.
     Manifest(String),
     NoGroundPoints(PathBuf),
+    /// Geoid-grid problems (missing grid, coverage, conversion).
+    Geoid(String),
 }
 
 impl fmt::Display for DemError {
@@ -20,6 +22,7 @@ impl fmt::Display for DemError {
             Self::Projection(m) => write!(f, "projection error: {m}"),
             Self::Raster(m) => write!(f, "raster error: {m}"),
             Self::Manifest(m) => write!(f, "manifest error: {m}"),
+            Self::Geoid(m) => write!(f, "geoid error: {m}"),
             Self::NoGroundPoints(p) => {
                 write!(
                     f,

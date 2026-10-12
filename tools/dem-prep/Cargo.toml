@@ -7,6 +7,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
+maggcs-core.workspace = true
 las.workspace = true
 tiff.workspace = true
 sha2.workspace = true

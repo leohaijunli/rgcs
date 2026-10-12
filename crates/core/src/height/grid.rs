@@ -200,6 +200,13 @@ impl GeoidGridModel {
     pub fn covers(&self, datum: HeightDatum) -> bool {
         self.grids.contains_key(&datum)
     }
+
+    /// The loaded grid for `datum`, if any — lets a consumer verify
+    /// spatial coverage (e.g. `dem-prep` checks a DEM's bounds against the
+    /// grid before converting heights).
+    pub fn grid(&self, datum: HeightDatum) -> Option<&GeoidGrid> {
+        self.grids.get(&datum)
+    }
 }
 
 impl GeoidModel for GeoidGridModel {

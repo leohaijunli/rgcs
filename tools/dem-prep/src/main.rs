@@ -7,13 +7,15 @@
 //! ```text
 //! dem-prep process <folder> [--out <dir>] [--resolution 1.0] [--ground-only-dsm false]
 //! dem-prep probe <file.laz>
-//! dem-prep terrain <processed-dir> [--out <dir>] [--maxzoom N]
+//! dem-prep terrain <processed-dir> [--out <dir>] [--maxzoom N] [--geoid <file.mggeoid>]
 //! ```
 //!
 //! The GCS loads a tile folder (dtm.tif + dsm.tif + dem.json) through
 //! `core::terrain::CogDem` — the point clouds never reach the app. The
 //! `terrain` subcommand turns processed tile folders into a quantized-mesh
 //! tileset (layer.json + {z}/{x}/{y}.terrain) the 3D globe streams.
+//! `--geoid` converts the DTM's orthometric heights to WGS84 ellipsoid
+//! heights at generation time (`H + N(CGG2013)`, ADR-004/006).
 
 mod cog;
 mod error;
@@ -58,20 +60,43 @@ fn main() -> Result<()> {
             let folder = PathBuf::from(args.next().context("terrain <processed-dir>")?);
             let mut out = folder.join("terrain");
             let mut maxzoom: Option<u8> = None;
+            let mut geoid_path: Option<PathBuf> = None;
             while let Some(arg) = args.next() {
                 match arg.as_str() {
                     "--out" => out = PathBuf::from(args.next().context("--out <dir>")?),
-                    "--maxzoom" => maxzoom = Some(args.next().context("--maxzoom <n>")?.parse()?),
+                    "--maxzoom" => {
+                        maxzoom = Some(args.next().context("--maxzoom <n>")?.parse()?)
+                    }
+                    "--geoid" => {
+                        geoid_path = Some(PathBuf::from(
+                            args.next().context("--geoid <file.mggeoid>")?,
+                        ))
+                    }
                     other => bail!("unknown argument: {other}"),
                 }
             }
-            let stats = mesh::generate_tileset(&folder, &out, maxzoom)?;
+            let geoid = match &geoid_path {
+                Some(path) => {
+                    let mut model = maggcs_core::height::GeoidGridModel::new("dem-prep");
+                    maggcs_core::height::load_geoid_grid(path, &mut model)
+                        .map_err(|e| anyhow::anyhow!("--geoid {}: {e}", path.display()))?;
+                    Some(model)
+                }
+                None => None,
+            };
+            let stats = mesh::generate_tileset(&folder, &out, maxzoom, geoid.as_ref())?;
             println!(
-                "tileset: {} DEM tile(s) -> {} mesh tile(s) at z{}, {:.1} MiB -> {}",
+                "tileset: {} DEM tile(s) -> {} mesh tile(s) at z{}, {:.1} MiB, heights {} -> {} ({})",
                 stats.dem_tiles,
                 stats.mesh_tiles,
                 stats.maxzoom,
                 stats.bytes as f64 / (1024.0 * 1024.0),
+                if geoid.is_some() {
+                    "CGVD2013 orthometric (converted)"
+                } else {
+                    "CGVD2013 orthometric (as-is)"
+                },
+                if geoid.is_some() { "WGS84 ellipsoid" } else { "served as ellipsoid (no N)" },
                 out.display()
             );
             Ok(())
@@ -79,7 +104,8 @@ fn main() -> Result<()> {
         _ => {
             bail!(
                 "usage: dem-prep process <folder> [--out <dir>] [--resolution m] \
-                 | probe <file> | terrain <processed-dir> [--out <dir>] [--maxzoom n]"
+                 | probe <file> | terrain <processed-dir> [--out <dir>] \
+                 [--maxzoom n] [--geoid <file.mggeoid>]"
             )
         }
     }

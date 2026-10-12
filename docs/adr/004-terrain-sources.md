@@ -57,16 +57,27 @@ DEM fall back to the smooth ellipsoid.
 - Tiles use the TMS Y (0 = south); Cesium mirrors availability with
   `yStart = yTiles - range.endY - 1`, so no server-side flip is needed.
 
-### Heights: orthometric CGVD2013 as-is
+### Heights: orthometric CGVD2013 as-is, `--geoid` converts to ellipsoid
 
-Tiles store the DTM **orthometric (CGVD2013) heights directly** — no
-geoid adjustment in `dem-prep terrain`. Cesium then places them relative
-to the WGS84 ellipsoid, i.e. offset by the (currently unapplied) geoid
-undulation. This is a deliberate interim choice: the 3D globe is visual
-context, not a survey-height source, and the full
-`H + N(CGG2013) = h` conversion (AGENTS height chain) is gated on the
-CGG2013 geoid grid (issue N2). The core/height conversion remains the
-single source of survey-grade altitudes.
+`dem-prep terrain` stores the DTM **orthometric (CGVD2013) heights directly**
+when no geoid is given — Cesium then places them relative to the WGS84
+ellipsoid, i.e. offset by the (unapplied) geoid undulation. This is a
+deliberate default: the 3D globe is visual context, not a survey-height
+source, and the full `H + N(CGG2013) = h` conversion is gated on the CGG2013
+grid data (issue N2). The core/height conversion remains the single source
+of survey-grade altitudes.
+
+**Implemented (2026-10-12):** `dem-prep terrain --geoid <file.mggeoid>`
+converts every sampled height to **WGS84 ellipsoid** at generation time via
+`core::height` (`Height::convert`, ADR-006). The grid must carry a CGVD2013
+datum and cover the DEM bounds — a missing grid or uncovered area fails the
+build instead of silently extrapolating an undulation. The tileset manifest
+records the outcome in a custom `verticalDatum` field (`orthometricCgvd2013`
+or `ellipsoidWgs84`; Cesium reads the standard keys only and ignores it).
+The 2D drape keeps consuming the orthometric `dtm.tif`, so AGL planning is
+untouched. The committed `tools/dem-prep/testdata/geoid/cgg2013_bc_sw.mggeoid`
+fixture exercises the loader, coverage check and mesh conversion; the
+published CGG2013 extraction plugs in as a data file (issue N2).
 
 ### Server and security (app-tauri, port 18823)
 
