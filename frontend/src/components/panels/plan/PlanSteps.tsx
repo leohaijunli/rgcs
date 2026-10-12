@@ -16,7 +16,7 @@ import type { CloverleafPattern } from '../../../generated-types/CloverleafPatte
 import type { SurveyPattern } from '../../../generated-types/SurveyPattern'
 import { defaultCloverleaf, defaultSweep } from '../../../mission/patterns'
 
-const STEPS: Array<{ id: PlanStep; titleKey: string }> = [
+const BASE_STEPS: Array<{ id: PlanStep; titleKey: string }> = [
   { id: 'area', titleKey: 'plan.step.area' },
   { id: 'pattern', titleKey: 'plan.step.pattern' },
   { id: 'waypoints', titleKey: 'plan.step.waypoints' },
@@ -55,6 +55,10 @@ export default function PlanSteps() {
   // Pattern form state, shared by the Area and Pattern steps (the boundary
   // feeds Generate).
   const [kind, setKind] = useState<PatternKind>('sweep')
+  // A cloverleaf is a calibration manoeuvre, not an area survey: the drawn
+  // polygon step is meaningless for it, so the flow skips Area entirely
+  // (operator request). Switching back to sweep restores it.
+  const steps = kind === 'cloverleaf' ? BASE_STEPS.filter((x) => x.id !== 'area') : BASE_STEPS
   const [sweep, setSweep] = useState<SurveyPattern>(() =>
     defaultSweep(ORIGIN, (home?.[2] ?? 0) + DEFAULT_ALT_AGL_M),
   )
@@ -101,7 +105,7 @@ export default function PlanSteps() {
         )}
       </div>
 
-      {STEPS.map(({ id, titleKey }) => (
+      {steps.map(({ id, titleKey }) => (
         <StepCard
           key={id}
           title={t(titleKey)}
@@ -112,7 +116,12 @@ export default function PlanSteps() {
           {id === 'pattern' ? (
             <PatternStep
               kind={kind}
-              onKind={setKind}
+              onKind={(k) => {
+                setKind(k)
+                if (k === 'cloverleaf' && useUiStore.getState().planStep === 'area') {
+                  useUiStore.getState().setPlanStep('pattern')
+                }
+              }}
               sweep={sweep}
               onSweep={setSweep}
               clover={clover}
