@@ -13,6 +13,7 @@ tokio.workspace = true
 mavlink.workspace = true
 serialport.workspace = true
 ts-rs.workspace = true
+tiff.workspace = true
 # Enables futures/alloc so mavlink's "tokio-1" feature compiles (Cargo feature unification).
 futures = { version = "0.3", features = ["alloc"] }
 num-traits = "0.2"

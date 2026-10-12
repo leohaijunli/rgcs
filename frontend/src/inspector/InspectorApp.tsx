@@ -334,6 +334,8 @@ export function InspectorApp() {
   const [calLoaded, setCalLoaded] = useState(false)
   /** Mirrors calLoaded for the rAF render loop (which reads refs only). */
   const calRef = useRef(false)
+  /** Per-plot change key of the last setData (skip redundant redraws). */
+  const lastDataKey = useRef(new Map<string, string>())
   useEffect(() => {
     calRef.current = calLoaded
   }, [calLoaded])
@@ -907,6 +909,14 @@ export function InspectorApp() {
       const maxPoints = Math.max(256, (host?.clientWidth ?? 800) * 2)
       const merged = mergedData(p, buffers.current, maxPoints, calRef.current)
       if (!merged) continue
+      // Skip redundant setData: re-assigning identical data makes uPlot
+      // redraw the curves every frame and the drawn points visibly shimmer
+      // (operator report 2026-10-11). The last column count + last t act as
+      // a cheap change key; a real change always shifts tEnd or the columns.
+      const last = lastDataKey.current.get(p.id)
+      const key = `${merged.tEnd}|${(merged.data[0] as ArrayLike<number>).length}|${merged.data.length}`
+      if (last === key) continue
+      lastDataKey.current.set(p.id, key)
       chart.setData(merged.data)
       if (followRef.current && merged.tEnd > 0) {
         const min = merged.tEnd - windowRef.current

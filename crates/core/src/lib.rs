@@ -23,6 +23,7 @@ pub mod rtk;
 pub mod signals;
 pub mod survey;
 pub mod telemetry;
+pub mod terrain;
 pub mod ulog;
 
 pub use commands::{CommandError, CommandEvent, CommandResult, CommandService, CommandSession};
