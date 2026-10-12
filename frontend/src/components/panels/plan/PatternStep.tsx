@@ -41,6 +41,8 @@ export default function PatternStep({ kind, onKind, sweep, onSweep, clover, onCl
   const insertPattern = useMissionStore((s) => s.insertPattern)
   const lastPattern = useMissionStore((s) => s.lastPattern)
   const center = useMissionStore((s) => s.patternCenter)
+  const setPatternCenter = useMissionStore((s) => s.setPatternCenter)
+  const mapCenter = useUiStore((s) => s.mapCenter)
   const polygonVertices = usePolygonStore((s) => s.vertices)
   const polygonClosed = usePolygonStore((s) => s.closed)
   const polygonBad = polygonClosed && selfIntersects(polygonVertices)
@@ -164,6 +166,34 @@ export default function PatternStep({ kind, onKind, sweep, onSweep, clover, onCl
         </>
       ) : (
         <>
+          {/* Cloverleaf centre: the calibration centre is not the rectangle
+           * fallback's — the operator must be able to position it directly
+           * (operator report 2026-10-11). Shared with the sweep's rectangle
+           * via the store's patternCenter. */}
+          <div className="grid grid-cols-2 items-end gap-1.5">
+            <Num
+              label={t('plan.pattern.lat')}
+              value={effectiveCenter?.latitude_deg ?? 0}
+              onChange={(v) =>
+                setPatternCenter({ latitude_deg: v, longitude_deg: effectiveCenter?.longitude_deg ?? 0 })
+              }
+            />
+            <Num
+              label={t('plan.pattern.lon')}
+              value={effectiveCenter?.longitude_deg ?? 0}
+              onChange={(v) =>
+                setPatternCenter({ latitude_deg: effectiveCenter?.latitude_deg ?? 0, longitude_deg: v })
+              }
+            />
+            <button
+              onClick={() => {
+                if (mapCenter) setPatternCenter({ latitude_deg: mapCenter.lat, longitude_deg: mapCenter.lon })
+              }}
+              className="col-span-2 rounded border border-line bg-canvas px-2 py-1 text-[11px] text-ink hover:bg-panel"
+            >
+              {t('plan.pattern.useMapCentre')}
+            </button>
+          </div>
           <div className="grid grid-cols-2 gap-1.5">
             <Num label={t('plan.pattern.altitude')} value={clover.altitude_amsl_m} onChange={(v) => onClover({ ...clover, altitude_amsl_m: v })} />
             <Num label={t('plan.pattern.speed')} value={clover.speed_mps ?? 0} onChange={(v) => onClover({ ...clover, speed_mps: v })} />

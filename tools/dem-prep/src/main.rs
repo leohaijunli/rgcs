@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
-use crate::cog::DemMetadata;
+use crate::cog::{DemMetadata, IndexEntry};
 use crate::grid::{dsm_value, dtm_value, fill_single_cell_holes, resample_to_wgs84, UtmGrid};
 
 fn main() -> Result<()> {
@@ -88,24 +88,31 @@ fn process_folder(folder: &Path, out: &Path, resolution_m: f64) -> Result<()> {
         bail!("no .laz/.las files in {}", folder.display());
     }
     println!("{} tile(s) in {}", tiles.len(), folder.display());
+    let mut index: Vec<IndexEntry> = Vec::new();
     for tile in &tiles {
         let is_raster = matches!(
             tile.extension().and_then(|e| e.to_str()),
             Some("tif") | Some("tiff")
         );
-        let result = if is_raster {
+        let result: Result<IndexEntry> = if is_raster {
             process_raster_tile(tile, out)
         } else {
             process_tile(tile, out, resolution_m)
         };
-        if let Err(e) = result {
-            eprintln!("FAILED {}: {e}", tile.display());
+        match result {
+            Ok(entry) => index.push(entry),
+            Err(e) => eprintln!("FAILED {}: {e}", tile.display()),
         }
     }
+    // Tile index (N1): the GCS picks the tile covering a survey area from
+    // this list instead of the operator guessing folder names.
+    let index_path = out.join("index.json");
+    cog::write_index(&index_path, &index)?;
+    println!("index: {} tile(s) -> {}", index.len(), index_path.display());
     Ok(())
 }
 
-fn process_tile(tile: &Path, out: &Path, resolution_m: f64) -> Result<()> {
+fn process_tile(tile: &Path, out: &Path, resolution_m: f64) -> Result<cog::IndexEntry> {
     let stem = tile
         .file_stem()
         .and_then(|s| s.to_str())
@@ -197,7 +204,12 @@ fn process_tile(tile: &Path, out: &Path, resolution_m: f64) -> Result<()> {
         utm_grid.dtm_n.iter().filter(|&&n| n > 0).count(),
         metadata.version
     );
-    Ok(())
+    Ok(cog::IndexEntry {
+        folder: stem,
+        bounds: metadata.bounds,
+        version: metadata.version,
+        has_dsm: metadata.has_dsm,
+    })
 }
 
 /// Process a GeoTIFF input (CDEM / Copernicus GLO-30 fallback sources): the
@@ -209,7 +221,7 @@ fn process_tile(tile: &Path, out: &Path, resolution_m: f64) -> Result<()> {
 ///
 /// Non-geographic inputs (projected CRS) are rejected with a hint — regrid
 /// them once with gdalwarp/QGIS before running dem-prep.
-fn process_raster_tile(tile: &Path, out: &Path) -> Result<()> {
+fn process_raster_tile(tile: &Path, out: &Path) -> Result<cog::IndexEntry> {
     let stem = tile
         .file_stem()
         .and_then(|s| s.to_str())
@@ -280,7 +292,12 @@ fn process_raster_tile(tile: &Path, out: &Path) -> Result<()> {
         height,
         metadata.version
     );
-    Ok(())
+    Ok(cog::IndexEntry {
+        folder: stem,
+        bounds: metadata.bounds,
+        version: metadata.version,
+        has_dsm: metadata.has_dsm,
+    })
 }
 
 /// The UTM zone and mid-latitude of a tile (from its probe).

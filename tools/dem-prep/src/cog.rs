@@ -83,6 +83,26 @@ pub fn version_of(contents: &[&[u8]]) -> String {
     digest.iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
 
+/// One processed tile, for the folder-level `index.json` (N1).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct IndexEntry {
+    /// Tile output folder name (relative to the index).
+    pub folder: String,
+    pub bounds: DemBounds,
+    pub version: String,
+    pub has_dsm: bool,
+}
+
+/// Write `index.json`.
+///
+/// # Errors
+///
+/// [`DemError::Raster`] on a write failure.
+pub fn write_index(path: &Path, tiles: &[IndexEntry]) -> Result<(), DemError> {
+    let json = serde_json::to_string_pretty(tiles).map_err(|e| DemError::Raster(e.to_string()))?;
+    std::fs::write(path, json).map_err(|e| DemError::Raster(e.to_string()))
+}
+
 /// Write `dem.json`.
 ///
 /// # Errors
