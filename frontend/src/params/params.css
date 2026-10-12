@@ -32,10 +32,28 @@ body,
   font-family: var(--mg-font-sans);
 }
 
+/* Flex column, not grid: the version note / reboot banner are conditional
+ * siblings, and a fixed row template let them push the main panes into an
+ * `auto` row — the parameter table collapsed to the bottom of the window
+ * (operator report: "custom 界面列表出现在底部"). With flex the banners
+ * take only the height they need and `p-main` keeps the rest. */
 .p-grid {
-  display: grid;
-  grid-template-rows: 40px 1fr auto;
+  display: flex;
+  flex-direction: column;
   height: 100%;
+}
+
+.p-grid > .p-toolbar,
+.p-grid > .p-version-note,
+.p-grid > .p-version-ok,
+.p-grid > .p-reboot-banner,
+.p-grid > .p-tray {
+  flex: none;
+}
+
+.p-grid > .p-main {
+  flex: 1;
+  min-height: 0;
 }
 
 /* Toolbar */

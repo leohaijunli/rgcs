@@ -665,7 +665,7 @@ export function ParamsApp() {
               )}
               {selectedMeta?.rebootRequired && (
                 <div className="p-reboot-note">
-                  \u27f2 Changing this parameter requires an FC restart to
+                  ⟲ Changing this parameter requires an FC restart to
                   take effect.
                 </div>
               )}
