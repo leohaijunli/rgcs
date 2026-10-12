@@ -9,8 +9,12 @@
 //! - Tiles are half-open `[west, east) × [south, north)`: a bbox edge that
 //!   lands exactly on a tile boundary must not pull in the neighbour tile.
 //! - `format` must start with `quantized-mesh-1.` (checked when Cesium
-//!   parses `layer.json`), `available` is indexed by level with rects
-//!   `[startX, endX, startY, endY]`, and the `{y}` URL value is TMS y.
+//!   parses `layer.json`), `available` is indexed by level with
+//!   **object** descriptors `{startX, startY, endX, endY}` (Cesium reads
+//!   `range.startX` — bare 4-number arrays yield `undefined`/NaN ranges,
+//!   verified against `CesiumTerrainProvider.js`, the STK terrain docs
+//!   and cesium-native's `AvailabilityRectangle`), and the `{y}` URL
+//!   value is TMS y.
 //! - Missing levels/tiles are simply absent from `available` — Cesium then
 //!   reports "not available" and never requests them.
 
@@ -121,22 +125,41 @@ pub fn maxzoom_for_resolution(resolution_m: f64) -> u8 {
     (z.round() as i64).clamp(0, MAX_DESIRED_ZOOM) as u8
 }
 
-/// `layer.json` `available`: one rect `[startX, endX, startY, endY]` per
-/// level `0..=maxzoom` (TMS y, as Cesium flips it itself), or an empty level
-/// when nothing intersects (Cesium then treats that level as unavailable).
-pub fn availability_ranges(bounds: &DemBounds, maxzoom: u8) -> Vec<Vec<[u32; 4]>> {
+/// One availability descriptor in `layer.json` `available` — **must
+/// serialise as a JSON object**: Cesium reads `range.startX` /
+/// `range.startY` / `range.endX` / `range.endY` properties, so bare
+/// 4-number arrays produce `undefined` coordinates and NaN availability
+/// ranges (no terrain ever loads).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AvailabilityRect {
+    pub start_x: u32,
+    pub start_y: u32,
+    pub end_x: u32,
+    pub end_y: u32,
+}
+
+/// `layer.json` `available`: one descriptor per level `0..=maxzoom`
+/// (TMS y, as Cesium flips it itself), or an empty level when nothing
+/// intersects (Cesium then treats that level as unavailable).
+pub fn availability_ranges(bounds: &DemBounds, maxzoom: u8) -> Vec<Vec<AvailabilityRect>> {
     (0..=maxzoom)
         .map(|z| {
             let tiles = tiles_covering(bounds, z);
             let Some(first) = tiles.first() else {
                 return Vec::new();
             };
-            let mut rect = [first.x, first.x, first.y, first.y];
+            let mut rect = AvailabilityRect {
+                start_x: first.x,
+                end_x: first.x,
+                start_y: first.y,
+                end_y: first.y,
+            };
             for t in &tiles {
-                rect[0] = rect[0].min(t.x);
-                rect[1] = rect[1].max(t.x);
-                rect[2] = rect[2].min(t.y);
-                rect[3] = rect[3].max(t.y);
+                rect.start_x = rect.start_x.min(t.x);
+                rect.end_x = rect.end_x.max(t.x);
+                rect.start_y = rect.start_y.min(t.y);
+                rect.end_y = rect.end_y.max(t.y);
             }
             vec![rect]
         })
@@ -164,7 +187,8 @@ pub struct LayerJson {
     pub bounds: [f64; 4],
     pub minzoom: u8,
     pub maxzoom: u8,
-    pub available: Vec<Vec<[u32; 4]>>,
+    /// Per-level availability — objects, see [`AvailabilityRect`].
+    pub available: Vec<Vec<AvailabilityRect>>,
 }
 
 /// Build `layer.json` for a tileset covering `bounds` down to `maxzoom`.
@@ -543,7 +567,10 @@ mod tests {
             assert!(!tiles.is_empty(), "z={z}");
             for t in &tiles {
                 assert!(
-                    rect[0] <= t.x && t.x <= rect[1] && rect[2] <= t.y && t.y <= rect[3],
+                    rect.start_x <= t.x
+                        && t.x <= rect.end_x
+                        && rect.start_y <= t.y
+                        && t.y <= rect.end_y,
                     "z={z} tile {:?} outside rect {rect:?}",
                     (t.x, t.y)
                 );
@@ -551,13 +578,21 @@ mod tests {
             // Rect is exactly the span — no spare rows/columns.
             let xs: Vec<u32> = tiles.iter().map(|t| t.x).collect();
             let ys: Vec<u32> = tiles.iter().map(|t| t.y).collect();
-            assert_eq!(rect[0], *xs.iter().min().unwrap());
-            assert_eq!(rect[1], *xs.iter().max().unwrap());
-            assert_eq!(rect[2], *ys.iter().min().unwrap());
-            assert_eq!(rect[3], *ys.iter().max().unwrap());
+            assert_eq!(rect.start_x, *xs.iter().min().unwrap());
+            assert_eq!(rect.end_x, *xs.iter().max().unwrap());
+            assert_eq!(rect.start_y, *ys.iter().min().unwrap());
+            assert_eq!(rect.end_y, *ys.iter().max().unwrap());
         }
         // Level 0: BC sits in the single west/south tile (TMS y=0).
-        assert_eq!(ranges[0], vec![[0, 0, 0, 0]]);
+        assert_eq!(
+            ranges[0],
+            vec![AvailabilityRect {
+                start_x: 0,
+                start_y: 0,
+                end_x: 0,
+                end_y: 0,
+            }]
+        );
     }
 
     #[test]
@@ -581,10 +616,23 @@ mod tests {
             v["bounds"],
             serde_json::json!([-123.4249917, 48.6374242, -123.3999894, 48.6500937])
         );
-        // Levels 0..=maxzoom, each with a rect.
+        // Levels 0..=maxzoom, each with a rect. The descriptor must be a
+        // JSON *object* with exactly these keys — Cesium accesses
+        // `range.startX` etc. property-style, so arrays silently produce
+        // `undefined` and NaN availability ranges.
         let available = v["available"].as_array().expect("available array");
         assert_eq!(available.len(), 20);
-        assert_eq!(available[0], serde_json::json!([[0, 0, 0, 0]]));
+        let level0 = available[0]
+            .as_array()
+            .expect("level 0 rect list")
+            .first()
+            .expect("level 0 rect");
+        assert_eq!(
+            level0,
+            &serde_json::json!({"startX": 0, "startY": 0, "endX": 0, "endY": 0})
+        );
+        assert!(level0.is_object(), "descriptor must be an object");
+        assert_eq!(level0.as_object().unwrap().len(), 4);
         assert_eq!(v["name"], "MagGCS DEM");
         assert_eq!(v["version"], "deadbeefdeadbeef");
     }
