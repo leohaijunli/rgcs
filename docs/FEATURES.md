@@ -17,11 +17,30 @@ in [ARCHITECTURE.md](ARCHITECTURE.md); open work in [issues.md](../issues.md).
   (Settings → Vehicle) is mirrored to the SITL helper so PX4 spawns at the
   same spot.
 
+## RTK (Tools-less: TopBar GPS/RTK pill ▸ drawer)
+
+- **Base station**: the drawer lists operator-pluggable serial ports
+  (`COM*` / `ttyUSB*` / `ttyACM*` — the same enumeration as the devices
+  page); pick one + baud (F9P), Start/Stop injection.
+- **Injection**: RTCM3 frames from the base are reassembled, fragmented
+  into `GPS_RTCM_DATA` and sent to the FC (`core::rtk`); PX4 forwards the
+  fragments to the GNSS in arrival order (ADR-008 addendum). Single-source
+  mutual exclusion; a bounded queue drops oldest on overflow.
+- **Health**: 1 Hz stats — source, B/s, RTCM type counts, dropped chunks
+  and a 5 s stall alarm (matching the PX4 GPS driver's link-switch
+  timeout); all transitions land in the event log.
+- **Rover**: fix type (RTK FIXED/FLOAT/…) and satellite count from
+  telemetry.
+
 ## Map
 
 - Imagery style selectable in Layers ▸: OSM streets, Esri satellite,
   Google satellite (WGS84-aligned), OpenTopoMap — always over the offline
   graticule (no grid-only mode).
+- **Terrain (hillshade)**: Layers ▸ loads a dem-prep tile folder
+  (hillshade.png + dem.json) and drapes the grayscale hillshade over the
+  imagery by its geographic bounds, with the DEM version shown. Offline
+  (ADR-004); the same folder feeds the Pattern-step drape.
 - Tool strip (top-left): Select (Esc), Add waypoint (W), Draw polygon (P) in
   Plan; Follow, 2D/3D in Fly. Layers ▸ (imagery style, grid, waypoint
   heights) and View ▸ (north up, go home) popovers.
@@ -36,6 +55,16 @@ in [ARCHITECTURE.md](ARCHITECTURE.md); open work in [issues.md](../issues.md).
 2. **Pattern** — Survey sweep / Cloverleaf; common fields (spacing, line
    azimuth, altitude, speed) always shown, advanced folded; generation via
    `core::survey` (tie lines and the calibration cloverleaf included).
+   Generation routes through the Rust compiler (S1): line counts, total
+   path, ETA and coverage are shown; magnetometer survey-line boundaries
+   stay GCS-side by default (the line table + MISSION_CURRENT), with an
+   optional camera-trigger gating mode.
+   **Drape to terrain (40 m AGL)** rewrites the heights over a dem-prep
+   tile folder: constant AGL over the DTM, raised where the DSM (surface
+   incl. trees) breaks the 5 m clearance; the report shows the tightest
+   clearance, raised count and DEM version (recorded in exported `.plan`s
+   as `maggcsDemVersion`). Fallback sources (CDEM / Copernicus GeoTIFF)
+   are DTM-only — the clearance check is skipped with `has_dsm: false`.
 3. **Waypoints** — list with distance-from-vehicle, coordinate entry (DMS or
    decimal), add/remove, inline editor under the selected row; rows colored
    by flight state.
@@ -47,23 +76,30 @@ in [ARCHITECTURE.md](ARCHITECTURE.md); open work in [issues.md](../issues.md).
 Altitude mode (relative / AMSL / AGL) is a mission-wide setting in the
 always-visible panel header.
 
-## Fly view (right panel)
+## Fly view (nav bar + map)
 
-- **Commands**: Takeoff / Land / RTL — each behind a two-click confirm; ack
-  outcome shown inline. (Pause/Continue removed: PX4 v1.17 NACKs
-  `MAV_CMD_DO_PAUSE_CONTINUE`.)
-- **Arm / Disarm**: two-click confirm, same status line; PX4 runs its own
-  preflight checks for GCS arming and denies with `temporarily_rejected`
-  plus a reason (ADR-017). The 21196 kill code is never sent from the UI.
+The Fly panel itself is gone (operator request): the nav bar and the map
+carry everything.
+
+- **Flight ▾** (nav bar dropdown): Takeoff / Land / RTL / Arm-Disarm,
+  each behind a two-click confirm. Takeoff replicates PX4's `commander
+  takeoff` flow — NAV_TAKEOFF (param7 = current AMSL + 10 m relative)
+  → await ACK → arm (Commander.cpp:336-345; a bare mode intent never
+  leaves the ground). PX4 runs its own preflight checks for GCS arming
+  and denies with `temporarily_rejected` plus a reason (ADR-017); the
+  21196 kill code is never sent from the UI. (Pause/Continue removed:
+  PX4 v1.17 NACKs `MAV_CMD_DO_PAUSE_CONTINUE`.)
+- **Event log drawer**: every terminal command ack, mode switch,
+  injection source change and RTK alarm lands in one timestamped side
+  drawer (300-entry ring, clearable) — the nav bar stays quiet.
 - **Mode switching**: the MODE pill is a popover (`MODE ▾`). Entries and
   their grey-out reasons (link, mission sync, armed, home, RC) resolve in
   core (ADR-017); Return/Land need the confirm click; the switch shows
   "Switching…" until the heartbeat readback matches — never an optimistic
   display. Manual/Acro/Offboard sit behind the "Advanced modes" checkbox.
-- **Mission progress**: active waypoint, distance/ETA, target altitude — the
-  FC's mission is auto-fetched when the local plan is empty (e.g. after a
-  restart or a QGC upload).
-- **Plan items**: flyable-order list colored by flight state.
+- **Blinking target**: the waypoint the FC is flying toward pulses on the
+  map (hard square-wave ring, 0.4 s on/off) and follows `MISSION_CURRENT`
+  as the mission progresses; flown waypoints dim.
 - **HUD** (bottom-left of the map): attitude indicator + numeric roll, pitch,
   heading, speed, altitudes — all angles in degrees. Collapsible.
 - Top bar: armed / mode (decoded PX4 flight mode) / RTK / battery pills;
