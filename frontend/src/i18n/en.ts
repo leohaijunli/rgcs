@@ -13,6 +13,7 @@ export default {
     popover: 'Tools',
     motorTest: 'Motor test',
     parameters: 'Parameters',
+    logs: 'Logs',
   },
   link: {
     fc: 'FC',
@@ -332,7 +333,6 @@ export default {
       connection: 'Connection',
       vehicle: 'Vehicle',
       appearance: 'Appearance',
-      logs: 'Logs',
       devices: 'Devices',
       about: 'About',
     },

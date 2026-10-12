@@ -1,4 +1,4 @@
-import { ChevronDown, Gauge, LineChart, List, Settings, SlidersHorizontal } from 'lucide-react'
+import { ChevronDown, FileDown, Gauge, LineChart, List, Settings, SlidersHorizontal } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { invoke } from '@tauri-apps/api/core'
@@ -7,6 +7,7 @@ import { IconButton, StatusDot, Tabs } from '../design-system/components'
 import { useUiStore, type View } from '../stores/ui'
 import { isTauri } from '../inspector/mock'
 import SettingsDialog, { type SettingsTab } from './dialogs/SettingsDialog'
+import LogsDialog from './dialogs/LogsDialog'
 import LinkPopover from './LinkPopover'
 import RtkDrawer from './RtkDrawer'
 import ModePopover from './ModePopover'
@@ -63,6 +64,7 @@ export default function TopBar() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('connection')
   const [rtkDrawerOpen, setRtkDrawerOpen] = useState(false)
+  const [logsOpen, setLogsOpen] = useState(false)
   const [logDrawerOpen, setLogDrawerOpen] = useState(false)
   const view = useUiStore((s) => s.view)
   const setView = useUiStore((s) => s.setView)
@@ -151,6 +153,7 @@ export default function TopBar() {
           onInspector={openInspector}
           onMotorTest={openMotorTest}
           onParams={openParams}
+          onLogs={() => setLogsOpen(true)}
         />
         <IconButton title={t('eventLog.title')} onClick={() => setLogDrawerOpen(true)}>
           <List size={16} />
@@ -167,6 +170,7 @@ export default function TopBar() {
         tab={settingsTab}
         onTabChange={setSettingsTab}
       />
+      <LogsDialog open={logsOpen} onOpenChange={setLogsOpen} />
     </header>
   )
 }
@@ -191,10 +195,12 @@ function ToolsPopover({
   onInspector,
   onMotorTest,
   onParams,
+  onLogs,
 }: {
   onInspector: () => void
   onMotorTest: () => void
   onParams: () => void
+  onLogs: () => void
 }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
@@ -259,6 +265,16 @@ function ToolsPopover({
           >
             <SlidersHorizontal size={14} />
             {t('tools.parameters')}
+          </button>
+          <button
+            onClick={() => {
+              setOpen(false)
+              onLogs()
+            }}
+            className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-sm text-ink hover:bg-canvas"
+          >
+            <FileDown size={14} />
+            {t('tools.logs')}
           </button>
         </div>
       )}
