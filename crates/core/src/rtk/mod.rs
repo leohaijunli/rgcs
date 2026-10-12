@@ -8,9 +8,11 @@
 //! service land in follow-up slices.
 
 pub mod forward;
+pub mod multi;
 pub mod rtcm;
 
 pub use forward::{fragment, RtcmForwardError, RtcmFragment};
+pub use multi::{ForeignInjector, ForeignState, FOREIGN_WINDOW};
 pub use rtcm::{encode_frame, parse_frame, RtcmError, RtcmFrame, RtcmFramer};
 pub mod service;
 pub mod source;

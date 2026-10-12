@@ -50,6 +50,7 @@ pub fn run() {
             rtk_service::rtk_start_serial,
             rtk_service::rtk_stop,
             rtk_service::rtk_last_stats,
+            rtk_service::rtk_foreign_state,
             commands::send_command,
             commands::flight_mode_table,
             commands::send_set_mode,

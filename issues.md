@@ -3,7 +3,7 @@
 遗留问题与待办（2026-10-10 重组）：已完成的问题压缩为索引（git 历史含全文），**未完成项在下方全文列出**。
 
 
-## Resolved issues（已完成，共 45 条 — 全文见 git 历史）
+## Resolved issues（已完成，共 46 条 — 全文见 git 历史）
 
 ### 进度总览（P0）
 ### #1 [P0][core] Heartbeat timeout is reset by any inbound traffic
@@ -51,6 +51,7 @@
 ### #43 [P2][frontend] 设置菜单应提供 UAV 3D 模型朝向的设置（pitch/roll/yaw 偏移）
 ### O1 [P2][frontend] Logs 页是占位
 ### O5 [P3][frontend] Data 视图移除后的遗留键
+### N1 [P2][frontend] Drape 前的地形数据发现
 
 ## Open issues（未完成）
 
@@ -74,11 +75,6 @@ Headless/主界面也要用副链路，需要把 SITL 连接提升到 AppState �
 - `DO_PAUSE_CONTINUE` 在 PX4 v1.17 不支持（已实测 NACK）——已用 NAV_TAKEOFF/LAND 替代，关闭。
 
 ## New open issues（2026-10-11 综合方案执行后新增）
-
-### N1 [P2][frontend] Drape 前的地形数据发现
-当前从 Layers ▸ 手动选 dem-prep 输出文件夹。需要：瓦片索引（folder 内
-多瓦片的 index.json）、按调查区域自动选瓦片、未覆盖时的清晰提示与
-CDEM/Copernicus 指引。
 
 ### N2 [P2][height] CGG2013 (HT2) 网格加载
 `core::height::load` 已支持任意 .mggeoid；等 BC 省发布 CGG2013 网格提取

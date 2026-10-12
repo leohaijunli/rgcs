@@ -146,6 +146,12 @@ pub async fn connect(
         let logs_state = std::sync::Arc::clone(&state.logs);
         logs_state.attach(app.clone(), h);
     }
+    // Multi-injector observer (N4/ADR-008): watches inbound GPS_RTCM_DATA
+    // for the "someone else is injecting too" warning.
+    if let Some(h) = state.connection() {
+        let rtk_state = std::sync::Arc::clone(&state.rtk);
+        rtk_state.attach_foreign(app.clone(), h);
+    }
 
     Ok(ConnectResponse {
         ok: true,

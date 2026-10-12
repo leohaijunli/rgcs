@@ -18,6 +18,7 @@ export default function RtkDrawer({ open, onClose }: { open: boolean; onClose: (
   const devices = useDevicesStore((s) => s.devices)
   const loadDevices = useDevicesStore((s) => s.load)
   const stats = useRtkStore((s) => s.stats)
+  const foreign = useRtkStore((s) => s.foreign)
   const busy = useRtkStore((s) => s.busy)
   const startSerial = useRtkStore((s) => s.startSerial)
   const stop = useRtkStore((s) => s.stop)
@@ -197,6 +198,12 @@ export default function RtkDrawer({ open, onClose }: { open: boolean; onClose: (
                 <span className="text-muted">{t('rtk.injectionOff')}</span>
               )}
             </div>
+            {/* N4/ADR-008: somebody else (QGC) is injecting on this link too. */}
+            {foreign?.active && (
+              <div className="mt-1 rounded border border-warn bg-canvas px-2 py-1 text-[11px] text-warn">
+                {t('rtk.foreignActive')} ({String(foreign.packets)})
+              </div>
+            )}
           </section>
 
           <p className="text-[11px] leading-relaxed text-muted">{t('rtk.hint')}</p>

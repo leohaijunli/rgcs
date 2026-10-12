@@ -69,6 +69,7 @@ export default {
     stop: 'Stop injection',
     injection: 'Injection',
     injectionOff: 'Injection off',
+    foreignActive: 'Another injector is sending RTCM on this link (QGC?) — disable one side',
     source: 'Source',
     bytesPerSecond: 'Bytes/s',
     totalFrames: 'Frames total',

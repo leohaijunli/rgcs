@@ -5,9 +5,13 @@
 //! lives in the main window frontend.
 
 use std::sync::{Arc, Mutex as StdMutex};
+use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter, State};
 
+use maggcs_core::mavlink::connection::{ConnectionEvent, ConnectionHandle};
+use maggcs_core::mavlink::router::MessageRoute;
+use maggcs_core::rtk::multi::{ForeignInjector, ForeignState, FOREIGN_WINDOW};
 use maggcs_core::rtk::service::{RtkServiceHandle, RtkStats};
 
 use crate::state::AppState;
@@ -19,6 +23,8 @@ pub struct RtkState {
     /// Handle of the primary link's injection service.
     handle: StdMutex<Option<RtkServiceHandle>>,
     last: StdMutex<Option<RtkStats>>,
+    /// Foreign-injector snapshot (N4), updated on change.
+    foreign: StdMutex<Option<ForeignState>>,
 }
 
 impl RtkState {
@@ -46,6 +52,52 @@ impl RtkState {
     pub fn detach(&self) {
         *self.handle.lock().expect("rtk handle lock poisoned") = None;
         *self.last.lock().expect("rtk stats lock poisoned") = None;
+        *self.foreign.lock().expect("rtk foreign lock poisoned") = None;
+    }
+
+    /// Observe inbound `GPS_RTCM_DATA` for the multi-injector warning
+    /// (N4 / ADR-008): any packet on the bus came from another injector,
+    /// since our own injections never echo back. Emits `rtk_foreign` on
+    /// every state change and caches it for the drawer's first paint.
+    pub fn attach_foreign(self: Arc<Self>, app: AppHandle, conn: ConnectionHandle) {
+        let state = self.clone();
+        tauri::async_runtime::spawn(async move {
+            use ::mavlink::MessageData;
+            let mut events = conn.subscribe_route(MessageRoute::messages(&[
+                ::mavlink::common::GPS_RTCM_DATA_DATA::ID,
+            ]));
+            let mut injector = ForeignInjector::new();
+            let mut last = ForeignState::default();
+            let mut tick = tokio::time::interval(Duration::from_secs(1));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    ev = events.recv() => match ev {
+                        Ok(ConnectionEvent::Message(_)) => injector.observe(Instant::now()),
+                        Ok(_) => {} // lifecycle events pass the route unchanged
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    },
+                    _ = tick.tick() => {} // age out FOREIGN_WINDOW without new packets
+                }
+                let now = Instant::now();
+                let current = ForeignState {
+                    active: injector.active(now, FOREIGN_WINDOW),
+                    packets: injector.packets(),
+                };
+                if current == last {
+                    continue;
+                }
+                last = current;
+                *state
+                    .foreign
+                    .lock()
+                    .expect("rtk foreign lock poisoned") = Some(current);
+                if app.emit("rtk_foreign", current).is_err() {
+                    return; // UI gone
+                }
+            }
+        });
     }
 
     fn service(&self) -> Option<RtkServiceHandle> {
@@ -91,4 +143,15 @@ pub fn rtk_last_stats(state: State<'_, AppState>) -> Option<RtkStats> {
         .lock()
         .expect("rtk stats lock poisoned")
         .clone()
+}
+
+/// Last foreign-injector snapshot (N4): seeds the drawer before the first
+/// `rtk_foreign` event.
+#[tauri::command]
+pub fn rtk_foreign_state(state: State<'_, AppState>) -> Option<ForeignState> {
+    *state
+        .rtk
+        .foreign
+        .lock()
+        .expect("rtk foreign lock poisoned")
 }
