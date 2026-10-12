@@ -254,7 +254,13 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       }
     }),
 
-  setPatternCenter: (center) => set({ patternCenter: center }),
+  setPatternCenter: (center) =>
+    set((s) => ({
+      patternCenter: center,
+      // The pattern block moves with its centre: a re-generate at a new
+      // centre still trims the previous block correctly.
+      lastPattern: s.lastPattern ? { ...s.lastPattern, center } : s.lastPattern,
+    })),
 
   drapeToTerrain: async (folder, aglM, minDsmClearanceM) => {
     try {
@@ -280,13 +286,16 @@ export const useMissionStore = create<MissionState>((set, get) => ({
   insertPattern: (plan, label, center, stats) =>
     set((s) => {
       // Generate replaces the previous preset block rather than stacking a
-      // second copy of the trajectory. `lastPattern` is cleared by every manual
-      // edit, so when it is set those trailing waypoints are ours to drop.
+      // second copy of the trajectory. `lastPattern` is cleared by every
+      // manual edit, so when it is set those trailing waypoints are ours to
+      // drop. Always trim to `min(previous, len)`: a re-generation with a
+      // smaller pattern (or an external trim that did not clear lastPattern)
+      // must never leave the old block stacked behind the new one
+      // (operator report: cloverleaf re-generate kept the old trajectory).
       const previous = s.lastPattern?.count ?? 0
+      const trimmed = previous > 0 ? Math.min(previous, s.waypoints.length) : 0
       const kept =
-        previous > 0 && previous <= s.waypoints.length
-          ? s.waypoints.slice(0, s.waypoints.length - previous)
-          : s.waypoints
+        trimmed > 0 ? s.waypoints.slice(0, s.waypoints.length - trimmed) : s.waypoints
       return {
         waypoints: [...kept, ...plan.waypoints],
         lastPattern: {

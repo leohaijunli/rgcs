@@ -65,12 +65,12 @@ export default function Hud() {
         <Readout label={t('hud.altAmsl')} value={pos?.altitude.meters.toFixed(1) ?? '—'} unit="m" />
         <Readout
           label={t('hud.roll')}
-          value={att?.roll_deg != null ? att.roll_deg.toFixed(0) : '—'}
+          value={att?.roll_deg != null ? att.roll_deg.toFixed(2) : '—'}
           unit="°"
         />
         <Readout
           label={t('hud.pitch')}
-          value={att?.pitch_deg != null ? att.pitch_deg.toFixed(0) : '—'}
+          value={att?.pitch_deg != null ? att.pitch_deg.toFixed(2) : '—'}
           unit="°"
         />
       </div>

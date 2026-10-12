@@ -72,7 +72,10 @@ export default function PatternStep({ kind, onKind, sweep, onSweep, clover, onCl
         })
         insertPattern(compiled, t('plan.pattern.kind.sweep'), effectiveCenter, compiled.stats)
       } else {
-        if (!effectiveCenter) return
+        if (!effectiveCenter) {
+          setError(t('plan.pattern.noCenter'))
+          return
+        }
         const plan = await generateCloverleaf({
           ...clover,
           center: effectiveCenter,
