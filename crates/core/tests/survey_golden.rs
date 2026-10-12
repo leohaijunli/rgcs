@@ -21,7 +21,7 @@ fn assert_golden(name: &str, value: &impl serde::Serialize) {
     let json = serde_json::to_string_pretty(value).expect("serialize golden");
     let path = golden_dir().join(format!("{name}.json"));
     if REGENERATE.load(Ordering::Relaxed) {
-        fs::create_dir_all(&golden_dir()).expect("mkdir");
+        fs::create_dir_all(golden_dir()).expect("mkdir");
         fs::write(&path, &json).expect("write golden");
         println!("regenerated {}", path.display());
         return;
