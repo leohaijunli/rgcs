@@ -42,7 +42,7 @@ pub fn read_single_band(
     let (west, north) = (tie[3], tie[4]);
     // Geographic degrees only — projected inputs must be regridded first
     // (gdalwarp/QGIS), keeping this tool's dependency set tiny.
-    if !(west >= -180.0 && west <= 180.0 && north.abs() <= 90.0) {
+    if !(-180.0..=180.0).contains(&west) || north.abs() > 90.0 {
         return Err(DemError::Raster(format!(
             "{}: raster is not geographic (degrees) — regrid with gdalwarp/QGIS first",
             path.display()
