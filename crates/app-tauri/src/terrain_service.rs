@@ -77,3 +77,77 @@ fn base64_encode(data: &[u8]) -> String {
     }
     out
 }
+
+/// One discovered tile: an absolute tile folder plus the metadata the
+/// frontend needs to auto-pick it against the survey area (N1).
+#[derive(Debug, Clone, Serialize)]
+pub struct DiscoveredTile {
+    /// Absolute tile folder path — feed straight to `terrain_load` /
+    /// `terrain_drape`.
+    pub path: String,
+    pub folder: String,
+    pub bounds: DemBounds,
+    pub version: String,
+    pub has_dsm: bool,
+}
+
+/// The tiles under a dem-prep output folder (N1).
+#[derive(Debug, Clone, Serialize)]
+pub struct TerrainDiscovery {
+    pub tiles: Vec<DiscoveredTile>,
+}
+
+/// Discover the tiles under a dem-prep output folder (N1).
+///
+/// Accepts either a **parent** folder carrying a multi-tile `index.json`
+/// (each entry a relative tile subfolder) or a **single-tile** folder
+/// (carrying `dem.json` itself, the pre-N1 layout the drape dialog already
+/// accepted). The frontend auto-picks the tile covering the survey area.
+///
+/// # Errors
+///
+/// A stringified error when the folder carries neither `index.json` nor
+/// `dem.json`.
+#[tauri::command]
+pub async fn terrain_discover(folder: String) -> Result<TerrainDiscovery, String> {
+    let dir = Path::new(&folder);
+    let index_path = dir.join("index.json");
+    if index_path.is_file() {
+        let tiles = maggcs_core::terrain::load_tile_index(dir)
+            .map_err(|e| e.to_string())?;
+        return Ok(TerrainDiscovery {
+            tiles: tiles
+                .into_iter()
+                .map(|t| DiscoveredTile {
+                    path: dir.join(&t.folder).display().to_string(),
+                    folder: t.folder,
+                    bounds: t.bounds,
+                    version: t.version,
+                    has_dsm: t.has_dsm,
+                })
+                .collect(),
+        });
+    }
+    // Single-tile folder (dem.json + hillshade.png directly under `folder`).
+    if dir.join("dem.json").is_file() {
+        let meta: DemMetadata = serde_json::from_str(
+            &tokio::fs::read_to_string(dir.join("dem.json"))
+                .await
+                .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+        return Ok(TerrainDiscovery {
+            tiles: vec![DiscoveredTile {
+                path: folder,
+                folder: String::new(),
+                bounds: meta.bounds,
+                version: meta.version,
+                has_dsm: meta.has_dsm,
+            }],
+        });
+    }
+    Err(format!(
+        "{}: no index.json or dem.json found",
+        dir.display()
+    ))
+}

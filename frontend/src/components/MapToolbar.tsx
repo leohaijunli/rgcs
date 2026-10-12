@@ -234,6 +234,9 @@ function TerrainToggle() {
   const { t } = useTranslation()
   const overlay = useTerrainStore((s) => s.overlay)
   const error = useTerrainStore((s) => s.error)
+  const uncovered = useTerrainStore((s) => s.uncovered)
+  const tiles = useTerrainStore((s) => s.tiles)
+  const tile = useTerrainStore((s) => s.tile)
   const load = useTerrainStore((s) => s.load)
   const clear = useTerrainStore((s) => s.clear)
   return (
@@ -244,9 +247,18 @@ function TerrainToggle() {
         onToggle={() => (overlay ? clear() : void load())}
       />
       {error && <div className="px-1 text-[10px] text-error">{error}</div>}
+      {uncovered && !error && (
+        <div className="px-1 text-[10px] text-warn">{t('terrain.uncovered')}</div>
+      )}
       {overlay && (
         <div className="px-1 text-[10px] text-muted">
           {t('terrain.version')} {overlay.version}
+          {tiles.length > 1 && tile && (
+            <span>
+              {' · '}
+              {tile.folder || '—'} ({tiles.length})
+            </span>
+          )}
         </div>
       )}
     </div>

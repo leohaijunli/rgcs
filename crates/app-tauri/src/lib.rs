@@ -42,6 +42,7 @@ pub fn run() {
             commands::survey_generate_cloverleaf,
             commands::survey_compile_pattern,
             terrain_service::terrain_load,
+            terrain_service::terrain_discover,
             logs_service::logs_request_list,
             logs_service::logs_download,
             logs_service::logs_cancel,

@@ -287,6 +287,7 @@ export default {
   terrain: {
     overlay: 'Terrain (hillshade)',
     version: 'DEM version',
+    uncovered: 'Survey area is outside the DEM coverage — pick another folder or adjust the area',
     osm: 'Streets',
     satellite: 'Esri',
     google: 'Google',

@@ -13,6 +13,7 @@ import {
 import { selfIntersects } from '../../../mission/polygon'
 import { useMissionStore } from '../../../stores/mission'
 import { usePolygonStore } from '../../../stores/polygon'
+import { useTerrainStore } from '../../../stores/terrain'
 import { useUiStore } from '../../../stores/ui'
 import type { CloverleafPattern } from '../../../generated-types/CloverleafPattern'
 import type { GeoPoint } from '../../../generated-types/GeoPoint'
@@ -292,40 +293,29 @@ function Num({
 }
 
 
-/** S3/D5: drape the planned waypoints over a dem-prep tile folder. The
- * report (min clearance, raised count, DEM version) shows after draping;
- * any plan edit clears it (the store handles that). */
+/** S3/D5: drape the planned waypoints over the auto-picked dem-prep tile
+ * (N1). The report (min clearance, raised count, DEM version) shows after
+ * draping; any plan edit clears it (the store handles that). */
 function DrapeBlock() {
   const { t } = useTranslation()
   const drape = useMissionStore((s) => s.drape)
   const drapeToTerrain = useMissionStore((s) => s.drapeToTerrain)
+  const ensureTile = useTerrainStore((s) => s.ensureTile)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const run = async () => {
     setBusy(true)
     setError(null)
-    // Folder: reuse the terrain overlay's folder when one was loaded via
-    // Layers ▸; otherwise ask (the same dialog the Layers toggle uses, and
-    // the choice is remembered for the overlay too).
-    let folder = terrainFolder()
-    if (!folder) {
-      try {
-        const { open } = await import('@tauri-apps/plugin-dialog')
-        const picked = await open({ multiple: false, directory: true })
-        if (!picked || typeof picked !== 'string') {
-          setBusy(false)
-          return
-        }
-        folder = picked
-        sessionStorage.setItem('maggcs.terrainFolder', folder)
-      } catch (e) {
-        setBusy(false)
-        setError(String(e))
-        return
-      }
+    // N1: the terrain store auto-picks the tile covering the survey area;
+    // it only opens a folder dialog when nothing was loaded yet.
+    const path = await ensureTile()
+    if (!path) {
+      setBusy(false)
+      setError(t('terrain.uncovered'))
+      return
     }
-    const err = await drapeToTerrain(folder, 40, 5)
+    const err = await drapeToTerrain(path, 40, 5)
     setBusy(false)
     if (err) setError(err)
   }
@@ -356,13 +346,4 @@ function DrapeBlock() {
       )}
     </div>
   )
-}
-
-/** The last folder the terrain overlay loaded (shared with the drape). */
-function terrainFolder(): string {
-  // The overlay store keeps the data URL, not the folder; the drape dialog
-  // asks the user again unless the store remembers it. Keep it simple:
-  // sessionStorage of the last terrain_load folder (set by the Layers
-  // toggle path in stores/terrain.ts).
-  return sessionStorage.getItem('maggcs.terrainFolder') ?? ''
 }
