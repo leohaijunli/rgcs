@@ -38,6 +38,7 @@ pub fn run() {
             commands::mission_set_current,
             commands::survey_generate_sweep,
             commands::survey_generate_cloverleaf,
+            commands::survey_compile_pattern,
             rtk_service::rtk_start_serial,
             rtk_service::rtk_stop,
             rtk_service::rtk_last_stats,

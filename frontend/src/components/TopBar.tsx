@@ -1,4 +1,4 @@
-import { ChevronDown, Gauge, LineChart, Settings, SlidersHorizontal } from 'lucide-react'
+import { ChevronDown, Gauge, LineChart, List, Settings, SlidersHorizontal } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { invoke } from '@tauri-apps/api/core'
@@ -9,7 +9,8 @@ import SettingsDialog, { type SettingsTab } from './dialogs/SettingsDialog'
 import LinkPopover from './LinkPopover'
 import RtkDrawer from './RtkDrawer'
 import ModePopover from './ModePopover'
-import FlightCommands from './FlightCommands'
+import FlightMenu from './FlightMenu'
+import EventLogDrawer from './EventLogDrawer'
 
 const VIEWS: View[] = ['planning', 'flight']
 
@@ -61,6 +62,7 @@ export default function TopBar() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('connection')
   const [rtkDrawerOpen, setRtkDrawerOpen] = useState(false)
+  const [logDrawerOpen, setLogDrawerOpen] = useState(false)
   const view = useUiStore((s) => s.view)
   const setView = useUiStore((s) => s.setView)
   const heartbeat = useTelemetryStore((s) => s.snapshot?.heartbeat ?? null)
@@ -137,7 +139,7 @@ export default function TopBar() {
           <span className={`h-1.5 w-1.5 rounded-full ${armed ? 'bg-ok-ink' : 'bg-muted'}`} />
           {armed ? t('link.armed') : t('link.disarmed')}
         </div>
-        <FlightCommands variant="bar" />
+        <FlightMenu />
         <ModePopover />
         <Pill
           label={t('link.rtk')}
@@ -157,6 +159,14 @@ export default function TopBar() {
           onParams={openParams}
         />
         <button
+          aria-label={t('eventLog.title')}
+          title={t('eventLog.title')}
+          onClick={() => setLogDrawerOpen(true)}
+          className="flex h-11 w-11 items-center justify-center rounded border border-line bg-canvas text-muted hover:text-ink"
+        >
+          <List size={16} />
+        </button>
+        <button
           aria-label={t('settings.menu')}
           onClick={() => setSettingsOpen(true)}
           className="flex h-11 w-11 items-center justify-center rounded border border-line bg-canvas text-muted hover:text-ink"
@@ -165,6 +175,7 @@ export default function TopBar() {
         </button>
       </div>
       <RtkDrawer open={rtkDrawerOpen} onClose={() => setRtkDrawerOpen(false)} />
+      <EventLogDrawer open={logDrawerOpen} onClose={() => setLogDrawerOpen(false)} />
       <SettingsDialog
         open={settingsOpen}
         onOpenChange={setSettingsOpen}

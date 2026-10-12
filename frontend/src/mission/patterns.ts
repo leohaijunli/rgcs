@@ -9,6 +9,8 @@ import { invoke } from '@tauri-apps/api/core'
 import type { CloverleafPattern } from '../generated-types/CloverleafPattern'
 import type { GeoPoint } from '../generated-types/GeoPoint'
 import type { PatternPlan } from '../generated-types/PatternPlan'
+import type { CompiledPattern } from '../generated-types/CompiledPattern'
+import type { CompileOptions } from '../generated-types/CompileOptions'
 import type { SurveyPattern } from '../generated-types/SurveyPattern'
 
 /** Generate a survey sweep (optionally with tie lines). */
@@ -19,6 +21,15 @@ export async function generateSweep(pattern: SurveyPattern): Promise<PatternPlan
 /** Generate a cloverleaf calibration manoeuvre. */
 export async function generateCloverleaf(pattern: CloverleafPattern): Promise<PatternPlan> {
   return invoke<PatternPlan>('survey_generate_cloverleaf', { pattern })
+}
+
+/** Compile a generated pattern into mission-ready waypoints + stats (S1/S2;
+ * the math runs in Rust). */
+export async function compilePattern(
+  plan: PatternPlan,
+  options: CompileOptions,
+): Promise<CompiledPattern> {
+  return invoke<CompiledPattern>('survey_compile_pattern', { plan, options })
 }
 
 /** WGS84 semi-major axis, matching `core::survey::LocalProjection`. */

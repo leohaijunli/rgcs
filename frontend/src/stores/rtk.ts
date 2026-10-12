@@ -4,6 +4,7 @@
 
 import { create } from 'zustand'
 import type { RtkStats } from '../generated-types/RtkStats'
+import { logEvent } from './eventlog'
 
 interface RtkState {
   /** Latest 1 Hz stats; null = no active injection source (or not connected). */
@@ -19,7 +20,26 @@ export const useRtkStore = create<RtkState>((set) => ({
   stats: null,
   busy: false,
 
-  handleEvent: (stats) => set({ stats }),
+  handleEvent: (stats) => {
+    // Log the state transitions an operator should not miss (stall, drops).
+    set((s) => {
+      const prev = s.stats
+      if (stats.stalled && !prev?.stalled) {
+        logEvent('rtk', 'warn', `RTCM injection stalled (${stats.source ?? 'no source'})`)
+      }
+      if (!prev?.dropped_chunks && stats.dropped_chunks > 0) {
+        logEvent('rtk', 'warn', `RTCM chunks dropped: ${stats.dropped_chunks}`)
+      }
+      if (prev?.source !== stats.source) {
+        logEvent(
+          'rtk',
+          'info',
+          stats.source ? `Injection source: ${stats.source}` : 'Injection stopped',
+        )
+      }
+      return { stats }
+    })
+  },
 
   startSerial: async (portName, baudRate) => {
     set({ busy: true })

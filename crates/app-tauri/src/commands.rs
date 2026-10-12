@@ -279,6 +279,17 @@ pub fn survey_generate_cloverleaf(pattern: CloverleafPattern) -> Result<PatternP
     pattern.generate().map_err(|e| e.to_string())
 }
 
+/// Compile a generated pattern into the mission-ready waypoint sequence and
+/// quality stats (S1/S2). Runs in Rust (ADR-015 convention); the frontend
+/// only renders.
+#[tauri::command]
+pub fn survey_compile_pattern(
+    plan: PatternPlan,
+    options: maggcs_core::survey::compile::CompileOptions,
+) -> Result<maggcs_core::survey::compile::CompiledPattern, String> {
+    maggcs_core::survey::compile::compile_pattern(&plan, &options).map_err(|e| e.to_string())
+}
+
 /// Named vehicle command.
 ///
 /// `name` is one of `"takeoff"`, `"land"`, `"rtl"`. The command is enqueued
@@ -293,9 +304,13 @@ pub fn survey_generate_cloverleaf(pattern: CloverleafPattern) -> Result<PatternP
 pub async fn send_command(name: String, state: State<'_, AppState>) -> Result<(), String> {
     let service = state.command().ok_or_else(|| "not connected".to_string())?;
     let (command, params) = named_command(&name)?;
-    // Takeoff needs the vehicle's current AMSL: PX4 interprets param7 as an
-    // absolute altitude, and we want a relative 10 m climb.
-    let params = if name == "takeoff" {
+
+    // Takeoff (MS3, ADR-017): PX4's own `commander takeoff` flow is
+    // NAV_TAKEOFF -> await ACK -> ARM (Commander.cpp:336-345). The mode
+    // intent is accepted while disarmed; nobody would arm afterwards, so we
+    // replicate the sequence here: param7 = current AMSL + the relative
+    // 10 m climb, then arm once the FC accepted the mode.
+    if name == "takeoff" {
         let alt = state
             .hub()
             .and_then(|h| h.snapshot().global_position)
@@ -303,10 +318,30 @@ pub async fn send_command(name: String, state: State<'_, AppState>) -> Result<()
             .ok_or_else(|| {
                 "no position fix yet — cannot compute the takeoff altitude".to_string()
             })?;
-        takeoff_params(alt)
-    } else {
-        params
-    };
+        maggcs_core::CommandService::send_await(
+            &service,
+            MavCmd::MAV_CMD_NAV_TAKEOFF,
+            takeoff_params(alt),
+            TAKEOFF_ACK_TIMEOUT,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        let armed = state
+            .hub()
+            .and_then(|h| h.snapshot().heartbeat)
+            .is_some_and(|hb| hb.base_mode.safety_armed);
+        if !armed {
+            service
+                .send(
+                    MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
+                    arm_disarm_params(true),
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        return Ok(());
+    }
+
     service
         .send(command, params)
         .await
@@ -325,6 +360,9 @@ pub fn flight_mode_table(
 
 /// Relative takeoff altitude (operator setting, 2026-10-11).
 const TAKEOFF_ALTITUDE_M: f32 = 10.0;
+/// How long takeoff waits for the NAV_TAKEOFF ack before giving up on the
+/// sequence (the session's own retry budget is ~4 s).
+const TAKEOFF_ACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// `MAV_CMD_NAV_TAKEOFF` parameters. PX4 reads `param7` as an **AMSL**
 /// altitude (`navigator_main.cpp`: `rep->current.alt = cmd.param7`), so the

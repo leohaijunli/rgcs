@@ -4,6 +4,7 @@
 
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
+import { logEvent } from './eventlog'
 
 /**
  * Commands the UI may send. `takeoff`/`land` map to `MAV_CMD_NAV_TAKEOFF` /
@@ -91,11 +92,18 @@ export const useCommandStore = create<CommandState>((set) => ({
 
   // `sent` (including retransmissions) keeps the command pending; a
   // `completed`/`failed` event always ends it.
-  handleEvent: (e) =>
+  handleEvent: (e) => {
+    // Event log (operator request): the nav bar no longer shows the ack
+    // inline; every terminal outcome lands in the log instead.
+    if (e.kind !== 'sent') {
+      const level = e.result === 'accepted' ? 'ok' : e.result === undefined ? 'err' : 'warn'
+      logEvent('command', level, `${e.command}: ${e.result ?? e.message ?? 'failed'}`)
+    }
     set((s) => ({
       lastEvent: e,
       pending: e.kind === 'sent' ? s.pending : null,
-    })),
+    }))
+  },
 
   reset: () => set({ pending: null, lastEvent: null }),
 }))

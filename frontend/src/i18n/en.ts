@@ -51,6 +51,11 @@ export default {
       other: 'Error',
     },
   },
+  eventLog: {
+    title: 'Event log',
+    clear: 'Clear',
+    empty: 'No events yet',
+  },
   rtk: {
     title: 'RTK GPS',
     rover: 'Rover',
@@ -248,6 +253,7 @@ export default {
     takeoff: 'Takeoff',
     land: 'Land',
     cmd: {
+      menu: 'Flight',
       confirmArm: 'Confirm ARM?',
       confirmDisarm: 'Confirm disarm?',
       arm: 'Arm',

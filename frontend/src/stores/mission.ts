@@ -10,6 +10,7 @@ import { invoke } from '@tauri-apps/api/core'
 import type { GeoPoint } from '../generated-types/GeoPoint'
 import type { MissionItem } from '../generated-types/MissionItem'
 import type { PatternLine } from '../generated-types/PatternLine'
+import type { PatternStats } from '../generated-types/PatternStats'
 import type { PatternPlan } from '../generated-types/PatternPlan'
 import type { PlannedWaypoint } from '../generated-types/PlannedWaypoint'
 import {
@@ -38,6 +39,8 @@ export interface InsertedPattern {
   lines: PatternLine[]
   /** Centre the pattern was generated from (cloverleaf centre / rectangle centre). */
   center: GeoPoint | null
+  /** Quality metrics from the S1/S2 compiler, when compiled. */
+  stats: PatternStats | null
 }
 
 /** Payload of the backend `mission` event. */
@@ -90,7 +93,12 @@ interface MissionState {
   removeWaypoint: (seq: number) => void
   moveWaypoint: (from: number, to: number) => void
   /** Append a generated pattern's waypoints and show its line table. */
-  insertPattern: (plan: PatternPlan, label: string, center?: GeoPoint | null) => void
+  insertPattern: (
+    plan: Pick<PatternPlan, 'waypoints' | 'lines'>,
+    label: string,
+    center?: GeoPoint | null,
+    stats?: PatternStats | null,
+  ) => void
   /** Pin or move the pattern centre (typed in the panel or dragged on the map). */
   setPatternCenter: (center: GeoPoint | null) => void
   upload: () => Promise<void>
@@ -233,7 +241,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
 
   setPatternCenter: (center) => set({ patternCenter: center }),
 
-  insertPattern: (plan, label, center) =>
+  insertPattern: (plan, label, center, stats) =>
     set((s) => {
       // Generate replaces the previous preset block rather than stacking a
       // second copy of the trajectory. `lastPattern` is cleared by every manual
@@ -254,6 +262,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
             end_seq: line.end_seq + kept.length,
           })),
           center: center ?? null,
+          stats: stats ?? null,
         },
         patternCenter: center ?? null,
         selectedSeq: null,
