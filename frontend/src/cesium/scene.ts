@@ -183,3 +183,31 @@ export function setTerrainOverlay(
     },
   )
 }
+
+/**
+ * Switch the globe's terrain provider (plan B): `url` is the tileset
+ * **base URL** served by the app (`terrain3d_start`, trailing slash —
+ * `fromUrl` appends `layer.json` itself), `null` resets to the ellipsoid.
+ *
+ * `fromUrl` fetches `layer.json` before the provider exists, so the swap
+ * is async — a per-viewer generation drops a slow load that raced a newer
+ * switch (same guard as [`setTerrainOverlay`]). Rejects when the endpoint
+ * is unreachable or its manifest is invalid; the caller surfaces that.
+ */
+const terrain3dGeneration = new WeakMap<Cesium.Viewer, number>()
+
+export async function setTerrain3d(viewer: Cesium.Viewer, url: string | null): Promise<void> {
+  const generation = (terrain3dGeneration.get(viewer) ?? 0) + 1
+  terrain3dGeneration.set(viewer, generation)
+  if (!url) {
+    if (!viewer.isDestroyed()) viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider()
+    return
+  }
+  const provider = await Cesium.CesiumTerrainProvider.fromUrl(url, {
+    // Negotiates the octvertexnormals extension (layer.json always ships
+    // normals; requestVertexNormals also enables globe lighting from them).
+    requestVertexNormals: true,
+  })
+  if (terrain3dGeneration.get(viewer) !== generation || viewer.isDestroyed()) return
+  viewer.terrainProvider = provider
+}

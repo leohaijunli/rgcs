@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import * as Cesium from 'cesium'
-import { setTerrainOverlay as sceneSetTerrainOverlay } from '../cesium/scene'
+import { setTerrain3d as sceneSetTerrain3d, setTerrainOverlay as sceneSetTerrainOverlay } from '../cesium/scene'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
 import { applyLayerVisibility, createViewer, setImageryStyle as applyImageryStyle } from '../cesium/scene'
 import {
@@ -70,6 +70,9 @@ export interface CesiumViewerHandle {
       bounds: { north: number; south: number; east: number; west: number }
     } | null,
   ): void
+  /** Switch the 3D terrain provider to the local tileset URL, or back to
+   * the ellipsoid with `null` (plan B). Rejects when the endpoint fails. */
+  setTerrain3d(url: string | null): Promise<void>
   /** Frame the home area and stop following. */
   goHome(): void
   /** Rotate the camera to north-up (no-op in 2D) and stop following. */
@@ -351,6 +354,12 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
     [],
   )
 
+  const setTerrain3d = useCallback(async (url: string | null) => {
+    const viewer = viewerRef.current
+    if (!viewer) return
+    await sceneSetTerrain3d(viewer, url)
+  }, [])
+
   const setLayers = useCallback((showGrid: boolean) => {
     const viewer = viewerRef.current
     if (!viewer) return
@@ -362,5 +371,5 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
     if (!viewer) return
     applyImageryStyle(viewer, style)
   }, [])
-  return { initError, setSnapshot, setMission, setTerrainOverlay, setLayers, setImageryStyle, goHome, lookNorth }
+  return { initError, setSnapshot, setMission, setTerrainOverlay, setTerrain3d, setLayers, setImageryStyle, goHome, lookNorth }
 }

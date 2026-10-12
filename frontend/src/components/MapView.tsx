@@ -15,7 +15,7 @@ import MapToolbar from './MapToolbar'
 export default function MapView() {
   const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
-  const { initError, setSnapshot, setMission, setTerrainOverlay, setLayers, setImageryStyle, goHome, lookNorth } =
+  const { initError, setSnapshot, setMission, setTerrainOverlay, setTerrain3d, setLayers, setImageryStyle, goHome, lookNorth } =
     useCesiumViewer(containerRef)
   const mapTool = useUiStore((s) => s.mapTool)
   const view = useUiStore((s) => s.view)
@@ -68,6 +68,26 @@ export default function MapView() {
   useEffect(() => {
     setTerrainOverlay(terrainOverlay)
   }, [terrainOverlay, setTerrainOverlay])
+
+  // 3D terrain tileset (plan B): react to the store's tileset base URL. A
+  // provider load that fails (server gone, bad manifest) rolls the toggle
+  // back through fail3d; a stale rejection after a newer switch is dropped.
+  const terrain3d = useTerrainStore((st) => st.terrain3d)
+  useEffect(() => {
+    let cancelled = false
+    void setTerrain3d(terrain3d?.url ?? null).catch((e) => {
+      if (!cancelled) void useTerrainStore.getState().fail3d(String(e))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [terrain3d, setTerrain3d])
+
+  // A tileset server started before a webview reload keeps running —
+  // re-attach on boot (terrain3d_status).
+  useEffect(() => {
+    void useTerrainStore.getState().restore3d()
+  }, [])
 
   const kinds = useMemo(() => kindsBySeq(lastPattern?.lines ?? []), [lastPattern])
   useEffect(() => {

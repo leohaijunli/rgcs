@@ -145,6 +145,7 @@ export default function MapToolbar({ onGoHome, onNorth }: Props) {
           <PopoverToggle label={t('terrain.grid')} on={showGrid} onLabel={t('layers.on')} offLabel={t('layers.off')} onToggle={toggleGrid} />
           <PopoverToggle label={t('map.heights')} on={showHeights} onLabel={t('layers.on')} offLabel={t('layers.off')} onToggle={toggleHeights} />
           <TerrainToggle />
+          <Terrain3DToggle />
         </Popover>
       )}
       {popover === 'view' && (
@@ -155,6 +156,37 @@ export default function MapToolbar({ onGoHome, onNorth }: Props) {
           <PopoverAction label={t('map.north')} icon={<Compass size={14} strokeWidth={1.75} />} onClick={onNorth} />
           <PopoverAction label={t('map.home')} icon={<House size={14} strokeWidth={1.75} />} onClick={onGoHome} />
         </Popover>
+      )}
+    </div>
+  )
+}
+
+/** 3D terrain mesh (plan B): serve a `dem-prep terrain` tileset from the
+ * loopback HTTP server and hand Cesium the layer.json URL; on = the server
+ * runs and the globe carries the mesh. */
+function Terrain3DToggle() {
+  const { t } = useTranslation()
+  const terrain3d = useTerrainStore((s) => s.terrain3d)
+  const error3d = useTerrainStore((s) => s.error3d)
+  const start3d = useTerrainStore((s) => s.start3d)
+  const stop3d = useTerrainStore((s) => s.stop3d)
+  const folderName = terrain3d
+    ? terrain3d.folder.split(/[\\/]/).filter(Boolean).pop() ?? terrain3d.folder
+    : null
+  return (
+    <div>
+      <PopoverToggle
+        label={t('terrain.threeD')}
+        on={terrain3d != null}
+        onLabel={t('layers.on')}
+        offLabel={t('layers.off')}
+        onToggle={() => (terrain3d ? void stop3d() : void start3d())}
+      />
+      {error3d && <div className="px-1 text-[10px] text-error">{error3d}</div>}
+      {folderName && (
+        <div className="px-1 text-[10px] text-muted">
+          {t('terrain.serving')} {folderName}
+        </div>
       )}
     </div>
   )

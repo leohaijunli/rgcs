@@ -39,6 +39,11 @@ interface TerrainState {
   loading: boolean
   /** Error from the last load attempt (shown in the Layers popover). */
   error: string | null
+  /** 3D tileset (plan B): the live tileset base URL + source folder,
+   * while the loopback server runs (`null` = ellipsoid terrain). */
+  terrain3d: { url: string; folder: string } | null
+  /** Error from the 3D toggle / provider load (Layers popover). */
+  error3d: string | null
   load: () => Promise<void>
   /** Pick + load a tile against the current survey area (no dialog). */
   repick: () => Promise<void>
@@ -46,6 +51,17 @@ interface TerrainState {
    * nothing was loaded yet). Returns null when the area is uncovered. */
   ensureTile: () => Promise<string | null>
   clear: () => void
+  /** Pick a `dem-prep terrain` folder, start the loopback tileset server
+   * (plan B) and remember the base URL for the Cesium terrain provider. */
+  start3d: () => Promise<void>
+  /** Stop the loopback tileset server and fall back to ellipsoid terrain. */
+  stop3d: () => Promise<void>
+  /** Re-attach to a server that survived a webview reload
+   * (`terrain3d_status`); best-effort, no dialog. */
+  restore3d: () => Promise<void>
+  /** The server is up but Cesium refused the tileset: clear the toggle,
+   * stop the server, surface `message`. */
+  fail3d: (message: string) => Promise<void>
 }
 
 /**
@@ -95,6 +111,8 @@ export const useTerrainStore = create<TerrainState>((set, get) => ({
   uncovered: false,
   loading: false,
   error: null,
+  terrain3d: null,
+  error3d: null,
   load: async () => {
     set({ error: null, loading: true })
     try {
@@ -153,6 +171,51 @@ export const useTerrainStore = create<TerrainState>((set, get) => ({
     }
   },
   clear: () => set({ overlay: null, tile: null, tiles: [], folder: null, uncovered: false, loading: false, error: null }),
+  start3d: async () => {
+    set({ error3d: null })
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      const { open } = await import('@tauri-apps/plugin-dialog')
+      const folder = await open({ multiple: false, directory: true })
+      if (!folder || typeof folder !== 'string') return // cancelled
+      const url = await invoke<string>('terrain3d_start', { dir: folder })
+      sessionStorage.setItem('maggcs.terrain3dFolder', folder)
+      set({ terrain3d: { url, folder }, error3d: null })
+    } catch (e) {
+      set({ error3d: String(e) })
+    }
+  },
+  stop3d: async () => {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      await invoke('terrain3d_stop')
+    } catch (e) {
+      // Keep the toggle on — the server may still be running.
+      set({ error3d: String(e) })
+      return
+    }
+    set({ terrain3d: null, error3d: null })
+  },
+  restore3d: async () => {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      const url = await invoke<string | null>('terrain3d_status')
+      if (!url) return
+      const folder = sessionStorage.getItem('maggcs.terrain3dFolder') ?? ''
+      set({ terrain3d: { url, folder } })
+    } catch {
+      /* best-effort: the toggle simply stays off */
+    }
+  },
+  fail3d: async (message: string) => {
+    set({ terrain3d: null, error3d: message })
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      await invoke('terrain3d_stop')
+    } catch {
+      /* server already gone */
+    }
+  },
 }))
 
 type Setter = (partial: Partial<TerrainState>) => void
