@@ -1,0 +1,778 @@
+{
+  "waypoints": [
+    {
+      "position": {
+        "latitude_deg": 48.0,
+        "longitude_deg": -122.99899311665513
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 0.0
+      },
+      "command": 178,
+      "params": [
+        1.0,
+        5.0,
+        -1.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 48.0,
+        "longitude_deg": -122.99899311665513
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 48.0001002371752,
+        "longitude_deg": -122.99905418671527
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 48.00016843411577,
+        "longitude_deg": -122.9992252829264
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 48.00017978584783,
+        "longitude_deg": -122.9994726745566
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 48.000122374548276,
+        "longitude_deg": -122.99974827916378
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 48.0,
+        "longitude_deg": -123.0
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 47.99983156588423,
+        "longitude_deg": -123.0001828858927
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 47.99964715040631,
+        "longitude_deg": -123.00026868573357
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 47.99948161309479,
+        "longitude_deg": -123.00025172083622
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 47.99936712738329,
+        "longitude_deg": -123.00014980210776
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 47.99932626353691,
+        "longitude_deg": -123.0
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 47.99936712738329,
+        "longitude_deg": -122.99985019789224
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 47.99948161309479,
+        "longitude_deg": -122.99974827916378
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 47.99964715040631,
+        "longitude_deg": -122.99973131426643
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 47.99983156588423,
+        "longitude_deg": -122.9998171141073
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 48.0,
+        "longitude_deg": -123.0
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 48.000122374548276,
+        "longitude_deg": -123.00025172083622
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 48.00017978584783,
+        "longitude_deg": -123.0005273254434
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 48.00016843411577,
+        "longitude_deg": -123.0007747170736
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 48.0001002371752,
+        "longitude_deg": -123.00094581328473
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 48.0,
+        "longitude_deg": -123.00100688334487
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 47.9998997628248,
+        "longitude_deg": -123.00094581328473
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 47.99983156588423,
+        "longitude_deg": -123.0007747170736
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 47.99982021415217,
+        "longitude_deg": -123.0005273254434
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 47.999877625451724,
+        "longitude_deg": -123.00025172083622
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 48.0,
+        "longitude_deg": -123.0
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 48.00016843411577,
+        "longitude_deg": -122.9998171141073
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 48.00035284959369,
+        "longitude_deg": -122.99973131426643
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 48.00051838690521,
+        "longitude_deg": -122.99974827916378
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 48.00063287261671,
+        "longitude_deg": -122.99985019789224
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 48.00067373646309,
+        "longitude_deg": -123.0
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 48.00063287261671,
+        "longitude_deg": -123.00014980210776
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 48.00051838690521,
+        "longitude_deg": -123.00025172083622
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 48.00035284959369,
+        "longitude_deg": -123.00026868573357
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 48.00016843411577,
+        "longitude_deg": -123.0001828858927
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 48.0,
+        "longitude_deg": -123.0
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 47.999877625451724,
+        "longitude_deg": -122.99974827916378
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 47.99982021415217,
+        "longitude_deg": -122.9994726745566
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 47.99983156588423,
+        "longitude_deg": -122.9992252829264
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 47.9998997628248,
+        "longitude_deg": -122.99905418671527
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    },
+    {
+      "position": {
+        "latitude_deg": 48.0,
+        "longitude_deg": -122.99899311665513
+      },
+      "altitude": {
+        "datum": "AMSL_EGM96",
+        "meters": 150.0
+      },
+      "command": 16,
+      "params": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "autocontinue": true
+    }
+  ],
+  "lines": [
+    {
+      "id": 1,
+      "kind": "calibration",
+      "start_seq": 1,
+      "end_seq": 41,
+      "length_m": 720.2571690766277
+    }
+  ],
+  "stats": {
+    "survey_length_m": -0.0,
+    "tie_length_m": -0.0,
+    "calibration_length_m": 720.2571690766277,
+    "total_length_m": 907.3043865314678,
+    "line_count": 1,
+    "estimated_time_s": 181.46087730629355,
+    "coverage_m2": null
+  }
+}
