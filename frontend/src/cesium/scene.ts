@@ -146,7 +146,13 @@ export function applyLayerVisibility(viewer: Cesium.Viewer, showGrid: boolean): 
  * Add or replace the terrain hillshade overlay (plan A): a dem-prep
  * hillshade PNG draped by its geographic bounds, above the imagery layer.
  * `null` removes it.
+ *
+ * Provider loading is async, so every call bumps a per-viewer generation;
+ * a load that finishes after a newer call (or a clear) is dropped instead
+ * of re-adding a stale overlay (M2).
  */
+const overlayGeneration = new WeakMap<Cesium.Viewer, number>()
+
 export function setTerrainOverlay(
   viewer: Cesium.Viewer,
   overlay: { url: string; bounds: { north: number; south: number; east: number; west: number } } | null,
@@ -156,6 +162,8 @@ export function setTerrainOverlay(
   while (layers.length > 2) {
     layers.remove(layers.get(layers.length - 1))
   }
+  const generation = (overlayGeneration.get(viewer) ?? 0) + 1
+  overlayGeneration.set(viewer, generation)
   if (!overlay) return
   const rectangle = Cesium.Rectangle.fromDegrees(
     overlay.bounds.west,
@@ -165,7 +173,8 @@ export function setTerrainOverlay(
   )
   void Cesium.SingleTileImageryProvider.fromUrl(overlay.url, { rectangle }).then(
     (provider) => {
-      // Re-check: an async add may race a clear.
+      // The load raced a newer call or a clear: that call owns the stack now.
+      if (overlayGeneration.get(viewer) !== generation || viewer.isDestroyed()) return
       const layer = layers.addImageryProvider(provider, 2)
       layer.alpha = OVERLAY_ALPHA
     },

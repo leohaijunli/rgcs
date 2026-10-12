@@ -25,6 +25,10 @@ pub struct RtkState {
     last: StdMutex<Option<RtkStats>>,
     /// Foreign-injector snapshot (N4), updated on change.
     foreign: StdMutex<Option<ForeignState>>,
+    /// Shutdown switch of the foreign observer task: dropping it (on
+    /// `detach`) ends the task, which otherwise holds a `ConnectionHandle`
+    /// and would keep the event bus — and itself — alive forever (M1).
+    foreign_stop: StdMutex<Option<tokio::sync::watch::Sender<bool>>>,
 }
 
 impl RtkState {
@@ -48,18 +52,34 @@ impl RtkState {
         });
     }
 
-    /// Drop the previous link's service (link swap).
+    /// Drop the previous link's service (link swap or disconnect): ends the
+    /// stats task (channel close), the injection service (last command
+    /// handle dropped) and the foreign observer (`foreign_stop` dropped).
     pub fn detach(&self) {
         *self.handle.lock().expect("rtk handle lock poisoned") = None;
         *self.last.lock().expect("rtk stats lock poisoned") = None;
         *self.foreign.lock().expect("rtk foreign lock poisoned") = None;
+        *self
+            .foreign_stop
+            .lock()
+            .expect("rtk foreign stop lock poisoned") = None;
     }
 
     /// Observe inbound `GPS_RTCM_DATA` for the multi-injector warning
     /// (N4 / ADR-008): any packet on the bus came from another injector,
     /// since our own injections never echo back. Emits `rtk_foreign` on
     /// every state change and caches it for the drawer's first paint.
+    ///
+    /// The task outlives the event bus it subscribes to (it holds a
+    /// `ConnectionHandle`, which keeps the broadcast channel open), so it
+    /// exits through the `foreign_stop` switch installed here and dropped
+    /// by [`RtkState::detach`] (M1).
     pub fn attach_foreign(self: Arc<Self>, app: AppHandle, conn: ConnectionHandle) {
+        let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
+        *self
+            .foreign_stop
+            .lock()
+            .expect("rtk foreign stop lock poisoned") = Some(stop_tx);
         let state = self.clone();
         tauri::async_runtime::spawn(async move {
             use ::mavlink::MessageData;
@@ -72,6 +92,8 @@ impl RtkState {
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tokio::select! {
+                    // detach(): sender dropped or link swapped (M1).
+                    _ = stop_rx.changed() => return,
                     ev = events.recv() => match ev {
                         Ok(ConnectionEvent::Message(_)) => injector.observe(Instant::now()),
                         Ok(_) => {} // lifecycle events pass the route unchanged

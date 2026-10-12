@@ -171,6 +171,11 @@ pub async fn disconnect(app: AppHandle, state: State<'_, AppState>) -> Result<()
         link.connection.shutdown().await;
         // Dropping the mission/command handles stops their service tasks.
     }
+    // Stop the link-scoped service tasks too (M1): the RTK stats/injection
+    // and log-download tasks hold ConnectionHandles and never see the bus
+    // close, so they must be told — `detach` drops their stop switches.
+    state.rtk.detach();
+    state.logs.detach();
     state.publish_link(LinkStatus::disconnected());
     let _ = app.emit("link", LinkStatus::disconnected());
     Ok(())
