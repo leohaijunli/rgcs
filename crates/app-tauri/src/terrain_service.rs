@@ -161,8 +161,9 @@ pub async fn terrain_discover(folder: String) -> Result<TerrainDiscovery, String
 /// `127.0.0.1` (plan B) rooted at `dir` — a `dem-prep terrain` output
 /// folder (`layer.json` + `{z}/{x}/{y}.terrain`).
 ///
-/// Returns the `layer.json` URL, ready for
-/// `Cesium.CesiumTerrainProvider.fromUrl`.
+/// Returns the tileset **base URL** (trailing slash), ready for
+/// `Cesium.CesiumTerrainProvider.fromUrl` — which appends `layer.json`
+/// itself.
 ///
 /// # Errors
 ///
@@ -199,8 +200,8 @@ pub async fn terrain3d_stop(state: tauri::State<'_, AppState>) -> Result<(), Str
     Ok(())
 }
 
-/// Base `layer.json` URL of the running server, or `None` when it is
-/// stopped — lets the frontend restore state across reloads.
+/// Tileset base URL of the running server, or `None` when it is stopped
+/// — lets the frontend restore state across reloads.
 #[tauri::command]
 pub async fn terrain3d_status(state: tauri::State<'_, AppState>) -> Result<Option<String>, String> {
     Ok(state.terrain3d.lock().as_ref().map(TerrainServer::url))

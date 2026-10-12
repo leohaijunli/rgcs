@@ -48,9 +48,10 @@ pub struct TerrainServer {
     /// Resolved bind address (loopback + actual port) — also used to
     /// wake the accept loop on shutdown.
     addr: SocketAddr,
-    /// Base URL of `layer.json` — hand straight to
-    /// `CesiumTerrainProvider.fromUrl`.
-    layer_url: String,
+    /// Base URL of the tileset (trailing slash) — hand straight to
+    /// `CesiumTerrainProvider.fromUrl`, which appends `layer.json`
+    /// itself (`resource.appendForwardSlash()` + derived resource).
+    base_url: String,
     running: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
 }
@@ -95,17 +96,17 @@ impl TerrainServer {
             .spawn(move || accept_loop(listener, thread_root, thread_flag))
             .map_err(|e| format!("spawn terrain server thread: {e}"))?;
         Ok(Self {
-            layer_url: format!("http://127.0.0.1:{}/layer.json", addr.port()),
+            base_url: format!("http://127.0.0.1:{}/", addr.port()),
             addr,
             running,
             handle: Some(handle),
         })
     }
 
-    /// Base URL of the served `layer.json` (what the frontend passes to
-    /// `CesiumTerrainProvider.fromUrl`).
+    /// Tileset base URL (trailing slash) — what the frontend passes to
+    /// `Cesium.CesiumTerrainProvider.fromUrl`.
     pub fn url(&self) -> String {
-        self.layer_url.clone()
+        self.base_url.clone()
     }
 
     /// Actual bound port (tests bind `0`).
@@ -524,14 +525,15 @@ mod tests {
     }
 
     #[test]
-    fn url_points_at_layer_json_on_the_bound_port() {
+    fn url_is_the_tileset_base_with_a_trailing_slash() {
         let dir = tempdir("url");
         write_layer_json(&dir);
         let server = TerrainServer::bind(dir.clone(), 0).expect("bind");
-        assert_eq!(
-            server.url(),
-            format!("http://127.0.0.1:{}/layer.json", server.port())
-        );
+        // fromUrl appends a forward slash and derives `layer.json`, so the
+        // contract is the tileset root — not the manifest file itself.
+        assert_eq!(server.url(), format!("http://127.0.0.1:{}/", server.port()));
+        let (head, _) = http(server.port(), "GET /layer.json HTTP/1.1\r\nHost: x\r\n\r\n");
+        assert_eq!(status_of(&head), 200, "url() + layer.json resolves");
         let _ = fs::remove_dir_all(&dir);
     }
 
