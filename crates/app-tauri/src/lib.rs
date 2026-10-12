@@ -15,6 +15,7 @@ mod params_service;
 mod rtk_service;
 mod state;
 mod telemetry_pump;
+mod terrain_server;
 mod terrain_service;
 
 use state::AppState;
@@ -43,6 +44,9 @@ pub fn run() {
             commands::survey_compile_pattern,
             terrain_service::terrain_load,
             terrain_service::terrain_discover,
+            terrain_service::terrain3d_start,
+            terrain_service::terrain3d_stop,
+            terrain_service::terrain3d_status,
             logs_service::logs_request_list,
             logs_service::logs_download,
             logs_service::logs_cancel,

@@ -75,3 +75,15 @@ fn script_src_has_no_remote_origins() {
         "script-src must not allow remote origins; got: {origins:?}"
     );
 }
+
+#[test]
+fn connect_src_allows_the_local_terrain_tile_server() {
+    // Plan B: the 3D quantized-mesh tileset is served from loopback by
+    // `terrain_server::TERRAIN_PORT`; moving the port means updating
+    // that constant and this pin together.
+    let connect_src = directive(&csp(), "connect-src");
+    assert!(
+        connect_src.contains("http://127.0.0.1:18823"),
+        "connect-src must allow the local terrain tileset server (plan B); got: {connect_src}"
+    );
+}

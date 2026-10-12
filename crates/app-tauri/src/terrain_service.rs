@@ -1,12 +1,18 @@
 //! Terrain overlay bridge (plan A): read a dem-prep tile folder
 //! (hillshade.png + dem.json) and hand the frontend a data URL plus the
 //! geographic placement for the Cesium imagery layer.
+//!
+//! Plan B (3D): [`terrain3d_start`] / [`terrain3d_stop`] run the local
+//! quantized-mesh tileset server — see [`crate::terrain_server`].
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
 use maggcs_core::terrain::{DemBounds, DemMetadata, VerticalDatum};
+
+use crate::state::AppState;
+use crate::terrain_server::TerrainServer;
 
 /// The overlay payload for the frontend.
 #[derive(Debug, Clone, Serialize)]
@@ -113,8 +119,7 @@ pub async fn terrain_discover(folder: String) -> Result<TerrainDiscovery, String
     let dir = Path::new(&folder);
     let index_path = dir.join("index.json");
     if index_path.is_file() {
-        let tiles = maggcs_core::terrain::load_tile_index(dir)
-            .map_err(|e| e.to_string())?;
+        let tiles = maggcs_core::terrain::load_tile_index(dir).map_err(|e| e.to_string())?;
         return Ok(TerrainDiscovery {
             tiles: tiles
                 .into_iter()
@@ -150,4 +155,53 @@ pub async fn terrain_discover(folder: String) -> Result<TerrainDiscovery, String
         "{}: no index.json or dem.json found",
         dir.display()
     ))
+}
+
+/// Start (or restart) the local 3D terrain tileset server on
+/// `127.0.0.1` (plan B) rooted at `dir` — a `dem-prep terrain` output
+/// folder (`layer.json` + `{z}/{x}/{y}.terrain`).
+///
+/// Returns the `layer.json` URL, ready for
+/// `Cesium.CesiumTerrainProvider.fromUrl`.
+///
+/// # Errors
+///
+/// A stringified error when `dir` is not a tileset folder, or the pinned
+/// port cannot be bound (already in use).
+#[tauri::command]
+pub async fn terrain3d_start(
+    state: tauri::State<'_, AppState>,
+    dir: String,
+) -> Result<String, String> {
+    // Stop any previous instance first — it holds the port.
+    let previous = state.terrain3d.lock().take();
+    if let Some(old) = previous {
+        tokio::task::spawn_blocking(move || old.stop())
+            .await
+            .map_err(|e| format!("stopping previous terrain server: {e}"))?;
+    }
+    let server = TerrainServer::start(PathBuf::from(dir))?;
+    let url = server.url();
+    *state.terrain3d.lock() = Some(server);
+    Ok(url)
+}
+
+/// Stop the local 3D terrain tileset server (no-op when it is not
+/// running).
+#[tauri::command]
+pub async fn terrain3d_stop(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let running = state.terrain3d.lock().take();
+    if let Some(old) = running {
+        tokio::task::spawn_blocking(move || old.stop())
+            .await
+            .map_err(|e| format!("stopping terrain server: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Base `layer.json` URL of the running server, or `None` when it is
+/// stopped — lets the frontend restore state across reloads.
+#[tauri::command]
+pub async fn terrain3d_status(state: tauri::State<'_, AppState>) -> Result<Option<String>, String> {
+    Ok(state.terrain3d.lock().as_ref().map(TerrainServer::url))
 }

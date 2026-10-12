@@ -21,6 +21,7 @@ use crate::logs_service::LogsState;
 use crate::motor_test_state::MotorTestState;
 use crate::params_service::ParamsState;
 use crate::rtk_service::RtkState;
+use crate::terrain_server::TerrainServer;
 
 /// Stable identifier for one connection/vehicle session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -72,6 +73,9 @@ pub struct AppState {
     pub rtk: Arc<RtkState>,
     /// Log download protocol task (O1).
     pub logs: Arc<LogsState>,
+    /// Local 3D terrain tileset server (plan B) — `terrain3d_start` /
+    /// `terrain3d_stop`; `None` while no tileset is served.
+    pub terrain3d: Mutex<Option<TerrainServer>>,
     /// Held for the whole duration of a `connect`/`disconnect` command so the
     /// link swap is atomic with respect to other commands (issues.md #21).
     ops: tokio::sync::Mutex<()>,

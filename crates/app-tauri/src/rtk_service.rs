@@ -111,10 +111,7 @@ impl RtkState {
                     continue;
                 }
                 last = current;
-                *state
-                    .foreign
-                    .lock()
-                    .expect("rtk foreign lock poisoned") = Some(current);
+                *state.foreign.lock().expect("rtk foreign lock poisoned") = Some(current);
                 if app.emit("rtk_foreign", current).is_err() {
                     return; // UI gone
                 }
@@ -171,9 +168,5 @@ pub fn rtk_last_stats(state: State<'_, AppState>) -> Option<RtkStats> {
 /// `rtk_foreign` event.
 #[tauri::command]
 pub fn rtk_foreign_state(state: State<'_, AppState>) -> Option<ForeignState> {
-    *state
-        .rtk
-        .foreign
-        .lock()
-        .expect("rtk foreign lock poisoned")
+    *state.rtk.foreign.lock().expect("rtk foreign lock poisoned")
 }
