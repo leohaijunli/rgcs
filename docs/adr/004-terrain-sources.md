@@ -111,3 +111,24 @@ construction.
   because the committed BC test DEM spans only -1.8..19 m — flat, so no
   screenshot could ever show relief; the fixture makes the "you can see
   terrain" claim reproducible.
+
+### Global fallback: Copernicus GLO-30 download helper (2026-10-12)
+
+`scripts/fetch-global-dem.py` gets a working 3D backdrop anywhere: given a
+centre point (and optional box edge), it downloads the covering 1° × 1°
+Copernicus GLO-30 COG tiles from AWS Open Data (public, ~24–32 MiB each),
+then runs the existing offline pipeline (`dem-prep process` GeoTIFF
+fallback path → `dem-prep terrain`). The result is a normal tileset folder
+for the Layers ▸ Terrain (3D mesh) picker; afterwards no network is needed.
+
+- The GeoTIFF fallback reader now converts the GDAL nodata sentinel
+  (Copernicus ocean = −32768) to voids, which the mesh pipeline fills from
+  the nearest land cell — no pits at the coast (unit-tested; verified on a
+  real GLO-30 tile: Sidney region heights −1..1579 m, no −32768).
+- GLO-30 is a DSM (surface incl. vegetation) on the EGM2008 geoid. Heights
+  are served as-is — the visual-context convention. `--geoid` converts to
+  ellipsoid with a matching grid (CGVD2013 for Canada; the loader knows
+  EGM96/CGVD2013 only, so an EGM2008 grid is future work).
+- One 1° tile covers a whole degree; a small survey box still downloads the
+  whole tile (documented in the script). Default maxzoom follows the 30 m
+  resolution (z14, ~11 k tiles for one tile in the Sidney verification).

@@ -49,7 +49,21 @@ pub fn read_single_band(
         )));
     }
 
-    let values: Vec<f64> = match decoder
+    // Optional nodata sentinel: GDAL writes it as an ASCII tag (e.g.
+    // "-32768" — Copernicus DEM ocean pixels); some writers store a
+    // numeric tag insteadaint none of ours does.
+    let nodata = decoder
+        .get_tag_ascii_string(Tag::GdalNodata)
+        .ok()
+        .and_then(|s| s.trim().parse::<f64>().ok())
+        .or_else(|| {
+            decoder
+                .get_tag_f64_vec(Tag::GdalNodata)
+                .ok()
+                .and_then(|v| v.first().copied())
+        });
+
+    let mut values: Vec<f64> = match decoder
         .read_image()
         .map_err(|e| DemError::Raster(e.to_string()))?
     {
@@ -64,6 +78,11 @@ pub fn read_single_band(
             )))
         }
     };
+    // Replace the nodata sentinel with NaN so voids flow through the
+    // pipeline the same way as ours (write NaN → -9999 → read NaN → fill).
+    if let Some(n) = nodata {
+        values = apply_nodata(values, n);
+    }
     if values.len() != width * height {
         return Err(DemError::Raster(format!(
             "expected {} samples, got {}",
@@ -72,6 +91,16 @@ pub fn read_single_band(
         )));
     }
     Ok((values, width, height, west, north, scale[1], scale[0]))
+}
+
+/// Turn every sample equal to the nodata sentinel into NaN (void). Exact
+/// equality is right: the pixels store the sentinel verbatim, and a near
+/// match would swallow real terrain at that value.
+fn apply_nodata(values: Vec<f64>, nodata: f64) -> Vec<f64> {
+    values
+        .into_iter()
+        .map(|v| if v == nodata { f64::NAN } else { v })
+        .collect()
 }
 
 /// Read a single-band float TIFF **without** requiring GeoTIFF tags: the
@@ -149,5 +178,23 @@ mod tests {
         assert_eq!(back[0], 42.0);
         assert!(back[2 * 4 + 1].is_nan(), "void must survive the round-trip");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn nodata_sentinel_becomes_a_void_and_real_values_survive() {
+        // Copernicus DEM stores ocean pixels at -32768; the fallback reader
+        // must turn them into voids (which the pipeline fills) and leave
+        // genuine terrain values — even one numerically close — untouched.
+        let values = vec![-32768.0, 12.5, -32767.0, 0.0, 500.25, -32768.0];
+        let out = apply_nodata(values, -32768.0);
+        assert!(out[0].is_nan(), "ocean pixel void");
+        assert!(out[5].is_nan(), "ocean pixel void");
+        assert!(!out[1].is_nan() && out[1] == 12.5);
+        assert!(!out[2].is_nan() && out[2] == -32767.0, "near-sentinel terrain kept");
+        assert!(!out[3].is_nan() && out[3] == 0.0);
+        assert!(!out[4].is_nan() && out[4] == 500.25);
+        // No sentinel present: values pass through untouched.
+        let kept = apply_nodata(vec![1.0, 2.0, 3.0], -9999.0);
+        assert!(kept.iter().all(|v| v.is_finite()));
     }
 }

@@ -46,7 +46,10 @@ in [ARCHITECTURE.md](ARCHITECTURE.md); open work in [issues.md](../issues.md).
   globe's `CesiumTerrainProvider` to it — real relief offline, imagery
   draped, areas outside the DEM stay ellipsoid. The toggle shows the
   served folder while on, surfaces the start error, and restores the
-  previous state across reloads (ADR-004).
+  previous state across reloads (ADR-004). No DEM on hand?
+  `scripts/fetch-global-dem.py <lat> <lon>` downloads a Copernicus GLO-30
+  patch and builds the tileset in one step (works offline afterwards;
+  `--geoid` converts heights to ellipsoid with a matching grid).
 - Tool strip (top-left): Select (Esc), Add waypoint (W), Draw polygon (P) in
   Plan; Follow, 2D/3D in Fly. Layers ▸ (imagery style, grid, waypoint
   heights) and View ▸ (north up, go home) popovers.
