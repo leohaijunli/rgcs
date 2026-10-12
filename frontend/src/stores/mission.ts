@@ -11,6 +11,7 @@ import type { GeoPoint } from '../generated-types/GeoPoint'
 import type { MissionItem } from '../generated-types/MissionItem'
 import type { PatternLine } from '../generated-types/PatternLine'
 import type { PatternStats } from '../generated-types/PatternStats'
+import type { DrapeReport } from '../generated-types/DrapeReport'
 import type { PatternPlan } from '../generated-types/PatternPlan'
 import type { PlannedWaypoint } from '../generated-types/PlannedWaypoint'
 import {
@@ -43,6 +44,13 @@ export interface InsertedPattern {
   stats: PatternStats | null
 }
 
+/** Result of the terrain drape (S3/D5) kept for the plan readout. */
+export interface DrapeState {
+  report: DrapeReport
+  /** The dem-prep tile folder the drape was computed against. */
+  folder: string
+}
+
 /** Payload of the backend `mission` event. */
 export interface MissionEventPayload {
   op: 'upload' | 'download' | 'clear' | 'set_current' | 'mission'
@@ -65,6 +73,8 @@ interface MissionState {
   dirty: boolean
   /** Hash of the items at the last successful sync (upload or download). */
   lastSyncedHash: string | null
+  /** Terrain drape result (S3/D5): dem version + report. */
+  drape: DrapeState | null
   /** Result of the post-upload read-back: null = unknown/not checked. */
   fcMatches: boolean | null
   /** True while a read-back download is in flight. */
@@ -99,6 +109,10 @@ interface MissionState {
     center?: GeoPoint | null,
     stats?: PatternStats | null,
   ) => void
+  /** Drape the plan over the DEM of a dem-prep tile folder (S3/D5). */
+  drapeToTerrain: (folder: string, aglM: number, minDsmClearanceM: number) => Promise<
+    string | null
+  >
   /** Pin or move the pattern centre (typed in the panel or dragged on the map). */
   setPatternCenter: (center: GeoPoint | null) => void
   upload: () => Promise<void>
@@ -144,6 +158,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
   lastSyncedHash: null,
   fcMatches: null,
   verifying: false,
+  drape: null,
   planBase: null,
   blocks: [],
   home: null,
@@ -241,6 +256,27 @@ export const useMissionStore = create<MissionState>((set, get) => ({
 
   setPatternCenter: (center) => set({ patternCenter: center }),
 
+  drapeToTerrain: async (folder, aglM, minDsmClearanceM) => {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      const report = await invoke<DrapeReport>('terrain_drape', {
+        waypoints: get().waypoints,
+        folder,
+        aglM,
+        minDsmClearanceM,
+      })
+      set({
+        waypoints: report.waypoints,
+        dirty: true,
+        fcMatches: null,
+        drape: { report, folder },
+      })
+      return null
+    } catch (e) {
+      return String(e)
+    }
+  },
+
   insertPattern: (plan, label, center, stats) =>
     set((s) => {
       // Generate replaces the previous preset block rather than stacking a
@@ -268,6 +304,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
         selectedSeq: null,
         dirty: true,
         fcMatches: null,
+        drape: null,
       }
     }),
 

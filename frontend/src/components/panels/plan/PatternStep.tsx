@@ -229,6 +229,7 @@ export default function PatternStep({ kind, onKind, sweep, onSweep, clover, onCl
           )}
         </div>
       )}
+      <DrapeBlock />
     </div>
   )
 }
@@ -256,4 +257,63 @@ function Num({
       />
     </label>
   )
+}
+
+
+/** S3/D5: drape the planned waypoints over a dem-prep tile folder. The
+ * report (min clearance, raised count, DEM version) shows after draping;
+ * any plan edit clears it (the store handles that). */
+function DrapeBlock() {
+  const { t } = useTranslation()
+  const drape = useMissionStore((s) => s.drape)
+  const drapeToTerrain = useMissionStore((s) => s.drapeToTerrain)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const run = async () => {
+    setBusy(true)
+    setError(null)
+    // Folder: reuse the terrain overlay's folder when one was loaded via
+    // Layers ▸ (the store keeps only the report there; the dialog re-opens
+    // otherwise).
+    const err = await drapeToTerrain(terrainFolder(), 40, 5)
+    setBusy(false)
+    if (err) setError(err)
+  }
+
+  return (
+    <div className="space-y-1">
+      <button
+        onClick={() => void run()}
+        disabled={busy}
+        className="w-full rounded border border-line bg-canvas px-2 py-1.5 text-xs text-ink hover:bg-panel disabled:opacity-50"
+      >
+        {busy ? t('plan.pattern.drape.busy') : t('plan.pattern.drape.run')}
+      </button>
+      {error && <div className="text-[11px] text-error">{error}</div>}
+      {drape && (
+        <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-[11px] text-muted">
+          <span>
+            {t('plan.pattern.drape.clearance')}{' '}
+            {drape.report.min_dsm_clearance_m.toFixed(1)} m
+          </span>
+          <span>
+            {t('plan.pattern.drape.raised')} {drape.report.raised}
+          </span>
+          <span className="text-accent">
+            {t('plan.pattern.drape.version')} {drape.report.dem_version}
+          </span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** The last folder the terrain overlay loaded (shared with the drape). */
+function terrainFolder(): string {
+  // The overlay store keeps the data URL, not the folder; the drape dialog
+  // asks the user again unless the store remembers it. Keep it simple:
+  // sessionStorage of the last terrain_load folder (set by the Layers
+  // toggle path in stores/terrain.ts).
+  return sessionStorage.getItem('maggcs.terrainFolder') ?? ''
 }

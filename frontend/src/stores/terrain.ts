@@ -32,6 +32,7 @@ export const useTerrainStore = create<TerrainState>((set) => ({
       const { open } = await import('@tauri-apps/plugin-dialog')
       const folder = await open({ multiple: false, directory: true })
       if (!folder || typeof folder !== 'string') return
+      sessionStorage.setItem('maggcs.terrainFolder', folder)
       const overlay = await invoke<Omit<TerrainOverlay, 'loading'>>(
         'terrain_load',
         { folder },

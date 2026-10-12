@@ -41,6 +41,7 @@ pub fn run() {
             commands::survey_generate_cloverleaf,
             commands::survey_compile_pattern,
             terrain_service::terrain_load,
+            commands::terrain_drape,
             rtk_service::rtk_start_serial,
             rtk_service::rtk_stop,
             rtk_service::rtk_last_stats,

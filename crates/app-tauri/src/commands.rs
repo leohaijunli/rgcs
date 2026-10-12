@@ -290,6 +290,35 @@ pub fn survey_compile_pattern(
     maggcs_core::survey::compile::compile_pattern(&plan, &options).map_err(|e| e.to_string())
 }
 
+/// Drape waypoints over the DEM of a dem-prep tile folder (S3/D5): DTM+AGL
+/// rewrite, DSM clearance raise, and the report the UI shows.
+#[tauri::command]
+pub fn terrain_drape(
+    waypoints: Vec<maggcs_core::plan::PlannedWaypoint>,
+    folder: String,
+    agl_m: f64,
+    min_dsm_clearance_m: f64,
+) -> Result<maggcs_core::terrain::drape::DrapeReport, String> {
+    use maggcs_core::terrain::drape::{drape_to_terrain, DrapeOptions};
+    let dir = std::path::Path::new(&folder);
+    let meta: maggcs_core::terrain::DemMetadata = serde_json::from_str(
+        &std::fs::read_to_string(dir.join("dem.json")).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    let dem = maggcs_core::terrain::CogDem::open(&dir.join("dtm.tif"), &dir.join("dsm.tif"), &meta)
+        .map_err(|e| e.to_string())?;
+    drape_to_terrain(
+        &waypoints,
+        &dem,
+        &DrapeOptions {
+            agl_m,
+            min_dsm_clearance_m,
+            floor_below_start_m: None,
+        },
+    )
+    .map_err(|e| e.to_string())
+}
+
 /// Named vehicle command.
 ///
 /// `name` is one of `"takeoff"`, `"land"`, `"rtl"`. The command is enqueued

@@ -233,6 +233,13 @@ export default {
           eta: 'Est. time',
           coverage: 'Coverage',
         },
+        drape: {
+          run: 'Drape to terrain (40 m AGL)',
+          busy: 'Draping…',
+          clearance: 'Min clearance',
+          raised: 'raised:',
+          version: 'DEM',
+        },
     },
     op: {
       upload: 'Uploading',
