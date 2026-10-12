@@ -65,7 +65,7 @@ pub struct DemMetadata {
     pub has_dsm: bool,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct DemBounds {
     pub north: f64,
     pub south: f64,

@@ -18,6 +18,10 @@ mod geotiff;
 mod grid;
 mod hillshade;
 mod las;
+// Pure tileset math — wired to a `terrain` subcommand together with the
+// quantized-mesh encoder (next task); tests cover it meanwhile.
+#[allow(dead_code)]
+mod terrain;
 mod utm;
 
 use std::path::{Path, PathBuf};
