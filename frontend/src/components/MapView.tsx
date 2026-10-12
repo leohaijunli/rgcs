@@ -8,13 +8,14 @@ import { useMissionStore } from '../stores/mission'
 import { usePolygonStore } from '../stores/polygon'
 import { useTelemetryStore } from '../stores/telemetry'
 import { useUiStore } from '../stores/ui'
+import { useTerrainStore } from '../stores/terrain'
 import MapToolbar from './MapToolbar'
 
 /** Composition shell: viewer lifecycle + store wiring + chrome (issues.md #29). */
 export default function MapView() {
   const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
-  const { initError, setSnapshot, setMission, setLayers, setImageryStyle, goHome, lookNorth } =
+  const { initError, setSnapshot, setMission, setTerrainOverlay, setLayers, setImageryStyle, goHome, lookNorth } =
     useCesiumViewer(containerRef)
   const mapTool = useUiStore((s) => s.mapTool)
   const view = useUiStore((s) => s.view)
@@ -61,6 +62,12 @@ export default function MapView() {
   useEffect(() => {
     setImageryStyle(imageryStyle)
   }, [imageryStyle, setImageryStyle])
+
+  // Terrain hillshade overlay (plan A): react to the store's overlay.
+  const terrainOverlay = useTerrainStore((st) => st.overlay)
+  useEffect(() => {
+    setTerrainOverlay(terrainOverlay)
+  }, [terrainOverlay, setTerrainOverlay])
 
   const kinds = useMemo(() => kindsBySeq(lastPattern?.lines ?? []), [lastPattern])
   useEffect(() => {

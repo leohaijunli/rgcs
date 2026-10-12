@@ -121,3 +121,35 @@ export function applyLayerVisibility(viewer: Cesium.Viewer, showGrid: boolean): 
   const grid = viewer.imageryLayers.get(0)
   if (grid) grid.show = showGrid
 }
+
+/**
+ * Add or replace the terrain hillshade overlay (plan A): a dem-prep
+ * hillshade PNG draped by its geographic bounds, above the imagery layer.
+ * `null` removes it.
+ */
+export function setTerrainOverlay(
+  viewer: Cesium.Viewer,
+  overlay: { url: string; bounds: { north: number; south: number; east: number; west: number } } | null,
+): void {
+  const layers = viewer.imageryLayers
+  // Remove any previous overlay (layers above index 1 are ours).
+  while (layers.length > 2) {
+    layers.remove(layers.get(layers.length - 1))
+  }
+  if (!overlay) return
+  const rectangle = Cesium.Rectangle.fromDegrees(
+    overlay.bounds.west,
+    overlay.bounds.south,
+    overlay.bounds.east,
+    overlay.bounds.north,
+  )
+  void Cesium.SingleTileImageryProvider.fromUrl(overlay.url, { rectangle }).then(
+    (provider) => {
+      // Re-check: an async add may race a clear.
+      layers.addImageryProvider(provider, 2)
+    },
+    () => {
+      /* a broken PNG is not fatal: the imagery stays */
+    },
+  )
+}

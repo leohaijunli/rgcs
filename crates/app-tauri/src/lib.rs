@@ -14,6 +14,7 @@ mod params_service;
 mod rtk_service;
 mod state;
 mod telemetry_pump;
+mod terrain_service;
 
 use state::AppState;
 
@@ -39,6 +40,7 @@ pub fn run() {
             commands::survey_generate_sweep,
             commands::survey_generate_cloverleaf,
             commands::survey_compile_pattern,
+            terrain_service::terrain_load,
             rtk_service::rtk_start_serial,
             rtk_service::rtk_stop,
             rtk_service::rtk_last_stats,

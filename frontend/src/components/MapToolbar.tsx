@@ -19,6 +19,7 @@ import {
   Plus,
 } from 'lucide-react'
 import { useUiStore } from '../stores/ui'
+import { useTerrainStore } from '../stores/terrain'
 
 interface Props {
   onGoHome: () => void
@@ -133,6 +134,7 @@ export default function MapToolbar({ onGoHome, onNorth }: Props) {
           </div>
           <PopoverToggle label={t('terrain.grid')} on={showGrid} onToggle={toggleGrid} />
           <PopoverToggle label={t('map.heights')} on={showHeights} onToggle={toggleHeights} />
+          <TerrainToggle />
         </Popover>
       )}
       {popover === 'view' && (
@@ -223,5 +225,30 @@ function ToolButton({
     >
       <Icon size={17} strokeWidth={1.75} />
     </button>
+  )
+}
+
+/** Terrain hillshade overlay (plan A): load a dem-prep tile folder from the
+ * Layers popover; on = an overlay is loaded. */
+function TerrainToggle() {
+  const { t } = useTranslation()
+  const overlay = useTerrainStore((s) => s.overlay)
+  const error = useTerrainStore((s) => s.error)
+  const load = useTerrainStore((s) => s.load)
+  const clear = useTerrainStore((s) => s.clear)
+  return (
+    <div>
+      <PopoverToggle
+        label={t('terrain.overlay')}
+        on={overlay != null}
+        onToggle={() => (overlay ? clear() : void load())}
+      />
+      {error && <div className="px-1 text-[10px] text-error">{error}</div>}
+      {overlay && (
+        <div className="px-1 text-[10px] text-muted">
+          {t('terrain.version')} {overlay.version}
+        </div>
+      )}
+    </div>
   )
 }

@@ -15,6 +15,7 @@
 mod cog;
 mod error;
 mod grid;
+mod hillshade;
 mod las;
 mod utm;
 
@@ -150,6 +151,9 @@ fn process_tile(tile: &Path, out: &Path, resolution_m: f64) -> Result<()> {
     let dsm_path = tile_out.join("dsm.tif");
     cog::write_geo_tiff(&dtm_path, &dtm)?;
     cog::write_geo_tiff(&dsm_path, &dsm)?;
+    // Terrain overlay for the map (plan A): grayscale hillshade PNG the
+    // Layers menu drapes over the imagery.
+    hillshade::write_hillshade_png(&tile_out.join("hillshade.png"), &dtm, dlat, dlon)?;
 
     // Version = sha256 over both rasters.
     let dtm_bytes = std::fs::read(&dtm_path)?;

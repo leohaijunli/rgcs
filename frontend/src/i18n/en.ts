@@ -278,6 +278,8 @@ export default {
     export: 'Export',
   },
   terrain: {
+    overlay: 'Terrain (hillshade)',
+    version: 'DEM version',
     osm: 'Streets',
     satellite: 'Esri',
     google: 'Google',

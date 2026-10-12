@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import * as Cesium from 'cesium'
+import { setTerrainOverlay as sceneSetTerrainOverlay } from '../cesium/scene'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
 import { applyLayerVisibility, createViewer, setImageryStyle as applyImageryStyle } from '../cesium/scene'
 import {
@@ -61,6 +62,13 @@ export interface CesiumViewerHandle {
     items: MissionItem[],
     selectedSeq: number | null,
     opts?: WaypointRenderOptions,
+  ): void
+  /** Add/remove the terrain hillshade overlay (plan A). */
+  setTerrainOverlay(
+    overlay: {
+      url: string
+      bounds: { north: number; south: number; east: number; west: number }
+    } | null,
   ): void
   /** Frame the home area and stop following. */
   goHome(): void
@@ -329,6 +337,20 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
     })
   }, [])
 
+  const setTerrainOverlay = useCallback(
+    (
+      overlay: {
+        url: string
+        bounds: { north: number; south: number; east: number; west: number }
+      } | null,
+    ) => {
+      const viewer = viewerRef.current
+      if (!viewer) return
+      sceneSetTerrainOverlay(viewer, overlay)
+    },
+    [],
+  )
+
   const setLayers = useCallback((showGrid: boolean) => {
     const viewer = viewerRef.current
     if (!viewer) return
@@ -340,5 +362,5 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
     if (!viewer) return
     applyImageryStyle(viewer, style)
   }, [])
-  return { initError, setSnapshot, setMission, setLayers, setImageryStyle, goHome, lookNorth }
+  return { initError, setSnapshot, setMission, setTerrainOverlay, setLayers, setImageryStyle, goHome, lookNorth }
 }
