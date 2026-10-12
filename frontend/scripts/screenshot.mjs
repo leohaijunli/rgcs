@@ -1,9 +1,12 @@
-// Capture/compare screenshot baselines for the UI shell (Phase 0 acceptance).
+// Capture/compare screenshot baselines for the UI shell (UI6).
 //   node screenshot.mjs <url> <shotsDir> <baselinesDir>
+// Matrix: dark|light × 1366x768|1920x1080 × Plan|Flight (8 baselines).
+// Theme switches go through localStorage + reload so the boot path applies
+// it (React store, canvas instruments and secondary mirrors included).
 // First run: saves shots and (if missing) baselines. Later runs: compare each
 // shot against its baseline and report the differing-pixel count (pixelmatch).
 import { chromium } from 'playwright'
-import { mkdir, readFile, writeFile, stat } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import pixelmatch from 'pixelmatch'
 import { PNG } from 'pngjs'
@@ -22,8 +25,8 @@ const VIEWPORTS = [
 const VIEWS = [
   { key: 'planning', label: 'Plan' },
   { key: 'flight', label: 'Flight' },
-  { key: 'data', label: 'Data' },
 ]
+const THEMES = ['dark', 'light']
 
 const browser = await chromium.launch({ headless: true })
 const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } })
@@ -38,11 +41,20 @@ await page.waitForTimeout(4000)
 await mkdir(shotsDir, { recursive: true })
 await mkdir(BASELINES, { recursive: true })
 
-const cases = []
-for (const vp of VIEWPORTS) {
-  for (const v of VIEWS) {
-    cases.push({ name: `dark-${v.key}-${vp.name}`, vp, view: v })
-  }
+async function setTheme(theme) {
+  await page.evaluate((t) => localStorage.setItem('maggcs.theme', t), theme)
+  await page.reload({ waitUntil: 'networkidle', timeout: 60000 })
+  await page.waitForTimeout(4000)
+}
+
+async function gotoView(label) {
+  await page.evaluate((label) => {
+    const btn = Array.from(document.querySelectorAll('button')).find(
+      (b) => b.textContent && b.textContent.trim() === label,
+    )
+    if (btn) btn.click()
+  }, label)
+  await page.waitForTimeout(400)
 }
 
 async function capture(name) {
@@ -74,29 +86,32 @@ async function compare(name, buf) {
   }
 }
 
-for (const c of cases) {
-  await page.setViewportSize(c.vp)
-  if (!c.light) {
-    await page.evaluate((label) => {
-      const btn = Array.from(document.querySelectorAll('button')).find(
-        (b) => b.textContent && b.textContent.trim() === label,
-      )
-      if (btn) btn.click()
-    }, c.view.label)
-    await page.waitForTimeout(400)
+async function warmup() {
+  // Run the viewport/view matrix once without capturing: Cesium tiles and
+  // route lines need a few seconds after each theme reload, and the first
+  // shot would otherwise baseline a blank map.
+  for (const vp of VIEWPORTS) {
+    await page.setViewportSize(vp)
+    for (const v of VIEWS) {
+      await gotoView(v.label)
+      await page.waitForTimeout(800)
+    }
   }
-  await page.waitForTimeout(300)
-  const buf = await capture(c.name)
-  await compare(c.name, buf)
 }
 
-// Light theme.
-await page.evaluate(() => {
-  document.documentElement.dataset.theme = 'light'
-})
-await page.waitForTimeout(600)
-const light = await capture('light-flight-1920x1080')
-await compare('light-flight-1920x1080', light)
+for (const theme of THEMES) {
+  await setTheme(theme)
+  await warmup()
+  for (const vp of VIEWPORTS) {
+    await page.setViewportSize(vp)
+    for (const v of VIEWS) {
+      await gotoView(v.label)
+      const name = `${theme}-${v.key}-${vp.name}`
+      const buf = await capture(name)
+      await compare(name, buf)
+    }
+  }
+}
 
 await browser.close()
 

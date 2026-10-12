@@ -3,7 +3,7 @@
 遗留问题与待办（2026-10-10 重组）：已完成的问题压缩为索引（git 历史含全文），**未完成项在下方全文列出**。
 
 
-## Resolved issues（已完成，共 43 条 — 全文见 git 历史）
+## Resolved issues（已完成，共 45 条 — 全文见 git 历史）
 
 ### 进度总览（P0）
 ### #1 [P0][core] Heartbeat timeout is reset by any inbound traffic
@@ -49,12 +49,10 @@
 ### #41 [P2][app/devices] 串口列表应只显示 ttyACM* / ttyUSB*
 ### #42 [P1][helper] udev 规则/权限自动安装助手未实现
 ### #43 [P2][frontend] 设置菜单应提供 UAV 3D 模型朝向的设置（pitch/roll/yaw 偏移）
+### O1 [P2][frontend] Logs 页是占位
+### O5 [P3][frontend] Data 视图移除后的遗留键
 
 ## Open issues（未完成）
-
-### O1 [P2][frontend] Logs 页是占位
-Settings → Logs 目前只有一段说明文字。SD 日志拉取（MAVLink LOG 协议或
-MAVFTP，`etc/logging/logger_topics.txt` 写入）已有设计讨论，未实现。
 
 ### O2 [P3][actuator] 报警音可选自定义 wav/mp3 文件路径
 当前为 WebAudio 合成蜂鸣（内置，无依赖）。plan §9.1 里的"可选本机音频文件"
@@ -67,11 +65,6 @@ Live 曲线目前为 总场(Δmag) + ESC 电流/RPM。plan §6.2 的另外两组
 ### O4 [P2][app] 双链路转发仅限 Motor 测试窗口
 SITL 副链路（`actuator_connect_sitl`）挂在 MotorTestState 上；若未来
 Headless/主界面也要用副链路，需要把 SITL 连接提升到 AppState 通用层。
-
-### O5 [P3][frontend] Data 视图移除后的遗留键
-`terrain.dtm/dsm`、`panels.status/current` 等 i18n 键与 `VIEW_CONFIG.dockTab`
-中 profile/log 常量仍保留（Phase 3b/5 内容门控用），P6 screenshot 基线
-尚未重拍。
 
 ## 待核实项（先验证再决定是否开 issue）
 
