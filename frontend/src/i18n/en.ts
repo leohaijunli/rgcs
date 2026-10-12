@@ -411,6 +411,8 @@ export default {
   theme: {
     dark: 'Dark',
     light: 'Light',
+    system: 'System',
+    nightRed: 'Night red',
   },
   hud: {
     altAmsl: 'MSL',

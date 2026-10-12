@@ -37,8 +37,10 @@ function contrast(a, b) {
 }
 
 const root = css.slice(css.indexOf(':root {'), css.indexOf('[data-theme="light"] {'))
-const light = css.slice(css.indexOf('[data-theme="light"] {'), css.indexOf('/* Tailwind theme mapping */'))
-const themes = { dark: extract(root), light: extract(light) }
+const nightStart = css.indexOf('[data-theme="night-red"] {')
+const light = css.slice(css.indexOf('[data-theme="light"] {'), nightStart)
+const nightRed = css.slice(nightStart, css.indexOf('/* Tailwind theme mapping */'))
+const themes = { dark: extract(root), light: extract(light), 'night-red': extract(nightRed) }
 
 const PAIRS = [
   ['ink', 'bg'],

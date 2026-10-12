@@ -1,7 +1,8 @@
 import { create } from 'zustand'
+import { applyThemePref, readThemePref, saveThemePref, type ThemePref } from '../design-system/theme'
 
 export type View = 'planning' | 'flight'
-export type Theme = 'dark' | 'light'
+export type Theme = ThemePref
 export type DockTab = 'profile' | 'qc' | 'log'
 /** One planning step expanded at a time (P2 §4.2). */
 export type PlanStep = 'area' | 'pattern' | 'waypoints' | 'sync'
@@ -67,23 +68,11 @@ const DOCK_MIN = 96
 const DOCK_MAX = 420
 const DOCK_DEFAULT = 180
 
-function applyTheme(theme: Theme) {
-  document.documentElement.dataset.theme = theme
-  try {
-    localStorage.setItem('maggcs.theme', theme)
-  } catch {
-    /* private mode */
-  }
-}
-
 function narrowScreen(): boolean {
   return typeof window !== 'undefined' && window.innerWidth <= 1366
 }
 
-const initialTheme: Theme =
-  (typeof localStorage !== 'undefined' &&
-    (localStorage.getItem('maggcs.theme') as Theme | null)) ||
-  'dark'
+const initialTheme: Theme = typeof localStorage !== 'undefined' ? readThemePref() : 'dark'
 
 export const useUiStore = create<UiState>((set) => ({
   view: 'flight',
@@ -109,7 +98,8 @@ export const useUiStore = create<UiState>((set) => ({
       ...(view === 'planning' ? {} : { mapTool: 'select' as const }),
     })),
   setTheme: (theme) => {
-    applyTheme(theme)
+    saveThemePref(theme)
+    applyThemePref(theme)
     set({ theme })
   },
   setPlanStep: (planStep) => set({ planStep }),
@@ -128,4 +118,4 @@ export const useUiStore = create<UiState>((set) => ({
   toggleGrid: () => set((s) => ({ showGrid: !s.showGrid })),
 }))
 
-applyTheme(initialTheme)
+applyThemePref(initialTheme)

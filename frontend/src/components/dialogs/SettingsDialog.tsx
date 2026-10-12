@@ -25,6 +25,7 @@ import { useLinkStore } from '../../stores/link'
 import { startLogsWatcher, useLogsStore } from '../../stores/logs'
 import { useTelemetryStore } from '../../stores/telemetry'
 import { useUiStore } from '../../stores/ui'
+import type { ThemePref } from '../../design-system/theme'
 import { hasInboundPackets, lastPacketAgeMs, linkLevel, linkLevelTone } from '../../util/linkLevel'
 
 const APP_VERSION = '0.1.0'
@@ -449,27 +450,29 @@ function VehicleTab() {
   )
 }
 
+const THEME_OPTIONS: readonly ThemePref[] = ['dark', 'light', 'system', 'night-red']
+
 function AppearanceTab({
   theme,
   setTheme,
 }: {
-  theme: 'dark' | 'light'
-  setTheme: (t: 'dark' | 'light') => void
+  theme: ThemePref
+  setTheme: (t: ThemePref) => void
 }) {
   const { t } = useTranslation()
   return (
     <div className="text-sm">
       <div className="mb-2 text-xs text-muted">{t('settings.theme')}</div>
-      <div className="flex gap-2">
-        {(['dark', 'light'] as const).map((th) => (
+      <div className="grid grid-cols-2 gap-2">
+        {THEME_OPTIONS.map((th) => (
           <button
             key={th}
             onClick={() => setTheme(th)}
-            className={`touch-target h-11 flex-1 rounded border border-line px-4 ${
+            className={`touch-target h-11 rounded border border-line px-4 ${
               theme === th ? 'bg-accent text-accent-ink' : 'bg-canvas text-muted hover:text-ink'
             }`}
           >
-            {t(`theme.${th}`)}
+            {t(`theme.${th === 'night-red' ? 'nightRed' : th}`)}
           </button>
         ))}
       </div>

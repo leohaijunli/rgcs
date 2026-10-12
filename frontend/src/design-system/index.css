@@ -100,6 +100,49 @@
   --mg-tape-track: rgba(14, 118, 148, 0.55);
 }
 
+/* Night-red theme (UI5): preserves dark adaptation for night flights —
+   everything shifts to a red/black palette; state colours stay apart by
+   brightness (ok orange-red < warn amber < error bright red). */
+[data-theme="night-red"] {
+  --mg-bg: #0b0505;
+  --mg-bg-raised: #150909;
+  --mg-bg-glass: rgba(21, 9, 9, 0.75);
+  --mg-border: #42191a;
+  --mg-ink: #ffb9ad;
+  --mg-muted: #b4675e;
+  --mg-accent: #ff6652;
+  --mg-accent-ink: #240806;
+  --mg-ok: #d96a4e;
+  --mg-ok-ink: #240a05;
+  --mg-warn: #d99548;
+  --mg-error: #ff3d33;
+  --mg-mag: #ff8fb0;
+
+  /* instrument cluster */
+  --mg-sky: #7a2f28;
+  --mg-ground: #4a1f1a;
+  --mg-instrument: #120707;
+  --mg-tape-track: rgba(255, 102, 82, 0.5);
+
+  /* offline graticule */
+  --mg-grid-bg: #140707;
+  --mg-grid-line: #4a1f1c;
+  --mg-grid-glow: #ff6652;
+
+  /* trace palette: red family, separated by lightness */
+  --mg-trace-1: #ff6655;
+  --mg-trace-2: #ff8f66;
+  --mg-trace-3: #ffb454;
+  --mg-trace-4: #ff4444;
+  --mg-trace-5: #e57373;
+  --mg-trace-6: #ff9a8a;
+  --mg-trace-7: #ff6b8a;
+  --mg-trace-8: #d4a373;
+  --mg-trace-measure: #ffcc80;
+  /* total-field curve: white — pure red would vanish into the palette */
+  --mg-trace-total-mag: #ffffff;
+}
+
 /* Tailwind theme mapping — single source of truth for utilities. */
 @theme {
   --color-canvas: var(--mg-bg);
