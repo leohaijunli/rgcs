@@ -74,13 +74,14 @@ export function Panel({ className = '', children }: { className?: string; childr
   return <div className={`panel rounded ${className}`}>{children}</div>
 }
 
-/** Anchored floating surface for toolbar dropdowns. Position via parent. */
+/** Anchored floating surface for toolbar dropdowns. Position via parent;
+ * rows get the 4px stack spacing every existing popover uses. */
 export function Popover({ className = '', children }: { className?: string; children: ReactNode }) {
   return (
     <div
       className={`absolute z-50 rounded border border-line bg-panel p-1.5 shadow-2xl ${className}`}
     >
-      {children}
+      <div className="space-y-1">{children}</div>
     </div>
   )
 }

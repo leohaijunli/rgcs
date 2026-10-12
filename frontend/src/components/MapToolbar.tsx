@@ -20,6 +20,12 @@ import {
 } from 'lucide-react'
 import { useUiStore } from '../stores/ui'
 import { useTerrainStore } from '../stores/terrain'
+import {
+  IconButton,
+  Popover,
+  PopoverAction,
+  PopoverToggle,
+} from '../design-system/components'
 
 interface Props {
   onGoHome: () => void
@@ -68,55 +74,59 @@ export default function MapToolbar({ onGoHome, onNorth }: Props) {
       className="absolute left-3 top-3 z-10 flex flex-col gap-1.5 rounded border border-line bg-panel/85 p-1.5 shadow-lg"
     >
       {isPlanning && (
-        <ToolButton
+        <IconButton
           title={`${t('map.select')} (Esc)`}
           active={mapTool === 'select'}
           onClick={() => setMapTool('select')}
-          icon={MousePointer2}
-        />
+        >
+          <MousePointer2 size={17} strokeWidth={1.75} />
+        </IconButton>
       )}
       {isPlanning && (
-        <ToolButton
+        <IconButton
           title={`${t('map.addWaypoint')} (W)`}
           active={mapTool === 'add'}
           onClick={() => setMapTool(mapTool === 'add' ? 'select' : 'add')}
-          icon={Plus}
-        />
+        >
+          <Plus size={17} strokeWidth={1.75} />
+        </IconButton>
       )}
       {isPlanning && (
-        <ToolButton
+        <IconButton
           title={`${t('map.drawPolygon')} (P)`}
           active={mapTool === 'polygon'}
           onClick={() => setMapTool(mapTool === 'polygon' ? 'select' : 'polygon')}
-          icon={PenTool}
-        />
+        >
+          <PenTool size={17} strokeWidth={1.75} />
+        </IconButton>
       )}
       {!isPlanning && (
-        <ToolButton
-          title={t('map.follow')}
-          active={follow}
-          onClick={toggleFollow}
-          icon={Crosshair}
-        />
+        <IconButton title={t('map.follow')} active={follow} onClick={toggleFollow}>
+          <Crosshair size={17} strokeWidth={1.75} />
+        </IconButton>
       )}
       {!isPlanning && (
-        <ToolButton title={t('map.mode3d')} active={map3d} onClick={toggleMap3d} icon={Move3d} />
+        <IconButton title={t('map.mode3d')} active={map3d} onClick={toggleMap3d}>
+          <Move3d size={17} strokeWidth={1.75} />
+        </IconButton>
       )}
-      <ToolButton
+      <IconButton
         title={t('layers.popover')}
         active={popover === 'layers'}
         onClick={() => setPopover((p) => (p === 'layers' ? null : 'layers'))}
-        icon={Layers}
-      />
-      <ToolButton
+      >
+        <Layers size={17} strokeWidth={1.75} />
+      </IconButton>
+      <IconButton
         title={t('view.popover')}
         active={popover === 'view'}
         onClick={() => setPopover((p) => (p === 'view' ? null : 'view'))}
-        icon={MoreVertical}
-      />
+      >
+        <MoreVertical size={17} strokeWidth={1.75} />
+      </IconButton>
 
       {popover === 'layers' && (
-        <Popover>
+        <Popover className="left-full top-0 ml-1.5 w-48">
           <div className="flex rounded border border-line bg-canvas p-0.5">
             {(['osm', 'satellite', 'google', 'topo'] as const).map((style) => (
               <button
@@ -132,99 +142,21 @@ export default function MapToolbar({ onGoHome, onNorth }: Props) {
               </button>
             ))}
           </div>
-          <PopoverToggle label={t('terrain.grid')} on={showGrid} onToggle={toggleGrid} />
-          <PopoverToggle label={t('map.heights')} on={showHeights} onToggle={toggleHeights} />
+          <PopoverToggle label={t('terrain.grid')} on={showGrid} onLabel={t('layers.on')} offLabel={t('layers.off')} onToggle={toggleGrid} />
+          <PopoverToggle label={t('map.heights')} on={showHeights} onLabel={t('layers.on')} offLabel={t('layers.off')} onToggle={toggleHeights} />
           <TerrainToggle />
         </Popover>
       )}
       {popover === 'view' && (
-        <Popover>
+        <Popover className="left-full top-0 ml-1.5 w-48">
           {isPlanning && (
-            <PopoverToggle label={t('map.mode3d')} on={map3d} onToggle={toggleMap3d} />
+            <PopoverToggle label={t('map.mode3d')} on={map3d} onLabel={t('layers.on')} offLabel={t('layers.off')} onToggle={toggleMap3d} />
           )}
-          <PopoverAction label={t('map.north')} icon={Compass} onClick={onNorth} />
-          <PopoverAction label={t('map.home')} icon={House} onClick={onGoHome} />
+          <PopoverAction label={t('map.north')} icon={<Compass size={14} strokeWidth={1.75} />} onClick={onNorth} />
+          <PopoverAction label={t('map.home')} icon={<House size={14} strokeWidth={1.75} />} onClick={onGoHome} />
         </Popover>
       )}
     </div>
-  )
-}
-
-/** Popover panel anchored to the strip's right edge. */
-function Popover({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="absolute left-full top-0 z-50 ml-1.5 w-48 rounded border border-line bg-panel p-1.5 shadow-2xl">
-      <div className="space-y-1">{children}</div>
-    </div>
-  )
-}
-
-function PopoverToggle({
-  label,
-  on,
-  onToggle,
-}: {
-  label: string
-  on: boolean
-  onToggle: () => void
-}) {
-  const { t } = useTranslation()
-  return (
-    <button
-      onClick={onToggle}
-      aria-pressed={on}
-      className="flex w-full touch-target items-center justify-between rounded border border-line bg-canvas px-3 py-1.5 text-sm text-ink hover:bg-panel"
-    >
-      <span className="truncate">{label}</span>
-      <span className={`mono text-xs ${on ? 'text-ok' : 'text-muted'}`}>
-        {on ? t('layers.on') : t('layers.off')}
-      </span>
-    </button>
-  )
-}
-
-function PopoverAction({
-  label,
-  icon: Icon,
-  onClick,
-}: {
-  label: string
-  icon: typeof Compass
-  onClick: () => void
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className="flex w-full touch-target items-center gap-2 rounded border border-line bg-canvas px-3 py-1.5 text-sm text-ink hover:bg-panel"
-    >
-      <Icon size={14} strokeWidth={1.75} />
-      <span className="truncate">{label}</span>
-    </button>
-  )
-}
-
-function ToolButton({
-  title,
-  onClick,
-  icon: Icon,
-  active,
-}: {
-  title: string
-  onClick: () => void
-  icon: typeof Crosshair
-  active?: boolean
-}) {
-  return (
-    <button
-      title={title}
-      aria-label={title}
-      onClick={onClick}
-      className={`flex h-11 w-11 items-center justify-center rounded transition-colors ${
-        active ? 'bg-accent text-accent-ink' : 'text-muted hover:bg-canvas hover:text-ink'
-      }`}
-    >
-      <Icon size={17} strokeWidth={1.75} />
-    </button>
   )
 }
 
@@ -244,6 +176,8 @@ function TerrainToggle() {
       <PopoverToggle
         label={t('terrain.overlay')}
         on={overlay != null}
+        onLabel={t('layers.on')}
+        offLabel={t('layers.off')}
         onToggle={() => (overlay ? clear() : void load())}
       />
       {error && <div className="px-1 text-[10px] text-error">{error}</div>}

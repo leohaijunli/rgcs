@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import PlanSteps from './panels/plan/PlanSteps'
 import { useUiStore, VIEW_CONFIG } from '../stores/ui'
+import { IconButton } from '../design-system/components'
 
 export default function RightInspector() {
   const { t } = useTranslation()
@@ -9,7 +10,8 @@ export default function RightInspector() {
   const toggleRight = useUiStore((s) => s.toggleRight)
 
   // Closed (default on narrow screens, §4.7): leave a slim edge toggle so the
-  // panel is one tap away instead of unreachable.
+  // panel is one tap away instead of unreachable. Full-height 24px strip, not
+  // the square IconButton shape — kept bespoke on purpose (UI3).
   if (!rightOpen) {
     return (
       <button
@@ -29,13 +31,9 @@ export default function RightInspector() {
     <aside className="flex w-[264px] shrink-0 flex-col border-l border-line bg-panel">
       <div className="flex items-center justify-between border-b border-line px-3 py-2">
         <h2 className="text-sm font-medium">{t(tab)}</h2>
-        <button
-          onClick={toggleRight}
-          title={t('panels.closePanel')}
-          className="touch-target rounded px-2 text-sm text-muted hover:text-ink"
-        >
-          ×
-        </button>
+        <IconButton title={t('panels.closePanel')} size={28} onClick={toggleRight}>
+          <span className="text-sm">×</span>
+        </IconButton>
       </div>
       <div className="flex-1 overflow-y-auto p-3">
         {view === 'planning' ? <PlanSteps /> : null}

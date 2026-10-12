@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { invoke } from '@tauri-apps/api/core'
 import { useTelemetryStore } from '../stores/telemetry'
+import { IconButton, StatusDot, Tabs } from '../design-system/components'
 import { useUiStore, type View } from '../stores/ui'
 import { isTauri } from '../inspector/mock'
 import SettingsDialog, { type SettingsTab } from './dialogs/SettingsDialog'
@@ -14,16 +15,16 @@ import EventLogDrawer from './EventLogDrawer'
 
 const VIEWS: View[] = ['planning', 'flight']
 
-function pillTone(kind: 'ok' | 'warn' | 'err' | 'off'): string {
+function pillTone(kind: 'ok' | 'warn' | 'err' | 'off'): 'ok' | 'warn' | 'error' | 'muted' {
   switch (kind) {
     case 'ok':
-      return 'bg-ok'
+      return 'ok'
     case 'warn':
-      return 'bg-warn'
+      return 'warn'
     case 'err':
-      return 'bg-error'
+      return 'error'
     default:
-      return 'bg-muted'
+      return 'muted'
   }
 }
 
@@ -44,7 +45,7 @@ function Pill({
   const inner = (
     <>
       <span className="text-muted">{label}</span>
-      <span className={`h-1.5 w-1.5 rounded-full ${pillTone(tone)}`} />
+      <StatusDot tone={pillTone(tone)} />
       {value && <span className="mono text-ink">{value}</span>}
     </>
   )
@@ -113,19 +114,12 @@ export default function TopBar() {
         <span className="text-lg font-semibold tracking-wide text-accent">{t('app.title')}</span>
       </div>
 
-      <nav className="flex items-center gap-0.5 rounded border border-line bg-canvas p-0.5">
-        {VIEWS.map((v) => (
-          <button
-            key={v}
-            onClick={() => setView(v)}
-            className={`rounded px-3 py-1.5 text-sm transition-colors ${
-              view === v ? 'bg-accent text-accent-ink' : 'text-muted hover:text-ink'
-            }`}
-          >
-            {t(`nav.${v}`)}
-          </button>
-        ))}
-      </nav>
+      <Tabs
+        items={VIEWS.map((v) => ({ id: v, label: t(`nav.${v}`) }))}
+        active={view}
+        onChange={setView}
+        className="text-sm [&>button]:px-3 [&>button]:py-1.5"
+      />
 
       <div className="ml-auto flex items-center gap-2">
         <div
@@ -158,21 +152,12 @@ export default function TopBar() {
           onMotorTest={openMotorTest}
           onParams={openParams}
         />
-        <button
-          aria-label={t('eventLog.title')}
-          title={t('eventLog.title')}
-          onClick={() => setLogDrawerOpen(true)}
-          className="flex h-11 w-11 items-center justify-center rounded border border-line bg-canvas text-muted hover:text-ink"
-        >
+        <IconButton title={t('eventLog.title')} onClick={() => setLogDrawerOpen(true)}>
           <List size={16} />
-        </button>
-        <button
-          aria-label={t('settings.menu')}
-          onClick={() => setSettingsOpen(true)}
-          className="flex h-11 w-11 items-center justify-center rounded border border-line bg-canvas text-muted hover:text-ink"
-        >
+        </IconButton>
+        <IconButton title={t('settings.menu')} onClick={() => setSettingsOpen(true)}>
           <Settings size={16} />
-        </button>
+        </IconButton>
       </div>
       <RtkDrawer open={rtkDrawerOpen} onClose={() => setRtkDrawerOpen(false)} />
       <EventLogDrawer open={logDrawerOpen} onClose={() => setLogDrawerOpen(false)} />
