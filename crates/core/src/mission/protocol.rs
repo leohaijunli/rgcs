@@ -541,7 +541,11 @@ impl MissionProtocol {
             ),
             other => {
                 self.state = other;
-                (Vec::new(), Vec::new())
+                // An unsolicited MISSION_CURRENT is the FC's flight-time
+                // broadcast of the active waypoint (S4 fix): the map's
+                // blinking target must follow the mission as it flies, not
+                // only move when the GCS itself changed the active item.
+                (vec![MissionEvent::CurrentChanged { seq }], Vec::new())
             }
         }
     }
@@ -846,6 +850,20 @@ mod tests {
             &events[0],
             MissionEvent::Failed(MissionError::AckDenied(_))
         ));
+    }
+
+    #[test]
+    fn unsolicited_mission_current_reports_the_active_waypoint() {
+        // Flight time: the FC broadcasts MISSION_CURRENT as it progresses;
+        // the UI's blinking target must follow (S4 fix) even though the GCS
+        // never requested a set-current.
+        let mut p = MissionProtocol::new(SELF_SYS, SELF_COMP, FC_SYS, FC_COMP);
+        let (events, frames) = p.handle(
+            &fc_header(),
+            &M::MISSION_CURRENT(MISSION_CURRENT_DATA { seq: 5 }),
+        );
+        assert!(events.contains(&MissionEvent::CurrentChanged { seq: 5 }));
+        assert!(frames.is_empty(), "no reply to a broadcast");
     }
 
     #[test]
