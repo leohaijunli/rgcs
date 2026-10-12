@@ -6,6 +6,26 @@ import * as Cesium from 'cesium'
 import { cssVar } from '../design-system/theme'
 import { HOME_LAT, HOME_LON } from './constants'
 
+/** UI4 base-imagery de-noising: pull the saturation down a touch and lift
+ * contrast so waypoints, flight lines and overlays stay legible on top of
+ * busy satellite/OSM tiles. Applied to every imagery layer swap. */
+const BASE_SATURATION = 0.8
+const BASE_BRIGHTNESS = 0.95
+const BASE_CONTRAST = 1.05
+
+/** UI4: the hillshade blends into the base imagery instead of hiding it —
+ * the dem-prep PNG is opaque grayscale, so at full alpha it replaced the
+ * satellite/OSM tiles entirely. */
+const OVERLAY_ALPHA = 0.55
+
+/** Apply the de-noise tuning to an imagery layer (UI4). */
+function toneDown(layer: Cesium.ImageryLayer): Cesium.ImageryLayer {
+  layer.saturation = BASE_SATURATION
+  layer.brightness = BASE_BRIGHTNESS
+  layer.contrast = BASE_CONTRAST
+  return layer
+}
+
 /** Initial camera / HOME position in degrees. */
 interface LatLonLike {
   lat: number
@@ -51,7 +71,7 @@ export function createViewer(
     infoBox: false,
     selectionIndicator: false,
   })
-  viewer.imageryLayers.addImageryProvider(imageryProvider('osm'), 1)
+  toneDown(viewer.imageryLayers.addImageryProvider(imageryProvider('osm'), 1))
   viewer.camera.setView({
     destination: Cesium.Cartesian3.fromDegrees(initial.lon, initial.lat, 12000),
   })
@@ -107,7 +127,7 @@ export function setImageryStyle(
   const layers = viewer.imageryLayers
   if (layers.length < 2) return
   layers.remove(layers.get(1))
-  layers.addImageryProvider(imageryProvider(style), 1)
+  toneDown(layers.addImageryProvider(imageryProvider(style), 1))
 }
 
 /**
@@ -146,7 +166,8 @@ export function setTerrainOverlay(
   void Cesium.SingleTileImageryProvider.fromUrl(overlay.url, { rectangle }).then(
     (provider) => {
       // Re-check: an async add may race a clear.
-      layers.addImageryProvider(provider, 2)
+      const layer = layers.addImageryProvider(provider, 2)
+      layer.alpha = OVERLAY_ALPHA
     },
     () => {
       /* a broken PNG is not fatal: the imagery stays */
