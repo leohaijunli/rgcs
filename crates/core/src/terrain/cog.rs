@@ -136,19 +136,6 @@ impl CogDem {
         })
     }
 
-    /// DTM + DSM elevations at one point (both datum-tagged).
-    ///
-    /// # Errors
-    ///
-    /// See [`ElevationSource::elevation`]; the DSM error wins when both
-    /// rasters miss (a clearance check on a void must not pass silently).
-    pub fn sample_pair(&self, point: GeoPoint) -> Result<(Height, Height), TerrainError> {
-        let dsm = self.dsm.sample(point.latitude_deg, point.longitude_deg)?;
-        let dtm = self.dtm.sample(point.latitude_deg, point.longitude_deg)?;
-        let datum = self.datum();
-        Ok((Height::new(datum, dtm), Height::new(datum, dsm)))
-    }
-
     fn datum(&self) -> HeightDatum {
         match self.metadata.vertical_datum {
             VerticalDatum::OrthometricCgvd2013 => HeightDatum::OrthometricCgvd2013,
@@ -167,6 +154,15 @@ impl CogDem {
 }
 
 impl ElevationSource for CogDem {
+    /// DTM + DSM at one point; the DSM error wins when both rasters miss (a
+    /// clearance check on a void must not pass silently).
+    fn sample_pair(&self, point: GeoPoint) -> Result<(Height, Height), TerrainError> {
+        let dsm = self.dsm.sample(point.latitude_deg, point.longitude_deg)?;
+        let dtm = self.dtm.sample(point.latitude_deg, point.longitude_deg)?;
+        let datum = self.datum();
+        Ok((Height::new(datum, dtm), Height::new(datum, dsm)))
+    }
+
     fn elevation(&self, point: GeoPoint) -> Result<Height, TerrainError> {
         // The DTM is the AGL datum (ADR-005): the plain elevation query.
         let v = self

@@ -21,6 +21,7 @@ use crate::height::Height;
 use crate::plan::GeoPoint;
 
 pub mod cog;
+pub mod drape;
 
 pub use cog::CogDem;
 
@@ -95,6 +96,14 @@ pub trait ElevationSource: Send + Sync {
 
     /// The DEM version (the `dem.json` content hash) for mission archives.
     fn version(&self) -> &str;
+
+    /// DTM and DSM at one point (both datum-tagged). The pair is what
+    /// draping needs: the DTM sets the AGL datum, the DSM the clearance.
+    ///
+    /// # Errors
+    ///
+    /// Same contract as [`ElevationSource::elevation`].
+    fn sample_pair(&self, point: GeoPoint) -> Result<(Height, Height), TerrainError>;
 }
 
 /// Validate a metadata/raster pair before sampling anything.
