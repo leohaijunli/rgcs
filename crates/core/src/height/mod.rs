@@ -12,6 +12,7 @@
 //! [`grid`]; the real EGM96 / CGG2013 grids are loaded in Phase 3.
 
 pub mod grid;
+pub mod load;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

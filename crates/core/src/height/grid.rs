@@ -175,7 +175,7 @@ impl GeoidGrid {
 }
 
 /// A [`GeoidModel`] backed by one [`GeoidGrid`] per datum.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct GeoidGridModel {
     name: String,
     grids: BTreeMap<HeightDatum, GeoidGrid>,
