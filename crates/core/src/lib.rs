@@ -14,6 +14,7 @@ pub mod devices;
 pub mod dsp;
 pub mod height;
 pub mod inspector;
+pub mod logs;
 pub mod mavlink;
 pub mod mission;
 pub mod motor_test;

@@ -17,6 +17,7 @@ use maggcs_core::CommandService;
 use parking_lot::Mutex;
 
 use crate::inspector_service::InspectorState;
+use crate::logs_service::LogsState;
 use crate::motor_test_state::MotorTestState;
 use crate::params_service::ParamsState;
 use crate::rtk_service::RtkState;
@@ -69,6 +70,8 @@ pub struct AppState {
     pub motor_test: MotorTestState,
     /// RTK injection service handle + 1 Hz stats forwarder (R4).
     pub rtk: Arc<RtkState>,
+    /// Log download protocol task (O1).
+    pub logs: Arc<LogsState>,
     /// Held for the whole duration of a `connect`/`disconnect` command so the
     /// link swap is atomic with respect to other commands (issues.md #21).
     ops: tokio::sync::Mutex<()>,

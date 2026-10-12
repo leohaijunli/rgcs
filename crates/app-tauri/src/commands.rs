@@ -115,6 +115,7 @@ pub async fn connect(
         old.connection.shutdown().await;
     }
     state.rtk.detach();
+    state.logs.detach();
 
     // A (re)connected link re-attaches an already-open inspector: otherwise a
     // link swap would leave the inspector window open but dry (plan P0-6).
@@ -139,6 +140,11 @@ pub async fn connect(
         let (rtk_handle, rtk_stats) = maggcs_core::rtk::service::spawn(h);
         let rtk_state = std::sync::Arc::clone(&state.rtk);
         rtk_state.attach(app.clone(), rtk_handle, rtk_stats);
+    }
+    // The log download protocol rides the same link (O1).
+    if let Some(h) = state.connection() {
+        let logs_state = std::sync::Arc::clone(&state.logs);
+        logs_state.attach(app.clone(), h);
     }
 
     Ok(ConnectResponse {

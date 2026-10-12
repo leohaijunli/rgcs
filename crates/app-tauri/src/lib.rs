@@ -8,6 +8,7 @@ mod actuator_service;
 mod command_service;
 mod commands;
 mod inspector_service;
+mod logs_service;
 mod mission_service;
 mod motor_test_state;
 mod params_service;
@@ -41,6 +42,9 @@ pub fn run() {
             commands::survey_generate_cloverleaf,
             commands::survey_compile_pattern,
             terrain_service::terrain_load,
+            logs_service::logs_request_list,
+            logs_service::logs_download,
+            logs_service::logs_cancel,
             commands::terrain_drape,
             rtk_service::rtk_start_serial,
             rtk_service::rtk_stop,

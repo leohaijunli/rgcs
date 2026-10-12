@@ -252,6 +252,15 @@ impl ConnectionHandle {
     /// Lifecycle events are always delivered; only inbound messages are
     /// filtered, so a subscriber is not woken for traffic it does not care
     /// about.
+    /// Subscribe to the LOG protocol messages (log download, O1).
+    pub fn subscribe_log_messages(&self) -> crate::mavlink::router::RoutedEvents {
+        use ::mavlink::MessageData;
+        self.subscribe_route(crate::mavlink::router::MessageRoute::messages(&[
+            ::mavlink::common::LOG_ENTRY_DATA::ID,
+            ::mavlink::common::LOG_DATA_DATA::ID,
+        ]))
+    }
+
     pub fn subscribe_route(
         &self,
         route: crate::mavlink::router::MessageRoute,

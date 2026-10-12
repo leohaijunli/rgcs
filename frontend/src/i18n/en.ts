@@ -397,10 +397,14 @@ export default {
       fixHint: 'Installs a udev rule granting read/write on the USB serial devices above — a system password prompt follows. Undo by deleting /etc/udev/rules.d/99-maggcs.rules.',
     },
     logs: {
-      placeholder: 'Log download over the MAVLink LOG protocol is not available yet.',
+      placeholder: 'Log download over the MAVLink LOG protocol.',
       refresh: 'Refresh list',
       download: 'Download',
       erase: 'Erase',
+      cancel: 'Cancel',
+      hint: 'FC SD-card logs (.ulg) via the MAVLink LOG protocol',
+      emptyList: 'No logs on the FC (or pull the list first)',
+      saved: 'Saved ✓',
     },
   },
   theme: {
