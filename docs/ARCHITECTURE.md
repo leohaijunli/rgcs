@@ -34,15 +34,24 @@ crates/core          maggcs_core — all domain logic (ADR-001):
                        10 Hz ACTUATOR_TEST sender, mag alarm watchdog
   calib/               JSON calibration application (mag: A·(raw−b)+K·I)
   devices/             serial enumeration + hotplug watcher
-  plan/ survey/ height/ rtk/ ulog/   plan compile, survey patterns,
-                       height datums, RTCM, ULog reader/replay
+  plan/ survey/ height/ rtk/ terrain/ params/ commands/ ulog/
+                       plan compile, survey patterns + pattern→mission
+                       compiler (S1) + terrain drape, height datums +
+                       geoid grids (EGM96), RTCM parse/fragment/inject
+                       (R1-R3), MAVLink params (pull/set/echo/cache),
+                       mode table + send_await (ADR-017), ULog reader
 crates/app-tauri     desktop shell: Tauri commands + thin service adapters
-                     (mission/command/inspector/actuator), telemetry pump,
-                     windows: main / inspector / actuator
+                     (mission/command/inspector/actuator/params/rtk),
+                     telemetry pump, windows: main / inspector / actuator /
+                     params
 crates/server        headless REST/WebSocket (planned)
-frontend/            React app, three Vite entries (index / inspector /
-                     actuator — separate webviews, no Cesium in the latter two)
-tools/dem-prep       DEM preprocessing (planned)
+frontend/            React app, four Vite entries (index / inspector /
+                     actuator / params — separate webviews, no Cesium in
+                     the latter three)
+tools/dem-prep       DEM preprocessing (D4, shipped): BC LiDAR LAZ →
+                     classified DTM/DSM WGS84 rasters + hillshade.png +
+                     sha256-versioned dem.json; GeoTIFF fallback input
+                     (CDEM/Copernicus)
 helpers/udev-installer  pkexec-invoked udev rule installer (ADR-009)
 ```
 
@@ -54,9 +63,12 @@ so headless mode reuses them unchanged.
 
 | Window | Content | Data path |
 | --- | --- | --- |
-| main | map + plan/fly task panel | Tauri events (`telemetry`, `link`, `mission`, `command`) + invokes |
+| main | map + plan task panel + nav-bar flight controls (Flight ▾,
+  MODE ▾, event log / RTK drawers) | Tauri events (`telemetry`, `link`,
+  `mission`, `command`, `rtk_stats`) + invokes |
 | inspector | Signal Inspector (ADR-015/016) | one Tauri Channel, columnar frames (~30 Hz), DSP in Rust |
 | actuator | motor / mag-interference test | invokes (commands) + `actuator_event`/`actuator_telemetry`/`actuator_alarm` events |
+| params | FC parameters (PM3): three panes, lazy value fetch, staging tray, reboot banner | `params_event` + invokes (`params_pull/set/read/...`) |
 
 MAVLink in: UDP/TCP/serial endpoints (ADR-011 four-level link model).
 MAVLink out: mission protocol, command service, and the motor-test sender
@@ -86,6 +98,17 @@ traffic bypasses the single-slot command service).
 - Mission read-back hash (`itemsHash`) narrows `z`/`params` and
   MAV_FRAME_MISSION `x`/`y` to f32 — PX4 parks command-item coordinates in
   f32 storage, so exact comparison false-fails otherwise.
+- `MAV_CMD_NAV_TAKEOFF`: param7 is an **AMSL** altitude
+  (`navigator_main.cpp`: `rep->current.alt = cmd.param7`), and param5/6
+  must be finite — zeros aim the takeoff loiter at 0°N/0°E. The GCS sends
+  current position + AMSL+10 m (ADR-017).
+- `MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN`: the reboot path compiles only for
+  `CONFIG_BOARDCTL_RESET` boards (NuttX hardware); **SITL answers DENIED**
+  — the UI surfaces the FC's verdict instead of assuming a reboot
+  (send_await).
+- `GPS_RTCM_DATA`: PX4 does **not** reassemble fragments — they are written
+  to the GNSS serial port in arrival order, flags ignored (ADR-008
+  addendum; the GNSS module's RTCM parser reassembles on the byte stream).
 
 ## 6. Architecture decision records
 
@@ -98,7 +121,7 @@ traffic bypasses the single-slot command service).
 | 005 | Terrain following (GCS-side, not PX4 terrain frames) |
 | 006 | Height datums |
 | 007 | License (Apache-2.0) |
-| 008 | RTCM forwarding |
+| 008 | RTCM forwarding (+ v1.17 addendum) |
 | 009 | udev privilege strategy (polkit + strict helper) |
 | 010 | Frontend stack + design tokens |
 | 011 | Link state model (transport vs FC heartbeat) |

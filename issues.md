@@ -80,6 +80,31 @@ Headless/主界面也要用副链路，需要把 SITL 连接提升到 AppState �
 - PX4 对多个 GCS 同时读取任务时的行为（影响 #9 的具体修法）。
 - `DO_PAUSE_CONTINUE` 在 PX4 v1.17 不支持（已实测 NACK）——已用 NAV_TAKEOFF/LAND 替代，关闭。
 
+## New open issues（2026-10-11 综合方案执行后新增）
+
+### N1 [P2][frontend] Drape 前的地形数据发现
+当前从 Layers ▸ 手动选 dem-prep 输出文件夹。需要：瓦片索引（folder 内
+多瓦片的 index.json）、按调查区域自动选瓦片、未覆盖时的清晰提示与
+CDEM/Copernicus 指引。
+
+### N2 [P2][height] CGG2013 (HT2) 网格加载
+`core::height::load` 已支持任意 .mggeoid；等 BC 省发布 CGG2013 网格提取
+后加载，完成 `H + N(CGG2013) = h`、`h − N(EGM96) = AMSL` 两段验收
+（AGENTS.md 的 <0.5 m 控制点验收）。
+
+### N3 [P3][frontend] 磁测记录的 GCS 侧分段落地
+survey 编译器已输出 PatternLine 表（S1），`MagTrigger::GcsSide` 是默认；
+飞行时按 MISSION_CURRENT + 线表自动开关磁数据正式段的 UI/存储标记未做
+（数据链与 QC 工具按同一张表切分）。
+
+### N4 [P3][core/rtk] 多注入源检测
+QGC 同时注入 RTCM 时无警告（ADR-008 要求提供开关并在检测到多源时提示）。
+
+### N5 [P3][docs/plans] 综合方案 v3
+`comprehensive-implementation-plan.md` v2 的 W6 参数窗口已基本落地、
+RTK R0-R4 完成、MS 线完成、领域主线（survey/mag/QC）独立推进中；按仓库
+惯例出 v3 状态修订或并入 issues.md 后删除。
+
 ## Deferred（操作员指示暂缓）
 
 ### D1 GoPro 视频监视（motor-test-plan §14 G1–G4）
