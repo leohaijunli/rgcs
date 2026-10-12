@@ -131,6 +131,7 @@ impl CogDem {
             dsm,
             metadata: DemMetadata {
                 vertical_datum,
+                has_dsm: metadata.has_dsm,
                 ..metadata.clone()
             },
         })
@@ -154,11 +155,15 @@ impl CogDem {
 }
 
 impl ElevationSource for CogDem {
-    /// DTM + DSM at one point; the DSM error wins when both rasters miss (a
-    /// clearance check on a void must not pass silently).
+    /// DTM + DSM at one point. A DTM void errors (the AGL datum must
+    /// exist); a DSM void — the DTM-only fallback sources — returns NaN so
+    /// the drape can skip the clearance check without failing the plan.
     fn sample_pair(&self, point: GeoPoint) -> Result<(Height, Height), TerrainError> {
-        let dsm = self.dsm.sample(point.latitude_deg, point.longitude_deg)?;
         let dtm = self.dtm.sample(point.latitude_deg, point.longitude_deg)?;
+        let dsm = self
+            .dsm
+            .sample(point.latitude_deg, point.longitude_deg)
+            .unwrap_or(f64::NAN);
         let datum = self.datum();
         Ok((Height::new(datum, dtm), Height::new(datum, dsm)))
     }
@@ -272,6 +277,7 @@ mod tests {
                 west: -123.0,
             },
             vertical_datum: VerticalDatum::AmslEgm96,
+            has_dsm: true,
         }
     }
 

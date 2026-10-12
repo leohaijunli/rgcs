@@ -61,6 +61,8 @@ pub struct DemMetadata {
     pub vertical_datum: &'static str,
     pub source_file: String,
     pub source_points: u64,
+    /// False for DTM-only fallback sources (CDEM / Copernicus).
+    pub has_dsm: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

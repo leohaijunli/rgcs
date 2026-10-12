@@ -10,5 +10,6 @@
   },
   "vertical_datum": "orthometric_cgvd2013",
   "source_file": "bc_092b063_4_2_2_xyes_8_utm10_20231125_20231126.laz",
-  "source_points": 72982306
+  "source_points": 72982306,
+  "has_dsm": true
 }

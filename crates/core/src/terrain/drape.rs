@@ -101,13 +101,21 @@ pub fn drape_to_terrain(
         }
         let (dtm, dsm) = dem.sample_pair(wp.position)?;
         let mut height = dtm.meters() + options.agl_m;
-        // DSM clearance: the draped height must clear the surface.
-        let clearance = height - dsm.meters();
-        if clearance < options.min_dsm_clearance_m {
-            height = dsm.meters() + options.min_dsm_clearance_m;
-            report.raised += 1;
+        // DSM clearance: the draped height must clear the surface. A void
+        // DSM (DTM-only fallback sources — CDEM/Copernicus) skips the check:
+        // no clearance stat, and the UI warns via dem.json `has_dsm: false`.
+        let clearance = if dsm.meters().is_finite() {
+            if height - dsm.meters() < options.min_dsm_clearance_m {
+                height = dsm.meters() + options.min_dsm_clearance_m;
+                report.raised += 1;
+            }
+            Some(height - dsm.meters())
+        } else {
+            None
+        };
+        if let Some(c) = clearance {
+            min_clearance = min_clearance.min(c);
         }
-        min_clearance = min_clearance.min(height - dsm.meters());
         let mut draped = wp.clone();
         draped.altitude = crate::height::Height::new(wp.altitude.datum(), height);
         out.push(draped);

@@ -42,6 +42,10 @@ pub struct DemMetadata {
     pub bounds: DemBounds,
     /// Vertical datum of the pixel values (BC LiDAR: CGVD2013 orthometric).
     pub vertical_datum: VerticalDatum,
+    /// Whether the pair carries a real DSM. Fallback sources (CDEM /
+    /// Copernicus) are DTM-only: the drape then skips the clearance check.
+    #[serde(default)]
+    pub has_dsm: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]

@@ -306,7 +306,13 @@ function maxDoJumpId(entries: unknown): number {
 export function buildPlan(
   items: MissionItem[],
   mode: AltitudeMode,
-  opts: { base?: QgcPlan; home?: [number, number, number] | null; blocks?: PlanBlock[] } = {},
+  opts: {
+    base?: QgcPlan
+    home?: [number, number, number] | null
+    blocks?: PlanBlock[]
+    /** DEM version the plan was draped against (ADR-004 archives). */
+    demVersion?: string | null
+  } = {},
 ): string {
   const base = opts.base ? structuredClone(opts.base) : ({ fileType: 'Plan', version: 1 } as QgcPlan)
   const baseMission = base.mission ?? {}
@@ -354,6 +360,9 @@ export function buildPlan(
       plannedHomePosition: home,
       globalPlanAltitudeMode: OURS_ALT_MODE_TO_QGC[mode],
       items: outItems,
+      // MagGCS extension: provenance of the terrain drape (ADR-004). QGC
+      // ignores unknown mission keys.
+      ...(opts.demVersion ? { maggcsDemVersion: opts.demVersion } : {}),
     },
   }
   return JSON.stringify(plan, null, 2)
@@ -371,7 +380,12 @@ export async function importPlanFile(): Promise<PlanImport | null> {
 export async function exportPlanFile(
   items: MissionItem[],
   mode: AltitudeMode,
-  opts: { base?: QgcPlan; home?: [number, number, number] | null; blocks?: PlanBlock[] } = {},
+  opts: {
+    base?: QgcPlan
+    home?: [number, number, number] | null
+    blocks?: PlanBlock[]
+    demVersion?: string | null
+  } = {},
 ): Promise<boolean> {
   const path = await save({ defaultPath: 'mission.plan', filters: QGC_FILTER })
   if (typeof path !== 'string') return false

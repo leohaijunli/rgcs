@@ -14,6 +14,7 @@
 
 mod cog;
 mod error;
+mod geotiff;
 mod grid;
 mod hillshade;
 mod las;
@@ -78,7 +79,7 @@ fn process_folder(folder: &Path, out: &Path, resolution_m: f64) -> Result<()> {
         .filter(|p| {
             matches!(
                 p.extension().and_then(|e| e.to_str()),
-                Some("laz") | Some("las")
+                Some("laz") | Some("las") | Some("tif") | Some("tiff")
             )
         })
         .collect();
@@ -88,7 +89,16 @@ fn process_folder(folder: &Path, out: &Path, resolution_m: f64) -> Result<()> {
     }
     println!("{} tile(s) in {}", tiles.len(), folder.display());
     for tile in &tiles {
-        if let Err(e) = process_tile(tile, out, resolution_m) {
+        let is_raster = matches!(
+            tile.extension().and_then(|e| e.to_str()),
+            Some("tif") | Some("tiff")
+        );
+        let result = if is_raster {
+            process_raster_tile(tile, out)
+        } else {
+            process_tile(tile, out, resolution_m)
+        };
+        if let Err(e) = result {
             eprintln!("FAILED {}: {e}", tile.display());
         }
     }
@@ -176,6 +186,7 @@ fn process_tile(tile: &Path, out: &Path, resolution_m: f64) -> Result<()> {
             .unwrap_or("")
             .into(),
         source_points: info.count,
+        has_dsm: true,
     };
     cog::write_metadata(&tile_out.join("dem.json"), &metadata)?;
     println!(
@@ -184,6 +195,89 @@ fn process_tile(tile: &Path, out: &Path, resolution_m: f64) -> Result<()> {
         dtm.width,
         dtm.height,
         utm_grid.dtm_n.iter().filter(|&&n| n > 0).count(),
+        metadata.version
+    );
+    Ok(())
+}
+
+/// Process a GeoTIFF input (CDEM / Copernicus GLO-30 fallback sources): the
+/// raster is taken as the DTM as-is when geographic (WGS84 degrees); no DSM
+/// exists in such products, so dem.json marks `has_dsm: false` and the
+/// runtime drape skips the clearance check with a warning in the report.
+///
+/// # Errors
+///
+/// Non-geographic inputs (projected CRS) are rejected with a hint — regrid
+/// them once with gdalwarp/QGIS before running dem-prep.
+fn process_raster_tile(tile: &Path, out: &Path) -> Result<()> {
+    let stem = tile
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .context("tile name")?
+        .to_string();
+    let tile_out = out.join(&stem);
+    std::fs::create_dir_all(&tile_out)?;
+
+    // Read the source grid (values + its own geographic placement).
+    let (values, width, height, src_west, src_north, src_dlat, src_dlon) =
+        crate::geotiff::read_single_band(tile)?;
+
+    // Output placement: pass the source placement through (already
+    // geographic — a straight copy, no resampling).
+    let raster = grid::GeoRaster {
+        width,
+        height,
+        values: values.iter().map(|v| *v as f32).collect(),
+        west: src_west,
+        north: src_north,
+    };
+    let (west, north) = (raster.west, raster.north);
+    let (south, east) = (
+        north - src_dlat * height as f64,
+        west + src_dlon * width as f64,
+    );
+
+    let dtm_path = tile_out.join("dtm.tif");
+    let dsm_path = tile_out.join("dsm.tif");
+    cog::write_geo_tiff(&dtm_path, &raster)?;
+    // No DSM source: write an all-nodata DSM so the folder shape stays
+    // uniform and the runtime reader sees an all-void DSM (the drape then
+    // reports zero clearance and the UI warns — see terrain_drape).
+    let empty = grid::GeoRaster {
+        width,
+        height,
+        values: vec![f32::NAN; width * height],
+        west,
+        north,
+    };
+    cog::write_geo_tiff(&dsm_path, &empty)?;
+
+    let dtm_bytes = std::fs::read(&dtm_path)?;
+    let metadata = DemMetadata {
+        version: cog::version_of(&[&dtm_bytes]),
+        raster_crs: "EPSG:4326".into(),
+        resolution_m: src_dlat * 111_132.954,
+        bounds: cog::DemBounds {
+            north,
+            south,
+            east,
+            west,
+        },
+        vertical_datum: "orthometric_cgvd2013",
+        source_file: tile
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .into(),
+        source_points: 0,
+        has_dsm: false,
+    };
+    cog::write_metadata(&tile_out.join("dem.json"), &metadata)?;
+    println!(
+        "  -> {} ({}x{} px, no DSM — clearance check unavailable, version {})",
+        tile_out.display(),
+        width,
+        height,
         metadata.version
     );
     Ok(())

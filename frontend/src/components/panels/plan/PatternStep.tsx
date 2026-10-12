@@ -274,9 +274,26 @@ function DrapeBlock() {
     setBusy(true)
     setError(null)
     // Folder: reuse the terrain overlay's folder when one was loaded via
-    // Layers ▸ (the store keeps only the report there; the dialog re-opens
-    // otherwise).
-    const err = await drapeToTerrain(terrainFolder(), 40, 5)
+    // Layers ▸; otherwise ask (the same dialog the Layers toggle uses, and
+    // the choice is remembered for the overlay too).
+    let folder = terrainFolder()
+    if (!folder) {
+      try {
+        const { open } = await import('@tauri-apps/plugin-dialog')
+        const picked = await open({ multiple: false, directory: true })
+        if (!picked || typeof picked !== 'string') {
+          setBusy(false)
+          return
+        }
+        folder = picked
+        sessionStorage.setItem('maggcs.terrainFolder', folder)
+      } catch (e) {
+        setBusy(false)
+        setError(String(e))
+        return
+      }
+    }
+    const err = await drapeToTerrain(folder, 40, 5)
     setBusy(false)
     if (err) setError(err)
   }

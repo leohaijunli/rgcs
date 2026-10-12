@@ -27,4 +27,9 @@ bounds: DemBounds,
 /**
  * Vertical datum of the pixel values (BC LiDAR: CGVD2013 orthometric).
  */
-vertical_datum: VerticalDatum, };
+vertical_datum: VerticalDatum, 
+/**
+ * Whether the pair carries a real DSM. Fallback sources (CDEM /
+ * Copernicus) are DTM-only: the drape then skips the clearance check.
+ */
+has_dsm: boolean, };

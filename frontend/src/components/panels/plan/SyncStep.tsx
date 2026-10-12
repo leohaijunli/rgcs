@@ -101,7 +101,13 @@ export default function SyncStep({
     await exportPlanFile(
       compileWaypoints(waypoints, altitudeMode, homeAmsl),
       altitudeMode,
-      { base: planBase ?? undefined, home, blocks },
+      {
+        base: planBase ?? undefined,
+        home,
+        blocks,
+        // Provenance (ADR-004): which DEM the drape was computed against.
+        demVersion: useMissionStore.getState().drape?.report.dem_version ?? null,
+      },
     )
   }
 
