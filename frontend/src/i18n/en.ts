@@ -228,6 +228,11 @@ export default {
         tie: 'Tie',
         cal: 'Cal',
       },
+        stats: {
+          total: 'Total path',
+          eta: 'Est. time',
+          coverage: 'Coverage',
+        },
     },
     op: {
       upload: 'Uploading',

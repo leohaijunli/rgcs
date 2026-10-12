@@ -311,17 +311,14 @@ pub async fn send_command(name: String, state: State<'_, AppState>) -> Result<()
     // replicate the sequence here: param7 = current AMSL + the relative
     // 10 m climb, then arm once the FC accepted the mode.
     if name == "takeoff" {
-        let alt = state
+        let fix = state
             .hub()
             .and_then(|h| h.snapshot().global_position)
-            .map(|p| p.altitude.meters())
-            .ok_or_else(|| {
-                "no position fix yet — cannot compute the takeoff altitude".to_string()
-            })?;
+            .ok_or_else(|| "no position fix yet — cannot compute the takeoff target".to_string())?;
         maggcs_core::CommandService::send_await(
             &service,
             MavCmd::MAV_CMD_NAV_TAKEOFF,
-            takeoff_params(alt),
+            takeoff_params(fix.latitude_deg, fix.longitude_deg, fix.altitude.meters()),
             TAKEOFF_ACK_TIMEOUT,
         )
         .await
@@ -367,9 +364,12 @@ const TAKEOFF_ACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// `MAV_CMD_NAV_TAKEOFF` parameters. PX4 reads `param7` as an **AMSL**
 /// altitude (`navigator_main.cpp`: `rep->current.alt = cmd.param7`), so the
 /// GCS must add the relative 10 m to the vehicle's current AMSL (telemetry).
-/// `param5/6` stay 0 = the current position.
-fn takeoff_params(current_amsl_m: f64) -> [f32; 7] {
+/// `param5/6` must be the **current lat/lon**: `PX4_ISFINITE(0.0)` is true,
+/// so zeros would aim the takeoff loiter at 0°N/0°E — the equator.
+fn takeoff_params(lat_deg: f64, lon_deg: f64, current_amsl_m: f64) -> [f32; 7] {
     let mut params = [0.0; 7];
+    params[4] = lat_deg as f32;
+    params[5] = lon_deg as f32;
     params[6] = (current_amsl_m as f32) + TAKEOFF_ALTITUDE_M;
     params
 }
@@ -555,11 +555,15 @@ mod tests {
     }
 
     #[test]
-    fn takeoff_params_add_relative_altitude_to_amsl() {
-        // 583.25 m AMSL + 10 m relative = 593.25 m AMSL in param7.
-        let params = takeoff_params(583.25);
+    fn takeoff_params_carry_position_and_relative_altitude() {
+        // Current fix (583.25 m AMSL) + 10 m relative = 593.25 m AMSL in
+        // param7; lat/lon go into param5/6 so the takeoff target is the
+        // vehicle's own position, not the equator.
+        let params = takeoff_params(48.6493, -123.3982, 583.25);
+        assert_eq!(params[4], 48.6493);
+        assert_eq!(params[5], -123.3982);
         assert_eq!(params[6], 593.25);
-        assert_eq!(&params[..6], &[0.0; 6]);
+        assert_eq!(&params[..4], &[0.0; 4]);
     }
 
     #[test]

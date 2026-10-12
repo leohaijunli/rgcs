@@ -5,6 +5,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
+  compilePattern,
   generateCloverleaf,
   generateSweep,
   rectanglePolygon,
@@ -63,7 +64,12 @@ export default function PatternStep({ kind, onKind, sweep, onSweep, clover, onCl
           tie_spacing_m: sweep.tie_spacing_m && sweep.tie_spacing_m > 0 ? sweep.tie_spacing_m : null,
           speed_mps: sweep.speed_mps && sweep.speed_mps > 0 ? sweep.speed_mps : null,
         })
-        insertPattern(plan, t('plan.pattern.kind.sweep'), effectiveCenter)
+        const compiled = await compilePattern(plan, {
+          mag_trigger: { kind: 'gcs_side' },
+          cruise_speed_mps: sweep.speed_mps && sweep.speed_mps > 0 ? sweep.speed_mps : null,
+          coverage_polygon: boundary,
+        })
+        insertPattern(compiled, t('plan.pattern.kind.sweep'), effectiveCenter, compiled.stats)
       } else {
         if (!effectiveCenter) return
         const plan = await generateCloverleaf({
@@ -71,7 +77,12 @@ export default function PatternStep({ kind, onKind, sweep, onSweep, clover, onCl
           center: effectiveCenter,
           speed_mps: clover.speed_mps && clover.speed_mps > 0 ? clover.speed_mps : null,
         })
-        insertPattern(plan, t('plan.pattern.kind.cloverleaf'), effectiveCenter)
+        const compiled = await compilePattern(plan, {
+          mag_trigger: { kind: 'gcs_side' },
+          cruise_speed_mps: clover.speed_mps && clover.speed_mps > 0 ? clover.speed_mps : null,
+          coverage_polygon: null,
+        })
+        insertPattern(compiled, t('plan.pattern.kind.cloverleaf'), effectiveCenter, compiled.stats)
       }
     } catch (e) {
       setError(String(e))
@@ -87,6 +98,7 @@ export default function PatternStep({ kind, onKind, sweep, onSweep, clover, onCl
         cal: lastPattern.lines.filter((l) => l.kind === 'calibration').length,
       }
     : null
+  const stats = lastPattern?.stats ?? null
 
   return (
     <div className="space-y-2">
@@ -201,6 +213,20 @@ export default function PatternStep({ kind, onKind, sweep, onSweep, clover, onCl
           <span className="text-mag">
             {t('plan.pattern.legend.cal')} {lineCounts.cal}
           </span>
+        </div>
+      )}
+      {stats && (
+        <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-[11px] text-muted">
+          <span>{t('plan.pattern.stats.total')} {stats.total_length_m.toFixed(0)} m</span>
+          <span>
+            {t('plan.pattern.stats.eta')}{' '}
+            {stats.estimated_time_s >= 90
+              ? `${Math.round(stats.estimated_time_s / 60)} min`
+              : `${Math.round(stats.estimated_time_s)} s`}
+          </span>
+          {stats.coverage_m2 != null && (
+            <span>{t('plan.pattern.stats.coverage')} {(stats.coverage_m2 / 10_000).toFixed(2)} ha</span>
+          )}
         </div>
       )}
     </div>
