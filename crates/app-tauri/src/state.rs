@@ -76,6 +76,10 @@ pub struct AppState {
     /// Local 3D terrain tileset server (plan B) — `terrain3d_start` /
     /// `terrain3d_stop`; `None` while no tileset is served.
     pub terrain3d: Mutex<Option<TerrainServer>>,
+    /// Opened DEM (drape + per-point sampling). Cached by tile path: a
+    /// CogDem::open reads the full rasters, so re-opening per call would
+    /// dominate the cost of an interactive edit.
+    pub dem: Mutex<Option<(String, std::sync::Arc<maggcs_core::terrain::cog::CogDem>)>>,
     /// Held for the whole duration of a `connect`/`disconnect` command so the
     /// link swap is atomic with respect to other commands (issues.md #21).
     ops: tokio::sync::Mutex<()>,

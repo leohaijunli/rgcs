@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useCesiumViewer } from '../hooks/useCesiumViewer'
 import { compileWaypoints, toDisplayItems } from '../mission/compile'
@@ -89,6 +89,41 @@ export default function MapView() {
     void useTerrainStore.getState().restore3d()
   }, [])
 
+  // Accurate AGL markers: sample the loaded DEM under every waypoint (the
+  // flat HOME plane stays the fallback). Re-sampled whenever the plan or the
+  // tile changes, debounced for drags.
+  const terrainTile = useTerrainStore((st) => st.tile)
+  const [groundBySeq, setGroundBySeq] = useState<Record<number, number> | null>(null)
+  useEffect(() => {
+    if (!terrainTile || missionItems.length === 0) {
+      setGroundBySeq(null)
+      return
+    }
+    const id = setTimeout(() => {
+      // MissionItem carries ×1e7 int lat/lon; sample in degrees. Command
+      // items (DO_*) have no coordinate and are skipped.
+      const points = missionItems.map((it) => [it.y / 1e7, it.x / 1e7] as [number, number])
+      void (async () => {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core')
+          const samples = await invoke<
+            Array<{ lat: number; lon: number; dtm_m: number | null }>
+          >('terrain_sample', { folder: terrainTile.path, points })
+          const next: Record<number, number> = {}
+          missionItems.forEach((it, i) => {
+            const dtm = samples[i]?.dtm_m
+            // A (0,0) coordinate is a command item, not a place on earth.
+            if (dtm != null && (it.x !== 0 || it.y !== 0)) next[it.seq] = dtm
+          })
+          setGroundBySeq(Object.keys(next).length > 0 ? next : null)
+        } catch {
+          setGroundBySeq(null) // DEM gone: fall back to the flat plane
+        }
+      })()
+    }, 300)
+    return () => clearTimeout(id)
+  }, [missionItems, terrainTile])
+
   const kinds = useMemo(() => kindsBySeq(lastPattern?.lines ?? []), [lastPattern])
   useEffect(() => {
     setMission(missionItems, selectedSeq, {
@@ -97,11 +132,14 @@ export default function MapView() {
       // Ground plane for the sticks and the AGL chips: HOME's AMSL until a
       // DEM exists (WS-D) — the same plane the vehicle drop line and the AGL
       // compile mode stand on (0 until the plan carries a home position).
+      // When the DEM is loaded, `groundBySeq` carries the DTM under each
+      // point and takes precedence (accurate terrain-following markers).
       groundM: home?.[2] ?? 0,
+      groundBySeq,
       // Flight-state colouring: flown waypoints dim, the target gets a halo.
       currentSeq,
     })
-  }, [missionItems, selectedSeq, kinds, showHeights, home, currentSeq, setMission])
+  }, [missionItems, selectedSeq, kinds, showHeights, home, currentSeq, groundBySeq, setMission])
 
   // Tool shortcuts (P3 §4.3): W = add waypoint, P = draw polygon. Planning
   // only; Esc already returns to select (cesium/waypoints.ts).

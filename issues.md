@@ -73,6 +73,10 @@ Headless/主界面也要用副链路，需要把 SITL 连接提升到 AppState �
 - `MISSION_COUNT` 的 `mission_type` 等扩展字段默认值，与 QGC 上传的帧对比。
 - PX4 对多个 GCS 同时读取任务时的行为（影响 #9 的具体修法）。
 - `DO_PAUSE_CONTINUE` 在 PX4 v1.17 不支持（已实测 NACK）——已用 NAV_TAKEOFF/LAND 替代，关闭。
+- PX4 v1.17 `MAV_FRAME_GLOBAL_TERRAIN_ALT` + `terrain_estimation` 的确切行为：
+  无雷达时 mission 是否拒飞、雷达融合参数链（`SENS_EN_RANGEFINDER`、
+  `EKF2_RNG_CTRL`）的实际效果（SITL 需模拟 DISTANCE_SENSOR）。决定是否
+  值得评估飞控侧跟踪；GCS 预计算路线（ADR-005/013）不依赖此项。
 
 ## New open issues（2026-10-11 综合方案执行后新增）
 
@@ -88,8 +92,19 @@ survey 编译器已输出 PatternLine 表（S1），`MagTrigger::GcsSide` 是默
 飞行时按 MISSION_CURRENT + 线表自动开关磁数据正式段的 UI/存储标记未做
 （数据链与 QC 工具按同一张表切分）。
 
-### N4 [P3][core/rtk] 多注入源检测
-QGC 同时注入 RTCM 时无警告（ADR-008 要求提供开关并在检测到多源时提示）。
+### N4 [P3][core/rtk] 多注入源检测 — 已完成（39d8fff，2026-10-11）
+
+### R1 [P2][frontend/core] 雷达测距（DISTANCE_SENSOR）实时 AGL 显示 + 低空告警
+飞控带测距仪时机载实测离地高度（`DISTANCE_SENSOR` 消息）：TopBar pill 或
+飞行 HUD 显示实际 AGL，与计划 AGL 偏差大/低于阈值时告警（同 mag 报警的
+阈值/去抖/迟滞模式）。**只做观测与告警，不进控制回路**（ADR-005）。
+无硬件可开发：SITL 用模拟 DISTANCE_SENSOR 验证；PX4 terrain frame 行为
+另见待核实项。
+
+### R2 [P2][qc] 飞行后雷达 AGL vs drape 计划 AGL 对比曲线
+磁测 QC 延伸：ULog 展开 `DISTANCE_SENSOR`，与 drape 计划的 40 m AGL 线逐点
+对比（偏差带 + 报告），量化 drape 质量与离地一致性（磁测数据质量直接
+相关）。依赖 ULog 读取器扩展（A6 同类）；实机验收需要雷达硬件。
 
 ### N5 [P3][docs/plans] 综合方案 v3
 `comprehensive-implementation-plan.md` v2 的 W6 参数窗口已基本落地、

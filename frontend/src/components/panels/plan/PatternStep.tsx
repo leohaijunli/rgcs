@@ -43,6 +43,8 @@ export default function PatternStep({ kind, onKind, sweep, onSweep, clover, onCl
   const lastPattern = useMissionStore((s) => s.lastPattern)
   const center = useMissionStore((s) => s.patternCenter)
   const setPatternCenter = useMissionStore((s) => s.setPatternCenter)
+  const altitudeMode = useMissionStore((s) => s.altitudeMode)
+  const setSurveyAglM = useMissionStore((s) => s.setSurveyAglM)
   const polygonVertices = usePolygonStore((s) => s.vertices)
   const polygonClosed = usePolygonStore((s) => s.closed)
   const polygonBad = polygonClosed && selfIntersects(polygonVertices)
@@ -50,11 +52,20 @@ export default function PatternStep({ kind, onKind, sweep, onSweep, clover, onCl
   const effectiveCenter: GeoPoint | null =
     center ?? (mapCenter ? { latitude_deg: mapCenter.lat, longitude_deg: mapCenter.lon } : null)
   const usePolygonBoundary = polygonClosed && !polygonBad
+  // Terrain mode re-interprets the Pattern altitude as the survey AGL the
+  // auto re-drape applies (same number, different meaning — label it).
+  const altitudeLabel =
+    altitudeMode === 'terrain' ? t('plan.pattern.altitudeAgl') : t('plan.pattern.altitude')
 
   const onGenerate = async () => {
     setError(null)
     setBusy(true)
     try {
+      // Terrain mode: the Pattern altitude is the survey AGL the auto
+      // re-drape applies (the store subscription runs after insertPattern).
+      if (altitudeMode === 'terrain') {
+        setSurveyAglM(kind === 'sweep' ? sweep.altitude_amsl_m : clover.altitude_amsl_m)
+      }
       if (kind === 'sweep') {
         let boundary: GeoPoint[]
         if (usePolygonBoundary) boundary = polygonVertices
@@ -127,7 +138,7 @@ export default function PatternStep({ kind, onKind, sweep, onSweep, clover, onCl
           <div className="grid grid-cols-2 gap-1.5">
             <Num label={t('plan.pattern.spacing')} value={sweep.line_spacing_m} onChange={(v) => onSweep({ ...sweep, line_spacing_m: v })} />
             <Num label={t('plan.pattern.lineAzimuth')} value={sweep.line_azimuth_deg} onChange={(v) => onSweep({ ...sweep, line_azimuth_deg: v })} />
-            <Num label={t('plan.pattern.altitude')} value={sweep.altitude_amsl_m} onChange={(v) => onSweep({ ...sweep, altitude_amsl_m: v })} />
+            <Num label={altitudeLabel} value={sweep.altitude_amsl_m} onChange={(v) => onSweep({ ...sweep, altitude_amsl_m: v })} />
             <Num label={t('plan.pattern.speed')} value={sweep.speed_mps ?? 0} onChange={(v) => onSweep({ ...sweep, speed_mps: v })} />
           </div>
           {/* Advanced: folded by default (P6). */}
@@ -198,7 +209,7 @@ export default function PatternStep({ kind, onKind, sweep, onSweep, clover, onCl
             </button>
           </div>
           <div className="grid grid-cols-2 gap-1.5">
-            <Num label={t('plan.pattern.altitude')} value={clover.altitude_amsl_m} onChange={(v) => onClover({ ...clover, altitude_amsl_m: v })} />
+            <Num label={altitudeLabel} value={clover.altitude_amsl_m} onChange={(v) => onClover({ ...clover, altitude_amsl_m: v })} />
             <Num label={t('plan.pattern.speed')} value={clover.speed_mps ?? 0} onChange={(v) => onClover({ ...clover, speed_mps: v })} />
           </div>
           <button
@@ -293,17 +304,20 @@ function Num({
 }
 
 
-/** S3/D5: drape the planned waypoints over the auto-picked dem-prep tile
- * (N1). The report (min clearance, raised count, DEM version) shows after
- * draping; any plan edit clears it (the store handles that). */
+/** S3/D5: terrain draping over the auto-picked dem-prep tile (N1). In
+ * `terrain` altitude mode the re-drape runs automatically on every plan
+ * change (the mission store subscription) — this block only reports. Other
+ * modes keep the one-shot button. */
 function DrapeBlock() {
   const { t } = useTranslation()
+  const altitudeMode = useMissionStore((s) => s.altitudeMode)
   const drape = useMissionStore((s) => s.drape)
   const drapeToTerrain = useMissionStore((s) => s.drapeToTerrain)
   const ensureTile = useTerrainStore((s) => s.ensureTile)
   const tile = useTerrainStore((s) => s.tile)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const auto = altitudeMode === 'terrain'
 
   const run = async () => {
     setBusy(true)
@@ -323,14 +337,21 @@ function DrapeBlock() {
 
   return (
     <div className="space-y-1">
-      <button
-        onClick={() => void run()}
-        disabled={busy}
-        className="w-full rounded border border-line bg-canvas px-2 py-1.5 text-xs text-ink hover:bg-panel disabled:opacity-50"
-      >
-        {busy ? t('plan.pattern.drape.busy') : t('plan.pattern.drape.run')}
-      </button>
+      {auto ? (
+        <div className="text-[11px] text-muted">{t('plan.pattern.drape.auto')}</div>
+      ) : (
+        <button
+          onClick={() => void run()}
+          disabled={busy}
+          className="w-full rounded border border-line bg-canvas px-2 py-1.5 text-xs text-ink hover:bg-panel disabled:opacity-50"
+        >
+          {busy ? t('plan.pattern.drape.busy') : t('plan.pattern.drape.run')}
+        </button>
+      )}
       {error && <div className="text-[11px] text-error">{error}</div>}
+      {auto && !tile && (
+        <div className="text-[11px] text-warn">{t('plan.pattern.drape.noDem')}</div>
+      )}
 {drape && (
         <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-[11px] text-muted">
           <span>

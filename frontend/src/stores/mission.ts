@@ -24,8 +24,21 @@ import {
 import { orderedMissionItems } from '../mission/planfile'
 import { itemsHash } from '../mission/hash'
 import type { PlanBlock, PlanImport, QgcPlan } from '../mission/planfile'
+import { useTerrainStore } from './terrain'
 
-export type AltitudeMode = 'relative' | 'amsl' | 'agl'
+/**
+ * Altitude semantics of the editable plan.
+ * - `relative`  — z stored as AMSL, flown as HOME-relative (compile converts).
+ * - `amsl`      — z stored and flown as AMSL.
+ * - `agl`       — z stored as AMSL; the HUD/labels show height − HOME AMSL.
+ * - `terrain`   — terrain following (ADR-005/013 addendum): the Pattern
+ *   altitude is a **survey AGL**; every plan change is automatically draped
+ *   over the loaded DEM (DTM + AGL, raised above the DSM clearance), so the
+ *   stored waypoints stay absolute AMSL (ADR-013 discipline) while always
+ *   hugging the terrain. Without a loaded DEM the plan keeps plain heights
+ *   and the panel says so.
+ */
+export type AltitudeMode = 'relative' | 'amsl' | 'agl' | 'terrain'
 
 /**
  * The most recently inserted preset pattern, for the line readout and for
@@ -95,6 +108,9 @@ interface MissionState {
   select: (seq: number | null) => void
   setWaypoints: (waypoints: PlannedWaypoint[]) => void
   setAltitudeMode: (mode: AltitudeMode) => void
+  /** Survey AGL in terrain mode (the Pattern altitude input), metres. */
+  surveyAglM: number
+  setSurveyAglM: (aglM: number) => void
   updatePosition: (seq: number, latDeg: number, lonDeg: number) => void
   updateAltitude: (seq: number, amslM: number) => void
   addWaypoint: (latDeg: number, lonDeg: number, amslM: number) => void
@@ -151,6 +167,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
   waypoints: [],
   selectedSeq: null,
   altitudeMode: 'relative',
+  surveyAglM: 40,
   busy: false,
   lastEvent: null,
   syncState: 'idle',
@@ -179,6 +196,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
     })),
 
   setAltitudeMode: (mode) => set({ altitudeMode: mode }),
+  setSurveyAglM: (aglM) => set({ surveyAglM: aglM }),
 
   updatePosition: (seq, latDeg, lonDeg) =>
     set((s) => ({
@@ -561,3 +579,77 @@ export function degFromMavInt(v: number): number {
 export function mavIntFromDeg(v: number): number {
   return Math.round(v * 1e7)
 }
+
+// ---------------------------------------------------------------------------
+// Terrain mode: automatic re-drape (ADR-005/013 addendum, plan C).
+//
+// In `terrain` mode the stored waypoints are absolute AMSL but their *input*
+// is the survey AGL: every plan change (pattern generate, waypoint drag,
+// AGL change, DEM change) is re-draped over the loaded DEM so the flight
+// keeps hugging the terrain. The drape output is compared against the last
+// draped input — identical plan+AGL+DEM short-circuits the loop the drape's
+// own `set` would otherwise create.
+// ---------------------------------------------------------------------------
+
+/** Milliseconds to settle plan edits before re-draping. */
+const TERRAIN_DRAPE_DEBOUNCE_MS = 600
+
+let drapeTimer: ReturnType<typeof setTimeout> | undefined
+/** Input fingerprint of the last completed drape (plan + AGL + DEM). */
+let lastDrapedKey = ''
+let draping = false
+
+function planKey(waypoints: PlannedWaypoint[]): string {
+  return JSON.stringify(
+    waypoints.map((w) => [
+      w.command,
+      w.position.latitude_deg,
+      w.position.longitude_deg,
+      Math.fround(w.altitude.meters),
+    ]),
+  )
+}
+
+function scheduleTerrainDrape(): void {
+  if (drapeTimer !== undefined) clearTimeout(drapeTimer)
+  drapeTimer = setTimeout(() => void runTerrainDrape(), TERRAIN_DRAPE_DEBOUNCE_MS)
+}
+
+async function runTerrainDrape(): Promise<void> {
+  const s = useMissionStore.getState()
+  if (s.altitudeMode !== 'terrain' || s.waypoints.length === 0 || draping) return
+  const terrain = useTerrainStore.getState()
+  const tile = terrain.tile
+  if (!tile) return // no DEM: plain heights stay, the panel says so
+  const key = `${planKey(s.waypoints)}|${s.surveyAglM}|${tile.version}`
+  if (key === lastDrapedKey) return // already draped against this input
+  draping = true
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const report = await invoke<DrapeReport>('terrain_drape', {
+      waypoints: s.waypoints,
+      folder: tile.path,
+      aglM: s.surveyAglM,
+      minDsmClearanceM: 5,
+    })
+    lastDrapedKey = `${planKey(report.waypoints)}|${s.surveyAglM}|${tile.version}`
+    useMissionStore.setState({
+      waypoints: report.waypoints,
+      dirty: true,
+      fcMatches: null,
+      drape: { report, folder: tile.path },
+    })
+  } catch {
+    // Outside coverage / DEM problem: keep the plan editable; the DrapeBlock
+    // surfaces the error via the manual path.
+  } finally {
+    draping = false
+  }
+}
+
+// Re-drape whenever the plan, the AGL or the loaded DEM changes while in
+// terrain mode. (subscribe fires on every store set; the key check keeps it
+// from re-running on its own output.)
+useMissionStore.subscribe((s) => {
+  if (s.altitudeMode === 'terrain') scheduleTerrainDrape()
+})

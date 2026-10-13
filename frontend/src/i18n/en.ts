@@ -22,6 +22,7 @@ export default {
     placeholder: 'Type a NuttShell command…',
     send: 'Send',
     noLink: 'No link — connect first',
+    resize: 'Drag to resize the console output',
   },
   link: {
     fc: 'FC',
@@ -192,6 +193,7 @@ export default {
       relative: 'Rel',
       amsl: 'AMSL',
       agl: 'AGL',
+      terrain: 'Terrain',
     },
     complex: {
       label: '{{type}} · {{count}} waypoints',
@@ -217,6 +219,7 @@ export default {
       leadIn: 'Lead-in (m)',
       leadOut: 'Lead-out (m)',
       altitude: 'Alt (m AMSL)',
+      altitudeAgl: 'Survey AGL (m)',
       speed: 'Speed (m/s)',
       alternate: 'Serpentine',
       advanced: 'Advanced',
@@ -251,6 +254,8 @@ export default {
           version: 'DEM',
           sourceLidar: 'LiDAR 1 m',
           sourceGeotiff: 'GeoTIFF 30 m (no clearance)',
+          auto: 'Terrain mode: re-draped automatically on every plan change.',
+          noDem: 'No DEM loaded — plain heights in use. Load a terrain folder (LiDAR preferred).',
         },
     },
     op: {

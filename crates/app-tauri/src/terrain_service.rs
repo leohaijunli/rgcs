@@ -445,3 +445,77 @@ pub async fn terrain3d_build(
 
     Ok(tileset_path)
 }
+
+/// One sampled ground height (the DTM the AGL markers are measured against).
+#[derive(Debug, Clone, Serialize)]
+pub struct SampledGround {
+    pub lat: f64,
+    pub lon: f64,
+    /// DTM height in the DEM's own datum (CGVD2013 orthometric), `None` when
+    /// the point is outside the loaded tile.
+    pub dtm_m: Option<f64>,
+    /// DSM height (surface incl. trees), `None` when DTM-only or outside.
+    pub dsm_m: Option<f64>,
+}
+
+/// Open (or reuse) the DEM for `folder`, keyed by the tile path in
+/// `AppState.dem` so interactive edits do not re-read the rasters. The
+/// `Arc` makes the cached DEM cheap to share.
+pub fn open_dem_cached(
+    state: &AppState,
+    folder: &str,
+) -> Result<std::sync::Arc<maggcs_core::terrain::cog::CogDem>, String> {
+    use maggcs_core::terrain::ElevationSource;
+    let mut guard = state.dem.lock();
+    if let Some((path, dem)) = guard.as_ref() {
+        if path == folder {
+            return Ok(dem.clone());
+        }
+    }
+    let dir = Path::new(folder);
+    let meta: DemMetadata = serde_json::from_str(
+        &std::fs::read_to_string(dir.join("dem.json")).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    let dem = std::sync::Arc::new(
+        maggcs_core::terrain::cog::CogDem::open(&dir.join("dtm.tif"), &dir.join("dsm.tif"), &meta)
+            .map_err(|e| e.to_string())?,
+    );
+    // Bounds sanity via the trait: an unusable DEM must not poison the cache.
+    let _ = dem.bounds();
+    *guard = Some((folder.to_string(), dem.clone()));
+    Ok(dem)
+}
+
+/// Sample the loaded DEM under the given points (waypoint AGL markers).
+/// Points outside the tile return `dtm_m: None` — the frontend shows the
+/// marker as ungrounded instead of guessing.
+///
+/// # Errors
+///
+/// A stringified error when the DEM cannot be opened.
+#[tauri::command]
+pub async fn terrain_sample(
+    state: tauri::State<'_, AppState>,
+    folder: String,
+    points: Vec<(f64, f64)>,
+) -> Result<Vec<SampledGround>, String> {
+    use maggcs_core::terrain::ElevationSource;
+    let dem = open_dem_cached(&state, &folder)?;
+    let mut out = Vec::with_capacity(points.len());
+    for (lat, lon) in points {
+        let point = maggcs_core::plan::GeoPoint::new(lat, lon);
+        let sample = dem.sample_pair(point).ok();
+        let (dtm, dsm) = match sample {
+            Some((d, s)) => (Some(d.meters()), Some(s.meters())),
+            None => (None, None),
+        };
+        out.push(SampledGround {
+            lat,
+            lon,
+            dtm_m: dtm,
+            dsm_m: dsm,
+        });
+    }
+    Ok(out)
+}

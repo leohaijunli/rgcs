@@ -75,6 +75,9 @@ export const FRAME_BY_MODE: Record<AltitudeMode, MissionFrame> = {
   relative: 'global_relative_alt_int',
   amsl: 'global_int',
   agl: 'global_relative_alt_int',
+  // Terrain mode stores draped absolute AMSL heights (the auto re-drape
+  // baked them in), so the wire frame is plain global like amsl.
+  terrain: 'global_int',
 }
 
 /**

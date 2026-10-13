@@ -43,3 +43,27 @@
   the geoid grids, ADR-006 height chain).
 - The wire model (`MissionFrame`, `MissionItem`) is unchanged; this ADR adds a
   layer above it.
+
+## Addendum (2026-10-13): the `terrain` altitude mode
+
+The operator-facing altitude modes gain **`terrain`**: the Pattern altitude
+becomes the **survey AGL** and every plan change is automatically re-draped
+over the loaded DEM (DTM + AGL, raised above the DSM clearance) by a
+debounced subscription in the mission store (ADR-005 path A, unchanged).
+
+- **Storage discipline holds**: the re-drape *writes back absolute AMSL*
+  heights, so `PlannedMission` still carries datum-tagged absolute heights
+  and `compile(FramePolicy)` is untouched — the frontend compile mirror
+  emits plain `global_int` in terrain mode. No AGL-carrying plan model is
+  introduced.
+- The loop is short-circuited by fingerprinting the drape input (waypoints +
+  AGL + DEM version): the drape's own `set` re-enters the subscription but
+  keys identically, so it stops.
+- Without a loaded DEM, terrain mode keeps plain heights and the Pattern
+  step says so; a drape failure (waypoint outside coverage) keeps the plan
+  editable and surfaces the error. PX4 terrain frames stay unemitted (see
+  above) — the drape is baked in before upload, never at flight time.
+- Waypoint height sticks / AGL chips are sampled against the **DTM under
+  each point** (`terrain_sample` over the cached `CogDem`), replacing the
+  flat HOME plane, so the plan view stands on the same ground the drape
+  used.

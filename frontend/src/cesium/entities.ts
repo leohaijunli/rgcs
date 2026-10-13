@@ -239,6 +239,10 @@ export interface WaypointRenderOptions {
   heights?: boolean
   /** Ground AMSL altitude to stand the height sticks on (HOME while no DEM). */
   groundM?: number | null
+  /** Per-waypoint ground heights (DTM under each point, from `terrain_sample`)
+   * — accurate AGL sticks instead of the flat HOME plane. Takes precedence
+   * over `groundM`; a seq without an entry falls back to `groundM`. */
+  groundBySeq?: Record<number, number> | null
   /** Seq the FC is flying to: earlier points dim (flown), this one gets a
    * halo, later ones keep their kind colour (future). `null` = not flying. */
   currentSeq?: number | null
@@ -284,7 +288,7 @@ export function renderWaypoints(
   // the plan view without opening the per-item editor.
   if (opts.heights) {
     const stickColor = Cesium.Color.fromCssColorString(cssVar('--mg-accent'))
-    for (const run of heightRuns(located, opts.groundM ?? null)) {
+    for (const run of heightRuns(located, opts.groundM ?? null, opts.groundBySeq)) {
       if (Math.abs(run.top - run.base) < HEIGHT_EPSILON_M) continue
       const item = located.find((it) => it.seq === run.seq)
       if (!item) continue
@@ -404,12 +408,13 @@ export function renderWaypoints(
   return layer
 }
 
-/** Chip text under a waypoint: `seq · AGL m` above the ground plane (the same
- * HOME-AMSL plane the vehicle drop line stands on; 0 until the plan carries a
- * home position), else just the seq when sticks are off. */
+/** Chip text under a waypoint: `seq · AGL m` above the point's own ground
+ * (the DTM under it from `terrain_sample`; the flat HOME plane as fallback —
+ * the same plane the vehicle drop line stands on), else just the seq when
+ * sticks are off. */
 function waypointLabel(item: MissionItem, opts: WaypointRenderOptions): string {
   if (!opts.heights) return String(item.seq)
-  const ground = opts.groundM ?? 0
+  const ground = opts.groundBySeq?.[item.seq] ?? opts.groundM ?? 0
   return `${item.seq} · ${Math.max(0, Math.round(item.z - ground))} m AGL`
 }
 

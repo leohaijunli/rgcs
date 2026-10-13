@@ -121,6 +121,9 @@ const OURS_ALT_MODE_TO_QGC: Record<AltitudeMode, number> = {
   amsl: 0,
   relative: 1,
   agl: 2,
+  // QGC has no terrain altitude mode; export draped plans as absolute AMSL
+  // (the stored heights already are).
+  terrain: 0,
 }
 
 function isCoordinate(v: unknown): v is [number, number, number] {

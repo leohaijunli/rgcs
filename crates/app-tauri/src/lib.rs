@@ -57,6 +57,7 @@ pub fn run() {
             logs_service::logs_download,
             logs_service::logs_cancel,
             commands::terrain_drape,
+            terrain_service::terrain_sample,
             rtk_service::rtk_start_serial,
             rtk_service::rtk_stop,
             rtk_service::rtk_last_stats,

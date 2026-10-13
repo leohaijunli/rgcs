@@ -23,7 +23,7 @@ const BASE_STEPS: Array<{ id: PlanStep; titleKey: string }> = [
   { id: 'sync', titleKey: 'plan.step.sync' },
 ]
 
-const MODES: AltitudeMode[] = ['relative', 'amsl', 'agl']
+const MODES: AltitudeMode[] = ['relative', 'amsl', 'agl', 'terrain']
 
 /** Default clearance above home for a generated pattern. */
 const DEFAULT_ALT_AGL_M = 50

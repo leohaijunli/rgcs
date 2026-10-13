@@ -63,9 +63,16 @@ export function splitRuns<T extends { seq: number }>(
 export function heightRuns<T extends { seq: number; z: number }>(
   items: readonly T[],
   groundM: number | null = null,
+  /** Per-waypoint ground (DTM under each point) — takes precedence over the
+   * flat `groundM` plane; a seq without an entry falls back to it. */
+  groundBySeq?: Record<number, number> | null,
 ): Array<{ seq: number; base: number; top: number }> {
   const coordinates = items.filter((item) => Number.isFinite(item.z))
   if (coordinates.length === 0) return []
-  const base = groundM ?? Math.min(...coordinates.map((item) => item.z))
-  return coordinates.map((item) => ({ seq: item.seq, base, top: item.z }))
+  const fallback = groundM ?? Math.min(...coordinates.map((item) => item.z))
+  return coordinates.map((item) => ({
+    seq: item.seq,
+    base: groundBySeq?.[item.seq] ?? fallback,
+    top: item.z,
+  }))
 }
