@@ -15,6 +15,14 @@ export default {
     parameters: 'Parameters',
     logs: 'Logs',
   },
+  console: {
+    title: 'MAVLink console',
+    hint: 'PX4 shell over MAVLink (SERIAL_CONTROL)',
+    empty: 'Output appears here. Try a preset or type a command.',
+    placeholder: 'Type a NuttShell command…',
+    send: 'Send',
+    noLink: 'No link — connect first',
+  },
   link: {
     fc: 'FC',
     rtk: 'RTK',

@@ -2,12 +2,13 @@
 // motor-test plan's window-launcher grouping): MAVLink LOG list + download
 // with per-file progress, fed by the `logs_event` shell watcher.
 
-import { useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useLinkStore } from '../../stores/link'
 import { startLogsWatcher, useLogsStore } from '../../stores/logs'
+import { CONSOLE_PRESETS, useConsoleStore } from '../../stores/console'
 
 /** Modal shell for the FC logs panel (same skin as the Settings dialog). */
 export default function LogsDialog({
@@ -22,7 +23,7 @@ export default function LogsDialog({
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/50" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex h-[min(85vh,560px)] w-[min(94vw,600px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-line bg-panel shadow-2xl">
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex h-[min(92vh,680px)] w-[min(94vw,620px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-line bg-panel shadow-2xl">
           <div className="flex items-center justify-between border-b border-line px-4 py-3">
             <Dialog.Title className="text-sm font-medium text-ink">{t('tools.logs')}</Dialog.Title>
             <Dialog.Close asChild>
@@ -36,6 +37,9 @@ export default function LogsDialog({
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto p-4">
             <LogsPanel />
+          </div>
+          <div className="border-t border-line p-4">
+            <ConsolePanel />
           </div>
         </Dialog.Content>
       </Dialog.Portal>
@@ -122,6 +126,101 @@ function LogsPanel() {
           )
         })}
       </ul>
+    </div>
+  )
+}
+
+/** MAVLink console (QGC-style): PX4 NuttShell over SERIAL_CONTROL, below
+ * the FC-log list. Auto-scrolls; preset chips run the survey-relevant
+ * commands; Enter sends. */
+function ConsolePanel() {
+  const { t } = useTranslation()
+  const link = useLinkStore((s) => s.link)
+  const lines = useConsoleStore((s) => s.lines)
+  const busy = useConsoleStore((s) => s.busy)
+  const send = useConsoleStore((s) => s.send)
+  const startWatcher = useConsoleStore((s) => s.startWatcher)
+  const [draft, setDraft] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const outRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    startWatcher()
+  }, [startWatcher])
+
+  // Stick to the bottom unless the operator scrolled up.
+  useEffect(() => {
+    const el = outRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [lines])
+
+  const fcAlive = link?.fc_alive === true
+
+  const run = async (command: string) => {
+    setError(null)
+    try {
+      await send(command)
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-baseline justify-between">
+        <span className="text-xs font-medium text-ink">{t('console.title')}</span>
+        <span className="text-[10px] text-muted">{t('console.hint')}</span>
+      </div>
+      <div
+        ref={outRef}
+        className="mono h-40 overflow-y-auto whitespace-pre-wrap rounded border border-line bg-canvas p-2 text-[11px] leading-relaxed text-ink"
+      >
+        {lines.length === 0 && <span className="text-muted">{t('console.empty')}</span>}
+        {lines.map((line, i) => (
+          <div key={i}>{line || '\u00a0'}</div>
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {CONSOLE_PRESETS.map((cmd) => (
+          <button
+            key={cmd}
+            onClick={() => void run(cmd)}
+            disabled={!fcAlive || busy}
+            className="mono rounded border border-line bg-canvas px-1.5 py-0.5 text-[10px] text-muted hover:text-ink disabled:opacity-50"
+          >
+            {cmd}
+          </button>
+        ))}
+      </div>
+      <div className="flex items-center gap-2">
+        <input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter' || !fcAlive || busy) return
+            const cmd = draft.trim()
+            if (!cmd) return
+            setDraft('')
+            void run(cmd)
+          }}
+          placeholder={fcAlive ? t('console.placeholder') : t('console.noLink')}
+          disabled={!fcAlive}
+          className="mono h-9 flex-1 rounded border border-line bg-canvas px-2 text-sm text-ink disabled:opacity-50"
+        />
+        <button
+          onClick={() => {
+            const cmd = draft.trim()
+            if (!cmd) return
+            setDraft('')
+            void run(cmd)
+          }}
+          disabled={!fcAlive || busy || draft.trim() === ''}
+          className="touch-target h-9 rounded border border-line bg-canvas px-3 text-xs text-ink hover:bg-panel disabled:opacity-50"
+        >
+          {t('console.send')}
+        </button>
+      </div>
+      {error && <div className="text-[11px] text-error">{error}</div>}
     </div>
   )
 }

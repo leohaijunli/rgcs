@@ -242,6 +242,12 @@ pub struct ConnectionHandle {
 }
 
 impl ConnectionHandle {
+    /// Identity of the underlying connection — stable for one link session;
+    /// used to detect a link swap without comparing endpoints.
+    pub fn handle_id(&self) -> usize {
+        Arc::as_ptr(&self.inner) as usize
+    }
+
     /// Subscribe to the event stream.
     pub fn subscribe(&self) -> broadcast::Receiver<ConnectionEvent> {
         self.events.subscribe()
