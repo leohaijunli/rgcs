@@ -241,6 +241,8 @@ export default {
           clearance: 'Min clearance',
           raised: 'raised:',
           version: 'DEM',
+          sourceLidar: 'LiDAR 1 m',
+          sourceGeotiff: 'GeoTIFF 30 m (no clearance)',
         },
     },
     op: {

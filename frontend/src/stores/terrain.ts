@@ -5,6 +5,7 @@
 
 import { create } from 'zustand'
 import type { DemBounds } from '../generated-types/DemBounds'
+import type { DemSource } from '../generated-types/DemSource'
 
 /** One tile from `terrain_discover` (absolute folder + placement). */
 export interface DiscoveredTile {
@@ -13,6 +14,8 @@ export interface DiscoveredTile {
   bounds: DemBounds
   version: string
   has_dsm: boolean
+  /** What produced the DEM — the drape report labels it (LiDAR preferred). */
+  source: DemSource
 }
 
 export interface TerrainOverlay {

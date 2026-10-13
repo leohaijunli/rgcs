@@ -378,7 +378,10 @@ pub struct TerrainSource {
 
 impl TerrainSource {
     pub fn new(rasters: Vec<PlacedRaster>) -> Self {
-        Self { rasters, geoid: None }
+        Self {
+            rasters,
+            geoid: None,
+        }
     }
 
     /// Convert samples to ellipsoid height using `model`'s CGVD2013 grid.
@@ -405,7 +408,14 @@ impl TerrainSource {
             return Err(DemError::Geoid(format!(
                 "CGVD2013 grid covers {:.4}..{:.4} N, {:.4}..{:.4} E but the DEM spans \
                  {:.4}..{:.4} N, {:.4}..{:.4} E — regenerate the grid extraction",
-                min_lat, max_lat, min_lon, max_lon, bounds.south, bounds.north, bounds.west, bounds.east
+                min_lat,
+                max_lat,
+                min_lon,
+                max_lon,
+                bounds.south,
+                bounds.north,
+                bounds.west,
+                bounds.east
             )));
         }
         self.geoid = Some(geoid);
@@ -726,7 +736,10 @@ mod tests {
         // after a `--geoid` conversion. Cesium ignores this custom key.
         assert_eq!(v["verticalDatum"], "orthometricCgvd2013");
         let conv = layer_json("MagGCS DEM", "x", &bb, 6, true);
-        assert_eq!(serde_json::to_value(&conv).unwrap()["verticalDatum"], "ellipsoidWgs84");
+        assert_eq!(
+            serde_json::to_value(&conv).unwrap()["verticalDatum"],
+            "ellipsoidWgs84"
+        );
     }
 
     #[test]
@@ -915,7 +928,9 @@ mod tests {
         )
         .expect("grid");
         let model = GeoidGridModel::new("fixture").with_grid(grid);
-        let src = TerrainSource::new(vec![r]).with_geoid(model).expect("geoid");
+        let src = TerrainSource::new(vec![r])
+            .with_geoid(model)
+            .expect("geoid");
         let h = f64::from(src.sample(48.65, -123.40).unwrap());
         assert!((h - 80.21).abs() < 1e-4, "h = {h}");
         // The conversion is per-point: a sloping grid shifts the sample by
@@ -931,7 +946,9 @@ mod tests {
                     nlat: 3,
                     nlon: 4,
                 },
-                vec![0.0, 10.0, 20.0, 30.0, 10.0, 20.0, 30.0, 40.0, 20.0, 30.0, 40.0, 50.0],
+                vec![
+                    0.0, 10.0, 20.0, 30.0, 10.0, 20.0, 30.0, 40.0, 20.0, 30.0, 40.0, 50.0,
+                ],
             )
             .expect("ramp grid"),
         );
@@ -989,7 +1006,10 @@ mod tests {
             .expect("grid"),
         );
         let err = TerrainSource::new(vec![flat()]).with_geoid(small);
-        assert!(matches!(err, Err(DemError::Geoid(_))), "grid must cover the DEM");
+        assert!(
+            matches!(err, Err(DemError::Geoid(_))),
+            "grid must cover the DEM"
+        );
         // A model without a CGVD2013 grid fails too.
         let only_egm96 = GeoidGridModel::new("egm96").with_grid(
             maggcs_core::height::GeoidGrid::constant(
@@ -1007,6 +1027,9 @@ mod tests {
             .expect("grid"),
         );
         let err = TerrainSource::new(vec![flat()]).with_geoid(only_egm96);
-        assert!(matches!(err, Err(DemError::Geoid(_))), "model must carry a CGVD2013 grid");
+        assert!(
+            matches!(err, Err(DemError::Geoid(_))),
+            "model must carry a CGVD2013 grid"
+        );
     }
 }

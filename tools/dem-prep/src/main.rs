@@ -64,9 +64,7 @@ fn main() -> Result<()> {
             while let Some(arg) = args.next() {
                 match arg.as_str() {
                     "--out" => out = PathBuf::from(args.next().context("--out <dir>")?),
-                    "--maxzoom" => {
-                        maxzoom = Some(args.next().context("--maxzoom <n>")?.parse()?)
-                    }
+                    "--maxzoom" => maxzoom = Some(args.next().context("--maxzoom <n>")?.parse()?),
                     "--geoid" => {
                         geoid_path = Some(PathBuf::from(
                             args.next().context("--geoid <file.mggeoid>")?,
@@ -250,6 +248,7 @@ fn process_tile(tile: &Path, out: &Path, resolution_m: f64) -> Result<cog::Index
             .into(),
         source_points: info.count,
         has_dsm: true,
+        source: "lidar".into(),
     };
     cog::write_metadata(&tile_out.join("dem.json"), &metadata)?;
     println!(
@@ -265,6 +264,7 @@ fn process_tile(tile: &Path, out: &Path, resolution_m: f64) -> Result<cog::Index
         bounds: metadata.bounds,
         version: metadata.version,
         has_dsm: metadata.has_dsm,
+        source: "lidar".into(),
     })
 }
 
@@ -339,6 +339,7 @@ fn process_raster_tile(tile: &Path, out: &Path) -> Result<cog::IndexEntry> {
             .into(),
         source_points: 0,
         has_dsm: false,
+        source: "geotiff".into(),
     };
     cog::write_metadata(&tile_out.join("dem.json"), &metadata)?;
     println!(
@@ -353,6 +354,7 @@ fn process_raster_tile(tile: &Path, out: &Path) -> Result<cog::IndexEntry> {
         bounds: metadata.bounds,
         version: metadata.version,
         has_dsm: metadata.has_dsm,
+        source: "geotiff".into(),
     })
 }
 

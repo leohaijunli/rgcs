@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use maggcs_core::terrain::{DemBounds, DemMetadata, VerticalDatum};
+use maggcs_core::terrain::{DemBounds, DemMetadata, DemSource, VerticalDatum};
 
 use crate::state::AppState;
 use crate::terrain_server::TerrainServer;
@@ -95,6 +95,8 @@ pub struct DiscoveredTile {
     pub bounds: DemBounds,
     pub version: String,
     pub has_dsm: bool,
+    /// What produced the DEM (LiDAR preferred for the low-altitude drape).
+    pub source: DemSource,
 }
 
 /// The tiles under a dem-prep output folder (N1).
@@ -129,6 +131,7 @@ pub async fn terrain_discover(folder: String) -> Result<TerrainDiscovery, String
                     bounds: t.bounds,
                     version: t.version,
                     has_dsm: t.has_dsm,
+                    source: t.source,
                 })
                 .collect(),
         });
@@ -148,6 +151,7 @@ pub async fn terrain_discover(folder: String) -> Result<TerrainDiscovery, String
                 bounds: meta.bounds,
                 version: meta.version,
                 has_dsm: meta.has_dsm,
+                source: meta.source,
             }],
         });
     }

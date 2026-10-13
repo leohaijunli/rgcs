@@ -301,6 +301,7 @@ function DrapeBlock() {
   const drape = useMissionStore((s) => s.drape)
   const drapeToTerrain = useMissionStore((s) => s.drapeToTerrain)
   const ensureTile = useTerrainStore((s) => s.ensureTile)
+  const tile = useTerrainStore((s) => s.tile)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -330,8 +331,13 @@ function DrapeBlock() {
         {busy ? t('plan.pattern.drape.busy') : t('plan.pattern.drape.run')}
       </button>
       {error && <div className="text-[11px] text-error">{error}</div>}
-      {drape && (
+{drape && (
         <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-[11px] text-muted">
+          <span>
+            {tile?.source === 'geotiff'
+              ? t('plan.pattern.drape.sourceGeotiff')
+              : t('plan.pattern.drape.sourceLidar')}
+          </span>
           <span>
             {t('plan.pattern.drape.clearance')}{' '}
             {drape.report.min_dsm_clearance_m.toFixed(1)} m
@@ -339,7 +345,7 @@ function DrapeBlock() {
           <span>
             {t('plan.pattern.drape.raised')} {drape.report.raised}
           </span>
-          <span className="text-accent">
+          <span>
             {t('plan.pattern.drape.version')} {drape.report.dem_version}
           </span>
         </div>

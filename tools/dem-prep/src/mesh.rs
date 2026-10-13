@@ -138,14 +138,13 @@ pub fn encode_tile(source: &TerrainSource, t: TileCoord) -> Result<Vec<u8>, DemE
         geodetic.iter().copied(),
     );
 
-    let blob = QuantizedMeshEncoder::new(header, vertices, indices, edge_indices).encode_with_options(
-        &EncodeOptions {
+    let blob = QuantizedMeshEncoder::new(header, vertices, indices, edge_indices)
+        .encode_with_options(&EncodeOptions {
             include_normals: true,
             normals: Some(normals),
             compression_level: GZIP_LEVEL,
             ..EncodeOptions::default()
-        },
-    );
+        });
     Ok(blob)
 }
 
@@ -574,6 +573,7 @@ mod tests {
             source_file: "sheet.laz".into(),
             source_points: 64,
             has_dsm: false,
+            source: "lidar".into(),
         };
         cog::write_metadata(&sheet.join("dem.json"), &meta).expect("dem.json");
 
@@ -678,6 +678,7 @@ mod tests {
             source_file: "sheet.laz".into(),
             source_points: 64,
             has_dsm: false,
+            source: "lidar".into(),
         };
         cog::write_metadata(&sheet.join("dem.json"), &meta).expect("dem.json");
         (proc, bounds)
@@ -692,8 +693,8 @@ mod tests {
         let root = temp_dir("geoid-tileset");
         let (proc, bounds) = flat_sheet_folder(&root);
 
-        let grid_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("testdata/geoid/cgg2013_bc_sw.mggeoid");
+        let grid_path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/geoid/cgg2013_bc_sw.mggeoid");
         let mut model = maggcs_core::height::GeoidGridModel::new("dem-prep");
         maggcs_core::height::load_geoid_grid(&grid_path, &mut model).expect("load fixture grid");
 
@@ -731,7 +732,11 @@ mod tests {
             .iter()
             .map(|(lat, lon)| {
                 model
-                    .undulation_m(*lat, *lon, maggcs_core::height::HeightDatum::OrthometricCgvd2013)
+                    .undulation_m(
+                        *lat,
+                        *lon,
+                        maggcs_core::height::HeightDatum::OrthometricCgvd2013,
+                    )
                     .expect("grid covers the tile")
             })
             .collect();

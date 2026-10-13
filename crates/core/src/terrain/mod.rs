@@ -46,6 +46,22 @@ pub struct DemMetadata {
     /// Copernicus) are DTM-only: the drape then skips the clearance check.
     #[serde(default)]
     pub has_dsm: bool,
+    /// What produced the raster pair — drives the auto-pick priority
+    /// (LiDAR preferred for the low-altitude drape) and the report label.
+    #[serde(default)]
+    pub source: DemSource,
+}
+
+/// Where a DEM tile came from (written by `tools/dem-prep`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum DemSource {
+    /// Airborne LiDAR (BC provincial product): ~1 m, cm-grade DTM + DSM.
+    #[default]
+    Lidar,
+    /// GeoTIFF fallback (CDEM / Copernicus): ~30 m, DTM-only, no DSM.
+    Geotiff,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
@@ -136,6 +152,9 @@ pub struct TileIndexEntry {
     /// Whether the tile pair carries a real DSM (fallback sources: DTM-only).
     #[serde(default)]
     pub has_dsm: bool,
+    /// Data source — the auto-pick prefers LiDAR for the drape.
+    #[serde(default)]
+    pub source: DemSource,
 }
 
 /// Read the folder-level `index.json` a multi-tile dem-prep run writes (N1).
@@ -153,17 +172,20 @@ pub fn load_tile_index(dir: &Path) -> Result<Vec<TileIndexEntry>, TerrainError> 
 }
 
 /// Pick the tile whose bounds contain the centre of the query area (N1
-/// auto-select). Returns `None` when the area is outside every tile — the
-/// caller then falls back (CDEM/Copernicus) and surfaces a hint.
-pub fn pick_tile<'a>(
-    tiles: &'a [TileIndexEntry],
-    query: &DemBounds,
-) -> Option<&'a TileIndexEntry> {
+/// auto-select), preferring a **LiDAR** tile over a GeoTIFF fallback when
+/// both cover it (the low-altitude drape needs the cm-grade DTM + DSM).
+/// Returns `None` when the area is outside every tile — the caller then
+/// surfaces a hint.
+pub fn pick_tile<'a>(tiles: &'a [TileIndexEntry], query: &DemBounds) -> Option<&'a TileIndexEntry> {
     let cx = (query.north + query.south) / 2.0;
     let cy = (query.east + query.west) / 2.0;
+    let covers = |t: &'a TileIndexEntry| {
+        t.bounds.north >= cx && cx >= t.bounds.south && t.bounds.east >= cy && cy >= t.bounds.west
+    };
     tiles
         .iter()
-        .find(|t| t.bounds.north >= cx && cx >= t.bounds.south && t.bounds.east >= cy && cy >= t.bounds.west)
+        .find(|t| covers(t) && t.source == DemSource::Lidar)
+        .or_else(|| tiles.iter().find(|t| covers(t)))
 }
 
 #[cfg(test)]
@@ -171,11 +193,21 @@ mod tile_index_tests {
     use super::*;
 
     fn tile(folder: &str, n: f64, s: f64, e: f64, w: f64) -> TileIndexEntry {
+        tile_src(folder, n, s, e, w, DemSource::Lidar)
+    }
+
+    fn tile_src(folder: &str, n: f64, s: f64, e: f64, w: f64, source: DemSource) -> TileIndexEntry {
         TileIndexEntry {
             folder: folder.to_string(),
-            bounds: DemBounds { north: n, south: s, east: e, west: w },
+            bounds: DemBounds {
+                north: n,
+                south: s,
+                east: e,
+                west: w,
+            },
             version: "v1".to_string(),
             has_dsm: true,
+            source,
         }
     }
 
@@ -185,20 +217,84 @@ mod tile_index_tests {
             tile("a", 48.7, 48.6, -123.3, -123.5),
             tile("b", 48.6, 48.5, -123.3, -123.5),
         ];
-        let q = DemBounds { north: 48.55, south: 48.52, east: -123.4, west: -123.45 };
+        let q = DemBounds {
+            north: 48.55,
+            south: 48.52,
+            east: -123.4,
+            west: -123.45,
+        };
         assert_eq!(pick_tile(&tiles, &q).unwrap().folder, "b");
+    }
+
+    #[test]
+    fn lidar_wins_over_geotiff_for_the_same_area() {
+        // Two tiles covering the same query centre: the LiDAR one must win
+        // even though the GeoTIFF tile sorts first.
+        let tiles = vec![
+            tile_src("geotiff", 48.7, 48.6, -123.3, -123.5, DemSource::Geotiff),
+            tile_src("lidar", 48.7, 48.6, -123.3, -123.5, DemSource::Lidar),
+        ];
+        let q = DemBounds {
+            north: 48.65,
+            south: 48.63,
+            east: -123.4,
+            west: -123.43,
+        };
+        assert_eq!(pick_tile(&tiles, &q).unwrap().folder, "lidar");
+    }
+
+    #[test]
+    fn geotiff_is_the_fallback_when_only_it_covers() {
+        let tiles = vec![tile_src(
+            "geotiff",
+            48.7,
+            48.6,
+            -123.3,
+            -123.5,
+            DemSource::Geotiff,
+        )];
+        let q = DemBounds {
+            north: 48.65,
+            south: 48.63,
+            east: -123.4,
+            west: -123.43,
+        };
+        assert_eq!(pick_tile(&tiles, &q).unwrap().folder, "geotiff");
+    }
+
+    #[test]
+    fn missing_source_defaults_to_lidar() {
+        // Old dem.json / index.json entries have no `source` field: serde
+        // must default them to LiDAR (the existing BC data is LiDAR).
+        let raw = r#"{"folder":"s","bounds":{"north":1.0,"south":0.0,"east":1.0,"west":0.0},"version":"v","has_dsm":true}"#;
+        let entry: TileIndexEntry = serde_json::from_str(raw).expect("parse");
+        assert_eq!(entry.source, DemSource::Lidar);
+
+        let meta = r#"{"version":"v","raster_crs":"EPSG:4326","resolution_m":1.0,"bounds":{"north":1.0,"south":0.0,"east":1.0,"west":0.0},"vertical_datum":"orthometric_cgvd2013","has_dsm":true}"#;
+        let m: DemMetadata = serde_json::from_str(meta).expect("parse");
+        assert_eq!(m.source, DemSource::Lidar);
     }
 
     #[test]
     fn outside_all_tiles_is_none() {
         let tiles = vec![tile("a", 48.7, 48.6, -123.3, -123.5)];
-        let q = DemBounds { north: 50.1, south: 50.0, east: -120.0, west: -120.1 };
+        let q = DemBounds {
+            north: 50.1,
+            south: 50.0,
+            east: -120.0,
+            west: -120.1,
+        };
         assert!(pick_tile(&tiles, &q).is_none());
     }
 
     #[test]
     fn empty_index_is_none() {
-        let q = DemBounds { north: 48.6, south: 48.5, east: -123.4, west: -123.5 };
+        let q = DemBounds {
+            north: 48.6,
+            south: 48.5,
+            east: -123.4,
+            west: -123.5,
+        };
         assert!(pick_tile(&[], &q).is_none());
     }
 
@@ -208,11 +304,7 @@ mod tile_index_tests {
         std::fs::create_dir_all(&dir).unwrap();
         let tiles = vec![tile("sidney", 48.7, 48.6, -123.2, -123.5)];
         let path = dir.join("index.json");
-        std::fs::write(
-            &path,
-            serde_json::to_string_pretty(&tiles).unwrap(),
-        )
-        .unwrap();
+        std::fs::write(&path, serde_json::to_string_pretty(&tiles).unwrap()).unwrap();
         let loaded = load_tile_index(&dir).unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].folder, "sidney");

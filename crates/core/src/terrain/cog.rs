@@ -252,6 +252,7 @@ fn read_raster(
 mod tests {
     use super::*;
     use crate::plan::GeoPoint;
+    use crate::terrain::DemSource;
     use std::io::BufWriter;
 
     /// Write a small geographic GeoTIFF via the tiff encoder: 4x4 pixels,
@@ -278,6 +279,7 @@ mod tests {
             },
             vertical_datum: VerticalDatum::AmslEgm96,
             has_dsm: true,
+            source: DemSource::Lidar,
         }
     }
 

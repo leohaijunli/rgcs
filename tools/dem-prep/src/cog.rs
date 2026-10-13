@@ -63,6 +63,9 @@ pub struct DemMetadata {
     pub source_points: u64,
     /// False for DTM-only fallback sources (CDEM / Copernicus).
     pub has_dsm: bool,
+    /// What produced the raster: `"lidar"` (BC LiDAR LAS) or `"geotiff"`
+    /// (CDEM / Copernicus fallback) — the app prefers LiDAR for the drape.
+    pub source: String,
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
@@ -91,6 +94,8 @@ pub struct IndexEntry {
     pub bounds: DemBounds,
     pub version: String,
     pub has_dsm: bool,
+    /// `"lidar"` or `"geotiff"` — drives the app's tile auto-pick priority.
+    pub source: String,
 }
 
 /// Write `index.json`.

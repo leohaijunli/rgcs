@@ -190,7 +190,10 @@ mod tests {
         assert!(out[0].is_nan(), "ocean pixel void");
         assert!(out[5].is_nan(), "ocean pixel void");
         assert!(!out[1].is_nan() && out[1] == 12.5);
-        assert!(!out[2].is_nan() && out[2] == -32767.0, "near-sentinel terrain kept");
+        assert!(
+            !out[2].is_nan() && out[2] == -32767.0,
+            "near-sentinel terrain kept"
+        );
         assert!(!out[3].is_nan() && out[3] == 0.0);
         assert!(!out[4].is_nan() && out[4] == 500.25);
         // No sentinel present: values pass through untouched.
