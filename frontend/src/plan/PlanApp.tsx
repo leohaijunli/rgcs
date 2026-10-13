@@ -13,6 +13,8 @@ import {
   type PlanSnapshot,
 } from './planBridge'
 import { useMissionStore, type AltitudeMode } from '../stores/mission'
+import { usePolygonStore } from '../stores/polygon'
+import { useUiStore } from '../stores/ui'
 import PlanSteps from '../components/panels/plan/PlanSteps'
 
 export function PlanApp() {
@@ -58,8 +60,10 @@ function PlanHeader() {
   )
 }
 
-/** Copy a snapshot into the local mission store. Waypoints/pattern/etc.
- * come from the main window; local-only UI (steps, form drafts) stays here. */
+/** Copy a snapshot into the local stores. Waypoints/pattern/etc. come from
+ * the main window; local-only UI (steps, form drafts) stays here. The
+ * survey polygon and map centre are read-only mirrors (drawing happens on
+ * the main window's map). */
 function applySnapshot(s: PlanSnapshot): void {
   useMissionStore.setState({
     waypoints: s.waypoints as never,
@@ -76,6 +80,19 @@ function applySnapshot(s: PlanSnapshot): void {
     syncState: s.syncState as never,
     fcMatches: s.fcMatches,
   })
+  const polygon = usePolygonStore.getState()
+  const polygonChanged =
+    polygon.closed !== s.polygon.closed ||
+    polygon.vertices.length !== (s.polygon.vertices as unknown[]).length
+  if (polygonChanged) {
+    usePolygonStore.setState({
+      vertices: s.polygon.vertices as never,
+      closed: s.polygon.closed,
+    })
+  }
+  if (useUiStore.getState().mapCenter !== s.mapCenter) {
+    useUiStore.setState({ mapCenter: s.mapCenter })
+  }
 }
 
 /**
@@ -114,6 +131,28 @@ function installEditBridge(): void {
     },
     upload: async () => {
       await sendPlanEdit('upload')
+    },
+    drapeToTerrain: async (folder, aglM, minDsmClearanceM) => {
+      await sendPlanEdit('drapeToTerrain', { folder, aglM, minDsmClearanceM })
+      return null
+    },
+    addWaypoint: (latDeg, lonDeg, amslM) => {
+      void sendPlanEdit('addWaypoint', { latDeg, lonDeg, amslM })
+    },
+    addWaypointAt: (latDeg, lonDeg) => {
+      void sendPlanEdit('addWaypointAt', { latDeg, lonDeg })
+    },
+    updatePosition: (seq, lat, lon) => {
+      void sendPlanEdit('updatePosition', { seq, lat, lon })
+    },
+    updateAltitude: (seq, altM) => {
+      void sendPlanEdit('updateAltitude', { seq, altM })
+    },
+    setCurrent: (seq) => {
+      void sendPlanEdit('setCurrent', { seq })
+    },
+    download: async () => {
+      await sendPlanEdit('download')
     },
   } as Partial<ReturnType<typeof useMissionStore.getState>>)
 }

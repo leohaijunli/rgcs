@@ -5,7 +5,8 @@
     "main",
     "inspector",
     "actuator",
-    "params"
+    "params",
+    "plan"
   ],
   "permissions": [
     "core:default",

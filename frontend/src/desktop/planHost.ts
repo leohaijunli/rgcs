@@ -5,6 +5,8 @@
 
 import { listen, emit } from '@tauri-apps/api/event'
 import { useMissionStore } from '../stores/mission'
+import { usePolygonStore } from '../stores/polygon'
+import { useUiStore } from '../stores/ui'
 import type { PlanSnapshot } from '../plan/planBridge'
 
 /** Milliseconds to settle store churn before broadcasting a snapshot. */
@@ -16,6 +18,7 @@ let timer: ReturnType<typeof setTimeout> | undefined
 
 function snapshot(): PlanSnapshot {
   const s = useMissionStore.getState()
+  const polygon = usePolygonStore.getState()
   return {
     rev: ++rev,
     waypoints: s.waypoints,
@@ -31,6 +34,8 @@ function snapshot(): PlanSnapshot {
     dirty: s.dirty,
     syncState: s.syncState,
     fcMatches: s.fcMatches,
+    polygon: { vertices: polygon.vertices, closed: polygon.closed },
+    mapCenter: useUiStore.getState().mapCenter,
   }
 }
 
@@ -74,6 +79,35 @@ function applyEdit(action: string, args: Record<string, unknown>): void {
     case 'upload':
       void s.upload()
       break
+    case 'drapeToTerrain':
+      void s.drapeToTerrain(
+        args.folder as string,
+        args.aglM as number,
+        args.minDsmClearanceM as number,
+      )
+      break
+    case 'addWaypoint':
+      s.addWaypoint(
+        args.latDeg as number,
+        args.lonDeg as number,
+        args.amslM as number,
+      )
+      break
+    case 'addWaypointAt':
+      s.addWaypointAt(args.latDeg as number, args.lonDeg as number)
+      break
+    case 'updatePosition':
+      s.updatePosition(args.seq as number, args.lat as number, args.lon as number)
+      break
+    case 'updateAltitude':
+      s.updateAltitude(args.seq as number, args.altM as number)
+      break
+    case 'setCurrent':
+      s.setCurrent(args.seq as number)
+      break
+    case 'download':
+      void s.download()
+      break
     default:
       break // unknown intent from a newer plan window: ignore
   }
@@ -84,8 +118,14 @@ export function startPlanHost(): void {
   if (started) return
   started = true
   // Any mission-store change re-broadcasts (debounced); the plan window
-  // applies snapshots by rev, so this is lossless and loop-free.
+  // applies snapshots by rev, so this is lossless and loop-free. The survey
+  // polygon and the map centre live in other stores and feed the plan
+  // window's Area step / waypoint defaults, so they re-broadcast too.
   useMissionStore.subscribe(broadcast)
+  usePolygonStore.subscribe(broadcast)
+  useUiStore.subscribe((s, prev) => {
+    if (s.mapCenter !== prev.mapCenter) broadcast()
+  })
   void (async () => {
     try {
       // The plan window asks for a fresh snapshot on boot/reload.

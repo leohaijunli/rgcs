@@ -519,3 +519,58 @@ pub async fn terrain_sample(
     }
     Ok(out)
 }
+
+/// Process a folder of **raw** BC LiDAR downloads (one subfolder per grid
+/// tile, `.laz` inside) through `dem-prep process`, then discover the tiles.
+/// Returns the processed output folder plus its discovery — the caller can
+/// feed the folder straight to the auto-pick like any processed folder.
+///
+/// # Errors
+///
+/// A stringified error when `dem-prep` is missing or the processing fails.
+#[tauri::command]
+pub async fn terrain_process_raw(
+    app: tauri::AppHandle,
+    folder: String,
+) -> Result<RawProcessResult, String> {
+    let bin = dem_prep_binary()?;
+    let source = PathBuf::from(&folder);
+    if !source.is_dir() {
+        return Err(format!("{} is not a folder", source.display()));
+    }
+    // Output next to the source: <source>-processed (flat, with index.json).
+    let out = source.parent().unwrap_or(&source).join(format!(
+        "{}-processed",
+        source
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("terrain")
+    ));
+    let out_display = out.display().to_string();
+    let handle = app.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let args = vec![
+            "process".to_string(),
+            source.display().to_string(),
+            "--out".to_string(),
+            out.display().to_string(),
+        ];
+        run_stage(&handle, &bin, &args, "process")?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("raw processing task: {e}"))??;
+
+    let discovery = terrain_discover(out_display.clone()).await?;
+    Ok(RawProcessResult {
+        processed: out_display,
+        tiles: discovery.tiles,
+    })
+}
+
+/// Result of [`terrain_process_raw`]: the generated folder + its tiles.
+#[derive(Debug, Clone, Serialize)]
+pub struct RawProcessResult {
+    pub processed: String,
+    pub tiles: Vec<DiscoveredTile>,
+}

@@ -306,18 +306,40 @@ function startBuildWatcher(): void {
 
 type Setter = (partial: Partial<TerrainState>) => void
 
-/** Discover tiles under `folder`, auto-pick by survey area, load overlay. */
+/** Discover tiles under `folder`, auto-pick by survey area, load overlay.
+ * A folder that carries neither `index.json` nor `dem.json` is treated as
+ * **raw** BC LiDAR downloads (one subfolder per grid tile): it is processed
+ * once through `dem-prep process` (recursive, `<source>-processed`) and the
+ * generated folder is discovered instead. */
 async function discoverAndLoad(
   invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>,
   folder: string,
   set: Setter,
 ): Promise<void> {
-  const { tiles } = await invoke<{ tiles: DiscoveredTile[] }>('terrain_discover', {
-    folder,
-  })
+  let effective = folder
+  let tiles: DiscoveredTile[]
+  if (await hasDemIndex(folder)) {
+    ;({ tiles } = await invoke<{ tiles: DiscoveredTile[] }>('terrain_discover', {
+      folder: effective,
+    }))
+  } else {
+    // Raw BC LiDAR downloads: one subfolder per grid tile. Processed once
+    // (recursively), then the generated folder is used from here on.
+    set({ loading: true })
+    const raw = await invoke<{ processed: string; tiles: DiscoveredTile[] }>(
+      'terrain_process_raw',
+      { folder },
+    )
+    effective = raw.processed
+    tiles = raw.tiles
+    if (tiles.length === 0) {
+      set({ loading: false, error: 'no DEM tiles produced from ' + folder })
+      return
+    }
+  }
   const bounds = await surveyBounds()
   const tile = pickTile(tiles, bounds)
-  set({ folder, tiles, tile, uncovered: tiles.length > 0 && tile == null })
+  set({ folder: effective, tiles, tile, uncovered: tiles.length > 0 && tile == null })
   if (!tile) {
     set({ overlay: null, loading: false })
     return
@@ -328,4 +350,23 @@ async function discoverAndLoad(
   // Keep the drape (and the next boot) pointed at the tile that was loaded.
   sessionStorage.setItem('maggcs.terrainFolder', tile.path)
   set({ overlay: { ...overlay, loading: false }, error: null, loading: false })
+}
+
+/** Whether `folder` is already a processed dem-prep output (index.json at
+ * the parent level or dem.json in the tile itself). */
+async function hasDemIndex(folder: string): Promise<boolean> {
+  const { exists, readDir } = await import('@tauri-apps/plugin-fs')
+  try {
+    if (await exists(`${folder}/dem.json`)) return true
+    const entries = await readDir(folder)
+    if (entries.some((e) => e.name === 'index.json')) return true
+    // Tile subfolders carry dem.json one level down (the N1 layout has the
+    // index; this catches a hand-built folder of tiles without one).
+    for (const e of entries) {
+      if (e.isDirectory && (await exists(`${folder}/${e.name}/dem.json`))) return true
+    }
+    return false
+  } catch {
+    return false
+  }
 }

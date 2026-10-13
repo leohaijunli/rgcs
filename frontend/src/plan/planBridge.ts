@@ -25,6 +25,10 @@ export interface PlanSnapshot {
   dirty: boolean
   syncState: string
   fcMatches: boolean | null
+  /** Survey polygon (drawn on the main window's map) for the Area step. */
+  polygon: { vertices: unknown[]; closed: boolean }
+  /** Main window's map centre — the default position for new waypoints. */
+  mapCenter: { lat: number; lon: number } | null
 }
 
 let started = false

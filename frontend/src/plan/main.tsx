@@ -7,6 +7,7 @@ import { createRoot } from 'react-dom/client'
 import { PlanApp } from './PlanApp'
 import ErrorBoundary from '../components/ErrorBoundary'
 import { applyThemePref, readThemePref } from '../design-system/theme'
+import '../i18n'
 
 // Restore the persisted theme before first paint (mirrors `maggcs.theme`).
 applyThemePref(readThemePref())
