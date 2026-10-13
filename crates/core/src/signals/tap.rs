@@ -22,7 +22,7 @@ use crate::mavlink::MessageEnvelope;
 
 use super::catalog::SignalCatalog;
 use super::extract;
-use super::{SignalId, SignalSample};
+use super::{normalize_mag_fields, SignalId, SignalSample};
 
 /// Capacity of the sample channel between tap and service.
 pub const SAMPLE_CHANNEL_CAP: usize = 4096;
@@ -240,7 +240,8 @@ fn handle_message(
                 message_id,
                 field.field.clone(),
             );
-            cat.observe(&id, message_name, field.value, env.received_at);
+            let value = normalize_mag_fields(message_id, &field.field, field.value);
+            cat.observe(&id, message_name, value, env.received_at);
         }
     }
     stats.lock().expect("stats lock").messages += 1;
@@ -265,9 +266,9 @@ fn handle_message(
                 .map(|f| f.value);
             if let Some(value) = value {
                 let sample = SignalSample {
-                    id: signal,
+                    id: signal.clone(),
                     t_ms,
-                    value,
+                    value: normalize_mag_fields(message_id, &signal.field, value),
                 };
                 if tx.try_send(sample).is_err() {
                     stats.lock().expect("stats lock").dropped += 1;
@@ -664,5 +665,70 @@ mod tests {
         // The tap dropped its sender, so the receiver closes.
         assert!(rx.recv().await.is_none());
         drop(bus_tx);
+    }
+
+    #[tokio::test]
+    async fn highres_imu_mag_fields_are_normalized_to_nanotesla() {
+        // HIGHRES_IMU mag is gauss on the wire (3,4,0); the inspector must
+        // receive nT (×1e5) for the components and the synthesized total.
+        let (bus_tx, bus_rx) = tokio::sync::broadcast::channel(64);
+        let events = RoutedEvents::new(bus_rx, MessageRoute::all());
+        let subs = Subscriptions::new();
+        subs.acquire();
+        subs.set(HashSet::from([
+            SignalId::new(1, 1, 105, "xmag"),
+            SignalId::new(1, 1, 105, "mag_total"),
+        ]));
+        let catalog = Arc::new(Mutex::new(SignalCatalog::new()));
+        let stats = Arc::new(Mutex::new(TapStats::default()));
+        let (tx, mut rx) = mpsc::channel(SAMPLE_CHANNEL_CAP);
+        let (_stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+        let tap = tokio::spawn(run_tap(events, subs, catalog, tx, stats, stop_rx));
+
+        bus_tx
+            .send(ConnectionEvent::Message(Box::new(envelope(
+                0,
+                MavMessage::HIGHRES_IMU(::mavlink::common::HIGHRES_IMU_DATA {
+                    time_usec: 0,
+                    xacc: 0.0,
+                    yacc: 0.0,
+                    zacc: 0.0,
+                    xgyro: 0.0,
+                    ygyro: 0.0,
+                    zgyro: 0.0,
+                    xmag: 3.0,
+                    ymag: 4.0,
+                    zmag: 0.0,
+                    abs_pressure: 0.0,
+                    diff_pressure: 0.0,
+                    pressure_alt: 0.0,
+                    temperature: 0.0,
+                    fields_updated: ::mavlink::common::HighresImuUpdatedFlags::empty(),
+                }),
+            ))))
+            .unwrap();
+        drop(bus_tx);
+        tap.await.unwrap();
+
+        let mut samples = Vec::new();
+        while let Some(s) = rx.recv().await {
+            samples.push(s);
+        }
+        assert_eq!(samples.len(), 2, "xmag + mag_total");
+        let xmag = samples.iter().find(|s| s.id.field == "xmag").expect("xmag");
+        let total = samples
+            .iter()
+            .find(|s| s.id.field == "mag_total")
+            .expect("mag_total");
+        assert!(
+            (xmag.value - 300_000.0).abs() < 1e-6,
+            "xmag in nT: {}",
+            xmag.value
+        );
+        assert!(
+            (total.value - 500_000.0).abs() < 1e-6,
+            "mag_total in nT: {}",
+            total.value
+        );
     }
 }

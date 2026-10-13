@@ -439,9 +439,11 @@ async fn auto_discovery_adopts_non_default_fc_sysid() {
     )
     .await
     .expect("peer send");
-    let _ = wait_for(&mut rx, Duration::from_secs(2), |e| {
-        matches!(e, ConnectionEvent::Message(m) if m.is_heartbeat_from(250, 1))
-    })
+    let _ = wait_for(
+        &mut rx,
+        Duration::from_secs(2),
+        |e| matches!(e, ConnectionEvent::Message(m) if m.is_heartbeat_from(250, 1)),
+    )
     .await;
 
     let lost = wait_for(&mut rx, Duration::from_secs(3), |e| {

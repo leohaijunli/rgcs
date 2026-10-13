@@ -23,13 +23,13 @@ import {
 
 /** Colour ramp, low → high AGL (also drawn by the map legend). */
 export const TRAIL_RAMP: ReadonlyArray<readonly [number, string]> = [
-  [0, '#4cc9f0'],
-  [0.33, '#4ade80'],
-  [0.66, '#facc15'],
-  [1, '#ef4444'],
+  [0, cssVar('--mg-trail-lo')],
+  [0.33, cssVar('--mg-trail-mid')],
+  [0.66, cssVar('--mg-trail-hi')],
+  [1, cssVar('--mg-trail-top')],
 ]
 /** Below the ground reference (negative AGL): distinct from the whole ramp. */
-export const TRAIL_BELOW_GROUND = '#d946ef'
+export const TRAIL_BELOW_GROUND = cssVar('--mg-trail-below')
 
 const RAMP_COLORS = TRAIL_RAMP.map(([stop, css]) => [stop, Cesium.Color.fromCssColorString(css)] as const)
 const BELOW_COLOR = Cesium.Color.fromCssColorString(TRAIL_BELOW_GROUND)

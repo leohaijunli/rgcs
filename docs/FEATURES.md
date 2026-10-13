@@ -174,7 +174,9 @@ degrees; the trace palette is token-based and theme-aware. Workspaces
 calibration…*); the Rust session then derives the calibrated total field
 `A·(m−b)` as a `total cal (nT)` series on any plot carrying
 xmag/ymag/zmag. Without a calibration the plain √(x²+y²+z²) total is
-shown. The loaded calibration persists across window reopens.
+shown. Mag values are normalized to nanotesla at ingestion (MAVLink
+`HIGHRES_IMU` mag is gauss on the wire). The loaded calibration persists
+across window reopens.
 
 ## Settings
 

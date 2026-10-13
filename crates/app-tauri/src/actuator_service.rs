@@ -522,9 +522,13 @@ async fn run_motor_telemetry_tap(app: AppHandle, handle: maggcs_core::mavlink::C
                 };
                 match &env.message {
                     MavMessage::HIGHRES_IMU(imu) => {
+                        // HIGHRES_IMU mag fields are gauss on the wire; the
+                        // whole MagGCS mag pipeline (calibration `A·(m−b)`,
+                        // `mag_total`, the alarm thresholds) is nanotesla.
+                        let raw_gauss = [imu.xmag as f64, imu.ymag as f64, imu.zmag as f64];
+                        let raw = raw_gauss.map(|g| g * maggcs_core::signals::GAUSS_TO_NANOTESLA);
                         // Apply the loaded calibration (A·(raw−b), optional
                         // K·I) — none loaded: raw pass-through.
-                        let raw = [imu.xmag as f64, imu.ymag as f64, imu.zmag as f64];
                         let calibrated = match &telemetry.calib {
                             Some(cal) => cal.apply(raw, None),
                             None => raw,

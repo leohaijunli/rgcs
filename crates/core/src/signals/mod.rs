@@ -25,6 +25,57 @@ pub mod tap;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+/// Gauss → nanotesla: `1 G = 1e5 nT`. MAVLink `HIGHRES_IMU` (105) mag fields
+/// are in gauss; every MagGCS mag value (components, total, calibration,
+/// alarm) is nanotesla.
+pub const GAUSS_TO_NANOTESLA: f64 = 1e5;
+
+/// MAVLink message ids carrying a magnetometer triple.
+pub const HIGHRES_IMU_ID: u32 = 105;
+pub const RAW_IMU_ID: u32 = 27;
+
+/// Normalize one magnetometer field value to nanotesla, keyed by the
+/// message id it came from: `HIGHRES_IMU` mag is gauss, `RAW_IMU` mag is
+/// milligauss. Other messages/fields pass through unchanged.
+pub fn normalize_mag_fields(message_id: u32, field: &str, value: f64) -> f64 {
+    let factor = match message_id {
+        HIGHRES_IMU_ID => GAUSS_TO_NANOTESLA,
+        RAW_IMU_ID => GAUSS_TO_NANOTESLA / 1e1, // milligauss → nT = ×1e4
+        _ => return value,
+    };
+    match field {
+        "xmag" | "ymag" | "zmag" | "mag_total" => value * factor,
+        _ => value,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn highres_imu_gauss_is_converted_to_nanotesla() {
+        assert_eq!(normalize_mag_fields(HIGHRES_IMU_ID, "xmag", 3.0), 300_000.0);
+        assert_eq!(
+            normalize_mag_fields(HIGHRES_IMU_ID, "mag_total", 5.0),
+            500_000.0
+        );
+        // Non-mag fields pass through untouched.
+        assert_eq!(normalize_mag_fields(HIGHRES_IMU_ID, "xacc", 9.81), 9.81);
+    }
+
+    #[test]
+    fn raw_imu_milligauss_is_converted_to_nanotesla() {
+        assert_eq!(normalize_mag_fields(RAW_IMU_ID, "xmag", 250.0), 2_500_000.0);
+    }
+
+    #[test]
+    fn non_mag_messages_pass_through() {
+        assert_eq!(normalize_mag_fields(30, "roll", 0.1), 0.1);
+        assert_eq!(normalize_mag_fields(105, "temperature", 25.0), 25.0);
+    }
+}
+
 /// Identifies one numeric signal: a field of a message type from one node.
 ///
 /// Array fields are expanded to one signal per element, `field[i]`; messages

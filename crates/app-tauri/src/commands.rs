@@ -196,15 +196,15 @@ const TARGET_DISCOVER_TIMEOUT: Duration = Duration::from_secs(5);
 /// Returns the discovered ids and `true` when they came from the FC itself.
 /// Falls back to the configured expectation on timeout or when the worker
 /// already reports a heartbeat from the expected node.
-async fn resolve_target(
-    handle: &ConnectionHandle,
-    config: &ConnectionConfig,
-) -> (u8, u8, bool) {
+async fn resolve_target(handle: &ConnectionHandle, config: &ConnectionConfig) -> (u8, u8, bool) {
     let mut events = handle.subscribe();
     let outcome = tokio::time::timeout(TARGET_DISCOVER_TIMEOUT, async {
         loop {
             match events.recv().await {
-                Ok(ConnectionEvent::TargetDiscovered { system_id, component_id }) => {
+                Ok(ConnectionEvent::TargetDiscovered {
+                    system_id,
+                    component_id,
+                }) => {
                     return (system_id, component_id);
                 }
                 Ok(ConnectionEvent::Message(env)) => {

@@ -662,21 +662,37 @@ mod tests {
         });
         // Our own GCS heartbeat must never be adopted (autopilot GENERIC).
         let own = MessageEnvelope {
-            header: MavHeader { system_id: 250, component_id: 250, sequence: 0 },
+            header: MavHeader {
+                system_id: 250,
+                component_id: 250,
+                sequence: 0,
+            },
             message: hb.clone(),
             received_at: Instant::now(),
         };
-        assert_eq!(candidate_autopilot_node(&own), None, "own GCS heartbeat is ignored");
+        assert_eq!(
+            candidate_autopilot_node(&own),
+            None,
+            "own GCS heartbeat is ignored"
+        );
         // Generic-autopilot nodes are not a flight controller.
         let generic = MessageEnvelope {
-            header: MavHeader { system_id: 2, component_id: 190, sequence: 0 },
+            header: MavHeader {
+                system_id: 2,
+                component_id: 190,
+                sequence: 0,
+            },
             message: hb,
             received_at: Instant::now(),
         };
         assert_eq!(candidate_autopilot_node(&generic), None);
         // Non-heartbeat traffic is not a candidate.
         let att = MessageEnvelope {
-            header: MavHeader { system_id: 1, component_id: 1, sequence: 0 },
+            header: MavHeader {
+                system_id: 1,
+                component_id: 1,
+                sequence: 0,
+            },
             message: MavMessage::ATTITUDE(::mavlink::common::ATTITUDE_DATA {
                 time_boot_ms: 0,
                 roll: 0.0,
@@ -707,8 +723,6 @@ mod tests {
         let io = MessageReadError::Io(std::io::Error::from(std::io::ErrorKind::BrokenPipe));
         assert!(!is_recoverable_read_error(&io));
     }
-
-    use super::*;
 
     #[test]
     fn heartbeat_status_keeps_endpoint() {

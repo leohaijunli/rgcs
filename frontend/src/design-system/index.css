@@ -75,6 +75,14 @@
   --mg-trace-measure: #ffb454;
   /* Derived total-magnetic-intensity curve: pure red reads on both themes. */
   --mg-trace-total-mag: #ff0000;
+
+  /* Recorded-track AGL ramp (low → high above ground) plus the below-ground
+     marker. A fixed scientific ramp: same across themes. */
+  --mg-trail-lo: #4cc9f0;
+  --mg-trail-mid: #4ade80;
+  --mg-trail-hi: #facc15;
+  --mg-trail-top: #ef4444;
+  --mg-trail-below: #d946ef;
 }
 
 /* High-contrast light theme for outdoor field use. */
