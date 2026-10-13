@@ -62,6 +62,7 @@ pub fn run() {
             commands::terrain_drape,
             terrain_service::terrain_sample,
             terrain_service::terrain_process_raw,
+            terrain_service::geoid_sample,
             rtk_service::rtk_start_serial,
             rtk_service::rtk_stop,
             rtk_service::rtk_last_stats,

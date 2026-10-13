@@ -243,6 +243,10 @@ export interface WaypointRenderOptions {
    * — accurate AGL sticks instead of the flat HOME plane. Takes precedence
    * over `groundM`; a seq without an entry falls back to `groundM`. */
   groundBySeq?: Record<number, number> | null
+  /** Per-waypoint geoid undulation N(EGM96): with a `--geoid` 3D mesh on,
+   * adding N puts the rendered geometry on the mesh's ellipsoid datum while
+   * the labels keep AMSL (the stored plan datum). */
+  ellipsoidBySeq?: Record<number, number> | null
   /** Seq the FC is flying to: earlier points dim (flown), this one gets a
    * halo, later ones keep their kind colour (future). `null` = not flying. */
   currentSeq?: number | null
@@ -272,6 +276,11 @@ export function renderWaypoints(
   const located = items.filter((it) => it.frame !== 'mission')
   if (located.length === 0) return layer
 
+  // Geoid offset per waypoint (3D-mesh datum alignment): added to every
+  // rendered height, never to the labels (the plan keeps AMSL semantics).
+  const off = (seq: number, z: number): number =>
+    z + (opts.ellipsoidBySeq?.[seq] ?? 0)
+
   const accent = Cesium.Color.fromCssColorString(cssVar('--mg-accent'))
   const ok = Cesium.Color.fromCssColorString(cssVar('--mg-ok'))
   const warn = Cesium.Color.fromCssColorString(cssVar('--mg-warn'))
@@ -296,8 +305,8 @@ export function renderWaypoints(
         viewer.entities.add({
           polyline: {
             positions: [
-              Cesium.Cartesian3.fromDegrees(degFromMavInt(item.y), degFromMavInt(item.x), run.base),
-              Cesium.Cartesian3.fromDegrees(degFromMavInt(item.y), degFromMavInt(item.x), run.top),
+              Cesium.Cartesian3.fromDegrees(degFromMavInt(item.y), degFromMavInt(item.x), off(item.seq, run.base)),
+              Cesium.Cartesian3.fromDegrees(degFromMavInt(item.y), degFromMavInt(item.x), off(item.seq, run.top)),
             ],
             width: 2,
             material: stickColor.withAlpha(0.8),
@@ -315,7 +324,7 @@ export function renderWaypoints(
     const entity = viewer.entities.add({
       polyline: {
         positions: run.items.map((it) =>
-          Cesium.Cartesian3.fromDegrees(degFromMavInt(it.y), degFromMavInt(it.x), it.z),
+          Cesium.Cartesian3.fromDegrees(degFromMavInt(it.y), degFromMavInt(it.x), off(it.seq, it.z)),
         ),
         width: run.kind === 'tie' ? 3 : 2,
         material: new Cesium.PolylineGlowMaterialProperty({
@@ -334,7 +343,7 @@ export function renderWaypoints(
     const position = Cesium.Cartesian3.fromDegrees(
       degFromMavInt(it.y),
       degFromMavInt(it.x),
-      it.z,
+      off(it.seq, it.z),
     )
     // Flight-state colouring (operator request): a flown waypoint dims, the
     // one the FC is flying to gets a green halo, future ones keep the kind

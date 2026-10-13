@@ -574,3 +574,42 @@ pub struct RawProcessResult {
     pub processed: String,
     pub tiles: Vec<DiscoveredTile>,
 }
+
+/// One sampled geoid undulation (AMSL → WGS84 ellipsoid offset).
+#[derive(Debug, Clone, Serialize)]
+pub struct GeoidSample {
+    pub lat: f64,
+    pub lon: f64,
+    /// `N(EGM96)` in metres at the point (add to AMSL for ellipsoid height),
+    /// `None` outside the loaded grid.
+    pub undulation_m: Option<f64>,
+}
+
+/// Sample the EGM96 undulation under the given points: `h(ellipsoid) =
+/// AMSL + N`. This is the offset that puts plan waypoints on the same
+/// height datum as a `--geoid`-converted 3D terrain mesh, so draped
+/// trajectories hug the mesh in the 3D view (ADR-004/006).
+///
+/// Points outside the grid return `None` — the frontend keeps them at AMSL
+/// rather than extrapolating (the same fail-closed rule as the grids).
+///
+/// # Errors
+///
+/// A stringified error when the committed EGM96 extraction cannot load.
+#[tauri::command]
+pub async fn geoid_sample(points: Vec<(f64, f64)>) -> Result<Vec<GeoidSample>, String> {
+    use maggcs_core::height::GeoidModel;
+    let model = maggcs_core::height::egm96_model();
+    let mut out = Vec::with_capacity(points.len());
+    for (lat, lon) in points {
+        let n = model
+            .undulation_m(lat, lon, maggcs_core::height::HeightDatum::AmslEgm96)
+            .ok();
+        out.push(GeoidSample {
+            lat,
+            lon,
+            undulation_m: n,
+        });
+    }
+    Ok(out)
+}

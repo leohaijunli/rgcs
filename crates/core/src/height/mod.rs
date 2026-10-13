@@ -125,7 +125,7 @@ pub trait GeoidModel: Send + Sync {
 }
 
 pub use grid::{GeoidGrid, GeoidGridModel, GeoidGridSpec};
-pub use load::{load_geoid_grid, load_geoid_model};
+pub use load::{egm96_model, load_geoid_grid, load_geoid_model};
 
 /// Errors from height conversion or geoid-grid construction.
 #[derive(Debug, Error)]

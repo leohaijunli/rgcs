@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useCesiumViewer } from '../hooks/useCesiumViewer'
 import { compileWaypoints, toDisplayItems } from '../mission/compile'
@@ -112,6 +112,40 @@ export default function MapView() {
   }, [missionItems, terrainTile, sampleGround])
 
   const kinds = useMemo(() => kindsBySeq(lastPattern?.lines ?? []), [lastPattern])
+  // Geoid offsets for the 3D-mesh datum: with the 3D tileset on, rendered
+  // heights move to the ellipsoid datum (AMSL + N) so the trajectory hugs
+  // the mesh; labels stay AMSL. Sampled per waypoint, cleared when 3D is
+  // off (back to the AMSL plane).
+  const [ellipsoidBySeq, setEllipsoidBySeq] = useState<Record<number, number> | null>(null)
+  const meshOn = terrain3d != null
+  useEffect(() => {
+    if (!meshOn || missionItems.length === 0) {
+      setEllipsoidBySeq(null)
+      return
+    }
+    const id = setTimeout(() => {
+      const points = missionItems
+        .filter((it) => it.x !== 0 || it.y !== 0)
+        .map((it) => [it.y / 1e7, it.x / 1e7] as [number, number])
+      void (async () => {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core')
+          const samples = await invoke<Array<{ undulation_m: number | null }>>('geoid_sample', {
+            points,
+          })
+          const next: Record<number, number> = {}
+          missionItems.forEach((it, i) => {
+            const n = samples[i]?.undulation_m
+            if (n != null && (it.x !== 0 || it.y !== 0)) next[it.seq] = n
+          })
+          setEllipsoidBySeq(Object.keys(next).length > 0 ? next : null)
+        } catch {
+          setEllipsoidBySeq(null) // geoid unavailable: keep the AMSL plane
+        }
+      })()
+    }, 300)
+    return () => clearTimeout(id)
+  }, [missionItems, meshOn])
   useEffect(() => {
     setMission(missionItems, selectedSeq, {
       kinds,
@@ -123,10 +157,21 @@ export default function MapView() {
       // point and takes precedence (accurate terrain-following markers).
       groundM: home?.[2] ?? 0,
       groundBySeq,
+      ellipsoidBySeq,
       // Flight-state colouring: flown waypoints dim, the target gets a halo.
       currentSeq,
     })
-  }, [missionItems, selectedSeq, kinds, showHeights, home, currentSeq, groundBySeq, setMission])
+  }, [
+    missionItems,
+    selectedSeq,
+    kinds,
+    showHeights,
+    home,
+    currentSeq,
+    groundBySeq,
+    ellipsoidBySeq,
+    setMission,
+  ])
 
   // Tool shortcuts (P3 §4.3): W = add waypoint, P = draw polygon. Planning
   // only; Esc already returns to select (cesium/waypoints.ts).

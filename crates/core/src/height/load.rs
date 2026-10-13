@@ -51,6 +51,28 @@ pub fn load_geoid_model(paths: &[&Path]) -> Result<GeoidGridModel, HeightError> 
     Ok(model)
 }
 
+/// The committed EGM96 BC-SW extraction, embedded at compile time and parsed
+/// once: a ready-to-use [`GeoidModel`] for the AMSL ↔ ellipsoid step of the
+/// height chain in the app (`geoid_sample`), valid inside the extraction's
+/// bounds (queries outside fail closed, like every grid).
+pub fn egm96_model() -> &'static GeoidGridModel {
+    static MODEL: std::sync::OnceLock<GeoidGridModel> = std::sync::OnceLock::new();
+    MODEL.get_or_init(|| {
+        let text = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/testdata/geoid/egm96_bc_sw.mggeoid"
+        ));
+        let grid = parse_grid(text).unwrap_or_else(|e| {
+            // The committed extraction is a repo fixture; a parse failure is
+            // a build-time bug, not a runtime condition. A rejected model
+            // would silently un-convert heights, so panic instead (the test
+            // below pins the fixture).
+            panic!("committed egm96_bc_sw.mggeoid failed to parse: {e}")
+        });
+        GeoidGridModel::new("egm96-embedded").with_grid(grid)
+    })
+}
+
 fn parse_grid(text: &str) -> Result<GeoidGrid, HeightError> {
     let mut datum = None;
     let mut lat0 = None;
@@ -185,5 +207,24 @@ mod tests {
                 "case {i} should be rejected"
             );
         }
+    }
+
+    /// The embedded EGM96 model (used by the app's `geoid_sample`) parses
+    /// and covers the survey area: Sidney N ≈ −19.8 m, and a query far
+    /// outside the extraction fails closed instead of extrapolating.
+    #[test]
+    fn embedded_egm96_model_covers_the_survey_area() {
+        let model = super::egm96_model();
+        let n = model
+            .undulation_m(48.6667, -123.3333, HeightDatum::AmslEgm96)
+            .expect("Sidney inside the extraction");
+        assert!((n - (-19.79)).abs() < 0.15, "N = {n}");
+
+        assert!(
+            model
+                .undulation_m(20.0, 20.0, HeightDatum::AmslEgm96)
+                .is_err(),
+            "outside the extraction must fail closed"
+        );
     }
 }
