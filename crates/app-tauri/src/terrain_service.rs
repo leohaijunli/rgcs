@@ -210,3 +210,230 @@ pub async fn terrain3d_stop(state: tauri::State<'_, AppState>) -> Result<(), Str
 pub async fn terrain3d_status(state: tauri::State<'_, AppState>) -> Result<Option<String>, String> {
     Ok(state.terrain3d.lock().as_ref().map(TerrainServer::url))
 }
+
+/// Locate the `dem-prep` binary: shipped next to the app executable first
+/// (dev: `target/debug/dem-prep` beside `target/debug/maggcs-app`), then the
+/// cargo test layout (`target/debug/deps/…` → `target/debug/dem-prep`), then
+/// the operator's `PATH`.
+fn dem_prep_binary() -> Result<PathBuf, String> {
+    if let Ok(exe) = std::env::current_exe() {
+        let sibling = exe.with_file_name("dem-prep");
+        if sibling.is_file() {
+            return Ok(sibling);
+        }
+        // cargo test binaries live in <target>/<profile>/deps/: the profile
+        // directory (one level up) also holds the dem-prep bin.
+        if let Some(profile) = exe.parent().and_then(Path::parent) {
+            let profile_bin = profile.join("dem-prep");
+            if profile_bin.is_file() {
+                return Ok(profile_bin);
+            }
+        }
+    }
+    // Fall back to PATH via `which`-style probe on each PATH entry.
+    if let Ok(path_var) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            let candidate = dir.join("dem-prep");
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+    }
+    Err(
+        "dem-prep not found next to the app or on PATH — build it with \
+         `cargo build -p dem-prep`"
+            .to_string(),
+    )
+}
+
+/// One pipeline stage: spawn `dem-prep <args>`, stream its stdout lines to
+/// the frontend as `terrain3d_progress` events, and fail with the tail of
+/// stderr when the exit status is not success.
+fn run_stage(
+    app: &tauri::AppHandle,
+    bin: &Path,
+    args: &[String],
+    stage: &str,
+) -> Result<(), String> {
+    use std::io::BufRead;
+    use tauri::Emitter;
+
+    let mut child = std::process::Command::new(bin)
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("spawn dem-prep: {e}"))?;
+    if let Some(stdout) = child.stdout.take() {
+        for line in std::io::BufReader::new(stdout)
+            .lines()
+            .map_while(Result::ok)
+        {
+            let _ = app.emit(
+                "terrain3d_progress",
+                serde_json::json!({ "stage": stage, "line": line }),
+            );
+        }
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("dem-prep {stage}: {e}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let tail: String = stderr.lines().rev().take(3).collect::<Vec<_>>().join("; ");
+    Err(format!(
+        "dem-prep {stage} failed: {}",
+        if tail.is_empty() {
+            "see console"
+        } else {
+            &tail
+        }
+    ))
+}
+
+/// One-click 3D terrain (ADR-004 addendum): download the Copernicus GLO-30
+/// tiles covering the box and build the quantized-mesh tileset, streaming
+/// per-line progress as `terrain3d_progress` events. Returns the tileset
+/// folder, ready for `terrain3d_start`.
+///
+/// # Errors
+///
+/// A stringified error when `dem-prep` is missing, a stage fails, or the
+/// coordinates are out of range.
+#[tauri::command]
+pub async fn terrain3d_download(
+    app: tauri::AppHandle,
+    lat: f64,
+    lon: f64,
+    size_km: f64,
+    maxzoom: Option<u8>,
+    out_dir: String,
+) -> Result<String, String> {
+    if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lon) {
+        return Err(format!("coordinates out of range: {lat}, {lon}"));
+    }
+    let size_km = size_km.clamp(1.0, 500.0);
+    let bin = dem_prep_binary()?;
+    let root = PathBuf::from(&out_dir);
+    let downloads = root.join("downloads");
+    let processed = root.join("processed");
+    let tileset = root.join("tileset");
+    let tileset_path = tileset.display().to_string();
+
+    // CPU/IO stages run off the async runtime (the CLI streams progress).
+    let handle = app.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let fetch_args = vec![
+            "fetch".to_string(),
+            format!("{lat}"),
+            format!("{lon}"),
+            "--out".to_string(),
+            downloads.display().to_string(),
+            "--size-km".to_string(),
+            format!("{size_km}"),
+        ];
+        run_stage(&handle, &bin, &fetch_args, "fetch")?;
+        let process_args = vec![
+            "process".to_string(),
+            downloads.display().to_string(),
+            "--out".to_string(),
+            processed.display().to_string(),
+        ];
+        run_stage(&handle, &bin, &process_args, "process")?;
+        let mut terrain_args = vec![
+            "terrain".to_string(),
+            processed.display().to_string(),
+            "--out".to_string(),
+            tileset.display().to_string(),
+        ];
+        if let Some(z) = maxzoom {
+            terrain_args.push("--maxzoom".to_string());
+            terrain_args.push(z.to_string());
+        }
+        run_stage(&handle, &bin, &terrain_args, "terrain")?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("terrain download task: {e}"))??;
+
+    Ok(tileset_path)
+}
+
+/// The `dem-prep` binary discovery (exposed for tests).
+#[cfg(test)]
+mod download_tests {
+    use super::dem_prep_binary;
+
+    #[test]
+    fn dem_prep_is_discovered_next_to_the_test_binary_or_on_path() {
+        // In the dev workspace the sibling `target/debug/dem-prep` exists
+        // (cargo builds both bins into one target dir); if the test binary
+        // lives elsewhere, PATH must carry dem-prep for this to pass.
+        let found = dem_prep_binary().expect("dem-prep discoverable");
+        assert!(found.is_file(), "{}", found.display());
+    }
+}
+
+/// One-click build from a **local** data folder (ADR-004 addendum): BC LiDAR
+/// `.laz` files (or GeoTIFF fallback rasters) the operator downloaded from
+/// the BC Data Catalogue → `dem-prep process` → `dem-prep terrain` → the
+/// tileset folder, streaming progress like [`terrain3d_download`]. LiDAR
+/// runs at the native 1 m resolution (the drape-grade DTM+DSM).
+///
+/// # Errors
+///
+/// A stringified error when `dem-prep` is missing or a stage fails.
+#[tauri::command]
+pub async fn terrain3d_build(
+    app: tauri::AppHandle,
+    folder: String,
+    maxzoom: Option<u8>,
+) -> Result<String, String> {
+    let bin = dem_prep_binary()?;
+    let source = PathBuf::from(&folder);
+    if !source.is_dir() {
+        return Err(format!("{} is not a folder", source.display()));
+    }
+    // The tileset lands next to the source folder: <folder>-3d/tileset.
+    let root = source.parent().unwrap_or(&source).join(format!(
+        "{}-3d",
+        source
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("terrain")
+    ));
+    let processed = root.join("processed");
+    let tileset = root.join("tileset");
+    let tileset_path = tileset.display().to_string();
+
+    let handle = app.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let process_args = vec![
+            "process".to_string(),
+            source.display().to_string(),
+            "--out".to_string(),
+            processed.display().to_string(),
+            "--resolution".to_string(),
+            "1.0".to_string(),
+        ];
+        run_stage(&handle, &bin, &process_args, "process")?;
+        let mut terrain_args = vec![
+            "terrain".to_string(),
+            processed.display().to_string(),
+            "--out".to_string(),
+            tileset.display().to_string(),
+        ];
+        if let Some(z) = maxzoom {
+            terrain_args.push("--maxzoom".to_string());
+            terrain_args.push(z.to_string());
+        }
+        run_stage(&handle, &bin, &terrain_args, "terrain")?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("terrain build task: {e}"))??;
+
+    Ok(tileset_path)
+}

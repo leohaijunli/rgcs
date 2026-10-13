@@ -13,6 +13,8 @@ pub enum DemError {
     NoGroundPoints(PathBuf),
     /// Geoid-grid problems (missing grid, coverage, conversion).
     Geoid(String),
+    /// Copernicus GLO-30 tile download problems (`fetch` subcommand).
+    Fetch(String),
 }
 
 impl fmt::Display for DemError {
@@ -23,6 +25,7 @@ impl fmt::Display for DemError {
             Self::Raster(m) => write!(f, "raster error: {m}"),
             Self::Manifest(m) => write!(f, "manifest error: {m}"),
             Self::Geoid(m) => write!(f, "geoid error: {m}"),
+            Self::Fetch(m) => write!(f, "fetch error: {m}"),
             Self::NoGroundPoints(p) => {
                 write!(
                     f,

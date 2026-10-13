@@ -23,7 +23,7 @@ export default function LogsDialog({
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/50" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex h-[min(92vh,680px)] w-[min(94vw,620px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-line bg-panel shadow-2xl">
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex h-[min(94vh,900px)] w-[min(96vw,960px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-line bg-panel shadow-2xl">
           <div className="flex items-center justify-between border-b border-line px-4 py-3">
             <Dialog.Title className="text-sm font-medium text-ink">{t('tools.logs')}</Dialog.Title>
             <Dialog.Close asChild>

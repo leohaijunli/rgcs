@@ -47,6 +47,10 @@ interface TerrainState {
   terrain3d: { url: string; folder: string } | null
   /** Error from the 3D toggle / provider load (Layers popover). */
   error3d: string | null
+  /** One-click build/download in flight (`fetch`/`process`/`terrain`). */
+  building3d: { stage: string; line: string } | null
+  /** Error from the one-click build/download. */
+  buildError3d: string | null
   load: () => Promise<void>
   /** Pick + load a tile against the current survey area (no dialog). */
   repick: () => Promise<void>
@@ -65,6 +69,11 @@ interface TerrainState {
   /** The server is up but Cesium refused the tileset: clear the toggle,
    * stop the server, surface `message`. */
   fail3d: (message: string) => Promise<void>
+  /** One-click Copernicus download for a lat/lon box (ADR-004 addendum):
+   * fetch → process → terrain, then start serving the tileset. */
+  download3d: (lat: number, lon: number, sizeKm: number) => Promise<void>
+  /** One-click build from a local LiDAR/GeoTIFF folder, then start serving. */
+  build3d: (folder: string) => Promise<void>
 }
 
 /**
@@ -116,6 +125,8 @@ export const useTerrainStore = create<TerrainState>((set, get) => ({
   error: null,
   terrain3d: null,
   error3d: null,
+  building3d: null,
+  buildError3d: null,
   load: async () => {
     set({ error: null, loading: true })
     try {
@@ -219,7 +230,79 @@ export const useTerrainStore = create<TerrainState>((set, get) => ({
       /* server already gone */
     }
   },
+  download3d: async (lat, lon, sizeKm) => {
+    startBuildWatcher()
+    set({ building3d: { stage: 'fetch', line: '' }, buildError3d: null })
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      const out = await invoke<string>('terrain3d_download', {
+        lat,
+        lon,
+        sizeKm,
+        maxzoom: null,
+        outDir: await defaultOutDir('glo30'),
+      })
+      await serveBuilt3d(out)
+      set({ building3d: null })
+    } catch (e) {
+      set({ building3d: null, buildError3d: String(e) })
+    }
+  },
+  build3d: async (folder) => {
+    startBuildWatcher()
+    set({ building3d: { stage: 'process', line: '' }, buildError3d: null })
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      const out = await invoke<string>('terrain3d_build', { folder, maxzoom: null })
+      await serveBuilt3d(out)
+      set({ building3d: null })
+    } catch (e) {
+      set({ building3d: null, buildError3d: String(e) })
+    }
+  },
 }))
+
+/** Output root for the one-click download: the app data dir (or the CWD in
+ * browser dev) + a fixed name, so repeat runs reuse the cached tiles. */
+async function defaultOutDir(name: string): Promise<string> {
+  try {
+    const { appDataDir, join } = await import('@tauri-apps/api/path')
+    return await join(await appDataDir(), name)
+  } catch {
+    return name
+  }
+}
+
+/** Serve a freshly built tileset: start the loopback server on it and flip
+ * the toggle on (the same state `start3d` would produce, minus the dialog). */
+async function serveBuilt3d(tileset: string): Promise<void> {
+  const { invoke } = await import('@tauri-apps/api/core')
+  const url = await invoke<string>('terrain3d_start', { dir: tileset })
+  sessionStorage.setItem('maggcs.terrain3dFolder', tileset)
+  useTerrainStore.setState({
+    terrain3d: { url, folder: tileset },
+    error3d: null,
+  })
+}
+
+let buildWatcherStarted = false
+
+/** Stream `terrain3d_progress` events ({stage, line}) into `building3d` —
+ * the one-click pipeline's per-line log, started lazily and once. */
+function startBuildWatcher(): void {
+  if (buildWatcherStarted) return
+  buildWatcherStarted = true
+  void (async () => {
+    try {
+      const { listen } = await import('@tauri-apps/api/event')
+      await listen<{ stage: string; line: string }>('terrain3d_progress', (e) => {
+        useTerrainStore.setState({ building3d: e.payload })
+      })
+    } catch {
+      /* events unavailable (browser dev) */
+    }
+  })()
+}
 
 type Setter = (partial: Partial<TerrainState>) => void
 

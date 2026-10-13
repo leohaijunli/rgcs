@@ -7,6 +7,7 @@
 mod actuator_service;
 mod command_service;
 mod commands;
+mod console_service;
 mod inspector_service;
 mod logs_service;
 mod mission_service;
@@ -26,6 +27,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(AppState::default())
+        .manage(std::sync::Arc::new(console_service::ConsoleState::default()))
         .invoke_handler(tauri::generate_handler![
             commands::connect,
             commands::disconnect,
@@ -47,6 +49,10 @@ pub fn run() {
             terrain_service::terrain3d_start,
             terrain_service::terrain3d_stop,
             terrain_service::terrain3d_status,
+            terrain_service::terrain3d_download,
+            terrain_service::terrain3d_build,
+            console_service::console_send,
+            console_service::console_close,
             logs_service::logs_request_list,
             logs_service::logs_download,
             logs_service::logs_cancel,

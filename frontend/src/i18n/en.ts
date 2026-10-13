@@ -15,7 +15,7 @@ export default {
     parameters: 'Parameters',
     logs: 'Logs',
   },
-  console: {
+    console: {
     title: 'MAVLink console',
     hint: 'PX4 shell over MAVLink (SERIAL_CONTROL)',
     empty: 'Output appears here. Try a preset or type a command.',
@@ -302,6 +302,10 @@ export default {
     serving: 'Serving',
     version: 'DEM version',
     uncovered: 'Survey area is outside the DEM coverage — pick another folder or adjust the area',
+    downloadHere: 'Download terrain for this area',
+    downloadHint: 'Download Copernicus GLO-30 for the map centre and build the 3D mesh (needs internet once)',
+    buildLocal: 'Build from local LiDAR…',
+    buildHint: 'Build the 3D mesh from a folder of BC LiDAR .laz tiles (or GeoTIFF)',
     osm: 'Streets',
     satellite: 'Esri',
     google: 'Google',

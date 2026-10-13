@@ -19,6 +19,7 @@
 
 mod cog;
 mod error;
+mod fetch;
 mod geotiff;
 mod grid;
 mod hillshade;
@@ -40,6 +41,34 @@ fn main() -> Result<()> {
         Some("probe") => {
             let path = args.next().context("probe <file.laz>")?;
             probe(Path::new(&path))
+        }
+        Some("fetch") => {
+            let lat: f64 = args.next().context("fetch <lat> <lon>")?.parse()?;
+            let lon: f64 = args.next().context("fetch <lat> <lon>")?.parse()?;
+            let mut out = PathBuf::from("glo30");
+            let mut size_km = 50.0;
+            while let Some(arg) = args.next() {
+                match arg.as_str() {
+                    "--out" => out = PathBuf::from(args.next().context("--out <dir>")?),
+                    "--size-km" => size_km = args.next().context("--size-km <n>")?.parse()?,
+                    other => bail!("unknown argument: {other}"),
+                }
+            }
+            // Requested box around the centre; whole 1° tiles are downloaded.
+            let dlat = size_km / 111_132.954;
+            let dlon = size_km / (111_132.954 * lat.to_radians().cos());
+            let tiles = fetch::fetch_box(
+                lat - dlat / 2.0,
+                lat + dlat / 2.0,
+                lon - dlon / 2.0,
+                lon + dlon / 2.0,
+                &out,
+            )?;
+            for t in &tiles {
+                println!("{}", t.display());
+            }
+            println!("{} GLO-30 tile(s) -> {}", tiles.len(), out.display());
+            Ok(())
         }
         Some("process") => {
             let folder = PathBuf::from(args.next().context("process <folder>")?);
@@ -102,8 +131,8 @@ fn main() -> Result<()> {
         _ => {
             bail!(
                 "usage: dem-prep process <folder> [--out <dir>] [--resolution m] \
-                 | probe <file> | terrain <processed-dir> [--out <dir>] \
-                 [--maxzoom n] [--geoid <file.mggeoid>]"
+                 | probe <file> | fetch <lat> <lon> [--out <dir>] [--size-km km] \
+                 | terrain <processed-dir> [--out <dir>] [--maxzoom n] [--geoid <file.mggeoid>]"
             )
         }
     }

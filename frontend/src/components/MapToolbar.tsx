@@ -163,16 +163,37 @@ export default function MapToolbar({ onGoHome, onNorth }: Props) {
 
 /** 3D terrain mesh (plan B): serve a `dem-prep terrain` tileset from the
  * loopback HTTP server and hand Cesium the layer.json URL; on = the server
- * runs and the globe carries the mesh. */
+ * runs and the globe carries the mesh. Below the toggle: the two one-click
+ * sources (Copernicus download for the map centre, or a local LiDAR folder)
+ * with the pipeline's progress lines. */
 function Terrain3DToggle() {
   const { t } = useTranslation()
   const terrain3d = useTerrainStore((s) => s.terrain3d)
   const error3d = useTerrainStore((s) => s.error3d)
+  const building3d = useTerrainStore((s) => s.building3d)
+  const buildError3d = useTerrainStore((s) => s.buildError3d)
   const start3d = useTerrainStore((s) => s.start3d)
   const stop3d = useTerrainStore((s) => s.stop3d)
+  const download3d = useTerrainStore((s) => s.download3d)
+  const build3d = useTerrainStore((s) => s.build3d)
+  const mapCenter = useUiStore((s) => s.mapCenter)
   const folderName = terrain3d
     ? terrain3d.folder.split(/[\\/]/).filter(Boolean).pop() ?? terrain3d.folder
     : null
+
+  const downloadHere = () => {
+    // The map centre at click time; without one (rare) fall back to the
+    // Chilliwack drape-verification area.
+    const c = mapCenter ?? { lat: 49.1577, lon: -121.951 }
+    void download3d(c.lat, c.lon, 50)
+  }
+
+  const buildLocal = async () => {
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    const folder = await open({ multiple: false, directory: true })
+    if (folder && typeof folder === 'string') void build3d(folder)
+  }
+
   return (
     <div>
       <PopoverToggle
@@ -186,6 +207,32 @@ function Terrain3DToggle() {
       {folderName && (
         <div className="px-1 text-[10px] text-muted">
           {t('terrain.serving')} {folderName}
+        </div>
+      )}
+      {!terrain3d && (
+        <div className="mt-1 space-y-1 border-t border-line pt-1">
+          <button
+            onClick={downloadHere}
+            disabled={building3d != null || !mapCenter}
+            title={t('terrain.downloadHint')}
+            className="w-full rounded border border-line bg-canvas px-2 py-1 text-[11px] text-ink hover:bg-panel disabled:opacity-50"
+          >
+            {t('terrain.downloadHere')}
+          </button>
+          <button
+            onClick={() => void buildLocal()}
+            disabled={building3d != null}
+            title={t('terrain.buildHint')}
+            className="w-full rounded border border-line bg-canvas px-2 py-1 text-[11px] text-ink hover:bg-panel disabled:opacity-50"
+          >
+            {t('terrain.buildLocal')}
+          </button>
+          {building3d && (
+            <div className="mono px-1 text-[10px] text-muted">
+              [{building3d.stage}] {building3d.line.slice(-60)}
+            </div>
+          )}
+          {buildError3d && <div className="px-1 text-[10px] text-error">{buildError3d}</div>}
         </div>
       )}
     </div>
