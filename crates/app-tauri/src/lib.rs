@@ -13,6 +13,7 @@ mod logs_service;
 mod mission_service;
 mod motor_test_state;
 mod params_service;
+mod plan_service;
 mod rtk_service;
 mod state;
 mod telemetry_pump;
@@ -53,6 +54,8 @@ pub fn run() {
             terrain_service::terrain3d_build,
             console_service::console_send,
             console_service::console_close,
+            plan_service::plan_window_open,
+            plan_service::plan_window_state,
             logs_service::logs_request_list,
             logs_service::logs_download,
             logs_service::logs_cancel,

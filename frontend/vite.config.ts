@@ -53,6 +53,7 @@ export default defineConfig({
         inspector: 'inspector.html',
         actuator: 'actuator.html',
         params: 'params.html',
+        plan: 'plan.html',
         gallery: 'gallery.html',
       },
     },

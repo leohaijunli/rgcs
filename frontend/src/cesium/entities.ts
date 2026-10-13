@@ -408,14 +408,17 @@ export function renderWaypoints(
   return layer
 }
 
-/** Chip text under a waypoint: `seq · AGL m` above the point's own ground
- * (the DTM under it from `terrain_sample`; the flat HOME plane as fallback —
- * the same plane the vehicle drop line stands on), else just the seq when
- * sticks are off. */
+/** Chip text under a waypoint: `seq · AMSL m · AGL m`. The AMSL height is
+ * the stored plan altitude (all frames normalize to AMSL); the AGL is
+ * measured against the point's own ground (the DTM under it from
+ * `terrain_sample`; the flat HOME plane as fallback — the same plane the
+ * vehicle drop line stands on). */
 function waypointLabel(item: MissionItem, opts: WaypointRenderOptions): string {
   if (!opts.heights) return String(item.seq)
   const ground = opts.groundBySeq?.[item.seq] ?? opts.groundM ?? 0
-  return `${item.seq} · ${Math.max(0, Math.round(item.z - ground))} m AGL`
+  const amsl = Math.round(item.z)
+  const agl = Math.max(0, Math.round(item.z - ground))
+  return `${item.seq} · ${amsl} m · ${agl} m AGL`
 }
 
 /** Hard on/off phase of the target-waypoint blink: 0.4 s visible, 0.4 s

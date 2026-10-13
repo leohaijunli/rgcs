@@ -13,6 +13,7 @@ export default {
     popover: 'Tools',
     motorTest: 'Motor test',
     parameters: 'Parameters',
+    planWindow: 'Flight plan design',
     logs: 'Logs',
   },
     console: {
@@ -128,6 +129,8 @@ export default {
   plan: {
     waypoint: 'Waypoint',
     altitude: 'Altitude',
+    windowTitle: 'Flight Plan Design',
+    windowHint: 'Mirrors the main window — edits apply there',
     step: {
       area: '1 · Area',
       pattern: '2 · Pattern',
