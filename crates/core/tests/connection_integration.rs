@@ -373,3 +373,84 @@ async fn send_round_trip_to_peer() {
         other => panic!("unexpected peer message: {other:?}"),
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn auto_discovery_adopts_non_default_fc_sysid() {
+    // The FC streams from sysid 250 (a custom MAV_SYS_ID) while the config
+    // expects 1/1; the worker must adopt the FC's real ids and track it.
+    let port = free_udp_port();
+    let config = ConnectionConfig {
+        endpoint: Endpoint::UdpListener {
+            addr: format!("127.0.0.1:{port}").parse().unwrap(),
+        },
+        heartbeat_timeout: Duration::from_millis(1000),
+        reconnect_delay: Duration::from_millis(50),
+        ..Default::default()
+    };
+    let (handle, mut rx, _first) = spawn_connection(config).await.expect("spawn");
+
+    let mut peer =
+        mavlink::connect_async::<mavlink::common::MavMessage>(&format!("udpout:127.0.0.1:{port}"))
+            .await
+            .expect("peer connect");
+    peer.set_protocol_version(mavlink::MavlinkVersion::V2);
+
+    let _ = wait_for(&mut rx, Duration::from_secs(2), |e| {
+        matches!(e, ConnectionEvent::Connected { .. })
+    })
+    .await;
+
+    // FC heartbeat from the non-default node.
+    peer.send(
+        &MavHeader {
+            system_id: 250,
+            component_id: 1,
+            sequence: 0,
+        },
+        &heartbeat(),
+    )
+    .await
+    .expect("peer send");
+
+    let _discovered = wait_for(&mut rx, Duration::from_secs(2), |e| {
+        matches!(
+            e,
+            ConnectionEvent::TargetDiscovered {
+                system_id: 250,
+                component_id: 1,
+            }
+        )
+    })
+    .await;
+    let _restored = wait_for(&mut rx, Duration::from_secs(2), |e| {
+        matches!(e, ConnectionEvent::HeartbeatRestored)
+    })
+    .await;
+
+    // The adopted FC stays tracked: a subsequent heartbeat is observed and
+    // HeartbeatLost still fires once the FC goes silent.
+    peer.send(
+        &MavHeader {
+            system_id: 250,
+            component_id: 1,
+            sequence: 1,
+        },
+        &heartbeat(),
+    )
+    .await
+    .expect("peer send");
+    let _ = wait_for(&mut rx, Duration::from_secs(2), |e| {
+        matches!(e, ConnectionEvent::Message(m) if m.is_heartbeat_from(250, 1))
+    })
+    .await;
+
+    let lost = wait_for(&mut rx, Duration::from_secs(3), |e| {
+        matches!(e, ConnectionEvent::HeartbeatLost { .. })
+    })
+    .await;
+    if let ConnectionEvent::HeartbeatLost { last_seen_age } = lost {
+        assert!(last_seen_age >= Duration::from_millis(200));
+    }
+
+    handle.shutdown().await;
+}

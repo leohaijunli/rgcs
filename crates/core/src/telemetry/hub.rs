@@ -158,6 +158,10 @@ async fn pump(
                 Ok(ConnectionEvent::HeartbeatRestored) => {
                     let _ = link_tx.send(LinkStatus::alive(endpoint.clone()));
                 }
+                Ok(ConnectionEvent::TargetDiscovered { .. }) => {
+                    // The immediately-following HeartbeatRestored carries the
+                    // liveness transition; nothing to update here (auto-discovery).
+                }
                 Ok(ConnectionEvent::HeartbeatLost { .. }) => {
                     let _ = link_tx.send(LinkStatus::lost(endpoint.clone()));
                 }

@@ -79,6 +79,25 @@ impl HeartbeatMonitor {
         was_lost
     }
 
+    /// Re-target this monitor to a different node, marking it alive at `now`.
+    ///
+    /// Used for auto-discovery: the first autopilot heartbeat on a link can
+    /// adopt a system whose ids differ from the configured expectation.
+    /// Returns `true` when the previous status was `NeverSeen`/`Lost` (i.e.
+    /// the adoption is itself a liveness transition).
+    pub fn adopt(&mut self, sys_id: u8, comp_id: u8, now: Instant) -> bool {
+        if self.sys_id == sys_id && self.comp_id == comp_id {
+            return self.observe(sys_id, comp_id, now);
+        }
+        let was_lost = self.is_lost(now);
+        self.sys_id = sys_id;
+        self.comp_id = comp_id;
+        self.last_seen = Some(now);
+        self.lost_since = None;
+        self.consecutive = 0;
+        was_lost
+    }
+
     /// True if a heartbeat was seen within the timeout.
     pub fn is_alive(&self, now: Instant) -> bool {
         match self.last_seen {
@@ -172,5 +191,32 @@ mod tests {
         m.observe(1, 1, t0);
         m.set_timeout(secs(10));
         assert!(m.is_alive(t0 + secs(5)));
+    }
+
+    #[test]
+    fn adopt_retargets_and_marks_alive() {
+        let mut m = HeartbeatMonitor::new(1, 1, secs(3));
+        let t0 = Instant::now();
+        assert!(m.adopt(250, 1, t0), "never-seen adoption is a transition");
+        assert_eq!(m.node(), (250, 1));
+        assert!(m.is_alive(t0));
+        // Subsequent heartbeats from the adopted node are observed.
+        assert!(!m.observe(250, 1, t0 + secs(1)));
+        assert!(m.is_alive(t0 + secs(1)));
+        // Heartbeats from the old expectation no longer match.
+        assert!(!m.observe(1, 1, t0 + secs(2)));
+        // Re-adopting the same node is a plain observe.
+        assert!(!m.adopt(250, 1, t0 + secs(3)));
+    }
+
+    #[test]
+    fn adopt_after_alive_is_not_a_liveness_transition() {
+        let mut m = HeartbeatMonitor::new(1, 1, secs(3));
+        let t0 = Instant::now();
+        m.observe(1, 1, t0);
+        // Retargeting a live monitor just switches nodes (still alive).
+        assert!(!m.adopt(250, 1, t0 + secs(1)));
+        assert_eq!(m.node(), (250, 1));
+        assert!(m.is_alive(t0 + secs(1)));
     }
 }

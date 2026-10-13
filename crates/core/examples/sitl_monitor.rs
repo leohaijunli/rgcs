@@ -102,6 +102,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ConnectionEvent::HeartbeatRestored => {
                 println!("[alarm] heartbeat restored");
             }
+            ConnectionEvent::TargetDiscovered {
+                system_id,
+                component_id,
+            } => {
+                println!("[link] adopted FC {system_id}/{component_id} from heartbeat");
+            }
             ConnectionEvent::LinkError(f) => {
                 println!("[link] error: {:?}", f);
             }

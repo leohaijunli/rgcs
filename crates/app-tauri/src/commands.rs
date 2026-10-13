@@ -6,7 +6,10 @@ use std::time::Duration;
 
 use ::mavlink::common::MavCmd;
 use maggcs_core::devices::{DeviceDatabase, DeviceManager, SerialDeviceInfo};
-use maggcs_core::mavlink::connection::{spawn_connection, LinkStatus};
+use maggcs_core::mavlink::connection::{
+    spawn_connection, ConnectionEvent, ConnectionHandle, LinkStatus,
+};
+use maggcs_core::mavlink::message::MavMessage;
 use maggcs_core::mavlink::{ConnectionConfig, Endpoint};
 use maggcs_core::mission::service::MissionIds;
 use maggcs_core::mission::types::MissionItem;
@@ -27,6 +30,14 @@ use crate::telemetry_pump;
 pub struct ConnectResponse {
     pub ok: bool,
     pub endpoint: String,
+    /// Flight controller system id the link settled on (auto-discovered or
+    /// the configured expectation).
+    pub target_system_id: u8,
+    /// Flight controller component id the link settled on.
+    pub target_component_id: u8,
+    /// True when the ids above were learned from the FC's own heartbeat
+    /// rather than taken from configuration.
+    pub target_discovered: bool,
 }
 
 /// Open a MAVLink connection and start the telemetry hub.
@@ -78,9 +89,19 @@ pub async fn connect(
     };
     outcome?;
 
+    // The FC ids are settled either by auto-discovery (first autopilot
+    // heartbeat on the link, e.g. a non-default PX4 sysid) or by the
+    // configured expectation when the link stays quiet.
+    let (target_system_id, target_component_id, target_discovered) = if config.auto_discover_target
+    {
+        resolve_target(&handle, &config).await
+    } else {
+        (config.target_system_id, config.target_component_id, false)
+    };
+
     // The hub consumes the initial event stream, so the `Connected` emitted by
     // the worker cannot be missed (issue #2).
-    let target = VehicleId::new(config.target_system_id, config.target_component_id);
+    let target = VehicleId::new(target_system_id, target_component_id);
     let hub = TelemetryHub::spawn(events_rx, DEFAULT_PUSH_HZ, target);
     let mission = mission_service::spawn(
         app.clone(),
@@ -88,15 +109,15 @@ pub async fn connect(
         MissionIds {
             self_system: config.system_id,
             self_component: config.component_id,
-            target_system: config.target_system_id,
-            target_component: config.target_component_id,
+            target_system: target_system_id,
+            target_component: target_component_id,
         },
     );
     let command = command_service::spawn(
         app.clone(),
         handle.clone(),
-        config.target_system_id,
-        config.target_component_id,
+        target_system_id,
+        target_component_id,
     );
     tauri::async_runtime::spawn(telemetry_pump::run(app.clone(), hub.clone()));
 
@@ -156,11 +177,59 @@ pub async fn connect(
     Ok(ConnectResponse {
         ok: true,
         endpoint: config.endpoint.to_address_string(),
+        target_system_id,
+        target_component_id,
+        target_discovered,
     })
 }
 
 /// How long `connect` waits for the first bind/connect attempt to resolve.
 const FIRST_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long `connect` waits for the FC's first heartbeat (auto-discovery)
+/// before falling back to the configured target ids.
+const TARGET_DISCOVER_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Resolve the FC's system/component ids by watching for the first autopilot
+/// heartbeat on a freshly connected link.
+///
+/// Returns the discovered ids and `true` when they came from the FC itself.
+/// Falls back to the configured expectation on timeout or when the worker
+/// already reports a heartbeat from the expected node.
+async fn resolve_target(
+    handle: &ConnectionHandle,
+    config: &ConnectionConfig,
+) -> (u8, u8, bool) {
+    let mut events = handle.subscribe();
+    let outcome = tokio::time::timeout(TARGET_DISCOVER_TIMEOUT, async {
+        loop {
+            match events.recv().await {
+                Ok(ConnectionEvent::TargetDiscovered { system_id, component_id }) => {
+                    return (system_id, component_id);
+                }
+                Ok(ConnectionEvent::Message(env)) => {
+                    // The configured target is already alive: keep it as-is.
+                    if env.header.system_id == config.target_system_id
+                        && env.header.component_id == config.target_component_id
+                        && matches!(env.message, MavMessage::HEARTBEAT(_))
+                    {
+                        return (config.target_system_id, config.target_component_id);
+                    }
+                }
+                Err(_) => return (config.target_system_id, config.target_component_id),
+                _ => {}
+            }
+        }
+    })
+    .await;
+    match outcome {
+        Ok((sys, comp)) => {
+            let discovered = sys != config.target_system_id || comp != config.target_component_id;
+            (sys, comp, discovered)
+        }
+        Err(_) => (config.target_system_id, config.target_component_id, false),
+    }
+}
 
 /// Stop the active connection and hub.
 #[tauri::command]

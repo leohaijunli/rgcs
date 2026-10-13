@@ -94,7 +94,8 @@ jobs:
   windows-build:
     name: Build Windows installer (NSIS/MSI)
     runs-on: windows-latest
-    # Only build a release when a version tag is pushed (or on manual dispatch).
+    # Build on a version tag (publish release) or on manual dispatch (download
+    # the installer artifact to test the current build).
     if: ${{ startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' }}
     permissions:
       contents: write
@@ -118,16 +119,20 @@ jobs:
         with:
           projectPath: crates/app-tauri
           args: ''
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v0.1.0' }}
-          releaseName: ${{ github.ref_type == 'tag' && format('MagGCS {0}', github.ref_name) || 'MagGCS v0.1.0' }}
-          releaseBody: 'Windows installer (NSIS/MSI). See assets to download.'
+          # Publish a release only when a version tag is pushed; on manual
+          # dispatch tauri-action just runs `tauri build` and the installer is
+          # downloaded as a workflow artifact (no spurious draft release).
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          releaseName: ${{ github.ref_type == 'tag' && format('MagGCS {0}', github.ref_name) || '' }}
+          releaseBody: ${{ github.ref_type == 'tag' && 'Windows installer (NSIS/MSI). See assets to download.' || '' }}
           releaseDraft: true
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: maggcs-windows
           path: target/release/bundle/**
-          if-no-files-found: warn
+          # A build that silently produced no installer is useless.
+          if-no-files-found: error
 
   sitl:
     name: PX4 SITL heartbeat integration

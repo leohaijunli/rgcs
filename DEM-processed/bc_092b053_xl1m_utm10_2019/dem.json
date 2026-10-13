@@ -1,0 +1,16 @@
+{
+  "version": "f3123d6ead881d48",
+  "raster_crs": "EPSG:4326",
+  "resolution_m": 1.0,
+  "bounds": {
+    "north": 48.60098791016354,
+    "south": 48.49885798747652,
+    "east": -123.49158077604353,
+    "west": -123.56460516102905
+  },
+  "vertical_datum": "orthometric_cgvd2013",
+  "source_file": "bc_092b053_xl1m_utm10_2019.tif",
+  "source_points": 0,
+  "has_dsm": false,
+  "source": "geotiff"
+}

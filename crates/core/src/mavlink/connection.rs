@@ -55,6 +55,12 @@ pub struct ConnectionConfig {
     pub target_system_id: u8,
     /// Expected flight controller component id (PX4 autopilot: 1).
     pub target_component_id: u8,
+    /// Auto-adopt the first autopilot heartbeat seen on the link when it
+    /// differs from the expected target ids above. When disabled, only the
+    /// configured `target_system_id`/`target_component_id` pair is treated
+    /// as the FC (ADR-003 ids are an expectation, not a hard pin).
+    #[serde(default = "default_auto_discover")]
+    pub auto_discover_target: bool,
     /// Heartbeat timeout before the link is declared lost.
     #[serde(default = "default_heartbeat_timeout")]
     pub heartbeat_timeout: Duration,
@@ -68,6 +74,10 @@ pub struct ConnectionConfig {
 
 fn default_heartbeat_timeout() -> Duration {
     DEFAULT_HEARTBEAT_TIMEOUT
+}
+
+fn default_auto_discover() -> bool {
+    true
 }
 
 fn default_reconnect_delay() -> Duration {
@@ -84,6 +94,7 @@ impl Default for ConnectionConfig {
             component_id: 250,
             target_system_id: 1,
             target_component_id: 1,
+            auto_discover_target: true,
             heartbeat_timeout: DEFAULT_HEARTBEAT_TIMEOUT,
             reconnect_delay: DEFAULT_RECONNECT_DELAY,
             mavlink_version: MavVersion::default(),
@@ -206,6 +217,9 @@ fn is_recoverable_read_error(e: &::mavlink::error::MessageReadError) -> bool {
 pub enum ConnectionEvent {
     /// Link established (first connect or reconnect).
     Connected { endpoint: Endpoint },
+    /// An autopilot node was adopted as the FC from its first heartbeat,
+    /// replacing the configured target expectation (auto-discovery).
+    TargetDiscovered { system_id: u8, component_id: u8 },
     /// A frame was received from any node on the link.
     Message(Box<MessageEnvelope>),
     /// Heartbeat from the target FC was lost.
@@ -387,6 +401,22 @@ fn gcs_heartbeat_message() -> MavMessage {
     })
 }
 
+/// A HEARTBEAT from an autopilot node, eligible for auto-discovery adoption.
+///
+/// The autopilot check is the discriminator: our own GCS heartbeat is
+/// `MAV_AUTOPILOT_GENERIC`, and the FC's system id may coincide with ours
+/// (both default to 250), so no source-id exclusion is possible.
+fn candidate_autopilot_node(env: &MessageEnvelope) -> Option<(u8, u8)> {
+    match &env.message {
+        MavMessage::HEARTBEAT(hb)
+            if hb.autopilot != ::mavlink::common::MavAutopilot::MAV_AUTOPILOT_GENERIC =>
+        {
+            Some((env.header.system_id, env.header.component_id))
+        }
+        _ => None,
+    }
+}
+
 /// Connection worker task.
 async fn run_worker(
     inner: Arc<ConnectionInner>,
@@ -398,12 +428,6 @@ async fn run_worker(
 ) {
     let config = &inner.config;
     let address = config.endpoint.to_address_string();
-    let mut heartbeat = HeartbeatMonitor::new(
-        config.target_system_id,
-        config.target_component_id,
-        config.heartbeat_timeout,
-    );
-    let mut fc_alive = false;
     let mut seq: u8 = 0;
     let mut first_result = Some(first_result);
 
@@ -412,6 +436,15 @@ async fn run_worker(
             return;
         }
         *inner.state.lock().await = LinkState::Connecting;
+        // Per-link discovery state: each fresh connection may expose a
+        // different FC, so the monitor and the adopted node reset on reconnect.
+        let mut heartbeat = HeartbeatMonitor::new(
+            config.target_system_id,
+            config.target_component_id,
+            config.heartbeat_timeout,
+        );
+        let mut adopted_target: Option<(u8, u8)> = None;
+        let mut fc_alive = false;
         let mut conn: Conn = match ::mavlink::connect_async::<MavMessage>(&address).await {
             Ok(c) => c,
             Err(e) => {
@@ -454,15 +487,49 @@ async fn run_worker(
                 res = conn.recv() => match res {
                     Ok((header, message)) => {
                         let now = Instant::now();
-                        let is_target_heartbeat = header.system_id == config.target_system_id
-                            && header.component_id == config.target_component_id
-                            && matches!(message, MavMessage::HEARTBEAT(_));
                         let env = MessageEnvelope { header, message, received_at: now };
+
+                        // Auto-discovery: adopt the first autopilot heartbeat
+                        // on the link when it differs from the configured
+                        // target. The FC is then tracked and addressed by its
+                        // real ids instead of the config expectation.
+                        let mut just_adopted = false;
+                        if config.auto_discover_target && adopted_target.is_none() {
+                            if let Some(node) = candidate_autopilot_node(&env) {
+                                if node != (config.target_system_id, config.target_component_id) {
+                                    let was_alive = fc_alive;
+                                    adopted_target = Some(node);
+                                    heartbeat.adopt(node.0, node.1, now);
+                                    fc_alive = true;
+                                    just_adopted = true;
+                                    let _ = events.send(ConnectionEvent::TargetDiscovered {
+                                        system_id: node.0,
+                                        component_id: node.1,
+                                    });
+                                    if !was_alive {
+                                        let _ =
+                                            events.send(ConnectionEvent::HeartbeatRestored);
+                                    }
+                                }
+                            }
+                        }
+
+                        let target =
+                            adopted_target.unwrap_or((config.target_system_id, config.target_component_id));
+                        let is_target_heartbeat = env.header.system_id == target.0
+                            && env.header.component_id == target.1
+                            && matches!(env.message, MavMessage::HEARTBEAT(_));
                         let _ = events.send(ConnectionEvent::Message(Box::new(env)));
-                        if is_target_heartbeat {
+                        if is_target_heartbeat && !just_adopted {
                             let was_alive = fc_alive;
-                            heartbeat.observe(header.system_id, header.component_id, now);
+                            heartbeat.observe(target.0, target.1, now);
                             fc_alive = true;
+                            // First target heartbeat (configured or adopted)
+                            // locks the node for this link: a QGC-like peer
+                            // on the same bus must not steal the target.
+                            if adopted_target.is_none() {
+                                adopted_target = Some(target);
+                            }
                             if !was_alive {
                                 let _ = events.send(ConnectionEvent::HeartbeatRestored);
                             }
@@ -556,6 +623,74 @@ async fn run_worker(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn autopilot_heartbeat_is_a_discovery_candidate() {
+        let env = MessageEnvelope {
+            header: MavHeader {
+                system_id: 250,
+                component_id: 1,
+                sequence: 0,
+            },
+            message: MavMessage::HEARTBEAT(::mavlink::common::HEARTBEAT_DATA {
+                custom_mode: 0,
+                mavtype: ::mavlink::common::MavType::MAV_TYPE_QUADROTOR,
+                autopilot: ::mavlink::common::MavAutopilot::MAV_AUTOPILOT_PX4,
+                base_mode: ::mavlink::common::MavModeFlag::empty(),
+                system_status: ::mavlink::common::MavState::MAV_STATE_ACTIVE,
+                mavlink_version: 3,
+            }),
+            received_at: Instant::now(),
+        };
+        assert_eq!(
+            candidate_autopilot_node(&env),
+            Some((250, 1)),
+            "an autopilot heartbeat is a candidate even when its system id equals ours"
+        );
+    }
+
+    #[test]
+    fn gcs_and_generic_heartbeats_are_not_candidates() {
+        let hb = MavMessage::HEARTBEAT(::mavlink::common::HEARTBEAT_DATA {
+            custom_mode: 0,
+            mavtype: ::mavlink::common::MavType::MAV_TYPE_GCS,
+            autopilot: ::mavlink::common::MavAutopilot::MAV_AUTOPILOT_GENERIC,
+            base_mode: ::mavlink::common::MavModeFlag::empty(),
+            system_status: ::mavlink::common::MavState::MAV_STATE_ACTIVE,
+            mavlink_version: 3,
+        });
+        // Our own GCS heartbeat must never be adopted (autopilot GENERIC).
+        let own = MessageEnvelope {
+            header: MavHeader { system_id: 250, component_id: 250, sequence: 0 },
+            message: hb.clone(),
+            received_at: Instant::now(),
+        };
+        assert_eq!(candidate_autopilot_node(&own), None, "own GCS heartbeat is ignored");
+        // Generic-autopilot nodes are not a flight controller.
+        let generic = MessageEnvelope {
+            header: MavHeader { system_id: 2, component_id: 190, sequence: 0 },
+            message: hb,
+            received_at: Instant::now(),
+        };
+        assert_eq!(candidate_autopilot_node(&generic), None);
+        // Non-heartbeat traffic is not a candidate.
+        let att = MessageEnvelope {
+            header: MavHeader { system_id: 1, component_id: 1, sequence: 0 },
+            message: MavMessage::ATTITUDE(::mavlink::common::ATTITUDE_DATA {
+                time_boot_ms: 0,
+                roll: 0.0,
+                pitch: 0.0,
+                yaw: 0.0,
+                rollspeed: 0.0,
+                pitchspeed: 0.0,
+                yawspeed: 0.0,
+            }),
+            received_at: Instant::now(),
+        };
+        assert_eq!(candidate_autopilot_node(&att), None);
+    }
+
     use super::is_recoverable_read_error;
     use ::mavlink::error::{MessageReadError, ParserError};
 
