@@ -65,6 +65,11 @@ pub struct PlannedWaypoint {
     /// Command parameters P1..P4.
     pub params: [f32; 4],
     pub autocontinue: bool,
+    /// Terrain-mode re-drape skips this waypoint: the operator pinned the
+    /// height by hand (e.g. a lower pass over a magnetometer base) and the
+    /// automatic drape must not overwrite it.
+    #[serde(default)]
+    pub locked: bool,
 }
 
 impl PlannedWaypoint {
@@ -76,6 +81,7 @@ impl PlannedWaypoint {
             command: 16, // MAV_CMD_NAV_WAYPOINT
             params: [0.0; 4],
             autocontinue: true,
+            locked: false,
         }
     }
 }

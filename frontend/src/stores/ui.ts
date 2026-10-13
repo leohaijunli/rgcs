@@ -8,7 +8,7 @@ export type DockTab = 'profile' | 'qc' | 'log'
 export type PlanStep = 'area' | 'pattern' | 'waypoints' | 'sync'
 /** Active map tool. `add` places a new waypoint on click; `polygon` draws a
  * survey boundary (both planning view only). */
-export type MapTool = 'select' | 'add' | 'polygon'
+export type MapTool = 'select' | 'add' | 'polygon' | 'center'
 /** Basemap imagery on top of the offline grid. */
 export type ImageryStyle = 'google-satellite' | 'google-hybrid'
 

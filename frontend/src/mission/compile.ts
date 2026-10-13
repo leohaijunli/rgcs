@@ -113,6 +113,7 @@ export function makeWaypoint(latDeg: number, lonDeg: number, amslM: number): Pla
     altitude: amslHeight(amslM),
     command: 16, // MAV_CMD_NAV_WAYPOINT
     params: [0, 0, 0, 0],
+    locked: false,
     autocontinue: true,
   }
 }
@@ -225,5 +226,6 @@ export function waypointFromItem(item: MissionItem, homeAmslM: number): PlannedW
     command: item.command,
     params: params4(item.params),
     autocontinue: item.autocontinue,
+    locked: false,
   }
 }

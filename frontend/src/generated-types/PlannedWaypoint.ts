@@ -17,4 +17,10 @@ command: number,
 /**
  * Command parameters P1..P4.
  */
-params: [number, number, number, number], autocontinue: boolean, };
+params: [number, number, number, number], autocontinue: boolean, 
+/**
+ * Terrain-mode re-drape skips this waypoint: the operator pinned the
+ * height by hand (e.g. a lower pass over a magnetometer base) and the
+ * automatic drape must not overwrite it.
+ */
+locked: boolean, };

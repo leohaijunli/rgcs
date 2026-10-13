@@ -224,6 +224,8 @@ function ItemEditor({ seq, waypoint }: { seq: number; waypoint: PlannedWaypoint 
   const { t } = useTranslation()
   const updatePosition = useMissionStore((s) => s.updatePosition)
   const updateAltitude = useMissionStore((s) => s.updateAltitude)
+  const toggleWaypointLock = useMissionStore((s) => s.toggleWaypointLock)
+  const altitudeMode = useMissionStore((s) => s.altitudeMode)
   const setCurrent = useMissionStore((s) => s.setCurrent)
   const coordinate = commandUsesCoordinate(waypoint.command)
   const confirmTimer = useRef<number | undefined>(undefined)
@@ -275,6 +277,19 @@ function ItemEditor({ seq, waypoint }: { seq: number; waypoint: PlannedWaypoint 
           />
           <span className="shrink-0 text-[10px] text-muted">AMSL</span>
         </label>
+        {/* Height pin (plan review): a locked waypoint keeps its altitude
+         * through terrain-mode re-drapes — the operator's manual override. */}
+        {coordinate && altitudeMode === 'terrain' && (
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={waypoint.locked === true}
+              onChange={() => toggleWaypointLock(seq)}
+              className="h-3.5 w-3.5"
+            />
+            <span className="text-muted">{t('plan.lockHeight')}</span>
+          </label>
+        )}
         <div className="flex items-center justify-between">
           <span className="text-muted">{t('plan.command')}</span>
           <span className="mono">{waypoint.command === 16 ? 'NAV_WAYPOINT' : waypoint.command}</span>

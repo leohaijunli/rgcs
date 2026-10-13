@@ -6,6 +6,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { planSyncStatus, type PlanSyncStatus } from '../../../mission/sync'
+import AltitudeProfile from './AltitudeProfile'
 import { useMissionStore, type AltitudeMode } from '../../../stores/mission'
 import { useUiStore, type PlanStep } from '../../../stores/ui'
 import AreaStep from './AreaStep'
@@ -146,6 +147,10 @@ export default function PlanSteps() {
           ) : null}
         </StepCard>
       ))}
+
+      {/* Design-stage altitude profile: planned line vs the DEM ground
+       * under it — the clearance/undulation check without the globe. */}
+      <AltitudeProfile />
     </div>
   )
 }

@@ -16,7 +16,8 @@
         -1.0,
         0.0
       ],
-      "autocontinue": true
+      "autocontinue": true,
+      "locked": false
     },
     {
       "position": {
@@ -34,7 +35,8 @@
         0.0,
         0.0
       ],
-      "autocontinue": true
+      "autocontinue": true,
+      "locked": false
     },
     {
       "position": {
@@ -52,7 +54,8 @@
         0.0,
         0.0
       ],
-      "autocontinue": true
+      "autocontinue": true,
+      "locked": false
     },
     {
       "position": {
@@ -70,7 +73,8 @@
         0.0,
         0.0
       ],
-      "autocontinue": true
+      "autocontinue": true,
+      "locked": false
     },
     {
       "position": {
@@ -88,7 +92,8 @@
         0.0,
         0.0
       ],
-      "autocontinue": true
+      "autocontinue": true,
+      "locked": false
     },
     {
       "position": {
@@ -106,7 +111,8 @@
         0.0,
         0.0
       ],
-      "autocontinue": true
+      "autocontinue": true,
+      "locked": false
     },
     {
       "position": {
@@ -124,7 +130,8 @@
         0.0,
         0.0
       ],
-      "autocontinue": true
+      "autocontinue": true,
+      "locked": false
     },
     {
       "position": {
@@ -142,7 +149,8 @@
         0.0,
         0.0
       ],
-      "autocontinue": true
+      "autocontinue": true,
+      "locked": false
     },
     {
       "position": {
@@ -160,7 +168,8 @@
         0.0,
         0.0
       ],
-      "autocontinue": true
+      "autocontinue": true,
+      "locked": false
     },
     {
       "position": {
@@ -178,7 +187,8 @@
         0.0,
         0.0
       ],
-      "autocontinue": true
+      "autocontinue": true,
+      "locked": false
     },
     {
       "position": {
@@ -196,7 +206,8 @@
         0.0,
         0.0
       ],
-      "autocontinue": true
+      "autocontinue": true,
+      "locked": false
     },
     {
       "position": {
@@ -214,7 +225,8 @@
         0.0,
         0.0
       ],
-      "autocontinue": true
+      "autocontinue": true,
+      "locked": false
     },
     {
       "position": {
@@ -232,7 +244,8 @@
         0.0,
         0.0
       ],
-      "autocontinue": true
+      "autocontinue": true,
+      "locked": false
     },
     {
       "position": {
@@ -250,7 +263,8 @@
         0.0,
         0.0
       ],
-      "autocontinue": true
+      "autocontinue": true,
+      "locked": false
     },
     {
       "position": {
@@ -268,7 +282,8 @@
         0.0,
         0.0
       ],
-      "autocontinue": true
+      "autocontinue": true,
+      "locked": false
     },
     {
       "position": {
@@ -286,7 +301,8 @@
         0.0,
         0.0
       ],
-      "autocontinue": true
+      "autocontinue": true,
+      "locked": false
     },
     {
       "position": {
@@ -304,7 +320,8 @@
         0.0,
         0.0
       ],
-      "autocontinue": true
+      "autocontinue": true,
+      "locked": false
     },
     {
       "position": {
@@ -322,7 +339,8 @@
         0.0,
         0.0
       ],
-      "autocontinue": true
+      "autocontinue": true,
+      "locked": false
     },
     {
       "position": {
@@ -340,7 +358,8 @@
         0.0,
         0.0
       ],
-      "autocontinue": true
+      "autocontinue": true,
+      "locked": false
     },
     {
       "position": {
@@ -358,7 +377,8 @@
         0.0,
         0.0
       ],
-      "autocontinue": true
+      "autocontinue": true,
+      "locked": false
     },
     {
       "position": {
@@ -376,7 +396,8 @@
         0.0,
         0.0
       ],
-      "autocontinue": true
+      "autocontinue": true,
+      "locked": false
     },
     {
       "position": {
@@ -394,7 +415,8 @@
         0.0,
         0.0
       ],
-      "autocontinue": true
+      "autocontinue": true,
+      "locked": false
     },
     {
       "position": {
@@ -412,7 +434,8 @@
         0.0,
         0.0
       ],
-      "autocontinue": true
+      "autocontinue": true,
+      "locked": false
     },
     {
       "position": {
@@ -430,7 +453,8 @@
         0.0,
         0.0
       ],
-      "autocontinue": true
+      "autocontinue": true,
+      "locked": false
     },
     {
       "position": {
@@ -448,7 +472,8 @@
         0.0,
         0.0
       ],
-      "autocontinue": true
+      "autocontinue": true,
+      "locked": false
     },
     {
       "position": {
@@ -466,7 +491,8 @@
         0.0,
         0.0
       ],
-      "autocontinue": true
+      "autocontinue": true,
+      "locked": false
     },
     {
       "position": {
@@ -484,7 +510,8 @@
         0.0,
         0.0
       ],
-      "autocontinue": true
+      "autocontinue": true,
+      "locked": false
     },
     {
       "position": {
@@ -502,7 +529,8 @@
         0.0,
         0.0
       ],
-      "autocontinue": true
+      "autocontinue": true,
+      "locked": false
     },
     {
       "position": {
@@ -520,7 +548,8 @@
         0.0,
         0.0
       ],
-      "autocontinue": true
+      "autocontinue": true,
+      "locked": false
     }
   ],
   "lines": [

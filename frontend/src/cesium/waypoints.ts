@@ -181,6 +181,18 @@ export function installMapTools(
         pressing = true
         return
       }
+      if (active === 'center') {
+        // Set the pattern centre on click (plan review: one tool for sweep
+        // and cloverleaf centres, no typing).
+        const ground = pickLatLon(viewer, click.position)
+        if (ground) {
+          useMissionStore.getState().setPatternCenter({
+            latitude_deg: ground.lat,
+            longitude_deg: ground.lon,
+          })
+        }
+        return
+      }
       if (active === 'polygon') {
         pressing = true
         const picked = viewer.scene.pick(click.position)

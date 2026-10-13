@@ -127,6 +127,14 @@ export default {
   },
   plan: {
     waypoint: 'Waypoint',
+    lockHeight: 'Lock height (re-drape keeps it)',
+    profile: {
+      title: 'Altitude profile',
+      planned: 'Planned (AMSL)',
+      ground: 'DEM ground',
+      agl: 'AGL',
+      noData: 'Generate a route (2+ waypoints) with a loaded DEM first.',
+    },
     altitude: 'Altitude',
     step: {
       area: '1 · Area',
@@ -347,6 +355,7 @@ export default {
     aglLabel: '{{value}} m AGL',
     addHint: 'Click the map to add a waypoint · Esc to finish',
     drawPolygon: 'Survey boundary (draw a polygon)',
+    setCenter: 'Set pattern centre (click the map)',
     polygonHint: 'Click to add a vertex · right-click a vertex to remove it · click the first vertex or double-click to close · Esc to cancel',
     polygonSelfIntersect: 'Boundary crosses itself — fix it before generating',
     polygonReadout: '{{count}} vertices · {{area}} ha · {{perimeter}} m',

@@ -256,6 +256,10 @@ export default function MapView() {
         useUiStore.getState().setMapTool(
           useUiStore.getState().mapTool === 'polygon' ? 'select' : 'polygon',
         )
+      } else if (e.key === 'c' || e.key === 'C') {
+        useUiStore.getState().setMapTool(
+          useUiStore.getState().mapTool === 'center' ? 'select' : 'center',
+        )
       }
     }
     window.addEventListener('keydown', onKey)

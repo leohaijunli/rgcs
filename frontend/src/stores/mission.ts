@@ -116,6 +116,8 @@ interface MissionState {
   setSurveyAglM: (aglM: number) => void
   updatePosition: (seq: number, latDeg: number, lonDeg: number) => void
   updateAltitude: (seq: number, amslM: number) => void
+  /** Pin/unpin a waypoint's height: terrain re-drape skips locked points. */
+  toggleWaypointLock: (seq: number) => void
   addWaypoint: (latDeg: number, lonDeg: number, amslM: number) => void
   /** Add a waypoint from a map click, inheriting the previous altitude. */
   addWaypointAt: (latDeg: number, lonDeg: number) => void
@@ -222,6 +224,13 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       dirty: true,
       fcMatches: null,
       lastPattern: null,
+    })),
+
+  toggleWaypointLock: (seq) =>
+    set((s) => ({
+      waypoints: s.waypoints.map((wp, i) => (i === seq ? { ...wp, locked: !wp.locked } : wp)),
+      dirty: true,
+      fcMatches: null,
     })),
 
   addWaypoint: (latDeg, lonDeg, amslM) =>

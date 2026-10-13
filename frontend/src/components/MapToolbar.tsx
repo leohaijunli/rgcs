@@ -102,6 +102,15 @@ export default function MapToolbar({ onGoHome, onNorth }: Props) {
           <PenTool size={17} strokeWidth={1.75} />
         </IconButton>
       )}
+      {isPlanning && (
+        <IconButton
+          title={`${t('map.setCenter')} (C)`}
+          active={mapTool === 'center'}
+          onClick={() => setMapTool(mapTool === 'center' ? 'select' : 'center')}
+        >
+          <Crosshair size={17} strokeWidth={1.75} />
+        </IconButton>
+      )}
       {!isPlanning && (
         <IconButton title={t('map.follow')} active={follow} onClick={toggleFollow}>
           <Crosshair size={17} strokeWidth={1.75} />

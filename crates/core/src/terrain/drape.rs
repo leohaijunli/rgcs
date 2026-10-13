@@ -148,6 +148,12 @@ pub fn drape_to_terrain(
             out.push(wp.clone());
             continue;
         }
+        // A locked waypoint is the operator's hand-set height: the drape
+        // must not overwrite it (the pin survives every re-drape).
+        if wp.locked {
+            out.push(wp.clone());
+            continue;
+        }
         let (dtm, dsm, bridged) = match dem.sample_pair(wp.position) {
             Ok(pair) => (pair.0, pair.1, false),
             Err(TerrainError::Void(p)) => {
@@ -248,6 +254,26 @@ mod tests {
 
     fn wp(lon: f64) -> PlannedWaypoint {
         PlannedWaypoint::waypoint(GeoPoint::new(0.5, lon), 0.0)
+    }
+
+    #[test]
+    fn locked_waypoints_keep_their_height() {
+        let mut pinned = wp(0.001);
+        pinned.altitude = Height::new(crate::height::HeightDatum::AmslEgm96, 77.0);
+        pinned.locked = true;
+        let options = DrapeOptions {
+            agl_m: 40.0,
+            ..DrapeOptions::default()
+        };
+        let report = drape_to_terrain(&[pinned, wp(0.002)], &Slope, &options).expect("drape");
+        assert!(
+            (report.waypoints[0].altitude.meters() - 77.0).abs() < 1e-9,
+            "the pin survives"
+        );
+        assert!(
+            (report.waypoints[1].altitude.meters() - 42.0).abs() < 1e-9,
+            "the neighbour drapes"
+        );
     }
 
     #[test]
