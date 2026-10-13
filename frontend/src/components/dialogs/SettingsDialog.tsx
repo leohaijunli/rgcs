@@ -3,6 +3,7 @@ import * as Dialog from '@radix-ui/react-dialog'
 import * as Tabs from '@radix-ui/react-tabs'
 import { X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { PRESET_AREAS, presetArea } from '../../cesium/presets'
 import { connectEndpoint, disconnect, reportConnectError, shutdownApp } from '../../desktop/connect'
 import {
   BAUD_RATES,
@@ -376,6 +377,14 @@ function VehicleTab() {
     setInitialPosition({ lat: mapCenter.lat, lon: mapCenter.lon })
   }
 
+  const applyPreset = (id: string) => {
+    const area = presetArea(id)
+    if (!area) return
+    setLat(formatDeg(area.lat))
+    setLon(formatDeg(area.lon))
+    setInitialPosition({ lat: area.lat, lon: area.lon })
+  }
+
   const field =
     'mono touch-target mt-1 w-full rounded border border-line bg-canvas px-2 py-1 text-sm text-ink'
 
@@ -383,6 +392,21 @@ function VehicleTab() {
     <div className="text-sm">
       <div className="mb-1 text-xs text-muted">{t('settings.initialPosition.title')}</div>
       <div className="mb-3 text-xs text-muted">{t('settings.initialPosition.hint')}</div>
+      <label className="block">
+        <span className="text-xs text-muted">{t('settings.initialPosition.preset')}</span>
+        <select
+          value=""
+          onChange={(e) => applyPreset(e.target.value)}
+          className={field}
+        >
+          <option value="">—</option>
+          {PRESET_AREAS.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.name}
+            </option>
+          ))}
+        </select>
+      </label>
       <div className="grid grid-cols-2 gap-3">
         <label className="block">
           <span className="text-xs text-muted">{t('settings.initialPosition.latitude')}</span>

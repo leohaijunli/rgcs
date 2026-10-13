@@ -358,6 +358,7 @@ export default {
       hint: 'Used for the mock feed, the HOME marker and the initial camera until a vehicle reports its own fix. Leave it at the default for the SITL/survey area.',
       latitude: 'Latitude (°)',
       longitude: 'Longitude (°)',
+      preset: 'Preset area',
       useMapCenter: 'Use map centre',
       invalidLatitude: 'Enter a latitude between -90 and 90',
       invalidLongitude: 'Enter a longitude between -180 and 180',
