@@ -9,7 +9,19 @@ import ErrorBoundary from '../components/ErrorBoundary'
 import { applyThemePref, readThemePref } from '../design-system/theme'
 import '../i18n'
 
-// Restore the persisted theme before first paint (mirrors `maggcs.theme`).
+// Boot diagnostics: the webview has no visible console, so any error before
+// (or outside) React lands in the DOM itself — a blank window always has a
+// written reason on it.
+function showBootError(where: string, err: unknown): void {
+  const pre = document.createElement('pre')
+  pre.id = 'boot-error'
+  pre.style.cssText = 'padding:16px;color:#b00;white-space:pre-wrap;font-size:12px'
+  pre.textContent = `[${where}] ${String(err)}`
+  document.body.appendChild(pre)
+}
+window.addEventListener('error', (e) => showBootError('error', e.error ?? e.message))
+window.addEventListener('unhandledrejection', (e) => showBootError('rejection', e.reason))
+
 applyThemePref(readThemePref())
 
 const root = createRoot(document.getElementById('root') as HTMLElement)

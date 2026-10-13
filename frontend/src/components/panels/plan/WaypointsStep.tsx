@@ -15,6 +15,7 @@ import { compileWaypoints } from '../../../mission/compile'
 import { useMissionStore } from '../../../stores/mission'
 import { useTelemetryStore } from '../../../stores/telemetry'
 import { useUiStore } from '../../../stores/ui'
+import { useTerrainStore } from '../../../stores/terrain'
 import type { PlannedWaypoint } from '../../../generated-types/PlannedWaypoint'
 
 export default function WaypointsStep({ importNotice }: { importNotice: string[] }) {
@@ -32,6 +33,7 @@ export default function WaypointsStep({ importNotice }: { importNotice: string[]
   const blocks = useMissionStore((s) => s.blocks)
   const planBase = useMissionStore((s) => s.planBase)
   const mapCenter = useUiStore((s) => s.mapCenter)
+  const groundBySeq = useTerrainStore((s) => s.groundBySeq)
   const pos = useTelemetryStore((s) => s.snapshot?.global_position ?? null)
   const homeAmsl = home?.[2] ?? 0
 
@@ -116,7 +118,12 @@ export default function WaypointsStep({ importNotice }: { importNotice: string[]
                       {wp.position.longitude_deg.toFixed(6)}
                     </span>
                     <span className="shrink-0 text-right">
-                      <span className="mono block text-muted">{wp.altitude.meters.toFixed(1)} m</span>
+                      <span className="mono block text-muted">{wp.altitude.meters.toFixed(1)} m AMSL</span>
+                      {groundBySeq?.[idx] != null && (
+                        <span className="mono block text-[10px] text-muted">
+                          {Math.max(0, wp.altitude.meters - groundBySeq[idx]).toFixed(1)} m AGL
+                        </span>
+                      )}
                       {pos && (
                         <span className="mono block text-[10px] text-muted">
                           {formatDistance(

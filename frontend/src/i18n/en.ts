@@ -260,6 +260,8 @@ export default {
           auto: 'Terrain mode: re-draped automatically on every plan change.',
           noDem: 'No DEM loaded — plain heights in use. Load a terrain folder (LiDAR preferred).',
         },
+        terrainNeedsDem:
+          'Terrain mode needs ground data: load a terrain folder first (Layers ▸ Terrain).',
     },
     op: {
       upload: 'Uploading',

@@ -51,6 +51,11 @@ interface TerrainState {
   building3d: { stage: string; line: string } | null
   /** Error from the one-click build/download. */
   buildError3d: string | null
+  /** DTM under each mission waypoint (seq → metres), sampled by the map and
+   * shared with the waypoint list — the AGL readouts' ground truth. */
+  groundBySeq: Record<number, number> | null
+  /** Re-sample the DEM under `[seq, lat, lon]` entries into `groundBySeq`. */
+  sampleGround: (points: Array<[number, number, number]>) => Promise<void>
   load: () => Promise<void>
   /** Pick + load a tile against the current survey area (no dialog). */
   repick: () => Promise<void>
@@ -127,6 +132,26 @@ export const useTerrainStore = create<TerrainState>((set, get) => ({
   error3d: null,
   building3d: null,
   buildError3d: null,
+  groundBySeq: null,
+  sampleGround: async (points) => {
+    const tile = get().tile
+    if (!tile || points.length === 0) return
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      const samples = await invoke<Array<{ lat: number; lon: number; dtm_m: number | null }>>(
+        'terrain_sample',
+        { folder: tile.path, points: points.map(([, lat, lon]) => [lat, lon]) },
+      )
+      const next: Record<number, number> = {}
+      points.forEach(([seq], i) => {
+        const dtm = samples[i]?.dtm_m
+        if (dtm != null) next[seq] = dtm
+      })
+      set({ groundBySeq: Object.keys(next).length > 0 ? next : null })
+    } catch {
+      set({ groundBySeq: null }) // DEM gone: fall back to the flat plane
+    }
+  },
   load: async () => {
     set({ error: null, loading: true })
     try {

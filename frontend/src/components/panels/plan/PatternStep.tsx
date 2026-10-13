@@ -52,20 +52,41 @@ export default function PatternStep({ kind, onKind, sweep, onSweep, clover, onCl
   const effectiveCenter: GeoPoint | null =
     center ?? (mapCenter ? { latitude_deg: mapCenter.lat, longitude_deg: mapCenter.lon } : null)
   const usePolygonBoundary = polygonClosed && !polygonBad
-  // Terrain mode re-interprets the Pattern altitude as the survey AGL the
-  // auto re-drape applies (same number, different meaning — label it).
+  // Terrain mode: the altitude input IS the survey AGL — bound to its own
+  // store field (default 40, pure AGL semantics), never to the AMSL-bearing
+  // pattern field. Mixing the two is what made "50 AGL" show up as
+  // "50 AMSL" in the waypoint list.
+  const terrainTile = useTerrainStore((s) => s.tile)
+  const surveyAglM = useMissionStore((s) => s.surveyAglM)
   const altitudeLabel =
     altitudeMode === 'terrain' ? t('plan.pattern.altitudeAgl') : t('plan.pattern.altitude')
+  const altitudeValue =
+    altitudeMode === 'terrain' ? surveyAglM : kind === 'sweep' ? sweep.altitude_amsl_m : clover.altitude_amsl_m
+  const onAltitudeChange = (v: number) => {
+    if (altitudeMode === 'terrain') setSurveyAglM(v)
+    else if (kind === 'sweep') onSweep({ ...sweep, altitude_amsl_m: v })
+    else onClover({ ...clover, altitude_amsl_m: v })
+  }
+
 
   const onGenerate = async () => {
     setError(null)
     setBusy(true)
     try {
-      // Terrain mode: the Pattern altitude is the survey AGL the auto
-      // re-drape applies (the store subscription runs after insertPattern).
-      if (altitudeMode === 'terrain') {
-        setSurveyAglM(kind === 'sweep' ? sweep.altitude_amsl_m : clover.altitude_amsl_m)
+      // Terrain mode needs a DEM to mean anything: the altitude input is an
+      // AGL, and without terrain there is nothing to drape against — the
+      // waypoints would silently carry AMSL-looking numbers (the reported
+      // "50 AGL shows as 50 AMSL" bug). Require the tile instead.
+      if (altitudeMode === 'terrain' && !terrainTile) {
+        setError(t('plan.pattern.terrainNeedsDem'))
+        setBusy(false)
+        return
       }
+      // The AGL the auto re-drape applies (the store subscription runs after
+      // insertPattern). The generator writes home+AGL as a placeholder AMSL;
+      // the drape rewrites every waypoint right after.
+      const aglM = surveyAglM
+      const placeholder = (useMissionStore.getState().home?.[2] ?? 0) + aglM
       if (kind === 'sweep') {
         let boundary: GeoPoint[]
         if (usePolygonBoundary) boundary = polygonVertices
@@ -73,6 +94,7 @@ export default function PatternStep({ kind, onKind, sweep, onSweep, clover, onCl
         else return
         const plan = await generateSweep({
           ...sweep,
+          altitude_amsl_m: altitudeMode === 'terrain' ? placeholder : sweep.altitude_amsl_m,
           polygon: boundary,
           tie_spacing_m: sweep.tie_spacing_m && sweep.tie_spacing_m > 0 ? sweep.tie_spacing_m : null,
           speed_mps: sweep.speed_mps && sweep.speed_mps > 0 ? sweep.speed_mps : null,
@@ -90,6 +112,7 @@ export default function PatternStep({ kind, onKind, sweep, onSweep, clover, onCl
         }
         const plan = await generateCloverleaf({
           ...clover,
+          altitude_amsl_m: altitudeMode === 'terrain' ? placeholder : clover.altitude_amsl_m,
           center: effectiveCenter,
           speed_mps: clover.speed_mps && clover.speed_mps > 0 ? clover.speed_mps : null,
         })
@@ -138,7 +161,7 @@ export default function PatternStep({ kind, onKind, sweep, onSweep, clover, onCl
           <div className="grid grid-cols-2 gap-1.5">
             <Num label={t('plan.pattern.spacing')} value={sweep.line_spacing_m} onChange={(v) => onSweep({ ...sweep, line_spacing_m: v })} />
             <Num label={t('plan.pattern.lineAzimuth')} value={sweep.line_azimuth_deg} onChange={(v) => onSweep({ ...sweep, line_azimuth_deg: v })} />
-            <Num label={altitudeLabel} value={sweep.altitude_amsl_m} onChange={(v) => onSweep({ ...sweep, altitude_amsl_m: v })} />
+            <Num label={altitudeLabel} value={altitudeValue} onChange={onAltitudeChange} />
             <Num label={t('plan.pattern.speed')} value={sweep.speed_mps ?? 0} onChange={(v) => onSweep({ ...sweep, speed_mps: v })} />
           </div>
           {/* Advanced: folded by default (P6). */}
@@ -209,7 +232,7 @@ export default function PatternStep({ kind, onKind, sweep, onSweep, clover, onCl
             </button>
           </div>
           <div className="grid grid-cols-2 gap-1.5">
-            <Num label={altitudeLabel} value={clover.altitude_amsl_m} onChange={(v) => onClover({ ...clover, altitude_amsl_m: v })} />
+            <Num label={altitudeLabel} value={altitudeValue} onChange={onAltitudeChange} />
             <Num label={t('plan.pattern.speed')} value={clover.speed_mps ?? 0} onChange={(v) => onClover({ ...clover, speed_mps: v })} />
           </div>
           <button
