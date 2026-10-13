@@ -263,7 +263,13 @@ export default function PatternStep({ kind, onKind, sweep, onSweep, clover, onCl
       <button
         disabled={busy || (!effectiveCenter && !usePolygonBoundary) || polygonBad}
         onClick={() => void onGenerate()}
-        title={lastPattern ? t('plan.pattern.replaces') : undefined}
+        title={
+          polygonBad
+            ? t('plan.pattern.selfIntersects')
+            : lastPattern
+              ? t('plan.pattern.replaces')
+              : undefined
+        }
         className="w-full rounded-md border border-line bg-panel px-2 py-1.5 text-sm hover:bg-canvas disabled:opacity-40"
       >
         {lastPattern ? t('plan.pattern.regenerate') : t('plan.pattern.generate')}

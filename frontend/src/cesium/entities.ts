@@ -335,11 +335,23 @@ export function renderWaypoints(
         positions: run.items.map((it) =>
           Cesium.Cartesian3.fromDegrees(degFromMavInt(it.y), degFromMavInt(it.x), off(it.seq, it.z)),
         ),
-        width: run.kind === 'tie' ? 3 : 2,
-        material: new Cesium.PolylineGlowMaterialProperty({
-          glowPower: 0.18,
-          color: colour.withAlpha(0.85),
-        }),
+        // #35: tie lines must read as *transitions*, not as more survey
+        // lines — dashed and thinner; calibration runs dotted.
+        ...(run.kind === 'survey'
+          ? {
+              width: 2,
+              material: new Cesium.PolylineGlowMaterialProperty({
+                glowPower: 0.18,
+                color: colour.withAlpha(0.85),
+              }),
+            }
+          : {
+              width: run.kind === 'tie' ? 2 : 1.5,
+              material: new Cesium.PolylineDashMaterialProperty({
+                color: colour.withAlpha(0.75),
+                dashLength: run.kind === 'tie' ? 18 : 8,
+              }),
+            }),
       },
     })
     layer.runs.push({ entity, seqs: run.items.map((it) => it.seq) })
