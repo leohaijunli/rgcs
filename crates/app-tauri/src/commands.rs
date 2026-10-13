@@ -328,6 +328,7 @@ pub fn terrain_drape(
             agl_m,
             min_dsm_clearance_m,
             floor_below_start_m: None,
+            ..DrapeOptions::default()
         },
     )
     .map_err(|e| e.to_string())

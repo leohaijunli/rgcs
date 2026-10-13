@@ -335,6 +335,7 @@ function DrapeBlock() {
   const { t } = useTranslation()
   const altitudeMode = useMissionStore((s) => s.altitudeMode)
   const drape = useMissionStore((s) => s.drape)
+  const drapeError = useMissionStore((s) => s.drapeError)
   const drapeToTerrain = useMissionStore((s) => s.drapeToTerrain)
   const ensureTile = useTerrainStore((s) => s.ensureTile)
   const tile = useTerrainStore((s) => s.tile)
@@ -372,6 +373,11 @@ function DrapeBlock() {
         </button>
       )}
       {error && <div className="text-[11px] text-error">{error}</div>}
+      {auto && drapeError && (
+        <div className="text-[11px] text-error">
+          Terrain drape failed — heights are not terrain-following: {drapeError}
+        </div>
+      )}
       {auto && !tile && (
         <div className="text-[11px] text-warn">{t('plan.pattern.drape.noDem')}</div>
       )}
@@ -389,6 +395,11 @@ function DrapeBlock() {
           <span>
             {t('plan.pattern.drape.raised')} {drape.report.raised}
           </span>
+          {drape.report.void_filled > 0 && (
+            <span>
+              {t('plan.pattern.drape.voidFilled')} {drape.report.void_filled}
+            </span>
+          )}
           <span>
             {t('plan.pattern.drape.version')} {drape.report.dem_version}
           </span>

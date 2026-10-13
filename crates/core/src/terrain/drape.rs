@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use super::{ElevationSource, TerrainError};
+use crate::height::Height;
 use crate::plan::types::PlannedWaypoint;
 
 /// Draping options (S3).
@@ -37,6 +38,12 @@ pub struct DrapeOptions {
     /// height minus this much (the return-climb floor), metres. `None` =
     /// no floor.
     pub floor_below_start_m: Option<f64>,
+    /// How far a DTM void may be bridged by the nearest valid ground, metres.
+    /// Real LiDAR tiles carry small classification voids (water, slivers at
+    /// sheet edges); borrowing ground from within this radius keeps the
+    /// drape robust while staying bounded — a waypoint over a genuinely
+    /// void area (open water) still fails the plan instead of extrapolating.
+    pub void_bridge_radius_m: f64,
 }
 
 impl Default for DrapeOptions {
@@ -45,6 +52,7 @@ impl Default for DrapeOptions {
             agl_m: 40.0,
             min_dsm_clearance_m: 5.0,
             floor_below_start_m: None,
+            void_bridge_radius_m: 100.0,
         }
     }
 }
@@ -61,10 +69,51 @@ pub struct DrapeReport {
     pub min_dsm_clearance_m: f64,
     /// Waypoints raised above the plain DTM+AGL because the DSM demanded it.
     pub raised: u32,
+    /// Waypoints whose DTM sample was a void and got the nearest valid
+    /// ground within the bridge radius instead (small classification
+    /// holes); the report lets the operator judge the borrow.
+    pub void_filled: u32,
     /// Waypoints skipped because they are command items (no coordinate).
     pub command_items_skipped: u32,
     /// The DEM version the drape was computed against (ADR-004 archives).
     pub dem_version: String,
+}
+
+/// Metres per degree of latitude for the void-bridge search offsets.
+const M_PER_DEG: f64 = 111_320.0;
+/// Spiral ring step for the void-bridge search, metres.
+const BRIDGE_STEP_M: f64 = 15.0;
+
+/// Sample the DEM at `point`, bridging a DTM **void** with the nearest valid
+/// ground within the option's radius (a coarse spiral of 8 directions per
+/// ring). Coverage errors pass through unchanged — a waypoint outside the
+/// DEM is a survey-clipping problem, not a data blemish. A void that stays
+/// void for the whole radius (open water) still fails the plan.
+fn sample_with_void_bridge(
+    dem: &dyn ElevationSource,
+    point: crate::plan::GeoPoint,
+    radius_m: f64,
+) -> Result<(Height, Height), TerrainError> {
+    match dem.sample_pair(point) {
+        Err(TerrainError::Void(_)) => {}
+        other => return other,
+    }
+    let cos_lat = point.latitude_deg.to_radians().cos().max(1e-6);
+    let max_rings = ((radius_m / BRIDGE_STEP_M).round() as i64).max(0);
+    for ring in 1..=max_rings {
+        let d = ring as f64 * BRIDGE_STEP_M;
+        for k in 0..8 {
+            let angle = std::f64::consts::TAU * f64::from(k) / 8.0;
+            let probe = crate::plan::GeoPoint {
+                latitude_deg: point.latitude_deg + d * angle.sin() / M_PER_DEG,
+                longitude_deg: point.longitude_deg + d * angle.cos() / (M_PER_DEG * cos_lat),
+            };
+            if let Ok(pair) = dem.sample_pair(probe) {
+                return Ok(pair);
+            }
+        }
+    }
+    Err(TerrainError::Void(point))
 }
 
 /// Drape `waypoints` over `dem`.
@@ -99,7 +148,22 @@ pub fn drape_to_terrain(
             out.push(wp.clone());
             continue;
         }
-        let (dtm, dsm) = dem.sample_pair(wp.position)?;
+        let (dtm, dsm, bridged) = match dem.sample_pair(wp.position) {
+            Ok(pair) => (pair.0, pair.1, false),
+            Err(TerrainError::Void(p)) => {
+                match sample_with_void_bridge(dem, p, options.void_bridge_radius_m) {
+                    Ok(pair) => (pair.0, pair.1, true),
+                    // Not `?`: surface the original point in the error, and keep
+                    // the report partial-state out of the API (the plan stays
+                    // unmodified on failure).
+                    Err(_) => return Err(TerrainError::Void(p)),
+                }
+            }
+            Err(e) => return Err(e),
+        };
+        if bridged {
+            report.void_filled += 1;
+        }
         let mut height = dtm.meters() + options.agl_m;
         // DSM clearance: the draped height must clear the surface. A void
         // DSM (DTM-only fallback sources — CDEM/Copernicus) skips the check:
@@ -190,8 +254,7 @@ mod tests {
     fn drapes_to_constant_agl() {
         let options = DrapeOptions {
             agl_m: 40.0,
-            min_dsm_clearance_m: 5.0,
-            floor_below_start_m: None,
+            ..DrapeOptions::default()
         };
         let report = drape_to_terrain(&[wp(0.001), wp(0.002)], &Slope, &options).expect("drape");
         // Ground at lon 0.001 → 1 m; at 0.002 → 2 m. Draped: 41/42.
@@ -210,7 +273,7 @@ mod tests {
         let options = DrapeOptions {
             agl_m: 40.0,
             min_dsm_clearance_m: 100.0, // demands 100 m above the surface
-            floor_below_start_m: None,
+            ..DrapeOptions::default()
         };
         let report = drape_to_terrain(&[wp(0.001), wp(0.002)], &Slope, &options).expect("drape");
         assert_eq!(report.raised, 2);
@@ -286,8 +349,7 @@ mod real_data_tests {
         let lat = (b.north + b.south) / 2.0;
         let options = DrapeOptions {
             agl_m: 40.0,
-            min_dsm_clearance_m: 5.0,
-            floor_below_start_m: None,
+            ..DrapeOptions::default()
         };
 
         // Probe eastward for 5 sampleable (land) spots at this latitude.
@@ -325,5 +387,96 @@ mod real_data_tests {
             drape_to_terrain(&[outside], dem, &options),
             Err(TerrainError::OutsideCoverage(_))
         ));
+    }
+
+    fn wp(lon: f64) -> PlannedWaypoint {
+        PlannedWaypoint::waypoint(GeoPoint::new(0.5, lon), 0.0)
+    }
+
+    /// A source with a small DTM void (a 30 m-wide hole at lon 0.5): the
+    /// drape borrows the nearest valid ground inside the bridge radius and
+    /// counts it; a source that is void everywhere inside the radius still
+    /// fails the plan.
+    struct Pocked;
+    impl ElevationSource for Pocked {
+        fn elevation(&self, p: GeoPoint) -> Result<Height, TerrainError> {
+            if !(0.0..=1.0).contains(&p.longitude_deg) {
+                return Err(TerrainError::OutsideCoverage(p));
+            }
+            // Void in a ~30 m band around lon 0.5 (0.00027 deg ≈ 30 m).
+            if (p.longitude_deg - 0.5).abs() < 0.00027 {
+                return Err(TerrainError::Void(p));
+            }
+            Ok(Height::new(
+                crate::height::HeightDatum::AmslEgm96,
+                p.longitude_deg * 1000.0,
+            ))
+        }
+        fn sample_pair(&self, p: GeoPoint) -> Result<(Height, Height), TerrainError> {
+            let h = self.elevation(p)?.meters();
+            Ok((
+                Height::new(crate::height::HeightDatum::AmslEgm96, h),
+                Height::new(crate::height::HeightDatum::AmslEgm96, h),
+            ))
+        }
+        fn bounds(&self) -> super::super::DemBounds {
+            super::super::DemBounds {
+                north: 1.0,
+                south: 0.0,
+                east: 1.0,
+                west: 0.0,
+            }
+        }
+        fn version(&self) -> &str {
+            "pocked0000000000"
+        }
+    }
+
+    /// Void everywhere — the bridge finds nothing and the plan fails.
+    struct AllVoid;
+    impl ElevationSource for AllVoid {
+        fn elevation(&self, p: GeoPoint) -> Result<Height, TerrainError> {
+            let _ = p;
+            Err(TerrainError::Void(p))
+        }
+        fn sample_pair(&self, p: GeoPoint) -> Result<(Height, Height), TerrainError> {
+            self.elevation(p)?;
+            unreachable!("elevation errors first")
+        }
+        fn bounds(&self) -> super::super::DemBounds {
+            super::super::DemBounds {
+                north: 1.0,
+                south: 0.0,
+                east: 1.0,
+                west: 0.0,
+            }
+        }
+        fn version(&self) -> &str {
+            "allvoid000000000"
+        }
+    }
+
+    #[test]
+    fn bridges_small_dtm_voids_with_the_nearest_ground() {
+        let options = DrapeOptions {
+            void_bridge_radius_m: 100.0,
+            ..DrapeOptions::default()
+        };
+        let report = drape_to_terrain(&[wp(0.5)], &Pocked, &options).expect("drape");
+        assert_eq!(report.void_filled, 1);
+        // The nearest valid ground sits at the void's edge (lon 0.5 ±
+        // 0.00027 → ground ≈ 500 ± 0.27 m); 40 m AGL on top.
+        let h = report.waypoints[0].altitude.meters();
+        assert!((h - 540.0).abs() < 1.0, "borrowed ground + AGL = {h}");
+    }
+
+    #[test]
+    fn a_void_area_with_no_ground_in_reach_still_fails() {
+        let options = DrapeOptions {
+            void_bridge_radius_m: 100.0,
+            ..DrapeOptions::default()
+        };
+        let err = drape_to_terrain(&[wp(0.001)], &AllVoid, &options).unwrap_err();
+        assert!(matches!(err, TerrainError::Void(_)), "got {err:?}");
     }
 }

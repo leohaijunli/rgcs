@@ -19,6 +19,12 @@ min_dsm_clearance_m: number,
  */
 raised: number, 
 /**
+ * Waypoints whose DTM sample was a void and got the nearest valid
+ * ground within the bridge radius instead (small classification
+ * holes); the report lets the operator judge the borrow.
+ */
+void_filled: number, 
+/**
  * Waypoints skipped because they are command items (no coordinate).
  */
 command_items_skipped: number, 

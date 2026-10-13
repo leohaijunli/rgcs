@@ -259,6 +259,7 @@ export default {
           sourceGeotiff: 'GeoTIFF 30 m (no clearance)',
           auto: 'Terrain mode: re-draped automatically on every plan change.',
           noDem: 'No DEM loaded — plain heights in use. Load a terrain folder (LiDAR preferred).',
+          voidFilled: 'ground borrowed:',
         },
         terrainNeedsDem:
           'Terrain mode needs ground data: load a terrain folder first (Layers ▸ Terrain).',

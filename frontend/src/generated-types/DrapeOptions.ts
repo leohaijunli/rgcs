@@ -19,4 +19,12 @@ min_dsm_clearance_m: number,
  * height minus this much (the return-climb floor), metres. `None` =
  * no floor.
  */
-floor_below_start_m: number | null, };
+floor_below_start_m: number | null, 
+/**
+ * How far a DTM void may be bridged by the nearest valid ground, metres.
+ * Real LiDAR tiles carry small classification voids (water, slivers at
+ * sheet edges); borrowing ground from within this radius keeps the
+ * drape robust while staying bounded — a waypoint over a genuinely
+ * void area (open water) still fails the plan instead of extrapolating.
+ */
+void_bridge_radius_m: number, };
