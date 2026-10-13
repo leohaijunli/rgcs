@@ -12,8 +12,11 @@ fi
 echo "==> building frontend"
 npm --prefix frontend run build
 
-echo "==> building desktop app (release)"
-cargo build --release -p maggcs-app
+# dem-prep must be built in the SAME profile as the app: the one-click 3D
+# terrain feature spawns it from beside the app binary (target/release/),
+# and a stale copy there would miss newer subcommands (e.g. `fetch`).
+echo "==> building desktop app + dem-prep (release)"
+cargo build --release -p maggcs-app -p dem-prep
 
 echo "==> launching MagGCS on ${DISPLAY:-:0}"
 exec ./target/release/maggcs-app

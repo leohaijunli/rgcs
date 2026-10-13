@@ -283,6 +283,14 @@ fn run_stage(
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
     let tail: String = stderr.lines().rev().take(3).collect::<Vec<_>>().join("; ");
+    // An old dem-prep prints its usage line for unknown subcommands — tell
+    // the operator to rebuild instead of pasting the usage back.
+    if tail.contains("usage: dem-prep") {
+        return Err(format!(
+            "the dem-prep binary next to the app is outdated (no `{stage}` subcommand) — \
+             rebuild both with `cargo build --release -p maggcs-app -p dem-prep`"
+        ));
+    }
     Err(format!(
         "dem-prep {stage} failed: {}",
         if tail.is_empty() {
