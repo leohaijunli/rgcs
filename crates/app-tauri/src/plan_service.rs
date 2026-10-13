@@ -36,10 +36,7 @@ pub fn plan_window_open(app: AppHandle) -> Result<(), String> {
 ///
 /// Never; the emit result is ignored (a closed plan window just drops it).
 #[tauri::command]
-pub fn plan_window_state(
-    app: tauri::AppHandle,
-    snapshot: serde_json::Value,
-) -> Result<(), String> {
+pub fn plan_window_state(app: tauri::AppHandle, snapshot: serde_json::Value) -> Result<(), String> {
     use tauri::Emitter;
     let _ = app.emit_to("plan", "plan_state", snapshot);
     Ok(())

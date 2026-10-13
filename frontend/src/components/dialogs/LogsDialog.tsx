@@ -130,8 +130,25 @@ function LogsPanel() {
   )
 }
 
+/** Height bounds for the resizable console output (px). */
+const CONSOLE_MIN_H = 80
+const CONSOLE_MAX_H = 600
+const CONSOLE_H_KEY = 'maggcs.consoleHeight'
+
+/** Persisted console height (px), falling back to the default. */
+function loadConsoleHeight(): number {
+  try {
+    const v = Number(localStorage.getItem(CONSOLE_H_KEY))
+    if (Number.isFinite(v)) return Math.min(CONSOLE_MAX_H, Math.max(CONSOLE_MIN_H, v))
+  } catch {
+    /* storage unavailable */
+  }
+  return 160
+}
+
 /** MAVLink console (QGC-style): PX4 NuttShell over SERIAL_CONTROL, below
- * the FC-log list. Auto-scrolls; preset chips run the survey-relevant
+ * the FC-log list. Auto-scrolls; the output height is draggable (a grip
+ * above the transcript, persisted); preset chips run the survey-relevant
  * commands; Enter sends. */
 function ConsolePanel() {
   const { t } = useTranslation()
@@ -142,6 +159,7 @@ function ConsolePanel() {
   const startWatcher = useConsoleStore((s) => s.startWatcher)
   const [draft, setDraft] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [height, setHeight] = useState(loadConsoleHeight)
   const outRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -152,7 +170,33 @@ function ConsolePanel() {
   useEffect(() => {
     const el = outRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [lines])
+  }, [lines, height])
+
+  // Vertical drag on the grip: pointer capture keeps the gesture even when
+  // the cursor leaves the grip; the delta inverts (drag up = taller).
+  const onGripDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    const grip = e.currentTarget
+    grip.setPointerCapture(e.pointerId)
+    const startY = e.clientY
+    const startH = height
+    const onMove = (ev: PointerEvent) => {
+      const next = Math.min(CONSOLE_MAX_H, Math.max(CONSOLE_MIN_H, startH - (ev.clientY - startY)))
+      setHeight(next)
+    }
+    const onUp = (ev: PointerEvent) => {
+      grip.releasePointerCapture(ev.pointerId)
+      grip.removeEventListener('pointermove', onMove)
+      grip.removeEventListener('pointerup', onUp)
+      try {
+        localStorage.setItem(CONSOLE_H_KEY, String(height))
+      } catch {
+        /* storage unavailable */
+      }
+    }
+    grip.addEventListener('pointermove', onMove)
+    grip.addEventListener('pointerup', onUp)
+  }
 
   const fcAlive = link?.fc_alive === true
 
@@ -172,8 +216,16 @@ function ConsolePanel() {
         <span className="text-[10px] text-muted">{t('console.hint')}</span>
       </div>
       <div
+        onPointerDown={onGripDown}
+        aria-label={t('console.resize')}
+        className="flex h-2 cursor-ns-resize items-center justify-center rounded text-muted hover:bg-panel"
+      >
+        <span className="h-0.5 w-10 rounded bg-line" />
+      </div>
+      <div
         ref={outRef}
-        className="mono h-40 overflow-y-auto whitespace-pre-wrap rounded border border-line bg-canvas p-2 text-[11px] leading-relaxed text-ink"
+        style={{ height: `${height}px` }}
+        className="mono overflow-y-auto whitespace-pre-wrap rounded border border-line bg-canvas p-2 text-[11px] leading-relaxed text-ink"
       >
         {lines.length === 0 && <span className="text-muted">{t('console.empty')}</span>}
         {lines.map((line, i) => (

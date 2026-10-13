@@ -138,6 +138,34 @@ fn main() -> Result<()> {
     }
 }
 
+/// Recursively collect raw input files (`.laz`/`.las`/`.tif`) under `dir`,
+/// skipping the pipeline's own outputs (a `--out` inside the download tree
+/// must not be re-ingested on the next run).
+fn collect_inputs(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    const SKIP_DIRS: [&str; 4] = ["processed", "tileset", "terrain", "downloads"];
+    let entries = std::fs::read_dir(dir)
+        .with_context(|| format!("read {}", dir.display()))?;
+    for entry in entries {
+        let path = entry?.path();
+        if path.is_dir() {
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if !SKIP_DIRS.contains(&name.as_str()) {
+                collect_inputs(&path, out)?;
+            }
+        } else if matches!(
+            path.extension().and_then(|e| e.to_str()),
+            Some("laz") | Some("las") | Some("tif") | Some("tiff")
+        ) {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
 fn probe(path: &Path) -> Result<()> {
     let info = las::probe(path)?;
     println!("version: {}.{}", info.version.0, info.version.1);
@@ -156,21 +184,21 @@ fn probe(path: &Path) -> Result<()> {
 
 /// Every BC LiDAR tile in `folder` becomes `<out>/<stem>/{dtm.tif,dsm.tif,dem.json}`.
 fn process_folder(folder: &Path, out: &Path, resolution_m: f64) -> Result<()> {
-    let mut tiles: Vec<PathBuf> = std::fs::read_dir(folder)
-        .with_context(|| format!("read {}", folder.display()))?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| {
-            matches!(
-                p.extension().and_then(|e| e.to_str()),
-                Some("laz") | Some("las") | Some("tif") | Some("tiff")
-            )
-        })
-        .collect();
+    // Recursive walk: BC LiDAR downloads arrive as one folder per grid tile
+    // (each holding its .laz), so the operator points at the download root
+    // and every raw file below it is picked up. The output stays flat — one
+    // tile folder per input, named by the file stem (stems are unique per
+    // BC sheet; a stem collision re-processes the later file in place).
+    let mut tiles: Vec<PathBuf> = Vec::new();
+    collect_inputs(folder, &mut tiles)?;
     tiles.sort();
     if tiles.is_empty() {
-        bail!("no .laz/.las files in {}", folder.display());
+        bail!(
+            "no .laz/.las/.tif files under {} (recursively)",
+            folder.display()
+        );
     }
-    println!("{} tile(s) in {}", tiles.len(), folder.display());
+    println!("{} tile(s) under {}", tiles.len(), folder.display());
     let mut index: Vec<IndexEntry> = Vec::new();
     for tile in &tiles {
         let is_raster = matches!(
