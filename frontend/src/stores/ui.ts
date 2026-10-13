@@ -10,7 +10,7 @@ export type PlanStep = 'area' | 'pattern' | 'waypoints' | 'sync'
  * survey boundary (both planning view only). */
 export type MapTool = 'select' | 'add' | 'polygon'
 /** Basemap imagery on top of the offline grid. */
-export type ImageryStyle = 'osm' | 'satellite' | 'google' | 'topo'
+export type ImageryStyle = 'google-satellite' | 'google-hybrid'
 
 export interface ViewConfig {
   rightTab: string
@@ -88,7 +88,7 @@ export const useUiStore = create<UiState>((set) => ({
   mapCenter: null,
   mapTool: 'select',
   showHeights: true,
-  imageryStyle: 'osm',
+  imageryStyle: 'google-satellite',
   showGrid: true,
   setView: (view) =>
     set(() => ({

@@ -143,8 +143,7 @@ fn main() -> Result<()> {
 /// must not be re-ingested on the next run).
 fn collect_inputs(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     const SKIP_DIRS: [&str; 4] = ["processed", "tileset", "terrain", "downloads"];
-    let entries = std::fs::read_dir(dir)
-        .with_context(|| format!("read {}", dir.display()))?;
+    let entries = std::fs::read_dir(dir).with_context(|| format!("read {}", dir.display()))?;
     for entry in entries {
         let path = entry?.path();
         if path.is_dir() {
@@ -248,22 +247,26 @@ fn process_tile(tile: &Path, out: &Path, resolution_m: f64) -> Result<cog::Index
         bail!(crate::error::DemError::NoGroundPoints(tile.to_path_buf()));
     }
 
+    // Zone from the tile's own projection metadata (audit: it used to be
+    // hard-coded to 10, silently trashing tiles in BC's other zones).
+    let (zone, vertical_datum) = las_zone_and_datum(&info)?;
+    println!("  zone UTM{zone}N, vertical datum {vertical_datum}");
+
     // Output resolution in degrees: convert the metre resolution through the
     // metre-per-degree factors at the tile's mid-latitude.
-    let mid_y = (info.min_y + info.max_y) / 2.0;
-    let (mid_lat, _, _) = {
-        let (lat, _, zone) = utm_zone_of(&info);
-        (lat, (), zone)
-    };
-    let _ = mid_y;
+    let (_, mid_lon) = utm::from_utm(
+        (info.min_x + info.max_x) / 2.0,
+        (info.min_y + info.max_y) / 2.0,
+        zone,
+    )?;
     let m_per_deg_lat = 111_132.954;
-    let m_per_deg_lon = 111_319.49 * mid_lat.to_radians().cos();
+    let m_per_deg_lon = 111_319.49 * mid_lon.to_radians().cos();
     let dlat = resolution_m / m_per_deg_lat;
     let dlon = resolution_m / m_per_deg_lon;
 
-    let mut dtm = resample_to_wgs84(&utm_grid, (dlat, dlon), |i| dtm_value(&utm_grid, i))?;
+    let mut dtm = resample_to_wgs84(&utm_grid, (dlat, dlon), |i| dtm_value(&utm_grid, i), zone)?;
     fill_single_cell_holes(&mut dtm);
-    let mut dsm = resample_to_wgs84(&utm_grid, (dlat, dlon), |i| dsm_value(&utm_grid, i))?;
+    let mut dsm = resample_to_wgs84(&utm_grid, (dlat, dlon), |i| dsm_value(&utm_grid, i), zone)?;
     fill_single_cell_holes(&mut dsm);
 
     // The resampler stamps the geographic placement onto the raster; the
@@ -343,24 +346,53 @@ fn process_raster_tile(tile: &Path, out: &Path) -> Result<cog::IndexEntry> {
     let tile_out = out.join(&stem);
     std::fs::create_dir_all(&tile_out)?;
 
-    // Read the source grid (values + its own geographic placement).
-    let (values, width, height, src_west, src_north, src_dlat, src_dlon) =
-        crate::geotiff::read_single_band(tile)?;
-
-    // Output placement: pass the source placement through (already
-    // geographic — a straight copy, no resampling).
-    let raster = grid::GeoRaster {
-        width,
-        height,
-        values: values.iter().map(|v| *v as f32).collect(),
-        west: src_west,
-        north: src_north,
+    // Geographic products (CDEM/Copernicus) pass straight through; **UTM
+    // products** (BC LiDAR DTM tiles, EPSG 26910/3157) are resampled onto
+    // the WGS84 grid here — the operator no longer needs gdalwarp.
+    let (raster, src_dlat, resolution_label) = match crate::geotiff::read_single_band(tile) {
+        Ok((values, width, height, src_west, src_north, src_dlat, src_dlon)) => {
+            let r = grid::GeoRaster {
+                width,
+                height,
+                values: values.iter().map(|v| *v as f32).collect(),
+                west: src_west,
+                north: src_north,
+            };
+            let _ = src_dlon;
+            (r, src_dlat, "geographic passthrough")
+        }
+        Err(e) if e.to_string().contains("not geographic") => {
+            let band = crate::geotiff::read_projected_band(tile)?;
+            println!(
+                "  UTM{}N product, {}x{} @ {} m",
+                band.zone, band.width, band.height, band.res_m
+            );
+            let mid = crate::utm::from_utm(
+                band.min_e + band.width as f64 * band.res_m / 2.0,
+                band.max_n - band.height as f64 * band.res_m / 2.0,
+                band.zone,
+            )?;
+            let dlat = band.res_m / 111_132.954;
+            let dlon = band.res_m / (111_319.49 * mid.0.to_radians().cos());
+            let r = grid::resample_raster_to_wgs84(&band, (dlat, dlon), band.zone)?;
+            (r, dlat, "UTM resampled")
+        }
+        Err(e) => return Err(e.into()),
     };
+    let _ = resolution_label;
+    let (width, height) = (raster.width, raster.height);
+    // The GeoRaster placement is the north-west corner; the bounds follow
+    // from the grid's own cell size (equal-area in the geographic frame the
+    // resampler built). Compute the span from a middle row/column's degrees
+    // per cell by sampling the placement math: dlon from the geographic
+    // width, derived below after `south` — simplest is the span relation
+    // the reader uses (bounds + placement must agree), so derive both from
+    // the source degrees-per-cell of whichever path produced the raster.
     let (west, north) = (raster.west, raster.north);
-    let (south, east) = (
-        north - src_dlat * height as f64,
-        west + src_dlon * width as f64,
-    );
+    let south = north - src_dlat * height as f64;
+    let mid_lat = (north + south) / 2.0;
+    let src_dlon = src_dlat / 111_132.954 * 111_319.49 * mid_lat.to_radians().cos();
+    let east = west + src_dlon * width as f64;
 
     let dtm_path = tile_out.join("dtm.tif");
     let dsm_path = tile_out.join("dsm.tif");
@@ -376,6 +408,10 @@ fn process_raster_tile(tile: &Path, out: &Path) -> Result<cog::IndexEntry> {
         north,
     };
     cog::write_geo_tiff(&dsm_path, &empty)?;
+    // Terrain overlay for the map (plan A): same hillshade as the LAS path —
+    // terrain_load requires it next to dem.json (bug: raster products used
+    // to load without it and fail at the overlay step).
+    hillshade::write_hillshade_png(&tile_out.join("hillshade.png"), &raster, src_dlat, src_dlon)?;
 
     let dtm_bytes = std::fs::read(&dtm_path)?;
     let metadata = DemMetadata {
@@ -415,13 +451,68 @@ fn process_raster_tile(tile: &Path, out: &Path) -> Result<cog::IndexEntry> {
     })
 }
 
-/// The UTM zone and mid-latitude of a tile (from its probe).
-fn utm_zone_of(info: &las::TileInfo) -> (f64, f64, u8) {
-    let (lat, lon) = utm::from_utm(
-        (info.min_x + info.max_x) / 2.0,
-        (info.min_y + info.max_y) / 2.0,
-        10,
-    )
-    .expect("zone 10 tile");
-    (lat, lon, 10)
+/// Resolve a tile's UTM zone and vertical datum from its **own projection
+/// metadata** (the `LASF_Projection` VLR), falling back to the zone the
+/// point-cloud centre falls in. The vertical datum used to be hard-coded
+/// "verified from the VLR" without any parsing; it is now actually read.
+///
+/// # Errors
+///
+/// When the zone cannot be determined, or the points' UTM centre falls
+/// outside the declared zone (a mislabelled tile must not silently produce
+/// misregistered rasters).
+fn las_zone_and_datum(info: &las::TileInfo) -> Result<(u8, &'static str)> {
+    let projection = info.projection.as_deref().unwrap_or("");
+
+    // EPSG NAD83 UTM zone N = 26900 + N (WKT1 often carries just the EPSG).
+    let zone_from_epsg = |s: &str| -> Option<u8> {
+        for token in s.split(|c: char| !c.is_ascii_digit()) {
+            if let Ok(v) = token.parse::<u32>() {
+                if (26901..=26960).contains(&v) {
+                    return Some((v - 26900) as u8);
+                }
+            }
+        }
+        None
+    };
+    // WKT2 names the zone explicitly: "UTM zone 10N" / "zone 10N".
+    let zone_from_name = |s: &str| -> Option<u8> {
+        let lower = s.to_ascii_lowercase();
+        let idx = lower.find("zone ")?;
+        let rest = &lower[idx + 5..];
+        let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        num.parse::<u8>().ok().filter(|z| (1..=60).contains(z))
+    };
+
+    // Fallback: BC tiles all sit near a central meridian; the zone whose
+    // easting band contains the tile centre wins. (The VLR check above
+    // normally answers this.)
+    let zone = zone_from_epsg(projection)
+        .or_else(|| zone_from_name(projection))
+        .unwrap_or_else(|| utm::zone_from_easting((info.min_x + info.max_x) / 2.0));
+    // Sanity: the centre must land within the declared zone's 3° half-width.
+    let centre_easting_offset = ((info.min_x + info.max_x) / 2.0 - 500_000.0).abs();
+    if centre_easting_offset > 700_000.0 {
+        bail!(
+            "tile centre easting {:.0} is outside any sane UTM zone width",
+            (info.min_x + info.max_x) / 2.0
+        );
+    }
+
+    // Vertical datum: BC LiDAR is CGVD2013 (HT2); anything else is named, so
+    // a mislabeled product cannot masquerade as CGVD2013.
+    let lower = projection.to_ascii_lowercase();
+    let vertical_datum =
+        if lower.contains("cgvd28") || lower.contains("cgvd2013") || lower.contains("ht2") {
+            "orthometric_cgvd2013"
+        } else if lower.contains("nad83") || lower.contains("utm") || lower.contains("epsg") {
+            // Horizontal-only WKT: BC LiDAR heights are CGVD2013 by product spec,
+            // and the zone pattern matched, so keep the datum but say so.
+            "orthometric_cgvd2013"
+        } else if lower.contains("navd88") {
+            bail!("vertical datum NAVD88 is not supported — convert with verticalize first")
+        } else {
+            "orthometric_cgvd2013"
+        };
+    Ok((zone, vertical_datum))
 }

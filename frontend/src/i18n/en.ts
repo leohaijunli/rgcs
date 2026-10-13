@@ -13,7 +13,6 @@ export default {
     popover: 'Tools',
     motorTest: 'Motor test',
     parameters: 'Parameters',
-    planWindow: 'Flight plan design',
     logs: 'Logs',
   },
     console: {
@@ -129,8 +128,6 @@ export default {
   plan: {
     waypoint: 'Waypoint',
     altitude: 'Altitude',
-    windowTitle: 'Flight Plan Design',
-    windowHint: 'Mirrors the main window — edits apply there',
     step: {
       area: '1 · Area',
       pattern: '2 · Pattern',
@@ -317,10 +314,8 @@ export default {
     downloadHint: 'Download Copernicus GLO-30 for the map centre and build the 3D mesh (needs internet once)',
     buildLocal: 'Build from local LiDAR…',
     buildHint: 'Build the 3D mesh from a folder of BC LiDAR .laz tiles (or GeoTIFF)',
-    osm: 'Streets',
-    satellite: 'Esri',
-    google: 'Google',
-    topo: 'Topo',
+    'google-satellite': 'Satellite',
+    'google-hybrid': 'Hybrid',
     grid: 'Grid',
   },
   dock: {

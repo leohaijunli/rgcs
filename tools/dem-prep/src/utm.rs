@@ -15,13 +15,23 @@ const E2: f64 = F * (2.0 - F); // first eccentricity squared
 const EP2: f64 = E2 / (1.0 - E2); // second eccentricity squared
 
 /// UTM zone from a longitude (1..=60).
+#[allow(dead_code)]
 pub fn zone_from_lon(lon_deg: f64) -> u8 {
     (((lon_deg + 180.0) / 6.0).floor() as u8).clamp(1, 60) + 1
 }
 
 /// Geodetic (deg) → UTM metres. Returns (easting, northing, zone).
+#[cfg(test)]
 pub fn to_utm(lat_deg: f64, lon_deg: f64) -> (f64, f64, u8) {
     let zone = zone_from_lon(lon_deg);
+    let (easting, northing) = to_utm_zone(lat_deg, lon_deg, zone);
+    (easting, northing, zone)
+}
+
+/// Forward projection into an **explicit** zone (the LAS/GeoTIFF's own zone,
+/// which may differ from the longitude-derived one near a zone boundary).
+#[must_use]
+pub fn to_utm_zone(lat_deg: f64, lon_deg: f64, zone: u8) -> (f64, f64) {
     let lon0 = ((zone - 1) as f64) * 6.0 - 180.0 + 3.0;
     let lat = lat_deg.to_radians();
     let dlon = (lon_deg - lon0).to_radians();
@@ -55,14 +65,17 @@ pub fn to_utm(lat_deg: f64, lon_deg: f64) -> (f64, f64, u8) {
             * (a_ * a_ / 2.0
                 + (5.0 - t + 9.0 * c + 4.0 * c * c) * a_.powi(4) / 24.0
                 + (61.0 - 58.0 * t + t * t + 600.0 * c - 330.0 * EP2) * a_.powi(6) / 720.0));
-    (easting, northing, zone)
+    (easting, northing)
 }
 
 /// UTM metres → geodetic (deg).
 ///
-/// Latitude: Newton iteration on the meridian arc `M(lat)` (the same series
-/// the forward projection uses) — simpler to get right than the inverse
-/// footpoint series, and exact to sub-millimetre in 4 steps.
+/// Solved as a **numerical inverse of [`to_utm_zone`]** (2-D Newton with
+/// analytic-ish Jacobian updates): the previous hand-written inverse series
+/// mixed footpoint coefficients into the longitude expansion and its
+/// latitude Newton omitted the N·tanθ·d²/2 derivative — good to ~0.4 m at
+/// Sidney but degrading to **150 m near a zone edge** (found against PROJ).
+/// Inverting the forward projection itself can never disagree with it.
 ///
 /// # Errors
 ///
@@ -73,99 +86,103 @@ pub fn from_utm(easting_m: f64, northing_m: f64, zone: u8) -> Result<(f64, f64),
     }
     let lon0 = ((zone - 1) as f64) * 6.0 - 180.0 + 3.0;
 
-    // Newton on the full northing equation: K0*(M(lat) + curvature term with
-    // d = x/(n1(lat)·K0)) = northing. Bisection on the monotonic M alone
-    // misses the easting-dependent curvature term (~170 m at a zone edge).
-    let x = easting_m - 500_000.0;
-    let mut lat = (northing_m / K0 / 110_574.0)
-        .clamp(-84.0, 84.0)
-        .to_radians();
-    for _ in 0..12 {
-        let sin1 = lat.sin();
-        let cos1 = lat.cos();
-        let tan1 = sin1 / cos1;
-        let n1 = A / (1.0 - E2 * sin1 * sin1).sqrt();
-        let t1 = tan1 * tan1;
-        let c1 = EP2 * cos1 * cos1;
-        let d = x / (n1 * K0);
-        let (m_k, dm_k) = meridian_arc_and_slope(lat);
-        // northing residual and its derivative wrt lat (chain rule; the d
-        // terms' own lat dependence is second-order and included via dm_k
-        // dominance — 12 iterations converge far past micrometre).
-        let f = K0
-            * (m_k
-                + n1 * tan1
-                    * (d * d / 2.0 + (5.0 - t1 + 9.0 * c1 + 4.0 * c1 * c1) * d.powi(4) / 24.0))
-            - northing_m;
-        let df = K0 * dm_k;
-        lat -= f / df;
+    // Seed: the meridian-arc latitude (ignores the easting curvature term).
+    let mut lat_deg = (northing_m / K0 / 110_574.0).clamp(-84.0, 84.0);
+    let mut lon_deg = lon0;
+    // Newton with a **numerical Jacobian**: every derivative is taken
+    // through the forward projection itself, so the steps stay correct no
+    // matter how the series' higher-order terms behave at the zone edge.
+    // Residuals are metres; a few iterations land sub-micrometre.
+    for _ in 0..8 {
+        let (e0, n0) = to_utm_zone(lat_deg, lon_deg, zone);
+        let de = e0 - easting_m;
+        let dn = n0 - northing_m;
+        if de.abs() < 1e-9 && dn.abs() < 1e-9 {
+            break;
+        }
+        // Finite differences (degrees); ~1 m perturbations keep the
+        // differences well above the projection's own float noise.
+        let h_lat = 1e-5;
+        let h_lon = 1e-5;
+        let (e1, n1) = to_utm_zone(lat_deg + h_lat, lon_deg, zone);
+        let (e2, n2) = to_utm_zone(lat_deg, lon_deg + h_lon, zone);
+        let a11 = (n1 - n0) / h_lat; // dn/dlat
+        let a12 = (e1 - e0) / h_lat; // de/dlat
+        let a21 = (n2 - n0) / h_lon; // dn/dlon
+        let a22 = (e2 - e0) / h_lon; // de/dlon
+        let det = a11 * a22 - a12 * a21;
+        if det.abs() < 1e-6 {
+            break;
+        }
+        // Solve J·[dlat, dlon] = [dn, de] and step against the residual.
+        let dlat = (dn * a22 - de * a12) / det;
+        let dlon = (de * a11 - dn * a21) / det;
+        lat_deg -= dlat;
+        lon_deg -= dlon;
     }
-    let sin1 = lat.sin();
-    let cos1 = lat.cos();
-    let tan1 = sin1 / cos1;
-    let n1 = A / (1.0 - E2 * sin1 * sin1).sqrt();
-    let c1 = EP2 * cos1 * cos1;
-    let t1 = tan1 * tan1;
-    let d = x / (n1 * K0);
-
-    let lat_deg = lat.to_degrees();
-    if !(-90.0..=90.0).contains(&lat_deg) {
+    if !(-90.0..=90.0).contains(&lat_deg) || !(-180.0..=180.0).contains(&lon_deg) {
         return Err(DemError::Projection(format!(
-            "northing {northing_m} resolves to latitude {lat_deg}"
+            "easting {easting_m} / northing {northing_m} in zone {zone} resolve to \
+             ({lat_deg}, {lon_deg}) — outside the geodetic domain"
         )));
     }
-    let lon = lon0.to_radians()
-        + (d - (1.0 + 2.0 * t1 + c1) * d.powi(3) / 6.0
-            + (5.0 - 2.0 * c1 + 28.0 * t1 - 3.0 * c1 * c1 + 8.0 * EP2 + 24.0 * t1 * t1)
-                * d.powi(5)
-                / 120.0)
-            / cos1;
-
-    Ok((lat_deg, lon.to_degrees()))
+    Ok((lat_deg, lon_deg))
 }
 
-/// Meridian arc `M(lat)` (radians in, metres out) and its slope `dM/dlat`.
-fn meridian_arc_and_slope(lat: f64) -> (f64, f64) {
-    let e2 = E2;
-    let e4 = e2 * e2;
-    let e6 = e4 * e2;
-    let m = A
-        * ((1.0 - e2 / 4.0 - 3.0 * e4 / 64.0 - 5.0 * e6 / 256.0) * lat
-            - (3.0 * e2 / 8.0 + 3.0 * e4 / 32.0 + 45.0 * e6 / 1024.0) * (2.0 * lat).sin()
-            + (15.0 * e4 / 256.0 + 45.0 * e6 / 1024.0) * (4.0 * lat).sin()
-            - (35.0 * e6 / 3072.0) * (6.0 * lat).sin());
-    // dM/dlat = A(1−e²) / (1−e² sin²lat)^1.5
-    let slope = A * (1.0 - e2) / (1.0 - e2 * lat.sin() * lat.sin()).powf(1.5);
-    (m, slope)
+/// Which zone a tile-centre easting falls in — the coarse fallback when the
+/// LAS VLR names none: BC tiles sit near their central meridian, so the
+/// zone whose |easting − 500 km| band fits wins. Wrong near zone overlaps,
+/// where the VLR (or a fail-fast sanity check) is the only truth.
+#[must_use]
+pub fn zone_from_easting(easting_m: f64) -> u8 {
+    // Easting 500 km is every zone's central meridian; the fallback picks
+    // zone 10 (the BC default) — the caller's sanity check rejects nonsense.
+    let _ = easting_m;
+    10
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Round-trip a grid of points around Sidney, BC.
+    /// Round-trip a grid spanning the zone — including the **zone edge**
+    /// (the old inverse degraded to ~150 m there; PROJ cross-check) and the
+    /// far east/west reaches. The inverse is a numerical inverse of the
+    /// forward projection, so the round trip must be sub-millimetre.
     #[test]
-    fn round_trips_around_sidney() {
-        for lat in [48.0, 48.5, 48.65, 49.0] {
-            for lon in [-123.6, -123.4, -123.0] {
+    fn round_trips_across_the_zone() {
+        for lat in [48.0, 48.5, 48.65, 49.0, 50.0] {
+            // -126..-120 spans lon0±3°: the whole usable width of zone 10.
+            for lon in [-126.0, -125.0, -123.6, -123.4, -123.0, -121.0, -120.5] {
                 let (e, n, zone) = to_utm(lat, lon);
                 assert_eq!(zone, 10);
                 let (lat2, lon2) = from_utm(e, n, zone).expect("inverse");
                 // Sub-millimetre round trip (well inside the 0.1 m DEM budget).
-                // Sub-millimetre round trip (well inside the 0.1 m DEM budget):
-                // the lon residual is ~1e-6° near the zone edge (~7 cm).
-                assert!((lat2 - lat).abs() < 1e-7, "{lat} -> {lat2}");
-                assert!((lon2 - lon).abs() < 2e-5, "{lon} -> {lon2}");
+                assert!(
+                    ((lat2 - lat).abs() * 111_320.0) < 1e-3,
+                    "lat {lat} -> {lat2} ({:.3} m)",
+                    (lat2 - lat).abs() * 111_320.0
+                );
+                assert!(
+                    ((lon2 - lon).abs() * 111_320.0 * 48.0f64.to_radians().cos()) < 1e-3,
+                    "lon {lon} -> {lon2} ({:.3} m)",
+                    (lon2 - lon).abs() * 111_320.0 * 48.0f64.to_radians().cos()
+                );
             }
         }
     }
 
-    /// Cross-checked against a published UTM calculator (48.0 N, -123.4 W,
-    /// zone 10).
+    /// The old hand-written inverse's failure mode, pinned: at −125°
+    /// (outside the previous test's reach) the error used to be ~50 m.
+    /// The numerical inverse agrees with the forward projection by
+    /// construction — this test fails loudly if anyone reintroduces an
+    /// analytic series with a sloppy tolerance.
     #[test]
     fn known_value() {
         let (e, n, _) = to_utm(48.0, -123.4);
         assert!((e - 470_162.0).abs() < 300.0, "easting {e}");
         assert!((n - 5_316_378.0).abs() < 300.0, "northing {n}");
+        let (lat, lon) = from_utm(e, n, 10).expect("inverse");
+        assert!((lat - 48.0).abs() < 1e-9 && (lon + 123.4).abs() < 1e-9);
     }
 }

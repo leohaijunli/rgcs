@@ -1,4 +1,4 @@
-import { ChevronDown, FileDown, Gauge, LineChart, List, Map, Settings, SlidersHorizontal } from 'lucide-react'
+import { ChevronDown, FileDown, Gauge, LineChart, List, Settings, SlidersHorizontal } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { invoke } from '@tauri-apps/api/core'
@@ -101,14 +101,6 @@ export default function TopBar() {
     }
   }
 
-  const openPlanWindow = () => {
-    if (isTauri()) {
-      void invoke('plan_window_open')
-    } else {
-      window.open('plan.html', '_blank')
-    }
-  }
-
   const armed = heartbeat?.base_mode.safety_armed === true
   const rtk = gps?.fix_type ?? null
   const rtkTone: 'ok' | 'warn' | 'err' =
@@ -161,7 +153,6 @@ export default function TopBar() {
           onInspector={openInspector}
           onMotorTest={openMotorTest}
           onParams={openParams}
-          onPlanWindow={openPlanWindow}
           onLogs={() => setLogsOpen(true)}
         />
         <IconButton title={t('eventLog.title')} onClick={() => setLogDrawerOpen(true)}>
@@ -204,13 +195,11 @@ function ToolsPopover({
   onInspector,
   onMotorTest,
   onParams,
-  onPlanWindow,
   onLogs,
 }: {
   onInspector: () => void
   onMotorTest: () => void
   onParams: () => void
-  onPlanWindow: () => void
   onLogs: () => void
 }) {
   const { t } = useTranslation()
@@ -276,16 +265,6 @@ function ToolsPopover({
           >
             <SlidersHorizontal size={14} />
             {t('tools.parameters')}
-          </button>
-          <button
-            onClick={() => {
-              setOpen(false)
-              onPlanWindow()
-            }}
-            className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-sm text-ink hover:bg-canvas"
-          >
-            <Map size={14} />
-            {t('tools.planWindow')}
           </button>
           <button
             onClick={() => {

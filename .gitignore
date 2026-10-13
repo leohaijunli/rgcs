@@ -7,3 +7,6 @@ frontend/dist/
 frontend/.vite/
 *.rar
 *.laz
+dem/
+*.tif
+terrain-drape-fixes-v2.patch

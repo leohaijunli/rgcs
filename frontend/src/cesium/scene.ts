@@ -71,63 +71,29 @@ export function createViewer(
     infoBox: false,
     selectionIndicator: false,
   })
-  toneDown(viewer.imageryLayers.addImageryProvider(imageryProvider('osm'), 1))
+  toneDown(viewer.imageryLayers.addImageryProvider(imageryProvider('google-satellite'), 1))
   viewer.camera.setView({
     destination: Cesium.Cartesian3.fromDegrees(initial.lon, initial.lat, 12000),
   })
   return viewer
 }
 
-/** The imagery providers (operator request: satellite + topo in addition to
- * the street map; no grid-only mode — imagery is always shown). */
-function imageryProvider(style: 'osm' | 'satellite' | 'google' | 'topo'): Cesium.ImageryProvider {
-  switch (style) {
-    case 'google':
-      // Google satellite tiles (lyrs=s): WGS84-aligned like the waypoints.
-      // Unreachable from mainland China without a proxy.
-      return new Cesium.UrlTemplateImageryProvider({
-        url: 'https://mt{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
-        subdomains: ['0', '1', '2', '3'],
-        maximumLevel: 20,
-        credit: 'Google',
-      })
-    case 'satellite':
-      // Esri World Imagery: global aerial coverage, the layer a survey plan
-      // is actually drawn against. WebKitGTK (Tauri's Linux webview) is
-      // stricter about cross-origin images than Chrome, so the provider
-      // loads tiles without crossOrigin when CORS fails — Cesium falls
-      // back automatically via the resource's CORS strategy.
-      return new Cesium.UrlTemplateImageryProvider({
-        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-        maximumLevel: 19,
-        credit: 'Esri, Maxar, Earthstar Geographics',
-        enablePickFeatures: false,
-      })
-    case 'topo':
-      return new Cesium.UrlTemplateImageryProvider({
-        url: 'https://tile.opentopomap.org/{z}/{x}/{y}.png',
-        maximumLevel: 17,
-        credit: 'OpenTopoMap (CC-BY-SA)',
-        enablePickFeatures: false,
-      })
-    default:
-      return new Cesium.OpenStreetMapImageryProvider({ url: 'https://tile.openstreetmap.org/' })
-  }
-}
-
 /**
- * Swap the imagery layer's provider (layer 1 keeps its stack position above
- * the offline grid; `imageryProvider` itself is read-only, so the layer is
- * replaced).
+ * The imagery providers (operator request 2026-10-13: Google Maps Platform
+ * only — OSM/Esri/OpenTopo were removed). Two Google layers: satellite
+ * (lyrs=s) and hybrid — satellite imagery with street labels (lyrs=y) —
+ * both WGS84-aligned like the waypoints; unreachable from mainland China
+ * without a proxy. Swapping to the official Map Tiles API is a URL + key
+ * change (tile.googleapis.com/v1/2dtiles/...).
  */
-export function setImageryStyle(
-  viewer: Cesium.Viewer,
-  style: 'osm' | 'satellite' | 'google' | 'topo',
-): void {
-  const layers = viewer.imageryLayers
-  if (layers.length < 2) return
-  layers.remove(layers.get(1))
-  toneDown(layers.addImageryProvider(imageryProvider(style), 1))
+function imageryProvider(style: 'google-satellite' | 'google-hybrid'): Cesium.ImageryProvider {
+  const lyrs = style === 'google-hybrid' ? 'y' : 's'
+  return new Cesium.UrlTemplateImageryProvider({
+    url: `https://mt{s}.google.com/vt/lyrs=${lyrs}&x={x}&y={y}&z={z}`,
+    subdomains: ['0', '1', '2', '3'],
+    maximumLevel: 20,
+    credit: 'Google',
+  })
 }
 
 /**
@@ -143,6 +109,21 @@ export function applyLayerVisibility(viewer: Cesium.Viewer, showGrid: boolean): 
 }
 
 /**
+ * Swap the imagery layer's provider (layer 1 keeps its stack position above
+ * the offline grid; `imageryProvider` itself is read-only, so the layer is
+ * replaced).
+ */
+export function setImageryStyle(
+  viewer: Cesium.Viewer,
+  style: 'google-satellite' | 'google-hybrid',
+): void {
+  const layers = viewer.imageryLayers
+  if (layers.length < 2) return
+  layers.remove(layers.get(1))
+  toneDown(layers.addImageryProvider(imageryProvider(style), 1))
+}
+
+/**
  * Add or replace the terrain hillshade overlay (plan A): a dem-prep
  * hillshade PNG draped by its geographic bounds, above the imagery layer.
  * `null` removes it.
@@ -155,7 +136,7 @@ const overlayGeneration = new WeakMap<Cesium.Viewer, number>()
 
 export function setTerrainOverlay(
   viewer: Cesium.Viewer,
-  overlay: { url: string; bounds: { north: number; south: number; east: number; west: number } } | null,
+  overlay: { url: string | null; bounds: { north: number; south: number; east: number; west: number } } | null,
 ): void {
   const layers = viewer.imageryLayers
   // Remove any previous overlay (layers above index 1 are ours).
@@ -164,7 +145,9 @@ export function setTerrainOverlay(
   }
   const generation = (overlayGeneration.get(viewer) ?? 0) + 1
   overlayGeneration.set(viewer, generation)
-  if (!overlay) return
+  // A tile without a hillshade (raster products) clears the shade layer but
+  // keeps the DEM loaded — drape / terrain mode do not depend on the PNG.
+  if (!overlay?.url) return
   const rectangle = Cesium.Rectangle.fromDegrees(
     overlay.bounds.west,
     overlay.bounds.south,

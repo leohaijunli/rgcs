@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Default capability for the main window","local":true,"windows":["main","inspector","actuator","params","plan"],"permissions":["core:default","dialog:default","fs:allow-read-text-file","fs:allow-write-text-file"]}}
+{"default":{"identifier":"default","description":"Default capability for the main window","local":true,"windows":["main","inspector","actuator","params"],"permissions":["core:default","dialog:default","fs:allow-read-text-file","fs:allow-write-text-file"]}}

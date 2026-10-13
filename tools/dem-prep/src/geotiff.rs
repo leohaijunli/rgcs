@@ -20,8 +20,19 @@ pub fn read_single_band(
     path: &Path,
 ) -> Result<(Vec<f64>, usize, usize, f64, f64, f64, f64), DemError> {
     let file = File::open(path).map_err(|e| DemError::Raster(e.to_string()))?;
-    let mut decoder =
-        Decoder::new(BufReader::new(file)).map_err(|e| DemError::Raster(e.to_string()))?;
+    let mut decoder = Decoder::new(BufReader::new(file))
+        .map_err(|e| DemError::Raster(e.to_string()))?
+        .with_limits({
+            // BC LiDAR product tiles reach ~15000x11000 f32 cells (~700 MB);
+            // the crate default (256 MiB) rejects those as "limits exceeded".
+            // Local, trusted files — raise the buffers, keep everything else
+            // at the crate defaults (Limits is #[non_exhaustive]).
+            let mut l = tiff::decoder::Limits::default();
+            l.decoding_buffer_size = 2 * 1024 * 1024 * 1024;
+            l.intermediate_buffer_size = 256 * 1024 * 1024;
+            l.ifd_value_size = 16 * 1024 * 1024;
+            l
+        });
     let (width, height) = decoder
         .dimensions()
         .map_err(|e| DemError::Raster(e.to_string()))?;
@@ -113,8 +124,19 @@ fn apply_nodata(values: Vec<f64>, nodata: f64) -> Vec<f64> {
 /// [`DemError::Raster`] on decode problems or a sample-count mismatch.
 pub fn read_band_raw(path: &Path) -> Result<(Vec<f32>, usize, usize), DemError> {
     let file = File::open(path).map_err(|e| DemError::Raster(e.to_string()))?;
-    let mut decoder =
-        Decoder::new(BufReader::new(file)).map_err(|e| DemError::Raster(e.to_string()))?;
+    let mut decoder = Decoder::new(BufReader::new(file))
+        .map_err(|e| DemError::Raster(e.to_string()))?
+        .with_limits({
+            // BC LiDAR product tiles reach ~15000x11000 f32 cells (~700 MB);
+            // the crate default (256 MiB) rejects those as "limits exceeded".
+            // Local, trusted files — raise the buffers, keep everything else
+            // at the crate defaults (Limits is #[non_exhaustive]).
+            let mut l = tiff::decoder::Limits::default();
+            l.decoding_buffer_size = 2 * 1024 * 1024 * 1024;
+            l.intermediate_buffer_size = 256 * 1024 * 1024;
+            l.ifd_value_size = 16 * 1024 * 1024;
+            l
+        });
     let (width, height) = decoder
         .dimensions()
         .map_err(|e| DemError::Raster(e.to_string()))?;
@@ -148,6 +170,168 @@ pub fn read_band_raw(path: &Path) -> Result<(Vec<f32>, usize, usize), DemError> 
         .map(|v| if v <= crate::cog::NODATA { f32::NAN } else { v })
         .collect();
     Ok((values, width, height))
+}
+
+/// A projected (UTM) single-band raster: raw values on their native grid.
+#[allow(clippy::type_complexity)]
+pub struct ProjectedBand {
+    pub values: Vec<f64>,
+    pub width: usize,
+    pub height: usize,
+    /// Placement of pixel (0,0)'s **corner** (GeoTIFF PixelIsArea): west
+    /// edge easting, north edge northing, metres.
+    pub min_e: f64,
+    pub max_n: f64,
+    /// Cell size, metres (square cells assumed — checked).
+    pub res_m: f64,
+    /// UTM zone from the GeoKeys (EPSG 269xx / 3156..=3166 / citation).
+    pub zone: u8,
+}
+
+/// Read one single-band **UTM-projected** GeoTIFF (BC LiDAR DTM products:
+/// EPSG 26910 / 3157, PixelIsArea tiepoints, metre scale).
+///
+/// # Errors
+///
+/// [`DemError::Raster`] when the tags are missing, the raster is not UTM
+/// (no parsable zone), or the sample type is unsupported.
+pub fn read_projected_band(path: &Path) -> Result<ProjectedBand, DemError> {
+    let file = File::open(path).map_err(|e| DemError::Raster(e.to_string()))?;
+    let mut decoder = Decoder::new(BufReader::new(file))
+        .map_err(|e| DemError::Raster(e.to_string()))?
+        .with_limits({
+            // BC LiDAR product tiles reach ~15000x11000 f32 cells (~700 MB);
+            // the crate default (256 MiB) rejects those as "limits exceeded".
+            // Local, trusted files — raise the buffers, keep everything else
+            // at the crate defaults (Limits is #[non_exhaustive]).
+            let mut l = tiff::decoder::Limits::default();
+            l.decoding_buffer_size = 2 * 1024 * 1024 * 1024;
+            l.intermediate_buffer_size = 256 * 1024 * 1024;
+            l.ifd_value_size = 16 * 1024 * 1024;
+            l
+        });
+    let (width, height) = decoder
+        .dimensions()
+        .map_err(|e| DemError::Raster(e.to_string()))?;
+    let (width, height) = (width as usize, height as usize);
+
+    let scale = decoder
+        .get_tag_f64_vec(Tag::ModelPixelScaleTag)
+        .map_err(|e| DemError::Raster(format!("no ModelPixelScale: {e}")))?;
+    let tie = decoder
+        .get_tag_f64_vec(Tag::ModelTiepointTag)
+        .map_err(|e| DemError::Raster(format!("no ModelTiepoint: {e}")))?;
+    if scale.len() < 2 || (scale[0] - scale[1]).abs() > 1e-9 || scale[0] <= 0.0 {
+        return Err(DemError::Raster(
+            "projected raster needs a square metre cell size".into(),
+        ));
+    }
+    if tie.len() < 6 {
+        return Err(DemError::Raster("no ModelTiepoint".into()));
+    }
+    let (min_e, max_n) = (tie[3], tie[4]);
+
+    // Zone: GeoKey 3072 (ProjectedCSType) EPSG codes cover NAD83 UTM
+    // 26901..=26960 (CSRS) and 3156..=3166-ish legacy NAD83; the citation
+    // (GeoKey 1026 / ASCII 34737) often says "UTM zone 10N" as a fallback.
+    let mut zone: Option<u8> = None;
+    if let Ok(keys) = decoder.get_tag_u16_vec(Tag::GeoKeyDirectoryTag) {
+        if keys.len() >= 4 {
+            let num = keys[3] as usize;
+            for i in 0..num {
+                let base = 4 + i * 4;
+                if base + 3 >= keys.len() {
+                    break;
+                }
+                if keys[base] == 3072 {
+                    let epsg = u32::from(keys[base + 3]);
+                    if (26901..=26960).contains(&epsg) {
+                        zone = Some((epsg - 26900) as u8);
+                    } else if (3150..=3200).contains(&epsg) {
+                        // Legacy NAD83 UTM: EPSG 3154..3157 map zones
+                        // alphabetically — unreliable; fall through to the
+                        // citation check.
+                    }
+                }
+            }
+        }
+    }
+    if zone.is_none() {
+        if let Ok(cit) = decoder.get_tag_ascii_string(Tag::GeoAsciiParamsTag) {
+            let lower = cit.to_ascii_lowercase();
+            if let Some(idx) = lower.find("zone ") {
+                let digits: String = lower[idx + 5..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect();
+                if let Ok(z) = digits.parse::<u8>() {
+                    if (1..=60).contains(&z) {
+                        zone = Some(z);
+                    }
+                }
+            }
+        }
+    }
+    let Some(zone) = zone else {
+        return Err(DemError::Raster(format!(
+            "{}: no parsable UTM zone (GeoKey 3072 / citation)",
+            path.display()
+        )));
+    };
+
+    // Nodata sentinel (BC DTM uses -32767 or none at all).
+    let nodata = decoder
+        .get_tag_ascii_string(Tag::GdalNodata)
+        .ok()
+        .and_then(|s| s.trim().parse::<f64>().ok())
+        .or_else(|| {
+            decoder
+                .get_tag_f64_vec(Tag::GdalNodata)
+                .ok()
+                .and_then(|v| v.first().copied())
+        });
+
+    let mut values: Vec<f64> = match decoder
+        .read_image()
+        .map_err(|e| DemError::Raster(e.to_string()))?
+    {
+        tiff::decoder::DecodingResult::F32(v) => v.into_iter().map(f64::from).collect(),
+        tiff::decoder::DecodingResult::F64(v) => v,
+        tiff::decoder::DecodingResult::U16(v) => v.into_iter().map(f64::from).collect(),
+        tiff::decoder::DecodingResult::U32(v) => v.into_iter().map(f64::from).collect(),
+        tiff::decoder::DecodingResult::I16(v) => v.into_iter().map(f64::from).collect(),
+        tiff::decoder::DecodingResult::I32(v) => v.into_iter().map(f64::from).collect(),
+        tiff::decoder::DecodingResult::U8(v) => v.into_iter().map(f64::from).collect(),
+        other => {
+            return Err(DemError::Raster(format!(
+                "unsupported sample type: {other:?}"
+            )))
+        }
+    };
+    if let Some(nd) = nodata {
+        for v in values.iter_mut() {
+            if *v == nd {
+                *v = f64::NAN;
+            }
+        }
+    }
+    if values.len() != width * height {
+        return Err(DemError::Raster(format!(
+            "{}: expected {} samples, got {}",
+            path.display(),
+            width * height,
+            values.len()
+        )));
+    }
+    Ok(ProjectedBand {
+        values,
+        width,
+        height,
+        min_e,
+        max_n,
+        res_m: scale[0],
+        zone,
+    })
 }
 
 #[cfg(test)]

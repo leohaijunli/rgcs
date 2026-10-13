@@ -1,5 +1,4 @@
 import { useTelemetryBridge } from './desktop/bridge'
-import { startPlanHost } from './desktop/planHost'
 import TopBar from './components/TopBar'
 import RightInspector from './components/RightInspector'
 import Dock from './components/Dock'
@@ -10,9 +9,6 @@ import ErrorBanner from './components/ErrorBanner'
 
 export default function App() {
   useTelemetryBridge()
-  // Main-window side of the flight-plan window bridge: snapshots out,
-  // edit intents in (the plan window mirrors this store).
-  startPlanHost()
 
   return (
     <div className="flex h-screen flex-col bg-canvas text-ink">

@@ -83,18 +83,30 @@ pub fn resample_to_wgs84(
     grid: &UtmGrid,
     resolution_deg: (f64, f64),
     aggregate: impl Fn(usize) -> Option<f64>,
+    zone: u8,
 ) -> Result<GeoRaster, DemError> {
-    // Tile's geographic bounds: project the four UTM corners.
-    let (lat0, lon0) = utm::from_utm(grid.min_x, grid.min_y, 10)?;
-    let (lat1, lon1) = utm::from_utm(
-        grid.min_x + grid.width as f64 * grid.resolution_m,
-        grid.min_y + grid.height as f64 * grid.resolution_m,
-        10,
-    )?;
-    let west = lon0.min(lon1);
-    let east = lon0.max(lon1);
-    let south = lat0.min(lat1);
-    let north = lat0.max(lat1);
+    // Geographic bounds: the **envelope of all four UTM corners**. A UTM
+    // rectangle is rotated in geographic space by the meridian convergence,
+    // so projecting only SW/NE (as this used to) clips the east/west edges
+    // by ~7-8 m on a BC sheet.
+    let max_x = grid.min_x + grid.width as f64 * grid.resolution_m;
+    let max_y = grid.min_y + grid.height as f64 * grid.resolution_m;
+    let corners = [
+        utm::from_utm(grid.min_x, grid.min_y, zone)?,
+        utm::from_utm(max_x, grid.min_y, zone)?,
+        utm::from_utm(grid.min_x, max_y, zone)?,
+        utm::from_utm(max_x, max_y, zone)?,
+    ];
+    let west = corners.iter().map(|c| c.1).fold(f64::INFINITY, f64::min);
+    let east = corners
+        .iter()
+        .map(|c| c.1)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let south = corners.iter().map(|c| c.0).fold(f64::INFINITY, f64::min);
+    let north = corners
+        .iter()
+        .map(|c| c.0)
+        .fold(f64::NEG_INFINITY, f64::max);
 
     let width = (((east - west) / resolution_deg.1).ceil() as usize).max(2);
     let height = (((north - south) / resolution_deg.0).ceil() as usize).max(2);
@@ -105,7 +117,7 @@ pub fn resample_to_wgs84(
             // North-up: row 0 = max latitude. Sample the cell centre.
             let lat = north - (row as f64 + 0.5) * resolution_deg.0;
             let lon = west + (col as f64 + 0.5) * resolution_deg.1;
-            let (x, y, _) = utm::to_utm(lat, lon);
+            let (x, y) = utm::to_utm_zone(lat, lon, zone);
             let cx = ((x - grid.min_x) / grid.resolution_m).floor() as isize;
             let cy = ((y - grid.min_y) / grid.resolution_m).floor() as isize;
             let value =
@@ -176,6 +188,71 @@ pub fn fill_single_cell_holes(raster: &mut GeoRaster) {
     }
 }
 
+/// Resample a **raster** UTM band (BC LiDAR DTM product tiles) onto the
+/// WGS84 grid the runtime reader consumes. Unlike the point-cloud
+/// [`resample_to_wgs84`], the aggregate is nearest-cell lookup of the
+/// source values (the product is already a gridded DEM); voids stay void.
+///
+/// The output placement is the four-corner geographic envelope (the UTM
+/// rectangle is rotated by the meridian convergence), same as the
+/// point-cloud resampler.
+///
+/// # Errors
+///
+/// [`DemError::Projection`] when a corner fails the inverse projection.
+pub fn resample_raster_to_wgs84(
+    band: &crate::geotiff::ProjectedBand,
+    resolution_deg: (f64, f64),
+    zone: u8,
+) -> Result<GeoRaster, DemError> {
+    let max_e = band.min_e + band.width as f64 * band.res_m;
+    let min_n = band.max_n - band.height as f64 * band.res_m;
+    let corners = [
+        crate::utm::from_utm(band.min_e, min_n, zone)?,
+        crate::utm::from_utm(max_e, min_n, zone)?,
+        crate::utm::from_utm(band.min_e, band.max_n, zone)?,
+        crate::utm::from_utm(max_e, band.max_n, zone)?,
+    ];
+    let west = corners.iter().map(|c| c.1).fold(f64::INFINITY, f64::min);
+    let east = corners
+        .iter()
+        .map(|c| c.1)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let south = corners.iter().map(|c| c.0).fold(f64::INFINITY, f64::min);
+    let north = corners
+        .iter()
+        .map(|c| c.0)
+        .fold(f64::NEG_INFINITY, f64::max);
+
+    let width = (((east - west) / resolution_deg.1).ceil() as usize).max(2);
+    let height = (((north - south) / resolution_deg.0).ceil() as usize).max(2);
+    let mut values = vec![f32::NAN; width * height];
+    for row in 0..height {
+        for col in 0..width {
+            // North-up, sample the cell centre.
+            let lat = north - (row as f64 + 0.5) * resolution_deg.0;
+            let lon = west + (col as f64 + 0.5) * resolution_deg.1;
+            let (x, y) = crate::utm::to_utm_zone(lat, lon, zone);
+            let cx = ((x - band.min_e) / band.res_m).floor() as isize;
+            let cy = ((band.max_n - y) / band.res_m).floor() as isize;
+            if cx < 0 || cy < 0 || cx as usize >= band.width || cy as usize >= band.height {
+                continue;
+            }
+            let v = band.values[cy as usize * band.width + cx as usize];
+            if v.is_finite() {
+                values[row * width + col] = v as f32;
+            }
+        }
+    }
+    Ok(GeoRaster {
+        width,
+        height,
+        values,
+        west,
+        north,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,6 +284,7 @@ mod tests {
                 1.0 / (111_320.0 * 48.65f64.to_radians().cos()),
             ),
             |i| dtm_value(&grid, i),
+            10,
         )
         .expect("resample");
         let filled = geo.values.iter().filter(|v| !v.is_nan()).count();

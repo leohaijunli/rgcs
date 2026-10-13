@@ -54,15 +54,14 @@ export default function MapView() {
       ),
     [waypoints, altitudeMode, home, blocks, planBase],
   )
-  const imageryStyle = useUiStore((s) => s.imageryStyle)
   const showGrid = useUiStore((s) => s.showGrid)
+  const imageryStyle = useUiStore((s) => s.imageryStyle)
   useEffect(() => {
     setLayers(showGrid)
   }, [showGrid, setLayers])
   useEffect(() => {
     setImageryStyle(imageryStyle)
   }, [imageryStyle, setImageryStyle])
-
   // Terrain hillshade overlay (plan A): react to the store's overlay.
   const terrainOverlay = useTerrainStore((st) => st.overlay)
   useEffect(() => {
@@ -117,7 +116,29 @@ export default function MapView() {
   // the mesh; labels stay AMSL. Sampled per waypoint, cleared when 3D is
   // off (back to the AMSL plane).
   const [ellipsoidBySeq, setEllipsoidBySeq] = useState<Record<number, number> | null>(null)
-  const meshOn = terrain3d != null
+  // Only add N(EGM96) when the tileset really is on the ellipsoid (built with
+  // `--geoid`). A tileset built without it serves CGVD2013 H as if it were h,
+  // and adding N (≈ −19.5 m at Sidney) would sink the trajectory below it.
+  const [meshEllipsoid, setMeshEllipsoid] = useState(false)
+  useEffect(() => {
+    if (!terrain3d) {
+      setMeshEllipsoid(false)
+      return
+    }
+    let cancelled = false
+    fetch(`${terrain3d.url}layer.json`)
+      .then((r) => r.json())
+      .then((j: { verticalDatum?: string }) => {
+        if (!cancelled) setMeshEllipsoid(j.verticalDatum === 'ellipsoidWgs84')
+      })
+      .catch(() => {
+        if (!cancelled) setMeshEllipsoid(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [terrain3d])
+  const meshOn = meshEllipsoid
   useEffect(() => {
     if (!meshOn || missionItems.length === 0) {
       setEllipsoidBySeq(null)

@@ -88,6 +88,9 @@ interface MissionState {
   lastSyncedHash: string | null
   /** Terrain drape result (S3/D5): dem version + report. */
   drape: DrapeState | null
+  /** Last automatic (terrain-mode) drape failure, `null` when the last drape
+   * succeeded. Without it a failed drape leaves stale heights silently. */
+  drapeError: string | null
   /** Result of the post-upload read-back: null = unknown/not checked. */
   fcMatches: boolean | null
   /** True while a read-back download is in flight. */
@@ -176,6 +179,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
   fcMatches: null,
   verifying: false,
   drape: null,
+  drapeError: null,
   planBase: null,
   blocks: [],
   home: null,
@@ -632,16 +636,25 @@ async function runTerrainDrape(): Promise<void> {
       aglM: s.surveyAglM,
       minDsmClearanceM: 5,
     })
+    // The plan may have been edited while the backend was draping: applying
+    // the result would overwrite those edits with a stale snapshot. Drop it
+    // and re-drape the current plan instead.
+    if (planKey(useMissionStore.getState().waypoints) !== planKey(s.waypoints)) {
+      scheduleTerrainDrape()
+      return
+    }
     lastDrapedKey = `${planKey(report.waypoints)}|${s.surveyAglM}|${tile.version}`
     useMissionStore.setState({
       waypoints: report.waypoints,
       dirty: true,
       fcMatches: null,
       drape: { report, folder: tile.path },
+      drapeError: null,
     })
-  } catch {
-    // Outside coverage / DEM problem: keep the plan editable; the DrapeBlock
-    // surfaces the error via the manual path.
+  } catch (e) {
+    // Outside coverage / DEM void: keep the plan editable but say so — the
+    // heights are NOT terrain-following until this clears.
+    useMissionStore.setState({ drapeError: String(e) })
   } finally {
     draping = false
   }

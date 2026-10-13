@@ -42,9 +42,9 @@ export default function MapToolbar({ onGoHome, onNorth }: Props) {
   const toggleFollow = useUiStore((s) => s.toggleFollow)
   const map3d = useUiStore((s) => s.map3d)
   const toggleMap3d = useUiStore((s) => s.toggleMap3d)
+  const showGrid = useUiStore((s) => s.showGrid)
   const imageryStyle = useUiStore((s) => s.imageryStyle)
   const setImageryStyle = useUiStore((s) => s.setImageryStyle)
-  const showGrid = useUiStore((s) => s.showGrid)
   const toggleGrid = useUiStore((s) => s.toggleGrid)
   const showHeights = useUiStore((s) => s.showHeights)
   const toggleHeights = useUiStore((s) => s.toggleHeights)
@@ -128,7 +128,7 @@ export default function MapToolbar({ onGoHome, onNorth }: Props) {
       {popover === 'layers' && (
         <Popover className="left-full top-0 ml-1.5 w-48">
           <div className="flex rounded border border-line bg-canvas p-0.5">
-            {(['osm', 'satellite', 'google', 'topo'] as const).map((style) => (
+            {(['google-satellite', 'google-hybrid'] as const).map((style) => (
               <button
                 key={style}
                 className={`flex-1 rounded px-1.5 py-1 text-[11px] transition-colors ${

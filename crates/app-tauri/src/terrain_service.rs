@@ -17,8 +17,10 @@ use crate::terrain_server::TerrainServer;
 /// The overlay payload for the frontend.
 #[derive(Debug, Clone, Serialize)]
 pub struct TerrainOverlay {
-    /// Data URL of the hillshade PNG (CSP allows img-src data:).
-    pub url: String,
+    /// Data URL of the hillshade PNG — `None` when the folder carries no
+    /// hillshade (raster-product tiles): the shade layer is optional, the
+    /// DEM itself (drape/AGL/terrain mode) never depends on it.
+    pub url: Option<String>,
     pub bounds: DemBounds,
     /// dem.json version (sha256[..16]) — mission archives reference it.
     pub version: String,
@@ -35,9 +37,9 @@ pub async fn terrain_load(folder: String) -> Result<TerrainOverlay, String> {
     let dir = Path::new(&folder);
     let png_path = dir.join("hillshade.png");
     let meta_path = dir.join("dem.json");
-    let png = tokio::fs::read(&png_path)
-        .await
-        .map_err(|e| format!("{}: {e}", png_path.display()))?;
+    // The hillshade is a visual nicety; its absence must not block the DEM
+    // (drape / terrain mode work off dtm.tif alone).
+    let png = tokio::fs::read(&png_path).await.ok();
     let meta: DemMetadata = serde_json::from_str(
         &tokio::fs::read_to_string(&meta_path)
             .await
@@ -50,7 +52,7 @@ pub async fn terrain_load(folder: String) -> Result<TerrainOverlay, String> {
         return Err(format!("{}: invalid bounds", meta_path.display()));
     }
     Ok(TerrainOverlay {
-        url: format!("data:image/png;base64,{}", base64_encode(&png)),
+        url: png.map(|p| format!("data:image/png;base64,{}", base64_encode(&p))),
         bounds: meta.bounds,
         version: meta.version,
     })
@@ -547,6 +549,23 @@ pub async fn terrain_process_raw(
             .unwrap_or("terrain")
     ));
     let out_display = out.display().to_string();
+
+    // The conversion is a one-time cost: if the output folder already holds
+    // a discovery with at least as many tiles as there are source rasters,
+    // reuse it instead of re-running dem-prep (which would re-resample the
+    // ~700 MB product tiles). Persisted on disk, so it survives restarts.
+    let source_rasters = count_input_rasters(&source);
+    if source_rasters > 0 {
+        if let Ok(discovery) = terrain_discover(out_display.clone()).await {
+            if discovery.tiles.len() >= source_rasters {
+                return Ok(RawProcessResult {
+                    processed: out_display,
+                    tiles: discovery.tiles,
+                });
+            }
+        }
+    }
+
     let handle = app.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let args = vec![
@@ -612,4 +631,22 @@ pub async fn geoid_sample(points: Vec<(f64, f64)>) -> Result<Vec<GeoidSample>, S
         });
     }
     Ok(out)
+}
+
+/// Count raw DEM inputs (`.tif`/`.las`) directly under `dir` — the cheap
+/// freshness check for reusing a previous [`terrain_process_raw`] run.
+fn count_input_rasters(dir: &Path) -> usize {
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    matches!(
+                        e.path().extension().and_then(|x| x.to_str()),
+                        Some("tif") | Some("tiff") | Some("las") | Some("laz")
+                    )
+                })
+                .count()
+        })
+        .unwrap_or(0)
 }

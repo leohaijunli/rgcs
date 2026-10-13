@@ -19,8 +19,9 @@ export interface DiscoveredTile {
 }
 
 export interface TerrainOverlay {
-  /** Data URL of the hillshade PNG (CSP allows img-src data:). */
-  url: string
+  /** Data URL of the hillshade PNG — null when the tile carries none
+   * (raster products): the shade is optional, the DEM is what matters. */
+  url: string | null
   bounds: DemBounds
   /** dem.json version (sha256[..16]) — mission archives reference it. */
   version: string
@@ -343,7 +344,7 @@ async function discoverAndLoad(
 ): Promise<void> {
   let effective = folder
   let tiles: DiscoveredTile[]
-  if (await hasDemIndex(folder)) {
+  if (await hasDemIndex(invoke, folder)) {
     ;({ tiles } = await invoke<{ tiles: DiscoveredTile[] }>('terrain_discover', {
       folder: effective,
     }))
@@ -377,20 +378,20 @@ async function discoverAndLoad(
   set({ overlay: { ...overlay, loading: false }, error: null, loading: false })
 }
 
-/** Whether `folder` is already a processed dem-prep output (index.json at
- * the parent level or dem.json in the tile itself). */
-async function hasDemIndex(folder: string): Promise<boolean> {
-  const { exists, readDir } = await import('@tauri-apps/plugin-fs')
+/** Whether `folder` is already a processed dem-prep output: simply probe
+ * `terrain_discover` (it accepts a parent with index.json or a single-tile
+ * folder with dem.json). No fs-plugin reads — the desktop capability only
+ * grants text-file reads, so a readDir probe silently failed and misrouted
+ * processed folders back into dem-prep (bug: "no DEM tiles produced"). */
+async function hasDemIndex(
+  invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>,
+  folder: string,
+): Promise<boolean> {
   try {
-    if (await exists(`${folder}/dem.json`)) return true
-    const entries = await readDir(folder)
-    if (entries.some((e) => e.name === 'index.json')) return true
-    // Tile subfolders carry dem.json one level down (the N1 layout has the
-    // index; this catches a hand-built folder of tiles without one).
-    for (const e of entries) {
-      if (e.isDirectory && (await exists(`${folder}/${e.name}/dem.json`))) return true
-    }
-    return false
+    const { tiles } = await invoke<{ tiles: DiscoveredTile[] }>('terrain_discover', {
+      folder,
+    })
+    return tiles.length > 0
   } catch {
     return false
   }

@@ -101,9 +101,12 @@ impl CogDem {
         check_paths(dtm, dsm)?;
         // Placement comes from dem.json; compute the per-axis degree scales
         // from the nominal metre resolution at the coverage's mid-latitude
-        // (dem-prep used the same conversion, so the numbers agree exactly).
+        // dem-prep divides by the constant 111_132.954 m/deg for latitude (and
+        // by 111_319.49·cos(lat) for longitude); the reader must use the very
+        // same factors, otherwise rows drift by ~0.064 % (≈1 px over a 1.4 km
+        // tile at 48.65° N).
         let mid_lat = (metadata.bounds.north + metadata.bounds.south) / 2.0;
-        let m_per_deg_lat = 111_132.954 - 559.822 * (2.0 * mid_lat).to_radians().cos();
+        let m_per_deg_lat = 111_132.954;
         let m_per_deg_lon = 111_319.49 * mid_lat.to_radians().cos();
         let (west, north) = (metadata.bounds.west, metadata.bounds.north);
         let (dlat, dlon) = (
@@ -159,7 +162,15 @@ impl ElevationSource for CogDem {
     /// exist); a DSM void — the DTM-only fallback sources — returns NaN so
     /// the drape can skip the clearance check without failing the plan.
     fn sample_pair(&self, point: GeoPoint) -> Result<(Height, Height), TerrainError> {
-        let dtm = self.dtm.sample(point.latitude_deg, point.longitude_deg)?;
+        // Re-attach the query point to a void so the operator can see which
+        // waypoint is not sampleable (Raster::at has no position).
+        let dtm = self
+            .dtm
+            .sample(point.latitude_deg, point.longitude_deg)
+            .map_err(|e| match e {
+                TerrainError::Void(_) => TerrainError::Void(point),
+                other => other,
+            })?;
         let dsm = self
             .dsm
             .sample(point.latitude_deg, point.longitude_deg)

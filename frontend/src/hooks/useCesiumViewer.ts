@@ -57,16 +57,17 @@ export interface CesiumViewerHandle {
   setSnapshot(snapshot: TelemetrySnapshot | null): void
   /** Re-render the mission waypoint layer. */
   setLayers(showGrid: boolean): void
-  setImageryStyle(style: 'osm' | 'satellite' | 'google' | 'topo'): void
   setMission(
     items: MissionItem[],
     selectedSeq: number | null,
     opts?: WaypointRenderOptions,
   ): void
+  /** Swap the Google imagery layer (satellite / hybrid). */
+  setImageryStyle(style: 'google-satellite' | 'google-hybrid'): void
   /** Add/remove the terrain hillshade overlay (plan A). */
   setTerrainOverlay(
     overlay: {
-      url: string
+      url: string | null
       bounds: { north: number; south: number; east: number; west: number }
     } | null,
   ): void
@@ -340,10 +341,16 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
     })
   }, [])
 
+  const setImageryStyle = useCallback((style: 'google-satellite' | 'google-hybrid') => {
+    const viewer = viewerRef.current
+    if (!viewer) return
+    applyImageryStyle(viewer, style)
+  }, [])
+
   const setTerrainOverlay = useCallback(
     (
       overlay: {
-        url: string
+        url: string | null
         bounds: { north: number; south: number; east: number; west: number }
       } | null,
     ) => {
@@ -366,10 +373,5 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
     applyLayerVisibility(viewer, showGrid)
   }, [])
 
-  const setImageryStyle = useCallback((style: 'osm' | 'satellite' | 'google' | 'topo') => {
-    const viewer = viewerRef.current
-    if (!viewer) return
-    applyImageryStyle(viewer, style)
-  }, [])
   return { initError, setSnapshot, setMission, setTerrainOverlay, setTerrain3d, setLayers, setImageryStyle, goHome, lookNorth }
 }
