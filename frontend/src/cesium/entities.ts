@@ -11,7 +11,7 @@ import type { MissionItem } from '../generated-types/MissionItem'
 import type { LineKind } from '../generated-types/LineKind'
 import { heightRuns, splitRuns, type KindBySeq } from '../mission/lineKinds'
 import { selfIntersects } from '../mission/polygon'
-import { HOME_LAT, HOME_LON, UAV_MODEL_URI } from './constants'
+import { FOCUS_PITCH_DEG, FOCUS_RANGE_M, HOME_LAT, HOME_LON, UAV_MODEL_URI } from './constants'
 
 /** Below this (m) a waypoint is level with the lowest one; no stick is drawn. */
 const HEIGHT_EPSILON_M = 0.25
@@ -724,4 +724,52 @@ export function updateCenterHandle(
   if (handle.entity.point) handle.entity.point.heightReference = new Cesium.ConstantProperty(reference)
   if (handle.entity.label) handle.entity.label.heightReference = new Cesium.ConstantProperty(reference)
   handle.entity.show = true
+}
+
+/** Camera flyTo a selected waypoint (#39): the list click must show the
+ * point on the map, not only highlight the row. Keeps the current heading/
+ * pitch, moves to a fixed oblique range over the point (rendered height,
+ * geoid-aligned like the geometry). */
+export function flyToWaypoint(
+  viewer: Cesium.Viewer,
+  items: MissionItem[],
+  seq: number,
+  ellipsoidBySeq: Record<number, number> | null,
+): void {
+  const item = items.find((it) => it.seq === seq)
+  if (!item) return
+  const height = item.z + (ellipsoidBySeq?.[seq] ?? 0)
+  viewer.camera.flyTo({
+    destination: Cesium.Cartesian3.fromDegrees(
+      degFromMavInt(item.y),
+      degFromMavInt(item.x),
+      height + FOCUS_RANGE_M,
+    ),
+    orientation: {
+      heading: viewer.camera.heading,
+      pitch: Cesium.Math.toRadians(FOCUS_PITCH_DEG),
+      roll: 0,
+    },
+    duration: 0.8,
+  })
+}
+
+/** Frame the whole mission (#plan review): fly the camera out to the
+ * bounding rectangle of the waypoints so a freshly generated pattern is
+ * visible at a glance. */
+export function flyToPattern(viewer: Cesium.Viewer, items: MissionItem[]): void {
+  const located = items.filter((it) => it.frame !== 'mission' && (it.x !== 0 || it.y !== 0))
+  if (located.length === 0) return
+  const lats = located.map((it) => degFromMavInt(it.x))
+  const lons = located.map((it) => degFromMavInt(it.y))
+  const spanLat = Math.max(...lats) - Math.min(...lats)
+  const spanLon = Math.max(...lons) - Math.min(...lons)
+  // Generous framing: the pattern plus margins for the height sticks.
+  const span = Math.max(spanLat, spanLon / Math.cos((Math.min(...lats) * Math.PI) / 180), 0.001)
+  const centreLat = (Math.max(...lats) + Math.min(...lats)) / 2
+  const centreLon = (Math.max(...lons) + Math.min(...lons)) / 2
+  viewer.camera.flyTo({
+    destination: Cesium.Cartesian3.fromDegrees(centreLon, centreLat, span * 111_320 * 2.2),
+    duration: 0.8,
+  })
 }

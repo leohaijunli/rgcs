@@ -36,6 +36,9 @@ interface UiState {
   hudCollapsed: boolean
   /** Last known map-camera centre in degrees, used as the default new-waypoint spot. */
   mapCenter: { lat: number; lon: number } | null
+  /** Bump to ask the map to frame the whole mission (post-Generate). */
+  fitRequest: number
+  requestFit: () => void
   /** Active map tool; `Esc` and leaving the planning view reset it to `select`. */
   mapTool: MapTool
   /** Draw a height stick and an AGL chip on every map waypoint (default on:
@@ -89,6 +92,7 @@ export const useUiStore = create<UiState>((set) => ({
   map3d: true,
   hudCollapsed: false,
   mapCenter: null,
+  fitRequest: 0,
   mapTool: 'select',
   showHeights: true,
   trailByAgl: true,
@@ -116,6 +120,7 @@ export const useUiStore = create<UiState>((set) => ({
   toggleMap3d: () => set((s) => ({ map3d: !s.map3d })),
   toggleHud: () => set((s) => ({ hudCollapsed: !s.hudCollapsed })),
   setMapCenter: (mapCenter) => set({ mapCenter }),
+  requestFit: () => set((s) => ({ fitRequest: s.fitRequest + 1 })),
   setMapTool: (mapTool) => set({ mapTool }),
   toggleHeights: () => set((s) => ({ showHeights: !s.showHeights })),
   toggleTrailByAgl: () => set((s) => ({ trailByAgl: !s.trailByAgl })),

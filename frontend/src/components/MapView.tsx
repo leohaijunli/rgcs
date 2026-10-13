@@ -18,7 +18,7 @@ import MapToolbar from './MapToolbar'
 export default function MapView() {
   const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
-  const { initError, setSnapshot, setMeshOffset, setTrailByAgl, setMission, setTerrainOverlay, setTerrain3d, setLayers, setImageryStyle, goHome, lookNorth } =
+  const { initError, setSnapshot, setMeshOffset, setTrailByAgl, setMission, setTerrainOverlay, setTerrain3d, setLayers, setImageryStyle, focusWaypoint, fitMission, goHome, lookNorth } =
     useCesiumViewer(containerRef)
   const mapTool = useUiStore((s) => s.mapTool)
   const view = useUiStore((s) => s.view)
@@ -225,6 +225,22 @@ export default function MapView() {
     ellipsoidBySeq,
     setMission,
   ])
+
+  // Generate bumps fitRequest: frame the freshly created pattern (#review).
+  const fitRequest = useUiStore((s) => s.fitRequest)
+  useEffect(() => {
+    if (fitRequest > 0) fitMission()
+  }, [fitRequest, fitMission])
+
+  // Selecting a waypoint in the list flies the camera to it (#39). The map
+  // keeps its own drag-preview selection; re-focusing on the same seq is a
+  // no-op, so a drag commit does not yank the camera.
+  const lastFocusedSeq = useRef<number | null>(null)
+  useEffect(() => {
+    if (selectedSeq === null || selectedSeq === lastFocusedSeq.current) return
+    lastFocusedSeq.current = selectedSeq
+    focusWaypoint(selectedSeq)
+  }, [selectedSeq, focusWaypoint])
 
   // Tool shortcuts (P3 §4.3): W = add waypoint, P = draw polygon. Planning
   // only; Esc already returns to select (cesium/waypoints.ts).

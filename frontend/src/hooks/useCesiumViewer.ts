@@ -9,6 +9,7 @@ import * as Cesium from 'cesium'
 import { setTerrain3d as sceneSetTerrain3d, setTerrainOverlay as sceneSetTerrainOverlay } from '../cesium/scene'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
 import { applyLayerVisibility, createViewer, setImageryStyle as applyImageryStyle } from '../cesium/scene'
+import { flyToPattern, flyToWaypoint } from '../cesium/entities'
 import {
   createCenterHandle,
   createDroneLayer,
@@ -71,6 +72,10 @@ export interface CesiumViewerHandle {
   ): void
   /** Swap the Google imagery layer (satellite / hybrid). */
   setImageryStyle(style: 'google-satellite' | 'google-hybrid'): void
+  /** Camera flyTo a selected waypoint (#39): the list click shows the point. */
+  focusWaypoint(seq: number): void
+  /** Frame the whole mission (post-Generate overview). */
+  fitMission(): void
   /** Add/remove the terrain hillshade overlay (plan A). */
   setTerrainOverlay(
     overlay: {
@@ -411,6 +416,18 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
     applyImageryStyle(viewer, style)
   }, [])
 
+  const focusWaypoint = useCallback((seq: number) => {
+    const viewer = viewerRef.current
+    if (!viewer) return
+    flyToWaypoint(viewer, wpItemsRef.current, seq, wpOptsRef.current.ellipsoidBySeq ?? null)
+  }, [])
+
+  const fitMission = useCallback(() => {
+    const viewer = viewerRef.current
+    if (!viewer) return
+    flyToPattern(viewer, wpItemsRef.current)
+  }, [])
+
   const setTerrainOverlay = useCallback(
     (
       overlay: {
@@ -437,5 +454,5 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
     applyLayerVisibility(viewer, showGrid)
   }, [])
 
-  return { initError, setSnapshot, setMeshOffset, setTrailByAgl, setMission, setTerrainOverlay, setTerrain3d, setLayers, setImageryStyle, goHome, lookNorth }
+  return { initError, setSnapshot, setMeshOffset, setTrailByAgl, setMission, setTerrainOverlay, setTerrain3d, setLayers, setImageryStyle, focusWaypoint, fitMission, goHome, lookNorth }
 }

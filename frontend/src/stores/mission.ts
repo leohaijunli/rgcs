@@ -465,6 +465,14 @@ export const useMissionStore = create<MissionState>((set, get) => ({
         )
         patch.fcMatches = true
       }
+      if (e.kind === 'completed' && e.op === 'clear') {
+        // The FC dropped its mission: there is no baseline any more. The
+        // local plan (if any) is simply unsynced again — reporting "synced"
+        // here is exactly the stale-state false positive issues.md #33/#38
+        // describe (the panel claimed sync while the FC held nothing).
+        patch.lastSyncedHash = null
+        patch.fcMatches = null
+      }
       return patch
     })
     if (e.kind === 'completed' && e.op === 'upload') {

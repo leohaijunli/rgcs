@@ -190,10 +190,16 @@ export default {
     goTo: 'Set current',
     failed: 'Mission failed',
     mode: {
-      relative: 'Rel',
+      relative: 'HOME-rel',
       amsl: 'AMSL',
-      agl: 'AGL',
-      terrain: 'Terrain',
+      agl: 'HOME-rel (flat)',
+      terrain: 'Terrain (needs DEM)',
+    },
+    modeHint: {
+      relative: 'Heights relative to HOME (the wire relative frame)',
+      amsl: 'Absolute AMSL heights',
+      agl: 'Heights relative to HOME on a flat plane — no terrain following',
+      terrain: 'Survey AGL over the DEM; every edit re-drapes. Needs a loaded terrain folder.',
     },
     complex: {
       label: '{{type}} · {{count}} waypoints',
@@ -257,6 +263,7 @@ export default {
           auto: 'Terrain mode: re-draped automatically on every plan change.',
           noDem: 'No DEM loaded — plain heights in use. Load a terrain folder (LiDAR preferred).',
           voidFilled: 'ground borrowed:',
+          noDsm: 'no DSM (no clearance check)',
         },
         terrainNeedsDem:
           'Terrain mode needs ground data: load a terrain folder first (Layers ▸ Terrain).',

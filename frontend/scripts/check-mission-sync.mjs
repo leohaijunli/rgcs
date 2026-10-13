@@ -91,6 +91,39 @@ function reset() {
   useMissionStore.getState().clearPlan()
 }
 
+await check('clearing the FC mission invalidates the baseline (#33/#38)', async () => {
+  reset()
+  useMissionStore.getState().addWaypointAt(48.6493, -123.3982)
+  const uploaded = useMissionStore.getState().flyable()
+  await useMissionStore.getState().upload()
+  event('upload', 'completed')
+  useMissionStore.getState().handlePlan(uploaded)
+  eq(status(), 'synced', 'precondition: in sync')
+
+  // "Clear FC mission" succeeds: the FC now holds nothing.
+  event('clear', 'completed')
+  const s = useMissionStore.getState()
+  eq(s.lastSyncedHash, null, 'baseline dropped')
+  eq(s.fcMatches, null, 'match knowledge dropped')
+  assert(s.waypoints.length === 1, 'the local plan is kept')
+  eq(status(), 'unsynced', 'status — the FC holds nothing, so not synced')
+})
+
+await check('a failed clear keeps the baseline (#33/#38)', async () => {
+  reset()
+  useMissionStore.getState().addWaypointAt(48.6493, -123.3982)
+  const uploaded = useMissionStore.getState().flyable()
+  await useMissionStore.getState().upload()
+  event('upload', 'completed')
+  useMissionStore.getState().handlePlan(uploaded)
+  eq(status(), 'synced', 'precondition')
+
+  event('clear', 'failed', 'NACK')
+  eq(status(), 'synced', 'the FC still holds the plan')
+})
+
+console.log('mission sync:')
+
 console.log('mission sync:')
 
 await check('an empty plan has nothing to sync', () => {

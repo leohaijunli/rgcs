@@ -37,6 +37,9 @@ export const DEAD_RECKON_MAX_S = 0.5
 // vehicle instead of keeping whatever overview the user happened to be at.
 // Once centred the user can orbit and zoom freely; follow keeps those.
 export const FOLLOW_RANGE_M = 250
+/** Waypoint-selection flyTo (#39): a closer, flatter look than follow. */
+export const FOCUS_RANGE_M = 600
+export const FOCUS_PITCH_DEG = -45
 export const FOLLOW_PITCH_DEG = -35
 
 // Shipped airframe (see `model/README.md` at the repo root). Cesium maps the

@@ -98,6 +98,9 @@ export default function PlanSteps() {
             </button>
           ))}
         </div>
+        <div className="mt-1 text-[10px] text-muted" title={t(`plan.modeHint.${altitudeMode}`)}>
+          {t(`plan.modeHint.${altitudeMode}`)}
+        </div>
         {sync !== 'empty' && (
           <div className={`mt-1 text-right text-xs ${SYNC_TONE[sync]}`}>
             {verifying ? t('plan.sync.verifying') : t(`plan.sync.${sync}`)}

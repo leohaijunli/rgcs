@@ -39,6 +39,8 @@ export default function PatternStep({ kind, onKind, sweep, onSweep, clover, onCl
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const mapCenter = useUiStore((s) => s.mapCenter)
+  const setPlanStep = useUiStore((s) => s.setPlanStep)
+  const requestFit = useUiStore((s) => s.requestFit)
   const insertPattern = useMissionStore((s) => s.insertPattern)
   const lastPattern = useMissionStore((s) => s.lastPattern)
   const center = useMissionStore((s) => s.patternCenter)
@@ -105,6 +107,9 @@ export default function PatternStep({ kind, onKind, sweep, onSweep, clover, onCl
           coverage_polygon: boundary,
         })
         insertPattern(compiled, t('plan.pattern.kind.sweep'), effectiveCenter, compiled.stats)
+        // Post-generate handoff (#plan review): show the result and frame it.
+        setPlanStep('waypoints')
+        requestFit()
       } else {
         if (!effectiveCenter) {
           setError(t('plan.pattern.noCenter'))
@@ -122,6 +127,8 @@ export default function PatternStep({ kind, onKind, sweep, onSweep, clover, onCl
           coverage_polygon: null,
         })
         insertPattern(compiled, t('plan.pattern.kind.cloverleaf'), effectiveCenter, compiled.stats)
+        setPlanStep('waypoints')
+        requestFit()
       }
     } catch (e) {
       setError(String(e))
@@ -382,16 +389,29 @@ function DrapeBlock() {
         <div className="text-[11px] text-warn">{t('plan.pattern.drape.noDem')}</div>
       )}
 {drape && (
-        <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-[11px] text-muted">
-          <span>
+        <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-[11px]">
+          <span className="text-muted">
             {tile?.source === 'geotiff'
               ? t('plan.pattern.drape.sourceGeotiff')
               : t('plan.pattern.drape.sourceLidar')}
           </span>
-          <span>
-            {t('plan.pattern.drape.clearance')}{' '}
-            {drape.report.min_dsm_clearance_m.toFixed(1)} m
-          </span>
+          {/* Clearance below the requested margin (or nothing to measure —
+           * a DTM-only source) is the one number the operator must not
+           * miss: red it (feedback from the flight-plan review). */}
+          {drape.report.min_dsm_clearance_m > 0 &&
+          drape.report.min_dsm_clearance_m < 5 ? (
+            <span className="text-error">
+              {t('plan.pattern.drape.clearance')}{' '}
+              {drape.report.min_dsm_clearance_m.toFixed(1)} m ⚠
+            </span>
+          ) : (
+            <span className="text-muted">
+              {t('plan.pattern.drape.clearance')}{' '}
+              {drape.report.min_dsm_clearance_m > 0
+                ? `${drape.report.min_dsm_clearance_m.toFixed(1)} m`
+                : t('plan.pattern.drape.noDsm')}
+            </span>
+          )}
           <span>
             {t('plan.pattern.drape.raised')} {drape.report.raised}
           </span>
