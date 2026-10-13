@@ -3,7 +3,7 @@ import * as Dialog from '@radix-ui/react-dialog'
 import * as Tabs from '@radix-ui/react-tabs'
 import { X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { PRESET_AREAS, presetArea } from '../../cesium/presets'
+import { allAreas, isValidAreaInput, loadCustomAreas, presetArea, saveCustomAreas, type PresetArea } from '../../cesium/presets'
 import { connectEndpoint, disconnect, reportConnectError, shutdownApp } from '../../desktop/connect'
 import {
   BAUD_RATES,
@@ -370,6 +370,15 @@ function VehicleTab() {
     setInitialPosition({ lat: latValue, lon: lonValue })
   }
 
+  const [customAreas, setCustomAreas] = useState<PresetArea[]>(() => loadCustomAreas())
+  const [areaName, setAreaName] = useState('')
+  const [areaError, setAreaError] = useState<string | null>(null)
+
+  const persistCustom = (areas: PresetArea[]) => {
+    setCustomAreas(areas)
+    saveCustomAreas(areas)
+  }
+
   const useMapCenter = () => {
     if (!mapCenter) return
     setLat(formatDeg(mapCenter.lat))
@@ -383,6 +392,35 @@ function VehicleTab() {
     setLat(formatDeg(area.lat))
     setLon(formatDeg(area.lon))
     setInitialPosition({ lat: area.lat, lon: area.lon })
+  }
+
+  const addCustomArea = () => {
+    const name = areaName.trim()
+    const latV = Number(lat)
+    const lonV = Number(lon)
+    if (!name) {
+      setAreaError(t('settings.areas.nameRequired'))
+      return
+    }
+    if (!isValidAreaInput(latV, lonV)) {
+      setAreaError(t('settings.areas.coordsInvalid'))
+      return
+    }
+    // A fresh id per entry (name collisions stay distinct entries).
+    const area: PresetArea = {
+      id: `custom-${Date.now().toString(36)}`,
+      name,
+      lat: latV,
+      lon: lonV,
+      alt: 0,
+    }
+    persistCustom([...customAreas, area])
+    setAreaName('')
+    setAreaError(null)
+  }
+
+  const removeCustomArea = (id: string) => {
+    persistCustom(customAreas.filter((a) => a.id !== id))
   }
 
   const field =
@@ -400,7 +438,7 @@ function VehicleTab() {
           className={field}
         >
           <option value="">—</option>
-          {PRESET_AREAS.map((a) => (
+          {allAreas(customAreas).map((a) => (
             <option key={a.id} value={a.id}>
               {a.name}
             </option>
@@ -443,6 +481,47 @@ function VehicleTab() {
       <div className="mono mt-3 text-xs text-muted">
         {formatDeg(saved.lat)}, {formatDeg(saved.lon)}
       </div>
+
+      {/* Custom preset areas: the operator's own take-off sites, persisted in
+       * localStorage and offered in the dropdown above. Added from whatever
+       * lat/lon is committed right now (map centre or typed). */}
+      <div className="mt-5 mb-1 text-xs text-muted">{t('settings.areas.title')}</div>
+      <div className="mb-3 text-xs text-muted">{t('settings.areas.hint')}</div>
+      <div className="flex items-center gap-2">
+        <input
+          value={areaName}
+          onChange={(e) => setAreaName(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && addCustomArea()}
+          placeholder={t('settings.areas.namePlaceholder')}
+          className={`${field} mt-0 flex-1`}
+        />
+        <button
+          onClick={addCustomArea}
+          className="touch-target h-9 shrink-0 rounded border border-line bg-canvas px-3 text-xs text-ink hover:bg-panel"
+        >
+          {t('settings.areas.add')}
+        </button>
+      </div>
+      <FieldError message={areaError} />
+      {customAreas.length > 0 && (
+        <ul className="mt-2 space-y-1">
+          {customAreas.map((a) => (
+            <li key={a.id} className="flex items-center gap-2 text-xs">
+              <span className="flex-1 truncate text-ink">{a.name}</span>
+              <span className="mono text-muted">
+                {formatDeg(a.lat)}, {formatDeg(a.lon)}
+              </span>
+              <button
+                onClick={() => removeCustomArea(a.id)}
+                aria-label={`remove ${a.name}`}
+                className="rounded px-1 text-muted hover:text-error"
+              >
+                <X size={12} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
 
       {/* UAV model orientation offsets (issues.md #43): added to the MAVLink
        * attitude when the 3D model is drawn, so a model whose nose is not the

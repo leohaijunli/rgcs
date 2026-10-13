@@ -25,6 +25,53 @@ export const PRESET_AREAS: PresetArea[] = [
   { id: 'chilliwack', name: 'Chilliwack, BC', lat: 49.1577, lon: -121.951, alt: 10 },
 ]
 
+/** localStorage key for the operator's own areas (Settings → Vehicle). */
+const CUSTOM_AREAS_KEY = 'maggcs.presetAreas'
+
+/** The operator's custom areas, or an empty list (corrupt entries drop). */
+export function loadCustomAreas(): PresetArea[] {
+  try {
+    const raw = localStorage.getItem(CUSTOM_AREAS_KEY)
+    if (!raw) return []
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (a): a is PresetArea =>
+        typeof a === 'object' &&
+        a !== null &&
+        typeof (a as PresetArea).id === 'string' &&
+        typeof (a as PresetArea).name === 'string' &&
+        typeof (a as PresetArea).lat === 'number' &&
+        typeof (a as PresetArea).lon === 'number' &&
+        typeof (a as PresetArea).alt === 'number',
+    )
+  } catch {
+    return []
+  }
+}
+
+/** Persist the operator's custom areas (best-effort; private mode drops). */
+export function saveCustomAreas(areas: PresetArea[]): void {
+  try {
+    localStorage.setItem(CUSTOM_AREAS_KEY, JSON.stringify(areas))
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+/** Every selectable area: the built-in presets first, then custom ones. */
+export function allAreas(custom: PresetArea[]): PresetArea[] {
+  return [...PRESET_AREAS, ...custom]
+}
+
+/** Validate one decimal-degree field for the add form. */
+export function isValidAreaInput(lat: number, lon: number): boolean {
+  return (
+    Number.isFinite(lat) && lat >= -90 && lat <= 90 &&
+    Number.isFinite(lon) && lon >= -180 && lon <= 180
+  )
+}
+
 export function presetArea(id: string | null): PresetArea | null {
-  return PRESET_AREAS.find((a) => a.id === id) ?? null
+  return allAreas(loadCustomAreas()).find((a) => a.id === id) ?? null
 }
