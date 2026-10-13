@@ -44,6 +44,11 @@ export function createFollowController(
     Cesium.Cartesian3.add(fix.cart, advanced, advanced)
     dronePosition.setValue(advanced)
     if (!useUiStore.getState().follow) {
+      // `lookAt` pins the camera to the vehicle's ENU frame. Leaving that
+      // transform in place after follow is switched off turns left-drag into
+      // an orbit around the stale target instead of a pan, so hand the camera
+      // back to the world frame once (the world pose is preserved).
+      if (followCentred) viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY)
       followCentred = false
       return
     }

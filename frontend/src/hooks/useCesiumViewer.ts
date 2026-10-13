@@ -33,13 +33,13 @@ import type {
 } from '../cesium/entities'
 import { installMapTools } from '../cesium/waypoints'
 import { createFollowController } from '../cesium/follow'
+import { createTrailLayer } from '../cesium/trail'
+import type { TrailLayer } from '../cesium/trail'
 import type { FollowController } from '../cesium/follow'
 import {
   PREDICT_HORIZON_S,
   PREDICT_MIN_GROUNDSPEED_M_S,
   PREDICT_STEP_S,
-  TRAIL_EVERY,
-  TRAIL_MAX,
 } from '../cesium/constants'
 import { groundSpeedMps, projectAhead, uavOrientation } from '../cesium/uav'
 import { DEFAULT_ALT_AGL_M } from '../mission/compile'
@@ -47,6 +47,7 @@ import { usePrefsStore } from '../desktop/prefs'
 import { usePolygonStore } from '../stores/polygon'
 import { useUiStore } from '../stores/ui'
 import { useMissionStore } from '../stores/mission'
+import { useTerrainStore } from '../stores/terrain'
 import type { MissionItem } from '../generated-types/MissionItem'
 import type { TelemetrySnapshot } from '../generated-types/TelemetrySnapshot'
 
@@ -54,7 +55,13 @@ export interface CesiumViewerHandle {
   /** Set when the map could not initialise (e.g. no WebGL). */
   initError: string | null
   /** Apply a telemetry snapshot: marker, attitude, trail and projection. */
-  setSnapshot(snapshot: TelemetrySnapshot | null): void
+  setSnapshot(snapshot: TelemetrySnapshot | null, record?: boolean): void
+  /** Geoid offset N (m) added to every rendered height while the ellipsoid
+   * 3D mesh is on, so the vehicle, trail, HOME and plan share one datum;
+   * `0` when it is off. */
+  setMeshOffset(offsetM: number): void
+  /** Colour the recorded track by height above ground, or one solid colour. */
+  setTrailByAgl(byAgl: boolean): void
   /** Re-render the mission waypoint layer. */
   setLayers(showGrid: boolean): void
   setMission(
@@ -85,9 +92,12 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
   const viewerRef = useRef<Cesium.Viewer | null>(null)
   const droneRef = useRef<DroneLayer | null>(null)
   const followRef = useRef<FollowController | null>(null)
-  const trailPos = useRef<Cesium.Cartesian3[]>([])
+  const trailRef = useRef<TrailLayer | null>(null)
+  const lastSnapshotRef = useRef<TelemetrySnapshot | null>(null)
+  const wpOptsRef = useRef<WaypointRenderOptions>({})
+  const meshOffsetRef = useRef(0)
+  const [meshOffset, setMeshOffsetState] = useState(0)
   const predictPos = useRef<Cesium.Cartesian3[]>([])
-  const tickRef = useRef(0)
   const wpLayerRef = useRef<WaypointLayer | null>(null)
   const wpHandlerRef = useRef<Cesium.ScreenSpaceEventHandler | null>(null)
   const ghostRef = useRef<GhostPoint | null>(null)
@@ -110,14 +120,24 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
 
     const layer = createDroneLayer(
       viewer,
-      () => trailPos.current,
       () => predictPos.current,
       usePrefsStore.getState().initialPosition,
       useMissionStore.getState().home?.[2] ?? 0,
     )
     droneRef.current = layer
+    const trail = createTrailLayer(viewer)
+    trail.setColorByAgl(useUiStore.getState().trailByAgl)
+    trailRef.current = trail
     const ghost = createGhostPoint(viewer)
     ghostRef.current = ghost
+    // Render height = AMSL + mesh datum offset (0 unless the ellipsoid mesh is on).
+    const rh = (amslM: number) => amslM + meshOffsetRef.current
+    // Altitude a newly added waypoint would get: last waypoint, else home + default AGL.
+    const ghostTopM = () => {
+      const st = useMissionStore.getState()
+      const last = st.waypoints[st.waypoints.length - 1]
+      return last ? last.altitude.meters : homeAmslRef.current + DEFAULT_ALT_AGL_M
+    }
     const polygonLayer = createPolygonLayer(viewer)
     polygonLayerRef.current = polygonLayer
     const centerHandle = createCenterHandle(viewer)
@@ -128,7 +148,7 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
       tool: () => useUiStore.getState().mapTool,
       onPreview: (seq, lat, lon) => {
         const layer = wpLayerRef.current
-        if (layer) previewWaypoint(layer, wpItemsRef.current, seq, lat, lon)
+        if (layer) previewWaypoint(layer, wpItemsRef.current, seq, lat, lon, wpOptsRef.current.ellipsoidBySeq ?? null)
       },
       onSelect: (seq) => useMissionStore.getState().select(seq),
       onAdd: (lat, lon) => useMissionStore.getState().addWaypointAt(lat, lon),
@@ -136,11 +156,23 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
         // Preview the new waypoint where it will land: at the inherited
         // altitude (last waypoint, else home + default AGL), so the click
         // placement matches the rendered point even from a tilted camera.
-        const st = useMissionStore.getState()
-        const last = st.waypoints[st.waypoints.length - 1]
-        const topM = last ? last.altitude.meters : homeAmslRef.current + DEFAULT_ALT_AGL_M
-        setGhostPoint(ghost, ground, topM, homeAmslRef.current)
+        setGhostPoint(ghost, ground, rh(ghostTopM()), rh(homeAmslRef.current))
       },
+      // Pick on the horizontal surface at the point's own height so it stays
+      // under the cursor from a tilted camera.
+      pickHeightM: (seq) => {
+        if (seq === null) return rh(ghostTopM())
+        const item = wpItemsRef.current.find((it) => it.seq === seq)
+        if (!item) return null
+        return item.z + (wpOptsRef.current.ellipsoidBySeq?.[seq] ?? 0)
+      },
+      // Terrain on: vertices are draped, so project them where they are drawn.
+      polygonHeightM: (v) =>
+        useTerrainStore.getState().terrain3d
+          ? (viewer.scene.globe.getHeight(
+              Cesium.Cartographic.fromDegrees(v.longitude_deg, v.latitude_deg),
+            ) ?? 0)
+          : rh(homeAmslRef.current),
     })
     const follow = createFollowController(viewer, layer.dronePosition)
     follow.attach()
@@ -178,7 +210,8 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
       viewerRef.current = null
       droneRef.current = null
       followRef.current = null
-      trailPos.current = []
+      trailRef.current?.dispose()
+      trailRef.current = null
       predictPos.current = []
     }
   }, [containerRef])
@@ -194,10 +227,10 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
     const viewer = viewerRef.current
     if (layer && viewer && home) {
       layer.home.position = new Cesium.ConstantPositionProperty(
-        Cesium.Cartesian3.fromDegrees(home[1], home[0], amsl),
+        Cesium.Cartesian3.fromDegrees(home[1], home[0], amsl + meshOffset),
       )
     }
-  }, [home])
+  }, [home, meshOffset])
 
   // Map tool cursor: crosshair while adding, hidden ghost otherwise.
   const mapTool = useUiStore((s) => s.mapTool)
@@ -207,20 +240,34 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
   // draft changes, only while the planning view is showing (view isolation).
   const polygonVertices = usePolygonStore((s) => s.vertices)
   const polygonClosed = usePolygonStore((s) => s.closed)
+  // With a terrain tileset loaded the draft boundary drapes onto it.
+  const terrain3dOn = useTerrainStore((s) => s.terrain3d != null)
   useEffect(() => {
     const viewer = viewerRef.current
     const layer = polygonLayerRef.current
     if (!viewer || !layer) return
-    updatePolygonLayer(viewer, layer, view === 'planning' ? polygonVertices : [], polygonClosed)
-  }, [polygonVertices, polygonClosed, view])
+    updatePolygonLayer(
+      viewer,
+      layer,
+      view === 'planning' ? polygonVertices : [],
+      polygonClosed,
+      homeAmslRef.current + meshOffset,
+      terrain3dOn,
+    )
+  }, [polygonVertices, polygonClosed, view, meshOffset, home, terrain3dOn])
 
   // Pinned pattern centre: render the draggable handle in the planning view.
   const patternCenter = useMissionStore((s) => s.patternCenter)
   useEffect(() => {
     const handle = centerHandleRef.current
     if (!handle) return
-    updateCenterHandle(handle, view === 'planning' ? patternCenter : null, homeAmslRef.current)
-  }, [patternCenter, view])
+    updateCenterHandle(
+      handle,
+      view === 'planning' ? patternCenter : null,
+      homeAmslRef.current + meshOffset,
+      terrain3dOn,
+    )
+  }, [patternCenter, view, meshOffset, home, terrain3dOn])
 
   useEffect(() => {
     const viewer = viewerRef.current
@@ -240,20 +287,24 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
     else viewer.scene.morphTo2D(0)
   }, [map3d])
 
-  const setSnapshot = useCallback((snapshot: TelemetrySnapshot | null) => {
+  const setSnapshot = useCallback((snapshot: TelemetrySnapshot | null, record = true) => {
     const layer = droneRef.current
     const pos = snapshot?.global_position
     if (!layer || !pos) return
+    lastSnapshotRef.current = snapshot
+    const offset = meshOffsetRef.current
 
-    // Render the vehicle in the same frame the plan is drawn in (AMSL): the
-    // waypoints, their labels and the height sticks are AMSL
-    // (MapView.toDisplayItems), so a marker placed at PX4's relative_alt would
-    // hang below the drawn path by the site's MSL elevation. Adding HOME's AMSL
-    // puts the marker exactly on the path at the planned clearance. (Once a
-    // DEM/terrain provider lands this becomes ellipsoid height + geoid.)
+    // Vehicle height in the frame the plan is drawn in (AMSL). Prefer the
+    // AMSL PX4 reports (the HUD's AMSL readout): it does not depend on the
+    // plan's HOME. `HOME + relative_alt` is the fallback only; with no plan
+    // home it is `relative_alt` alone, which hangs the marker below the path
+    // by the site elevation, and a HOME that changes in flight would step
+    // the whole trail. (Once the 3D mesh is on the datum offset is added.)
     const homeAmsl = homeAmslRef.current
-    const droneAmsl = homeAmsl + pos.relative_alt_m
-    const cart = Cesium.Cartesian3.fromDegrees(pos.longitude_deg, pos.latitude_deg, droneAmsl)
+    const reportedAmsl = pos.altitude.meters
+    const droneAmsl = Number.isFinite(reportedAmsl) ? reportedAmsl : homeAmsl + pos.relative_alt_m
+    const renderAmsl = droneAmsl + offset
+    const cart = Cesium.Cartesian3.fromDegrees(pos.longitude_deg, pos.latitude_deg, renderAmsl)
 
     // Attitude straight from the MAVLink ATTITUDE message; fall back to the
     // reported heading until the first attitude sample arrives. The marker is a
@@ -281,23 +332,35 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
     layer.drone.show = true
     // Straight down to the ground plane, labelled with the height above it, so
     // the clearance is visible in the scene and not only in the HUD
-    // (issues.md #40). Same AMSL datum as the vehicle marker above.
-    updateDropLine(layer.drop, pos.longitude_deg, pos.latitude_deg, droneAmsl, homeAmsl)
+    // (issues.md #40). Same datum as the vehicle marker above.
+    updateDropLine(layer.drop, pos.longitude_deg, pos.latitude_deg, renderAmsl, homeAmsl + offset)
 
     // Rebuild the forward projection from the live fix so the segment already
-    // flown disappears and only the predicted track ahead is drawn.
+    // flown disappears and only the predicted track ahead is drawn. It starts
+    // at the marker's own render height.
     predictPos.current =
       groundSpeedMps(pos) >= PREDICT_MIN_GROUNDSPEED_M_S
-        ? projectAhead(pos, PREDICT_HORIZON_S, PREDICT_STEP_S)
+        ? projectAhead(pos, PREDICT_HORIZON_S, PREDICT_STEP_S, renderAmsl)
         : []
 
-    tickRef.current += 1
-    if (tickRef.current % TRAIL_EVERY === 0) {
-      trailPos.current.push(cart)
-      if (trailPos.current.length > TRAIL_MAX) {
-        trailPos.current = trailPos.current.slice(-TRAIL_MAX)
-      }
-    }
+    // Record the track: AMSL for position, height above the ground plane
+    // (HOME's AMSL, the same reference as the drop line) for the colour.
+    if (record) trailRef.current?.push(pos.longitude_deg, pos.latitude_deg, droneAmsl, droneAmsl - homeAmsl)
+  }, [])
+
+  // Datum offset changed (3D mesh toggled): re-render everything that bakes
+  // the offset into a Cartesian — the recorded trail and the live marker.
+  const setMeshOffset = useCallback((offsetM: number) => {
+    const next = Number.isFinite(offsetM) ? offsetM : 0
+    if (next === meshOffsetRef.current) return
+    meshOffsetRef.current = next
+    trailRef.current?.setOffset(next)
+    setSnapshot(lastSnapshotRef.current, false)
+    setMeshOffsetState(next)
+  }, [setSnapshot])
+
+  const setTrailByAgl = useCallback((byAgl: boolean) => {
+    trailRef.current?.setColorByAgl(byAgl)
   }, [])
 
   const setMission = useCallback(
@@ -307,6 +370,7 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
       opts: WaypointRenderOptions = {},
     ) => {
       wpItemsRef.current = items
+      wpOptsRef.current = opts
       const viewer = viewerRef.current
       if (!viewer) return
       disposeWaypointLayer(viewer, wpLayerRef.current)
@@ -373,5 +437,5 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
     applyLayerVisibility(viewer, showGrid)
   }, [])
 
-  return { initError, setSnapshot, setMission, setTerrainOverlay, setTerrain3d, setLayers, setImageryStyle, goHome, lookNorth }
+  return { initError, setSnapshot, setMeshOffset, setTrailByAgl, setMission, setTerrainOverlay, setTerrain3d, setLayers, setImageryStyle, goHome, lookNorth }
 }

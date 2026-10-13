@@ -61,7 +61,6 @@ export interface DropLayer {
 /** The fixed drone/trail/predict/home layer, created once per viewer. */
 export interface DroneLayer {
   drone: Cesium.Entity
-  trail: Cesium.Entity
   predict: Cesium.Entity
   home: Cesium.Entity
   drop: DropLayer
@@ -81,7 +80,6 @@ export interface DroneLayer {
  */
 export function createDroneLayer(
   viewer: Cesium.Viewer,
-  trailPos: () => Cesium.Cartesian3[],
   predictPos: () => Cesium.Cartesian3[],
   initial: LatLonLike = { lat: HOME_LAT, lon: HOME_LON },
   homeAmslM = 0,
@@ -148,13 +146,6 @@ export function createDroneLayer(
   })
   const drop: DropLayer = { line: dropLine, label: dropLabel }
 
-  const trail = viewer.entities.add({
-    polyline: {
-      positions: new Cesium.CallbackProperty(trailPos, false),
-      width: 2,
-      material: new Cesium.PolylineGlowMaterialProperty({ glowPower: 0.18, color: accent }),
-    },
-  })
   // Forward-projection hint: dashed and warn-tinted so it reads as a
   // prediction, not the recorded track.
   const predict = viewer.entities.add({
@@ -180,10 +171,12 @@ export function createDroneLayer(
       fillColor: Cesium.Color.WHITE,
     },
   })
-  return { drone, trail, predict, home, drop, dronePosition, droneOrientation }
+  return { drone, predict, home, drop, dronePosition, droneOrientation }
 }
 
-/** Below this the drop line is noise: the vehicle is on the ground. */
+/** Below this (either side of the plane) the drop line is noise: the vehicle
+ * is on the ground. A vehicle under HOME's plane keeps its line — hiding it
+ * made a flight into a valley look like no clearance data at all. */
 const DROP_MIN_AGL_M = 1.5
 
 /**
@@ -202,7 +195,7 @@ export function updateDropLine(
   bottomM: number,
 ): void {
   const aglM = topM - bottomM
-  const visible = Number.isFinite(aglM) && aglM >= DROP_MIN_AGL_M
+  const visible = Number.isFinite(aglM) && Math.abs(aglM) >= DROP_MIN_AGL_M
   drop.line.show = visible
   drop.label.show = visible
   if (!visible) return
@@ -229,6 +222,11 @@ export interface WaypointLayer {
   runs: Array<{ entity: Cesium.Entity; seqs: number[] }>
   points: Map<number, Cesium.Entity>
   extra: Cesium.Entity[]
+  /** Height stick per waypoint with the render heights it spans, so a drag
+   * preview can move it along with the point. */
+  sticks: Map<number, { entity: Cesium.Entity; base: number; top: number }>
+  /** Selection halo / active-target ring per waypoint (also in `extra`). */
+  marks: Map<number, Cesium.Entity[]>
 }
 
 /** How to colour the plan: pattern line kinds and the height sticks. */
@@ -259,6 +257,8 @@ export function disposeWaypointLayer(viewer: Cesium.Viewer, layer: WaypointLayer
   layer.points.clear()
   layer.extra.forEach((e) => viewer.entities.remove(e))
   layer.extra = []
+  layer.sticks.clear()
+  layer.marks.clear()
   for (const run of layer.runs) viewer.entities.remove(run.entity)
   layer.runs = []
 }
@@ -270,7 +270,13 @@ export function renderWaypoints(
   selectedSeq: number | null,
   opts: WaypointRenderOptions = {},
 ): WaypointLayer {
-  const layer: WaypointLayer = { runs: [], points: new Map(), extra: [] }
+  const layer: WaypointLayer = {
+    runs: [],
+    points: new Map(),
+    extra: [],
+    sticks: new Map(),
+    marks: new Map(),
+  }
   // Command items (`MAV_FRAME_MISSION`) carry no position: their x/y are
   // command arguments, so drawing them would put a vertex at the equator.
   const located = items.filter((it) => it.frame !== 'mission')
@@ -288,6 +294,7 @@ export function renderWaypoints(
   // no other map layer uses yet) so all three pattern kinds are distinguishable.
   const cal = Cesium.Color.fromCssColorString(cssVar('--mg-mag'))
   const palette: KindPalette = { accent, ok, warn, cal }
+  const errorColor = Cesium.Color.fromCssColorString(cssVar('--mg-error'))
   const kinds = opts.kinds ?? new Map<number, LineKind>()
 
   // Height sticks first, so the path and the points stay on top of them. The
@@ -301,18 +308,20 @@ export function renderWaypoints(
       if (Math.abs(run.top - run.base) < HEIGHT_EPSILON_M) continue
       const item = located.find((it) => it.seq === run.seq)
       if (!item) continue
-      layer.extra.push(
-        viewer.entities.add({
-          polyline: {
-            positions: [
-              Cesium.Cartesian3.fromDegrees(degFromMavInt(item.y), degFromMavInt(item.x), off(item.seq, run.base)),
-              Cesium.Cartesian3.fromDegrees(degFromMavInt(item.y), degFromMavInt(item.x), off(item.seq, run.top)),
-            ],
-            width: 2,
-            material: stickColor.withAlpha(0.8),
-          },
-        }),
-      )
+      const base = off(item.seq, run.base)
+      const top = off(item.seq, run.top)
+      const stick = viewer.entities.add({
+        polyline: {
+          positions: [
+            Cesium.Cartesian3.fromDegrees(degFromMavInt(item.y), degFromMavInt(item.x), base),
+            Cesium.Cartesian3.fromDegrees(degFromMavInt(item.y), degFromMavInt(item.x), top),
+          ],
+          width: 2,
+          material: (belowDemGround(item, opts) ? errorColor : stickColor).withAlpha(0.8),
+        },
+      })
+      layer.extra.push(stick)
+      layer.sticks.set(item.seq, { entity: stick, base, top })
     }
   }
 
@@ -355,6 +364,7 @@ export function renderWaypoints(
     // A selected waypoint gets a white halo ring on top of a larger marker:
     // recolouring alone is invisible when the whole plan already shares the
     // accent colour, which is what the operator reported (issues.md #37).
+    const extraStart = layer.extra.length
     if (isSel) {
       layer.extra.push(
         viewer.entities.add({
@@ -388,6 +398,7 @@ export function renderWaypoints(
         }),
       )
     }
+    layer.marks.set(it.seq, layer.extra.slice(extraStart))
     const entity = viewer.entities.add({
       id: `wp-${it.seq}`,
       position,
@@ -407,7 +418,10 @@ export function renderWaypoints(
         pixelOffset: new Cesium.Cartesian2(0, -18),
         fillColor: Cesium.Color.WHITE,
         showBackground: Boolean(opts.heights),
-        backgroundColor: Cesium.Color.BLACK.withAlpha(0.55),
+        // Underground (per the DEM): red chip so it cannot be missed.
+        backgroundColor: belowDemGround(it, opts)
+          ? errorColor.withAlpha(0.85)
+          : Cesium.Color.BLACK.withAlpha(0.55),
         backgroundPadding: new Cesium.Cartesian2(4, 3),
         disableDepthTestDistance: Number.POSITIVE_INFINITY,
       },
@@ -426,8 +440,16 @@ function waypointLabel(item: MissionItem, opts: WaypointRenderOptions): string {
   if (!opts.heights) return String(item.seq)
   const ground = opts.groundBySeq?.[item.seq] ?? opts.groundM ?? 0
   const amsl = Math.round(item.z)
-  const agl = Math.max(0, Math.round(item.z - ground))
-  return `${item.seq} · ${amsl} m · ${agl} m AGL`
+  // Not clamped: a waypoint below its ground must read negative, not "0 m".
+  const agl = Math.round(item.z - ground)
+  return `${belowDemGround(item, opts) ? '⚠ ' : ''}${item.seq} · ${amsl} m · ${agl} m AGL`
+}
+
+/** True when the loaded DEM (not the flat HOME plane) puts the waypoint under
+ * the ground: below HOME is normal on a downslope, below the DTM is not. */
+function belowDemGround(item: MissionItem, opts: WaypointRenderOptions): boolean {
+  const ground = opts.groundBySeq?.[item.seq]
+  return ground != null && item.z < ground - HEIGHT_EPSILON_M
 }
 
 /** Hard on/off phase of the target-waypoint blink: 0.4 s visible, 0.4 s
@@ -438,10 +460,15 @@ function blinkOn(): boolean {
 }
 
 /**
- * Move one rendered waypoint and the polyline vertices that touch it without
- * touching the mission store. Used for the live drag preview so a drag commits
- * once, on release (finding 14). The plan may be split into several coloured
- * runs, so every run that contains this seq is redrawn (only one can).
+ * Move one rendered waypoint and everything attached to it (polyline
+ * vertices, height stick, selection halo / target ring) without touching the
+ * mission store. Used for the live drag preview so a drag commits once, on
+ * release (finding 14). The plan may be split into several coloured runs, so
+ * every run that contains this seq is redrawn (only one can).
+ *
+ * `ellipsoidBySeq` is the same per-waypoint geoid offset `renderWaypoints`
+ * applied: without it the previewed point (and its neighbours) dropped by N
+ * while dragging with the 3D mesh on, then jumped back on release.
  */
 export function previewWaypoint(
   layer: WaypointLayer,
@@ -449,25 +476,35 @@ export function previewWaypoint(
   seq: number,
   latDeg: number,
   lonDeg: number,
+  ellipsoidBySeq: Record<number, number> | null = null,
 ): void {
   const entity = layer.points.get(seq)
   if (!entity) return
   const item = items.find((it) => it.seq === seq)
   if (!item) return
-  const height = item.z
-  entity.position = new Cesium.ConstantPositionProperty(
-    Cesium.Cartesian3.fromDegrees(lonDeg, latDeg, height),
-  )
+  const off = (s: number, z: number): number => z + (ellipsoidBySeq?.[s] ?? 0)
+  const height = off(seq, item.z)
+  const here = Cesium.Cartesian3.fromDegrees(lonDeg, latDeg, height)
+  entity.position = new Cesium.ConstantPositionProperty(here)
+  for (const mark of layer.marks.get(seq) ?? []) {
+    mark.position = new Cesium.ConstantPositionProperty(here)
+  }
+  const stick = layer.sticks.get(seq)
+  if (stick?.entity.polyline) {
+    stick.entity.polyline.positions = new Cesium.ConstantProperty(
+      Cesium.Cartesian3.fromDegreesArrayHeights([lonDeg, latDeg, stick.base, lonDeg, latDeg, stick.top]),
+    )
+  }
   for (const run of layer.runs) {
     if (!run.seqs.includes(seq)) continue
     const polyline = run.entity.polyline
     if (!polyline) continue
     polyline.positions = new Cesium.ConstantProperty(
       run.seqs.map((s) => {
-        if (s === seq) return Cesium.Cartesian3.fromDegrees(lonDeg, latDeg, height)
+        if (s === seq) return here
         const it = items.find((i) => i.seq === s)
-        if (!it) return Cesium.Cartesian3.fromDegrees(lonDeg, latDeg, height)
-        return Cesium.Cartesian3.fromDegrees(degFromMavInt(it.y), degFromMavInt(it.x), it.z)
+        if (!it) return here
+        return Cesium.Cartesian3.fromDegrees(degFromMavInt(it.y), degFromMavInt(it.x), off(s, it.z))
       }),
     )
   }
@@ -574,6 +611,12 @@ export function updatePolygonLayer(
   layer: PolygonLayer,
   vertices: readonly GeoPoint[],
   closed: boolean,
+  /** Render height (m) the draft sits at: the plan's ground plane, so the
+   * boundary lines up with HOME and the height sticks' base. */
+  heightM = 0,
+  /** Drape the vertices and the boundary on the terrain surface instead of
+   * the flat plane at `heightM` (only meaningful with a terrain provider). */
+  clamp = false,
 ): void {
   for (const e of layer.vertices) viewer.entities.remove(e)
   layer.vertices = []
@@ -589,8 +632,13 @@ export function updatePolygonLayer(
     layer.vertices.push(
       viewer.entities.add({
         id: `pg-${i}`,
-        position: Cesium.Cartesian3.fromDegrees(p.longitude_deg, p.latitude_deg, 0),
+        position: Cesium.Cartesian3.fromDegrees(p.longitude_deg, p.latitude_deg, clamp ? 0 : heightM),
         point: {
+          heightReference: clamp
+            ? Cesium.HeightReference.CLAMP_TO_GROUND
+            : Cesium.HeightReference.NONE,
+          // Keep the vertex visible where the terrain would occlude it.
+          disableDepthTestDistance: clamp ? Number.POSITIVE_INFINITY : 0,
           pixelSize: i === 0 ? 12 : 9,
           color: i === 0 ? Cesium.Color.WHITE : accent,
           outlineColor: Cesium.Color.WHITE,
@@ -604,13 +652,14 @@ export function updatePolygonLayer(
     return
   }
   const points = vertices.map((p) =>
-    Cesium.Cartesian3.fromDegrees(p.longitude_deg, p.latitude_deg, 0),
+    Cesium.Cartesian3.fromDegrees(p.longitude_deg, p.latitude_deg, clamp ? 0 : heightM),
   )
   if (closed && vertices.length >= 3) points.push(Cesium.Cartesian3.clone(points[0]))
   layer.boundary.show = true
   const bad = closed && selfIntersects(vertices)
   if (layer.boundary.polyline) {
     layer.boundary.polyline.positions = new Cesium.ConstantProperty(points)
+    layer.boundary.polyline.clampToGround = new Cesium.ConstantProperty(clamp)
     layer.boundary.polyline.material = new Cesium.PolylineGlowMaterialProperty({
       glowPower: 0.2,
       color: (bad ? error : accent).withAlpha(0.9),
@@ -642,6 +691,7 @@ export function createCenterHandle(viewer: Cesium.Viewer): CenterHandle {
       color: Cesium.Color.TRANSPARENT,
       outlineColor: accent,
       outlineWidth: 3,
+      disableDepthTestDistance: Number.POSITIVE_INFINITY,
     },
     label: {
       text: i18n.t('map.patternCenter'),
@@ -659,13 +709,19 @@ export function updateCenterHandle(
   handle: CenterHandle,
   center: GeoPoint | null,
   groundM: number,
+  /** Drape the handle on the terrain (terrain provider loaded) instead of
+   * standing it on the flat plane at `groundM`. */
+  clamp = false,
 ): void {
   if (!center) {
     handle.entity.show = false
     return
   }
   handle.entity.position = new Cesium.ConstantPositionProperty(
-    Cesium.Cartesian3.fromDegrees(center.longitude_deg, center.latitude_deg, groundM),
+    Cesium.Cartesian3.fromDegrees(center.longitude_deg, center.latitude_deg, clamp ? 0 : groundM),
   )
+  const reference = clamp ? Cesium.HeightReference.CLAMP_TO_GROUND : Cesium.HeightReference.NONE
+  if (handle.entity.point) handle.entity.point.heightReference = new Cesium.ConstantProperty(reference)
+  if (handle.entity.label) handle.entity.label.heightReference = new Cesium.ConstantProperty(reference)
   handle.entity.show = true
 }

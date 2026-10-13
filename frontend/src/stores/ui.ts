@@ -41,6 +41,8 @@ interface UiState {
   /** Draw a height stick and an AGL chip on every map waypoint (default on:
    * clearance is the number a survey plan is checked against). */
   showHeights: boolean
+  /** Colour the flown track by height above ground (legend on the map). */
+  trailByAgl: boolean
   /** Imagery style on top of the offline grid (always shown; no
    * grid-only mode — operator request 2026-10-10). */
   imageryStyle: ImageryStyle
@@ -60,6 +62,7 @@ interface UiState {
   setMapCenter: (c: { lat: number; lon: number }) => void
   setMapTool: (tool: MapTool) => void
   toggleHeights: () => void
+  toggleTrailByAgl: () => void
   setImageryStyle: (style: ImageryStyle) => void
   toggleGrid: () => void
 }
@@ -88,6 +91,7 @@ export const useUiStore = create<UiState>((set) => ({
   mapCenter: null,
   mapTool: 'select',
   showHeights: true,
+  trailByAgl: true,
   imageryStyle: 'google-satellite',
   showGrid: true,
   setView: (view) =>
@@ -114,6 +118,7 @@ export const useUiStore = create<UiState>((set) => ({
   setMapCenter: (mapCenter) => set({ mapCenter }),
   setMapTool: (mapTool) => set({ mapTool }),
   toggleHeights: () => set((s) => ({ showHeights: !s.showHeights })),
+  toggleTrailByAgl: () => set((s) => ({ trailByAgl: !s.trailByAgl })),
   setImageryStyle: (imageryStyle) => set({ imageryStyle }),
   toggleGrid: () => set((s) => ({ showGrid: !s.showGrid })),
 }))

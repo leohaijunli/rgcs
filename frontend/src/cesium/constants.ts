@@ -5,9 +5,19 @@
 export const HOME_LAT = 48.6493
 export const HOME_LON = -123.3982
 
-/** Recorded track length and decimation (keep every Nth fix). */
-export const TRAIL_MAX = 512
-export const TRAIL_EVERY = 2
+// Recorded track (cesium/trail.ts). Fixes are kept by distance, not by count:
+// a hover adds nothing and a survey line gets even spacing. 3 m x 30 000
+// points is ~90 km of track, enough for a full battery of survey lines.
+export const TRAIL_MIN_STEP_M = 3
+export const TRAIL_MAX_POINTS = 30_000
+/** Points per primitive chunk; only the newest chunk is ever rebuilt. */
+export const TRAIL_CHUNK_POINTS = 200
+/** Minimum gap between rebuilds of the newest chunk. */
+export const TRAIL_TAIL_REBUILD_MS = 150
+export const TRAIL_WIDTH_PX = 3
+/** Height above ground mapped to the two ends of the colour ramp. */
+export const TRAIL_AGL_LO_M = 0
+export const TRAIL_AGL_HI_M = 120
 
 // Forward projection drawn ahead of the vehicle. Constant-velocity estimate
 // from the live NED velocity; it is rebuilt from the current fix on every

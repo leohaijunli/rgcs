@@ -78,11 +78,18 @@ export function uavOrientation(
  * always starts at the current position, the segment already flown is never
  * part of the result: each fix replaces the hint and only the track ahead
  * remains.
+ *
+ * `startAltM` is the render height of the current fix (the same value the
+ * vehicle marker is placed at: AMSL, plus the mesh datum offset when on).
+ * It defaults to `relative_alt_m` only for callers that draw in the relative
+ * frame; mixing the two put the projection below the marker by the site
+ * elevation.
  */
 export function projectAhead(
   pos: GlobalPositionInt,
   horizonS: number,
   stepS: number,
+  startAltM: number = pos.relative_alt_m,
 ): Cesium.Cartesian3[] {
   const mPerDegLat = 111_320
   const cosLat = Math.max(Math.cos(Cesium.Math.toRadians(pos.latitude_deg)), 1e-6)
@@ -96,7 +103,7 @@ export function projectAhead(
       Cesium.Cartesian3.fromDegrees(
         pos.longitude_deg + (east * t) / mPerDegLon,
         pos.latitude_deg + (north * t) / mPerDegLat,
-        pos.relative_alt_m + climb * t,
+        startAltM + climb * t,
       ),
     )
   }

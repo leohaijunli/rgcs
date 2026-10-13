@@ -48,6 +48,8 @@ export default function MapToolbar({ onGoHome, onNorth }: Props) {
   const toggleGrid = useUiStore((s) => s.toggleGrid)
   const showHeights = useUiStore((s) => s.showHeights)
   const toggleHeights = useUiStore((s) => s.toggleHeights)
+  const trailByAgl = useUiStore((s) => s.trailByAgl)
+  const toggleTrailByAgl = useUiStore((s) => s.toggleTrailByAgl)
   const [popover, setPopover] = useState<'layers' | 'view' | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
 
@@ -144,6 +146,7 @@ export default function MapToolbar({ onGoHome, onNorth }: Props) {
           </div>
           <PopoverToggle label={t('terrain.grid')} on={showGrid} onLabel={t('layers.on')} offLabel={t('layers.off')} onToggle={toggleGrid} />
           <PopoverToggle label={t('map.heights')} on={showHeights} onLabel={t('layers.on')} offLabel={t('layers.off')} onToggle={toggleHeights} />
+          <PopoverToggle label={t('map.trailByAgl')} on={trailByAgl} onLabel={t('layers.on')} offLabel={t('layers.off')} onToggle={toggleTrailByAgl} />
           <TerrainToggle />
           <Terrain3DToggle />
         </Popover>

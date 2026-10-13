@@ -334,6 +334,8 @@ export default {
     north: 'North up',
     addWaypoint: 'Add waypoints (click the map)',
     heights: 'Waypoint heights (stick + label)',
+    trailByAgl: 'Track colour by height',
+    trailLegend: 'Height above ground (m)',
     aglLabel: '{{value}} m AGL',
     addHint: 'Click the map to add a waypoint · Esc to finish',
     drawPolygon: 'Survey boundary (draw a polygon)',

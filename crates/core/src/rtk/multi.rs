@@ -51,8 +51,7 @@ impl ForeignInjector {
 
     /// Seconds since the last foreign packet (`None` = none ever received).
     pub fn seconds_since_last(&self, now: Instant) -> Option<f64> {
-        self.last_seen
-            .map(|t| now.duration_since(t).as_secs_f64())
+        self.last_seen.map(|t| now.duration_since(t).as_secs_f64())
     }
 
     /// Forget everything (link swap / disconnect).
@@ -114,10 +113,7 @@ mod tests {
         // inside a 5 s window.
         for step in 0..4 {
             inj.observe(base + Duration::from_secs(step * 3));
-            assert!(inj.active(
-                base + Duration::from_secs(step * 3),
-                FOREIGN_WINDOW
-            ));
+            assert!(inj.active(base + Duration::from_secs(step * 3), FOREIGN_WINDOW));
         }
         assert_eq!(inj.packets(), 4);
     }
@@ -128,7 +124,9 @@ mod tests {
         let mut inj = ForeignInjector::new();
         assert_eq!(inj.seconds_since_last(base), None);
         inj.observe(base);
-        let age = inj.seconds_since_last(base + Duration::from_secs(2)).unwrap();
+        let age = inj
+            .seconds_since_last(base + Duration::from_secs(2))
+            .unwrap();
         assert!((age - 2.0).abs() < f64::EPSILON);
     }
 

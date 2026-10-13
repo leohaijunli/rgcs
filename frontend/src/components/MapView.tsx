@@ -4,18 +4,21 @@ import { useCesiumViewer } from '../hooks/useCesiumViewer'
 import { compileWaypoints, toDisplayItems } from '../mission/compile'
 import { kindsBySeq } from '../mission/lineKinds'
 import { orderedMissionItems } from '../mission/planfile'
+import { usePrefsStore } from '../desktop/prefs'
 import { useMissionStore } from '../stores/mission'
 import { usePolygonStore } from '../stores/polygon'
 import { useTelemetryStore } from '../stores/telemetry'
 import { useUiStore } from '../stores/ui'
 import { useTerrainStore } from '../stores/terrain'
+import { TRAIL_AGL_HI_M, TRAIL_AGL_LO_M } from '../cesium/constants'
+import { TRAIL_BELOW_GROUND, TRAIL_RAMP } from '../cesium/trail'
 import MapToolbar from './MapToolbar'
 
 /** Composition shell: viewer lifecycle + store wiring + chrome (issues.md #29). */
 export default function MapView() {
   const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
-  const { initError, setSnapshot, setMission, setTerrainOverlay, setTerrain3d, setLayers, setImageryStyle, goHome, lookNorth } =
+  const { initError, setSnapshot, setMeshOffset, setTrailByAgl, setMission, setTerrainOverlay, setTerrain3d, setLayers, setImageryStyle, goHome, lookNorth } =
     useCesiumViewer(containerRef)
   const mapTool = useUiStore((s) => s.mapTool)
   const view = useUiStore((s) => s.view)
@@ -54,6 +57,10 @@ export default function MapView() {
       ),
     [waypoints, altitudeMode, home, blocks, planBase],
   )
+  const trailByAgl = useUiStore((s) => s.trailByAgl)
+  useEffect(() => {
+    setTrailByAgl(trailByAgl)
+  }, [trailByAgl, setTrailByAgl])
   const showGrid = useUiStore((s) => s.showGrid)
   const imageryStyle = useUiStore((s) => s.imageryStyle)
   useEffect(() => {
@@ -139,6 +146,31 @@ export default function MapView() {
     }
   }, [terrain3d])
   const meshOn = meshEllipsoid
+  // One geoid offset at HOME (N varies ~cm per km) for the vehicle-level
+  // layers — drone, trail, predict, HOME, drop line, ghost, polygon — so they
+  // share the datum the plan already moved to. 0 when the mesh is off.
+  useEffect(() => {
+    if (!meshOn) {
+      setMeshOffset(0)
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      try {
+        const at = home ? { lat: home[0], lon: home[1] } : usePrefsStore.getState().initialPosition
+        const { invoke } = await import('@tauri-apps/api/core')
+        const samples = await invoke<Array<{ undulation_m: number | null }>>('geoid_sample', {
+          points: [[at.lat, at.lon]],
+        })
+        if (!cancelled) setMeshOffset(samples[0]?.undulation_m ?? 0)
+      } catch {
+        if (!cancelled) setMeshOffset(0) // geoid unavailable: keep the AMSL plane
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [meshOn, home, setMeshOffset])
   useEffect(() => {
     if (!meshOn || missionItems.length === 0) {
       setEllipsoidBySeq(null)
@@ -241,6 +273,7 @@ export default function MapView() {
           {t('map.polygonHint')}
         </div>
       )}
+      {trailByAgl && <TrailLegend />}
       <CoordinateReadout />
     </div>
   )
@@ -256,6 +289,26 @@ function CoordinateReadout() {
       {pos.latitude_deg.toFixed(5)} · {pos.longitude_deg.toFixed(5)}
       <br />
       {Math.round(pos.altitude.meters)} m
+    </div>
+  )
+}
+
+/** Colour key for the flown track (shown while "track colour by height" is on). */
+function TrailLegend() {
+  const { t } = useTranslation()
+  const gradient = `linear-gradient(to right, ${TRAIL_RAMP.map(([stop, css]) => `${css} ${stop * 100}%`).join(', ')})`
+  return (
+    <div className="mono pointer-events-none absolute bottom-12 right-3 w-36 rounded border border-line bg-panel/85 px-2 py-1 text-[10px] leading-tight text-muted shadow-lg">
+      <div>{t('map.trailLegend')}</div>
+      <div className="mt-1 h-1.5 rounded" style={{ background: gradient }} />
+      <div className="mt-0.5 flex justify-between">
+        <span>{TRAIL_AGL_LO_M}</span>
+        <span>{TRAIL_AGL_HI_M}+</span>
+      </div>
+      <div className="mt-0.5 flex items-center gap-1">
+        <span className="inline-block h-1.5 w-3 rounded" style={{ background: TRAIL_BELOW_GROUND }} />
+        <span>&lt; 0</span>
+      </div>
     </div>
   )
 }

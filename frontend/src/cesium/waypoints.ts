@@ -49,6 +49,12 @@ export interface MapToolOptions {
   onAdd?: (lat: number, lon: number) => void
   /** Ghost-point preview while hovering with the add tool; `null` in the sky. */
   onHover?: (ground: GroundPoint | null) => void
+  /** Render height (m) of the waypoint being dragged (`seq`) or about to be
+   * added (`null`): picks then use the horizontal surface at that height so
+   * the point stays under the cursor in a tilted view. `null` = pick ground. */
+  pickHeightM?: (seq: number | null) => number | null
+  /** Render height (m) a draft-polygon vertex is drawn at (close-vertex hit test). */
+  polygonHeightM?: (v: GeoPoint) => number
 }
 
 /**
@@ -128,7 +134,7 @@ export function installMapTools(
     pressing = false
     start = null
     if (moved || !at) return
-    const ground = pickLatLon(viewer, at)
+    const ground = pickLatLon(viewer, at, opts.pickHeightM?.(null))
     if (ground) opts.onAdd?.(ground.lat, ground.lon)
   }
 
@@ -136,7 +142,7 @@ export function installMapTools(
 
   /** Whether `pos` is within [`POLYGON_CLOSE_PX`] of a polygon vertex on screen. */
   const nearVertex = (pos: Cesium.Cartesian2, v: GeoPoint): boolean => {
-    const cart = Cesium.Cartesian3.fromDegrees(v.longitude_deg, v.latitude_deg, 0)
+    const cart = Cesium.Cartesian3.fromDegrees(v.longitude_deg, v.latitude_deg, opts.polygonHeightM?.(v) ?? 0)
     const screen = Cesium.SceneTransforms.worldToWindowCoordinates(viewer.scene, cart)
     if (!screen) return false
     return Cesium.Cartesian2.distance(screen, pos) <= POLYGON_CLOSE_PX
@@ -256,7 +262,7 @@ if (centerDrag) {
       }
       if (pendingSeq < 0) {
         if (active === 'add') {
-          const ground = pickLatLon(viewer, movement.endPosition)
+          const ground = pickLatLon(viewer, movement.endPosition, opts.pickHeightM?.(null))
           opts.onHover?.(ground ? { lat: ground.lat, lon: ground.lon } : null)
         }
         return
@@ -267,7 +273,7 @@ if (centerDrag) {
         }
         dragging = true
       }
-      const ground = pickLatLon(viewer, movement.endPosition)
+      const ground = pickLatLon(viewer, movement.endPosition, opts.pickHeightM?.(pendingSeq))
       if (!ground) return
       lastGround = { lat: ground.lat, lon: ground.lon }
       opts.onPreview?.(pendingSeq, ground.lat, ground.lon)
