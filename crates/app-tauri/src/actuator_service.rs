@@ -732,19 +732,21 @@ fn request_motor_test_streams(handle: &maggcs_core::mavlink::ConnectionHandle) {
             (36u32, 40_000u32),   // SERVO_OUTPUT_RAW @ 25 Hz (servo curves)
         ] {
             let _ = h
-                .send(MavMessage::COMMAND_LONG(::mavlink::common::COMMAND_LONG_DATA {
-                    param1: msg_id as f32,
-                    param2: interval_us as f32,
-                    param3: 0.0,
-                    param4: 0.0,
-                    param5: 0.0,
-                    param6: 0.0,
-                    param7: 0.0,
-                    command: ::mavlink::common::MavCmd::MAV_CMD_SET_MESSAGE_INTERVAL,
-                    target_system: 1,
-                    target_component: 1,
-                    confirmation: 0,
-                }))
+                .send(MavMessage::COMMAND_LONG(
+                    ::mavlink::common::COMMAND_LONG_DATA {
+                        param1: msg_id as f32,
+                        param2: interval_us as f32,
+                        param3: 0.0,
+                        param4: 0.0,
+                        param5: 0.0,
+                        param6: 0.0,
+                        param7: 0.0,
+                        command: ::mavlink::common::MavCmd::MAV_CMD_SET_MESSAGE_INTERVAL,
+                        target_system: 1,
+                        target_component: 1,
+                        confirmation: 0,
+                    },
+                ))
                 .await;
         }
     });
@@ -790,7 +792,10 @@ async fn run_motor_telemetry_tap(app: AppHandle, handle: maggcs_core::mavlink::C
     // HEARTBEAT (armed/mode gating), HIGHRES_IMU (mag), ESC_STATUS (curves).
     let mut events = handle.subscribe_route(MessageRoute::messages(&[0, 36, 105, 291]));
     let mut last_emit = tokio::time::Instant::now();
-    let Some(bus) = app.try_state::<AppState>().map(|s| s.motor_test.scope.clone()) else {
+    let Some(bus) = app
+        .try_state::<AppState>()
+        .map(|s| s.motor_test.scope.clone())
+    else {
         return;
     };
     loop {
@@ -966,7 +971,13 @@ fn start_scope_flusher(app: &AppHandle) {
                 // and must not live across the awaited sends below.
                 let target = app
                     .try_state::<AppState>()
-                    .map(|s| s.motor_test.target.lock().as_ref().map(|t| t.handle.clone()))
+                    .map(|s| {
+                        s.motor_test
+                            .target
+                            .lock()
+                            .as_ref()
+                            .map(|t| t.handle.clone())
+                    })
                     .flatten();
                 if let Some(target) = target {
                     for (msg_id, hz) in TARGET_STREAMS {

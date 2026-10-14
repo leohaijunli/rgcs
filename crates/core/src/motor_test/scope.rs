@@ -133,7 +133,11 @@ pub fn esc_samples(
         if k > MAX_ESC {
             break;
         }
-        out.push(ScopeSample::new(format!("esc{k}.rpm"), t, f64::from(rpm[slot])));
+        out.push(ScopeSample::new(
+            format!("esc{k}.rpm"),
+            t,
+            f64::from(rpm[slot]),
+        ));
         for (name, v) in [("voltage", voltage[slot]), ("current", current[slot])] {
             if v.is_finite() {
                 out.push(ScopeSample::new(format!("esc{k}.{name}"), t, f64::from(v)));
@@ -221,14 +225,16 @@ mod tests {
     #[test]
     fn mag_totals_with_calibration_applies_a_times_raw_minus_b() {
         // A = I, b = [3000, 4000, 0]: the offset removed leaves 27k/36k.
-        let cal = MagCalibration::from_json(
-            r#"{"a": [[1,0,0],[0,1,0],[0,0,1]], "b": [3000, 4000, 0]}"#,
-        )
-        .expect("valid calibration");
+        let cal =
+            MagCalibration::from_json(r#"{"a": [[1,0,0],[0,1,0],[0,0,1]], "b": [3000, 4000, 0]}"#)
+                .expect("valid calibration");
         let t = mag_totals([30_000.0, 40_000.0, 0.0], Some(&cal));
         assert!((t.raw - 50_000.0).abs() < 1e-9);
         let c = t.cal.expect("calibrated total");
-        assert!((c - 45_000.0).abs() < 1e-6, "3-4-5 triangle scaled by 9000: {c}");
+        assert!(
+            (c - 45_000.0).abs() < 1e-6,
+            "3-4-5 triangle scaled by 9000: {c}"
+        );
         assert!((t.effective() - c).abs() < 1e-12);
         assert_eq!(
             ids(&mag_samples(0.0, t)),
