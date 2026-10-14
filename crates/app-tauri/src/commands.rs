@@ -578,7 +578,11 @@ pub async fn send_arm_disarm(arm: bool, state: State<'_, AppState>) -> Result<()
 /// so PX4 moves itself into loiter and accepts the target regardless of the
 /// current mode. The ack verdict arrives on the `"command"` event (`goto`).
 #[tauri::command]
-pub async fn send_goto(lat_deg: f64, lon_deg: f64, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn send_goto(
+    lat_deg: f64,
+    lon_deg: f64,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     let service = state.command().ok_or_else(|| "not connected".to_string())?;
     let fix = state
         .hub()

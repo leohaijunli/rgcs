@@ -358,15 +358,11 @@ pub async fn actuator_connect_target(
             }
         });
     }
-    let old = state
-        .motor_test
-        .target
-        .lock()
-        .replace(MotorTestTarget {
-            handle,
-            endpoint,
-            com_mot_test_en,
-        });
+    let old = state.motor_test.target.lock().replace(MotorTestTarget {
+        handle,
+        endpoint,
+        com_mot_test_en,
+    });
     if let Some(old) = old {
         old.handle.shutdown().await;
     }

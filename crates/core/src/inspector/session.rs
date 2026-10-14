@@ -753,9 +753,21 @@ mod mag_cal_tests {
                 .map(|o| o.raw)
                 .unwrap_or(f64::NAN)
         };
-        assert!((value("x") - 2.0).abs() < 1e-9, "calibrated x: {}", value("x"));
-        assert!((value("y") - 4.0).abs() < 1e-9, "calibrated y: {}", value("y"));
-        assert!((value("z") - 6.0).abs() < 1e-9, "calibrated z: {}", value("z"));
+        assert!(
+            (value("x") - 2.0).abs() < 1e-9,
+            "calibrated x: {}",
+            value("x")
+        );
+        assert!(
+            (value("y") - 4.0).abs() < 1e-9,
+            "calibrated y: {}",
+            value("y")
+        );
+        assert!(
+            (value("z") - 6.0).abs() < 1e-9,
+            "calibrated z: {}",
+            value("z")
+        );
         let total: f64 = (4.0f64 + 16.0 + 36.0).sqrt();
         assert!(
             (value("tot") - total).abs() < 1e-9,
