@@ -504,12 +504,20 @@ fn arm_disarm_params(arm: bool) -> [f32; 7] {
     [if arm { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 }
 
-/// `MAV_CMD_DO_REPOSITION` parameters for a click-to-fly: default ground
-/// speed (`param1` = -1), altitude expressed as AMSL (no `MAV_DO_REPOSITION_FLAGS`
-/// AGL bit), `param4` = NaN so the vehicle keeps its current heading.
+/// `MAV_CMD_DO_REPOSITION` bit 0: switch the vehicle to position control.
+/// PX4 v1.14+ rejects the command outright with `UNSUPPORTED` unless this bit
+/// is set — the flag tells commander to move into loiter (reposition) mode
+/// and let the navigator fly the coordinates.
+const MAV_DO_REPOSITION_FLAG_CHANGE_MODE: f32 = 1.0;
+
+/// `MAV_CMD_DO_REPOSITION` parameters for a click-to-fly: `param1` = -1 uses
+/// the default ground speed, `param2` carries the change-mode flag (PX4
+/// requires it), `param4` = NaN keeps the current heading, `param7` is the
+/// altitude expressed as AMSL (no `MAV_DO_REPOSITION_FLAGS` AGL bit).
 fn reposition_params(lat_deg: f64, lon_deg: f64, amsl_m: f64) -> [f32; 7] {
     let mut params = [0.0f32; 7];
     params[0] = -1.0; // default ground speed
+    params[1] = MAV_DO_REPOSITION_FLAG_CHANGE_MODE;
     params[3] = f32::NAN; // keep the current heading
     params[4] = lat_deg as f32;
     params[5] = lon_deg as f32;
@@ -517,11 +525,13 @@ fn reposition_params(lat_deg: f64, lon_deg: f64, amsl_m: f64) -> [f32; 7] {
     params
 }
 
-/// `MAV_CMD_DO_SET_HOME` parameters: `param1` = 1 makes PX4 use the specified
-/// location (`param5/6/7`) instead of the vehicle's current position.
+/// `MAV_CMD_DO_SET_HOME` parameters: `param1` = 0 selects the specified
+/// location (`param5/6/7`); 1 would mean "use the vehicle's current position",
+/// which PX4's commander reads as `cmd.param1 > 0.5f` and would ignore the
+/// clicked coordinates entirely.
 fn set_home_params(lat_deg: f64, lon_deg: f64, amsl_m: f64) -> [f32; 7] {
     let mut params = [0.0f32; 7];
-    params[0] = 1.0; // use the specified location
+    params[0] = 0.0; // use the specified location, not the current position
     params[4] = lat_deg as f32;
     params[5] = lon_deg as f32;
     params[6] = amsl_m as f32;
@@ -564,9 +574,9 @@ pub async fn send_arm_disarm(arm: bool, state: State<'_, AppState>) -> Result<()
 /// Fly the vehicle to a spot clicked on the map (`MAV_CMD_DO_REPOSITION`).
 /// The altitude is the vehicle's current AMSL, so the drone holds its height
 /// and flies horizontally to `(lat, lon)` — the click-to-fly behaviour QGC's
-/// "Fly to here" exposes. The ack verdict arrives on the `"command"`
-/// event (`goto`); the vehicle must be in a mode where reposition is allowed
-/// (e.g. Guided / Offboard).
+/// "Fly to here" exposes. `param2` carries `MAV_DO_REPOSITION_FLAG_CHANGE_MODE`
+/// so PX4 moves itself into loiter and accepts the target regardless of the
+/// current mode. The ack verdict arrives on the `"command"` event (`goto`).
 #[tauri::command]
 pub async fn send_goto(lat_deg: f64, lon_deg: f64, state: State<'_, AppState>) -> Result<(), String> {
     let service = state.command().ok_or_else(|| "not connected".to_string())?;
@@ -584,9 +594,11 @@ pub async fn send_goto(lat_deg: f64, lon_deg: f64, state: State<'_, AppState>) -
 }
 
 /// Set the vehicle's home to a spot clicked on the map (`MAV_CMD_DO_SET_HOME`).
-/// The altitude is the vehicle's current AMSL — the drone is on the ground
-/// when a home is set, so the current fix is the local ground height. The
-/// verdict arrives on the `"command"` event (`set_home`).
+/// `param1` = 0 carries the clicked coordinates (`param5/6/7`), so PX4 sets
+/// home there rather than at the vehicle's current position. The altitude is
+/// the vehicle's current AMSL — the drone is on the ground when a home is
+/// set, so the current fix is the local ground height. The verdict arrives
+/// on the `"command"` event (`set_home`).
 #[tauri::command]
 pub async fn send_set_home(
     lat_deg: f64,
@@ -746,6 +758,10 @@ mod tests {
     fn reposition_params_carry_position_and_keep_heading() {
         let p = reposition_params(48.6493, -123.3982, 90.5);
         assert_eq!(p[0], -1.0, "default ground speed");
+        assert_eq!(
+            p[1], MAV_DO_REPOSITION_FLAG_CHANGE_MODE,
+            "param2 requests the mode change PX4 requires"
+        );
         assert_eq!(p[2], 0.0, "reserved");
         assert!(p[3].is_nan(), "param4 = NaN keeps the current heading");
         assert_eq!(p[4], 48.6493);
@@ -756,7 +772,10 @@ mod tests {
     #[test]
     fn set_home_params_carry_the_specified_location() {
         let p = set_home_params(48.6, -123.4, 45.0);
-        assert_eq!(p[0], 1.0, "param1 = 1 selects the specified location");
+        assert_eq!(
+            p[0], 0.0,
+            "param1 = 0 selects the specified location, not the current position"
+        );
         assert_eq!(p[4], 48.6);
         assert_eq!(p[5], -123.4);
         assert_eq!(p[6], 45.0);
