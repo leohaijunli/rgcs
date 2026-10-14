@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use maggcs_core::calib::mag::MagCalibration;
 use maggcs_core::mavlink::connection::LinkStatus;
 use maggcs_core::mavlink::ConnectionHandle;
 use maggcs_core::mission::service::MissionService;
@@ -22,6 +23,24 @@ use crate::motor_test_state::MotorTestState;
 use crate::params_service::ParamsState;
 use crate::rtk_service::RtkState;
 use crate::terrain_server::TerrainServer;
+
+/// Process-wide magnetometer calibration: one loaded JSON drives the Signal
+/// Inspector's mag traces (A·(m−b)) AND the motor-test alarm's total field.
+/// Survives link swaps; the motor-test tap re-reads it on every attach.
+#[derive(Default, Clone)]
+pub struct CalibrationStore(Arc<Mutex<Option<MagCalibration>>>);
+
+impl CalibrationStore {
+    /// The currently loaded calibration, if any.
+    pub fn get(&self) -> Option<MagCalibration> {
+        self.0.lock().clone()
+    }
+
+    /// Replace the loaded calibration (`None` = clear).
+    pub fn set(&self, cal: Option<MagCalibration>) {
+        *self.0.lock() = cal;
+    }
+}
 
 /// Stable identifier for one connection/vehicle session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -63,6 +82,8 @@ pub struct AppState {
     inner: Mutex<AppInner>,
     /// Signal Inspector tap/catalog/batcher (survives link swaps, ADR-016).
     pub inspector: InspectorState,
+    /// Shared magnetometer calibration (inspector + motor-test, one file).
+    pub calibration: CalibrationStore,
     /// FC parameter protocol task + cache (Parameters window, PM3).
     pub params: ParamsState,
     /// Motor-test service handle + event forwarder (survives link swaps; the

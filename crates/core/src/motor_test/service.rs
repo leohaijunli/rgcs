@@ -84,19 +84,28 @@ impl MotorTestService {
     /// Spawn on a link. The task stops when the handle drops, the link
     /// closes, or the event subscriber goes away. The session starts Idle:
     /// arming observations flow before any Start.
+    ///
+    /// Returns the service handle, the event stream specialist, and a watch of
+    /// the last values actually sent to the FC (updated every tick while
+    /// sending, `0.0` otherwise) for the window's output readout.
     pub fn spawn(
         handle: ConnectionHandle,
         limits: SafetyLimits,
-    ) -> (Self, mpsc::Receiver<MotorTestEvent>) {
+    ) -> (
+        Self,
+        mpsc::Receiver<MotorTestEvent>,
+        tokio::sync::watch::Receiver<Vec<f32>>,
+    ) {
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
         let (evt_tx, evt_rx) = mpsc::channel(32);
         let session = MotorTestSession::new(
             AnySource::Manual(super::source::ManualSource::new(vec![0.0; 4])),
             limits.clone(),
         );
+        let (output_tx, output_rx) = tokio::sync::watch::channel(session.output_values());
         let tick = std::time::Duration::from_secs_f64(1.0 / super::DEFAULT_TICK_HZ);
-        tokio::spawn(run(handle, session, cmd_rx, evt_tx, tick));
-        (Self { cmd_tx }, evt_rx)
+        tokio::spawn(run(handle, session, cmd_rx, evt_tx, output_tx, tick));
+        (Self { cmd_tx }, evt_rx, output_rx)
     }
 
     /// Send a command; `Err` = the service is gone (link dropped).
@@ -123,6 +132,7 @@ async fn run(
     mut session: MotorTestSession<AnySource>,
     mut cmd_rx: mpsc::Receiver<MotorTestCommand>,
     evt_tx: mpsc::Sender<MotorTestEvent>,
+    output_tx: tokio::sync::watch::Sender<Vec<f32>>,
     tick: std::time::Duration,
 ) {
     let mut events_rx = handle.subscribe_route(MessageRoute::messages(WATCHED_MESSAGES));
@@ -194,6 +204,10 @@ async fn run(
                 return; // link gone: PX4's 3 s timeout is the backstop
             }
         }
+
+        // Publish the latest values that went onto the wire (the window's
+        // output readout; a dropped receiver — window closed — is fine).
+        let _ = output_tx.send(session.output_values());
 
         if session.state() != last_state {
             last_state = session.state();

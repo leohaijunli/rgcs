@@ -108,6 +108,12 @@ interface MissionState {
   patternCenter: GeoPoint | null
   /** Waypoint the FC is flying now, from MISSION_CURRENT (0-based). */
   currentSeq: number | null
+  /** True right after the user cleared the local plan: the FC's mission must
+   * not be auto-downloaded back over an intentionally empty plan (a running
+   * mission would otherwise repopulate the panel via `current_changed`).
+   * Cleared whenever a plan is explicitly set, added to, imported or
+   * downloaded again. */
+  planCleared: boolean
   select: (seq: number | null) => void
   setWaypoints: (waypoints: PlannedWaypoint[]) => void
   setAltitudeMode: (mode: AltitudeMode) => void
@@ -189,6 +195,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
   /** Pinned pattern centre (cloverleaf / sweep rectangle), editable on the map. */
   patternCenter: null,
   currentSeq: null,
+  planCleared: false,
 
   select: (seq) => set({ selectedSeq: seq }),
 
@@ -199,6 +206,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       dirty: true,
       fcMatches: null,
       lastPattern: null,
+      planCleared: false,
     })),
 
   setAltitudeMode: (mode) => set({ altitudeMode: mode }),
@@ -242,6 +250,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
         dirty: true,
         fcMatches: null,
         lastPattern: null,
+        planCleared: false,
       }
     }),
 
@@ -258,6 +267,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
         dirty: true,
         fcMatches: null,
         lastPattern: null,
+        planCleared: false,
       }
     }),
 
@@ -345,6 +355,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
         dirty: true,
         fcMatches: null,
         drape: null,
+        planCleared: false,
       }
     }),
 
@@ -363,6 +374,9 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       lastSyncedHash: null,
       lastEvent: null,
       verifying: false,
+      // An intentional empty plan: the FC's mission must not be fetched back
+      // over it (a running mission would repopulate the panel).
+      planCleared: true,
     }),
 
   // The mission service task exits with its connection (core::mission::service),
@@ -497,7 +511,11 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       get().waypoints.length === 0 &&
       get().blocks.length === 0 &&
       !get().busy &&
-      !get().verifying
+      !get().verifying &&
+      // After an explicit "Clear local plan" the panel must stay empty: the
+      // FC's still-loaded mission is not fetched back over an intentional
+      // clear (operator report).
+      !get().planCleared
     ) {
       void get().download()
     }
@@ -529,6 +547,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
         busy: false,
         syncState: 'idle' as const,
         selectedSeq: null,
+        planCleared: false,
       }
     })
   },
@@ -559,6 +578,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       planBase: result.base,
       blocks: result.blocks,
       home: result.home,
+      planCleared: false,
     })
   },
 
@@ -583,11 +603,16 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       lastSyncedHash: null,
       fcMatches: null,
       verifying: false,
+      drape: null,
+      drapeError: null,
       planBase: null,
       blocks: [],
       home: null,
       lastPattern: null,
       patternCenter: null,
+      currentSeq: null,
+      // A true fresh boot: the FC's running mission may be auto-fetched.
+      planCleared: false,
     }),
 }))
 

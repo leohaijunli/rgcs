@@ -130,6 +130,12 @@ impl<S: RpmSource> MotorTestSession<S> {
         &self.interlock
     }
 
+    /// The last values actually sent to the FC (post clamp/slew), for the
+    /// window's output readout — `0.0` when idle.
+    pub fn output_values(&self) -> Vec<f32> {
+        self.last_values.clone()
+    }
+
     /// Operator start (after the app-layer confirmation): begin sending.
     pub fn start(&mut self, now: Instant) {
         if self.state == SessionState::Emergency {

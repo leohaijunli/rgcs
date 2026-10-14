@@ -86,13 +86,37 @@ export interface CesiumViewerHandle {
   /** Switch the 3D terrain provider to the local tileset URL, or back to
    * the ellipsoid with `null` (plan B). Rejects when the endpoint fails. */
   setTerrain3d(url: string | null): Promise<void>
+  /** Ground height under each `[lat, lon]` taken from the served 3D mesh, in
+   * the tileset's own frame (`null` outside `bounds` / without a mesh). */
+  sampleMeshGround(
+    points: Array<[number, number]>,
+    bounds: [number, number, number, number] | null,
+  ): Promise<Array<number | null>>
   /** Frame the home area and stop following. */
   goHome(): void
   /** Rotate the camera to north-up (no-op in 2D) and stop following. */
   lookNorth(): void
 }
 
-export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>): CesiumViewerHandle {
+/** A right-click pick on the map, for the context menu. */
+export interface MapContextMenu {
+  lat: number
+  lon: number
+  /** Screen position of the right-click (CSS pixels), to anchor the menu. */
+  screen: { x: number; y: number }
+}
+
+/** Options for `useCesiumViewer`. */
+export interface CesiumViewerOptions {
+  /** A right-click that was not a polygon-vertex removal: the picked ground
+   * point and its screen position, so the map can show a context menu. */
+  onContextMenu?: (ground: { lat: number; lon: number } | null, screen: { x: number; y: number }) => void
+}
+
+export function useCesiumViewer(
+  containerRef: RefObject<HTMLDivElement | null>,
+  opts: CesiumViewerOptions = {},
+): CesiumViewerHandle {
   const [initError, setInitError] = useState<string | null>(null)
   const viewerRef = useRef<Cesium.Viewer | null>(null)
   const droneRef = useRef<DroneLayer | null>(null)
@@ -110,6 +134,12 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
   const homeAmslRef = useRef(0)
   const polygonLayerRef = useRef<PolygonLayer | null>(null)
   const centerHandleRef = useRef<CenterHandle | null>(null)
+  // Latest right-click callback (replaced on every render so the mount-time
+  // `installMapTools` closure always calls the current handler).
+  const onContextRef = useRef(opts.onContextMenu)
+  useEffect(() => {
+    onContextRef.current = opts.onContextMenu
+  }, [opts.onContextMenu])
 
   useEffect(() => {
     const container = containerRef.current
@@ -178,6 +208,13 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
               Cesium.Cartographic.fromDegrees(v.longitude_deg, v.latitude_deg),
             ) ?? 0)
           : rh(homeAmslRef.current),
+      // Right-click context menu (move-to / set-home): works in both views.
+      onContextMenu: (ground, screen) => {
+        onContextRef.current?.(
+          ground ? { lat: ground.lat, lon: ground.lon } : null,
+          { x: screen.x, y: screen.y },
+        )
+      },
     })
     const follow = createFollowController(viewer, layer.dronePosition)
     follow.attach()
@@ -442,6 +479,37 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
     [],
   )
 
+  const sampleMeshGround = useCallback(
+    async (
+      points: Array<[number, number]>,
+      bounds: [number, number, number, number] | null,
+    ): Promise<Array<number | null>> => {
+      const out: Array<number | null> = points.map(() => null)
+      const viewer = viewerRef.current
+      if (!viewer || viewer.isDestroyed()) return out
+      const provider = viewer.terrainProvider
+      // Only a real mesh: the ellipsoid provider would answer 0 everywhere.
+      if (!(provider instanceof Cesium.CesiumTerrainProvider)) return out
+      // Outside the DEM the globe stays flat; do not report that as ground.
+      const covered: number[] = []
+      points.forEach(([lat, lon], i) => {
+        const inside =
+          !bounds || (lon >= bounds[0] && lon <= bounds[2] && lat >= bounds[1] && lat <= bounds[3])
+        if (inside) covered.push(i)
+      })
+      if (covered.length === 0) return out
+      const sampled = await Cesium.sampleTerrainMostDetailed(
+        provider,
+        covered.map((i) => Cesium.Cartographic.fromDegrees(points[i][1], points[i][0])),
+      )
+      sampled.forEach((c, k) => {
+        if (Number.isFinite(c.height)) out[covered[k]] = c.height
+      })
+      return out
+    },
+    [],
+  )
+
   const setTerrain3d = useCallback(async (url: string | null) => {
     const viewer = viewerRef.current
     if (!viewer) return
@@ -454,5 +522,5 @@ export function useCesiumViewer(containerRef: RefObject<HTMLDivElement | null>):
     applyLayerVisibility(viewer, showGrid)
   }, [])
 
-  return { initError, setSnapshot, setMeshOffset, setTrailByAgl, setMission, setTerrainOverlay, setTerrain3d, setLayers, setImageryStyle, focusWaypoint, fitMission, goHome, lookNorth }
+  return { initError, setSnapshot, setMeshOffset, setTrailByAgl, setMission, setTerrainOverlay, setTerrain3d, sampleMeshGround, setLayers, setImageryStyle, focusWaypoint, fitMission, goHome, lookNorth }
 }

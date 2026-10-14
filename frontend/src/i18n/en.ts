@@ -361,6 +361,9 @@ export default {
     polygonReadout: '{{count}} vertices · {{area}} ha · {{perimeter}} m',
     polygonClosed: 'Boundary closed · drag a vertex to adjust',
     patternCenter: 'Centre — drag to move',
+    gotoHere: 'Move to here',
+    setHomeHere: 'Set to home',
+    needLink: 'Connect to the FC first',
   },
   settings: {
     menu: 'Settings',

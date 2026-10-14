@@ -128,7 +128,7 @@ async fn harness() -> Harness {
             continue;
         }
 
-        let (svc, evt) = MotorTestService::spawn(handle.clone(), limits());
+        let (svc, evt, _output) = MotorTestService::spawn(handle.clone(), limits());
         return Harness {
             handle,
             svc,

@@ -11,6 +11,7 @@ import type { MissionItem } from '../generated-types/MissionItem'
 import type { LineKind } from '../generated-types/LineKind'
 import { heightRuns, splitRuns, type KindBySeq } from '../mission/lineKinds'
 import { selfIntersects } from '../mission/polygon'
+import { MIN_AGL_GROUND_M } from '../mission/compile'
 import { FOCUS_PITCH_DEG, FOCUS_RANGE_M, HOME_LAT, HOME_LON, UAV_MODEL_URI } from './constants'
 
 /** Below this (m) a waypoint is level with the lowest one; no stick is drawn. */
@@ -245,6 +246,12 @@ export interface WaypointRenderOptions {
    * adding N puts the rendered geometry on the mesh's ellipsoid datum while
    * the labels keep AMSL (the stored plan datum). */
   ellipsoidBySeq?: Record<number, number> | null
+  /** `true` when the plan's heights are offsets from a HOME whose elevation is
+   * unknown (relative/AGL altitude mode and the plan carries no HOME altitude).
+   * The stored "AMSL" is then really height above HOME, so it must not be
+   * printed as AMSL nor compared with the DEM (which gave a bogus AGL and a
+   * false "underground" warning). */
+  heightsRelativeToUnknownHome?: boolean
   /** Seq the FC is flying to: earlier points dim (flown), this one gets a
    * halo, later ones keep their kind colour (future). `null` = not flying. */
   currentSeq?: number | null
@@ -302,9 +309,21 @@ export function renderWaypoints(
   // waypoint, so the operator reads the clearance directly (issues.md #36).
   // The accent colour and the boxed AGL label make the clearance prominent in
   // the plan view without opening the per-item editor.
+  //
+  // Sticks need a numeric base even when the label has no real ground to
+  // report (`groundM` is `null` then): HOME's altitude, else the 0 reference
+  // the "above HOME" label measures from — without it a level plan (every
+  // waypoint at the same height) would have zero-length sticks everywhere and
+  // lose its ground lines entirely. The per-point DTM overrides the plane
+  // when loaded; relative-to-unknown-HOME heights are never measured against
+  // the DEM (the patch's label rule), so they stick to their own 0 base.
   if (opts.heights) {
     const stickColor = Cesium.Color.fromCssColorString(cssVar('--mg-accent'))
-    for (const run of heightRuns(located, opts.groundM ?? null, opts.groundBySeq)) {
+    for (const run of heightRuns(
+      located,
+      opts.groundM ?? 0,
+      opts.heightsRelativeToUnknownHome ? null : opts.groundBySeq,
+    )) {
       if (Math.abs(run.top - run.base) < HEIGHT_EPSILON_M) continue
       const item = located.find((it) => it.seq === run.seq)
       if (!item) continue
@@ -450,16 +469,33 @@ export function renderWaypoints(
  * vehicle drop line stands on). */
 function waypointLabel(item: MissionItem, opts: WaypointRenderOptions): string {
   if (!opts.heights) return String(item.seq)
-  const ground = opts.groundBySeq?.[item.seq] ?? opts.groundM ?? 0
+  // HOME elevation unknown and heights are relative to it: the only true
+  // number is the height above HOME. No AMSL, no AGL (both would be guesses).
+  if (opts.heightsRelativeToUnknownHome) {
+    return `${item.seq} · ${Math.round(item.z)} m above HOME`
+  }
   const amsl = Math.round(item.z)
-  // Not clamped: a waypoint below its ground must read negative, not "0 m".
-  const agl = Math.round(item.z - ground)
-  return `${belowDemGround(item, opts) ? '⚠ ' : ''}${item.seq} · ${amsl} m · ${agl} m AGL`
+  const head = `${belowDemGround(item, opts) ? '⚠ ' : ''}${item.seq} · ${amsl} m AMSL`
+  // Real terrain under the point (DTM / the 3D mesh): this is AGL.
+  const dem = opts.groundBySeq?.[item.seq]
+  // A ground at/below MIN_AGL_GROUND_M is no reliable reference (sea level /
+  // a zero or stale sample): AMSL == AGL is misleading, so the absolute
+  // height stands alone. Not clamped either: a waypoint below a valid ground
+  // must still read negative, not "0 m".
+  if (dem != null && dem > MIN_AGL_GROUND_M) return `${head} · ${Math.round(item.z - dem)} m AGL`
+  // No terrain data: only the flat plane through HOME. Say so — calling it
+  // AGL is wrong on any slope — and with no HOME altitude either there is no
+  // ground reference at all, so the AMSL stands alone (it used to be
+  // measured from sea level, which made AGL equal AMSL).
+  const plane = opts.groundM
+  if (plane != null && Number.isFinite(plane)) return `${head} · ${Math.round(item.z - plane)} m above HOME`
+  return head
 }
 
 /** True when the loaded DEM (not the flat HOME plane) puts the waypoint under
  * the ground: below HOME is normal on a downslope, below the DTM is not. */
 function belowDemGround(item: MissionItem, opts: WaypointRenderOptions): boolean {
+  if (opts.heightsRelativeToUnknownHome) return false
   const ground = opts.groundBySeq?.[item.seq]
   return ground != null && item.z < ground - HEIGHT_EPSILON_M
 }

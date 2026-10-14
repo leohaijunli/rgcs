@@ -7,6 +7,8 @@ import { orderedMissionItems } from '../mission/planfile'
 import { usePrefsStore } from '../desktop/prefs'
 import { useMissionStore } from '../stores/mission'
 import { usePolygonStore } from '../stores/polygon'
+import { useCommandStore } from '../stores/command'
+import { useLinkStore } from '../stores/link'
 import { useTelemetryStore } from '../stores/telemetry'
 import { useUiStore } from '../stores/ui'
 import { useTerrainStore } from '../stores/terrain'
@@ -18,11 +20,36 @@ import MapToolbar from './MapToolbar'
 export default function MapView() {
   const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
-  const { initError, setSnapshot, setMeshOffset, setTrailByAgl, setMission, setTerrainOverlay, setTerrain3d, setLayers, setImageryStyle, focusWaypoint, fitMission, goHome, lookNorth } =
-    useCesiumViewer(containerRef)
+  const [ctxMenu, setCtxMenu] = useState<{
+    lat: number
+    lon: number
+    x: number
+    y: number
+  } | null>(null)
+  const { initError, setSnapshot, setMeshOffset, setTrailByAgl, setMission, setTerrainOverlay, setTerrain3d, sampleMeshGround, setLayers, setImageryStyle, focusWaypoint, fitMission, goHome, lookNorth } =
+    useCesiumViewer(containerRef, {
+      onContextMenu: (ground, screen) =>
+        setCtxMenu(ground ? { ...ground, x: screen.x, y: screen.y } : null),
+    })
   const mapTool = useUiStore((s) => s.mapTool)
   const view = useUiStore((s) => s.view)
   const polygonClosed = usePolygonStore((s) => s.closed)
+  const connected = useLinkStore((s) => Boolean(s.link?.fc_alive))
+  const sendGoto = useCommandStore((s) => s.sendGoto)
+  const sendSetHome = useCommandStore((s) => s.sendSetHome)
+
+  // Close the context menu on an outside click or Esc.
+  useEffect(() => {
+    if (!ctxMenu) return
+    const close = () => setCtxMenu(null)
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && close()
+    window.addEventListener('pointerdown', close)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('pointerdown', close)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [ctxMenu])
 
   // Telemetry updates: drone position, trail, camera follow.
   const snapshot = useTelemetryStore((s) => s.snapshot)
@@ -79,9 +106,15 @@ export default function MapView() {
   // provider load that fails (server gone, bad manifest) rolls the toggle
   // back through fail3d; a stale rejection after a newer switch is dropped.
   const terrain3d = useTerrainStore((st) => st.terrain3d)
+  // Bumped each time the provider swap finished, so mesh sampling waits for it.
+  const [meshEpoch, setMeshEpoch] = useState(0)
   useEffect(() => {
     let cancelled = false
-    void setTerrain3d(terrain3d?.url ?? null).catch((e) => {
+    void setTerrain3d(terrain3d?.url ?? null)
+      .then(() => {
+        if (!cancelled) setMeshEpoch((n) => n + 1)
+      })
+      .catch((e) => {
       if (!cancelled) void useTerrainStore.getState().fail3d(String(e))
     })
     return () => {
@@ -102,7 +135,9 @@ export default function MapView() {
   const groundBySeq = useTerrainStore((st) => st.groundBySeq)
   const sampleGround = useTerrainStore((st) => st.sampleGround)
   useEffect(() => {
-    if (!terrainTile || missionItems.length === 0) {
+    // No DEM tile: the mesh effect below owns `groundBySeq`.
+    if (!terrainTile) return
+    if (missionItems.length === 0) {
       useTerrainStore.setState({ groundBySeq: null })
       return
     }
@@ -127,16 +162,20 @@ export default function MapView() {
   // `--geoid`). A tileset built without it serves CGVD2013 H as if it were h,
   // and adding N (≈ −19.5 m at Sidney) would sink the trajectory below it.
   const [meshEllipsoid, setMeshEllipsoid] = useState(false)
+  const [meshBounds, setMeshBounds] = useState<[number, number, number, number] | null>(null)
   useEffect(() => {
     if (!terrain3d) {
       setMeshEllipsoid(false)
+      setMeshBounds(null)
       return
     }
     let cancelled = false
     fetch(`${terrain3d.url}layer.json`)
       .then((r) => r.json())
-      .then((j: { verticalDatum?: string }) => {
-        if (!cancelled) setMeshEllipsoid(j.verticalDatum === 'ellipsoidWgs84')
+      .then((j: { verticalDatum?: string; bounds?: number[] }) => {
+        if (cancelled) return
+        setMeshEllipsoid(j.verticalDatum === 'ellipsoidWgs84')
+        setMeshBounds(Array.isArray(j.bounds) && j.bounds.length === 4 ? (j.bounds as [number, number, number, number]) : null)
       })
       .catch(() => {
         if (!cancelled) setMeshEllipsoid(false)
@@ -199,6 +238,44 @@ export default function MapView() {
     }, 300)
     return () => clearTimeout(id)
   }, [missionItems, meshOn])
+  // No DEM tile loaded but the 3D mesh is on: take the ground under each
+  // waypoint from the mesh itself, so the AGL chips and the list show real
+  // terrain clearance instead of falling back to a flat plane. Heights come
+  // back in the tileset's frame; on an ellipsoid mesh remove N to get AMSL.
+  useEffect(() => {
+    if (terrainTile) return
+    if (!terrain3d || meshEpoch === 0 || missionItems.length === 0) {
+      useTerrainStore.setState({ groundBySeq: null })
+      return
+    }
+    if (meshEllipsoid && !ellipsoidBySeq) return // N not sampled yet
+    let cancelled = false
+    const id = setTimeout(() => {
+      const points = missionItems
+        .filter((it) => it.x !== 0 || it.y !== 0)
+        .map((it) => [it.seq, it.y / 1e7, it.x / 1e7] as [number, number, number])
+      sampleMeshGround(
+        points.map(([, lat, lon]) => [lat, lon] as [number, number]),
+        meshBounds,
+      )
+        .then((heights) => {
+          if (cancelled) return
+          const next: Record<number, number> = {}
+          points.forEach(([seq], i) => {
+            const h = heights[i]
+            if (h != null) next[seq] = h - (meshEllipsoid ? (ellipsoidBySeq?.[seq] ?? 0) : 0)
+          })
+          useTerrainStore.setState({ groundBySeq: Object.keys(next).length > 0 ? next : null })
+        })
+        .catch(() => {
+          if (!cancelled) useTerrainStore.setState({ groundBySeq: null })
+        })
+    }, 300)
+    return () => {
+      cancelled = true
+      clearTimeout(id)
+    }
+  }, [terrainTile, terrain3d, meshEpoch, meshBounds, meshEllipsoid, ellipsoidBySeq, missionItems, sampleMeshGround])
   useEffect(() => {
     setMission(missionItems, selectedSeq, {
       kinds,
@@ -208,8 +285,12 @@ export default function MapView() {
       // compile mode stand on (0 until the plan carries a home position).
       // When the DEM is loaded, `groundBySeq` carries the DTM under each
       // point and takes precedence (accurate terrain-following markers).
-      groundM: home?.[2] ?? 0,
+      // `null` = the plan carries no HOME altitude (0 = unset): there is no
+      // flat plane to measure from, so the chips show AMSL alone.
+      groundM: home && home[2] !== 0 ? home[2] : null,
       groundBySeq,
+      heightsRelativeToUnknownHome:
+        !(home && home[2] !== 0) && (altitudeMode === 'relative' || altitudeMode === 'agl'),
       ellipsoidBySeq,
       // Flight-state colouring: flown waypoints dim, the target gets a halo.
       currentSeq,
@@ -220,6 +301,7 @@ export default function MapView() {
     kinds,
     showHeights,
     home,
+    altitudeMode,
     currentSeq,
     groundBySeq,
     ellipsoidBySeq,
@@ -295,6 +377,41 @@ export default function MapView() {
       )}
       {trailByAgl && <TrailLegend />}
       <CoordinateReadout />
+      {ctxMenu && (
+        <div
+          className="absolute z-20 w-44 rounded border border-line bg-panel p-1 shadow-xl"
+          style={{
+            left: Math.min(ctxMenu.x, window.innerWidth - 190),
+            top: Math.min(ctxMenu.y, window.innerHeight - 96),
+          }}
+        >
+          <div className="mono truncate px-1.5 py-0.5 text-[10px] text-muted">
+            {ctxMenu.lat.toFixed(6)} · {ctxMenu.lon.toFixed(6)}
+          </div>
+          <button
+            disabled={!connected}
+            title={connected ? undefined : t('map.needLink')}
+            onClick={() => {
+              void sendGoto(ctxMenu.lat, ctxMenu.lon)
+              setCtxMenu(null)
+            }}
+            className="w-full rounded px-2 py-1.5 text-left text-sm text-ink hover:bg-canvas disabled:opacity-40"
+          >
+            {t('map.gotoHere')}
+          </button>
+          <button
+            disabled={!connected}
+            title={connected ? undefined : t('map.needLink')}
+            onClick={() => {
+              void sendSetHome(ctxMenu.lat, ctxMenu.lon)
+              setCtxMenu(null)
+            }}
+            className="w-full rounded px-2 py-1.5 text-left text-sm text-ink hover:bg-canvas disabled:opacity-40"
+          >
+            {t('map.setHomeHere')}
+          </button>
+        </div>
+      )}
     </div>
   )
 }

@@ -88,7 +88,7 @@ function event(op, kind, message) {
 }
 
 function reset() {
-  useMissionStore.getState().clearPlan()
+  useMissionStore.getState().reset()
 }
 
 await check('clearing the FC mission invalidates the baseline (#33/#38)', async () => {
@@ -456,6 +456,28 @@ await check('a running FC mission with an empty local plan auto-fetches', () => 
     .getState()
     .handleEvent({ op: 'mission', kind: 'current_changed', sent: 0, total: 0, seq: 1 })
   eq(useMissionStore.getState().syncState, 'idle', 'no auto-fetch with a local plan')
+})
+
+await check("after 'Clear local plan' a running FC mission is not auto-fetched back", () => {
+  // Operator report: clearing the local plan while the FC still holds the
+  // mission made the plan come back on the next MISSION_CURRENT. The
+  // explicit clear must suppress the boot-time auto-fetch until a plan is
+  // deliberately loaded again.
+  reset()
+  useMissionStore.getState().addWaypointAt(48.6493, -123.3982)
+  useMissionStore.getState().clearPlan()
+  useMissionStore
+    .getState()
+    .handleEvent({ op: 'mission', kind: 'current_changed', sent: 0, total: 0, seq: 4 })
+  eq(useMissionStore.getState().waypoints.length, 0, 'local plan stays empty')
+  eq(useMissionStore.getState().syncState, 'idle', 'no auto-fetch after an explicit clear')
+  // The next deliberate Download brings the FC mission back and re-arms the
+  // boot-time auto-fetch for the future.
+  useMissionStore.getState().download()
+  eq(useMissionStore.getState().syncState, 'downloading', 'explicit download still works')
+  useMissionStore.getState().handlePlan([{ seq: 0, frame: 'global_int', command: 16, params: [0, 0, 0, 0], x: 486493000, y: -1233982000, z: 45, autocontinue: true, current: true }])
+  eq(useMissionStore.getState().waypoints.length, 1, 'plan restored by the explicit download')
+  eq(useMissionStore.getState().planCleared, false, 'auto-fetch re-armed')
 })
 
 if (failures.length > 0) {

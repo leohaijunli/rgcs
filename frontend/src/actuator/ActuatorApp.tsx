@@ -13,6 +13,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { open as openDialog } from '@tauri-apps/plugin-dialog'
+import { readTextFile } from '@tauri-apps/plugin-fs'
 import type { ParamEntry } from '../generated-types/ParamEntry'
 import { isTauri } from '../inspector/mock'
 
@@ -85,6 +87,15 @@ interface ActuatorStatus {
   sitl_connected: boolean
   sitl_endpoint: string | null
   sitl_feed_age_s: number | null
+  /** The motor test's own target link (real PX4, serial). */
+  target_connected: boolean
+  target_endpoint: string | null
+  /** COM_MOT_TEST_EN read from the target PX4 (null = unknown). */
+  com_mot_test_en: number | null
+  /** Normalized SITL servo outputs 1–4 (the forward INPUT). */
+  input_values: number[]
+  /** Values sent to the FC as ACTUATOR_TEST (the OUTPUT), 0 when idle. */
+  output_values: number[]
 }
 
 const IDLE: ActuatorStatus = {
@@ -100,6 +111,11 @@ const IDLE: ActuatorStatus = {
   sitl_connected: false,
   sitl_endpoint: null,
   sitl_feed_age_s: null,
+  target_connected: false,
+  target_endpoint: null,
+  com_mot_test_en: null,
+  input_values: [],
+  output_values: [],
 }
 
 export function ActuatorApp() {
@@ -125,6 +141,9 @@ export function ActuatorApp() {
   const [duration, setDuration] = useState(5)
   // Realtime forward (revised D3): the SITL source endpoint.
   const [sitlEndpoint, setSitlEndpoint] = useState('udpin:0.0.0.0:14540')
+  // The motor test's own target link: the real PX4 over serial (the main
+  // GCS keeps its own link, e.g. UDP SITL).
+  const [targetEndpoint, setTargetEndpoint] = useState('serial:/dev/ttyACM0:115200')
   // Confirmation state.
   const [phrase, setPhrase] = useState('')
   const [holdProgress, setHoldProgress] = useState(0)
@@ -135,6 +154,9 @@ export function ActuatorApp() {
   const [alarmThreshold, setAlarmThreshold] = useState(55_000)
   const [magAlarm, setMagAlarm] = useState(false)
   const [magTotal, setMagTotal] = useState<number | null>(null)
+  // Shared mag calibration (same file as the Signal Inspector): when loaded,
+  // the alarm's total field and the inspector's mag traces are A·(m−b).
+  const [calLoaded, setCalLoaded] = useState(false)
   const audioCtxRef = useRef<AudioContext | null>(null)
   const beepTimer = useRef<number | undefined>(undefined)
 
@@ -259,6 +281,32 @@ export function ActuatorApp() {
   const acknowledgeAlarm = () => {
     setMagAlarm(false)
     if (tauri) void invoke('actuator_acknowledge_alarm').catch(() => {})
+  }
+
+  /** Load a mag calibration JSON (shared with the Signal Inspector): the
+   * alarm's total field and the inspector's mag traces become A·(m−b). */
+  const loadMagCal = async () => {
+    try {
+      const f = await openDialog({
+        multiple: false,
+        filters: [{ name: 'Mag calibration', extensions: ['json'] }],
+      })
+      if (!f || typeof f !== 'string') return
+      const text = await readTextFile(f)
+      await invoke('set_mag_calibration', { json: text })
+      setCalLoaded(true)
+    } catch {
+      setCalLoaded(false)
+    }
+  }
+
+  const clearMagCal = async () => {
+    try {
+      await invoke('set_mag_calibration', { json: null })
+      setCalLoaded(false)
+    } catch {
+      /* keep the local flag */
+    }
   }
 
   // Mag telemetry + alarm events; the threshold change is pushed to core.
@@ -444,50 +492,135 @@ export function ActuatorApp() {
         </button>
       </header>
 
-      {/* Left: one workflow — load → source → source panel → safety. */}
+      {/* Left: the SITL input source (SERVO_OUTPUT_RAW → the forward slot). */}
       <aside className="actuator-left">
+        <div className="section-title">Input — SITL</div>
         <div className="card">
-          <h3>Prop load</h3>
-          <div className="btn-row">
-            {LOADS.map((l) => (
-              <button
-                key={l.id}
-                className={`mode-btn ${load === l.id ? 'active' : ''}`}
-                onClick={() => changeLoad(l.id)}
-                title="Declared by the operator; there is no sensor to detect it"
-              >
-                {l.label}
-              </button>
-            ))}
+          <h3>SITL source (SERVO_OUTPUT_RAW)</h3>
+          <input
+            className="phrase-input"
+            style={{ width: '100%', margin: 0 }}
+            value={sitlEndpoint}
+            onChange={(e) => setSitlEndpoint(e.target.value)}
+            placeholder="udpin:0.0.0.0:14540"
+            aria-label="SITL endpoint"
+            spellCheck={false}
+          />
+          {status.sitl_connected ? (
+            <button
+              className="mode-btn"
+              style={{ width: '100%', marginTop: 6 }}
+              onClick={() => tauri && void invoke('actuator_disconnect_sitl').catch(() => {})}
+            >
+              Disconnect SITL
+            </button>
+          ) : (
+            <button
+              className="mode-btn"
+              style={{ width: '100%', marginTop: 6 }}
+              onClick={() => tauri && void invoke('actuator_connect_sitl', { endpoint: sitlEndpoint }).catch(() => {})}
+            >
+              Connect SITL
+            </button>
+          )}
+          <div className="row" style={{ marginTop: 6 }}>
+            <span className="text-muted">Source link</span>
+            <span className={`mono ${status.sitl_connected ? 'text-ok' : 'text-error'}`}>
+              {status.sitl_connected ? 'connected' : 'down'}
+            </span>
           </div>
-          <div className="estop-note" style={{ marginTop: 6 }}>
-            {load === 'props'
-              ? 'Full props: type START PROPS, then hold Start for 3 s. Vehicle must be fixed to a rig.'
-              : load === 'plate'
-                ? 'Flat plates: same start path as no props.'
-                : 'No props: safest configuration.'}
+          <div className="row">
+            <span className="text-muted">Feed age</span>
+            <span className="mono">
+              {status.sitl_feed_age_s != null
+                ? `${status.sitl_feed_age_s.toFixed(1)} s`
+                : 'no data yet'}
+            </span>
+          </div>
+          <div className="motor-bars" style={{ marginTop: 6 }}>
+            {Array.from({ length: MOTOR_COUNT }, (_, i) => {
+              const v = status.input_values[i] ?? 0
+              return (
+                <div key={i} className="motor-bar">
+                  <span className="mono motor-label">M{i + 1}</span>
+                  <div className="bar-track">
+                    <div className="bar-fill input" style={{ width: `${v * 100}%` }} />
+                  </div>
+                  <span className="mono motor-value">{(v * 100).toFixed(0)}%</span>
+                </div>
+              )
+            })}
+          </div>
+          <div className="estop-note" style={{ marginTop: 4 }}>
+            SITL main outputs 1–4, normalized 0..1 → the forward slot.
           </div>
         </div>
+      </aside>
 
-        <div className="card">
-          <h3>Command source</h3>
-          <div className="btn-row">
-            {SOURCES.map((s) => (
-              <button
-                key={s.id}
-                className={`mode-btn ${source === s.id ? 'active' : ''}`}
-                disabled={running}
-                onClick={() => setSource(s.id)}
-                title={running ? 'Stop the test before switching source' : s.hint}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
-          <div className="estop-note" style={{ marginTop: 6 }}>
-            {SOURCES.find((s) => s.id === source)?.hint}
-          </div>
+      {/* Middle: the command source and safety controls. */}
+      <main className="actuator-mid">
+        <div className="state-strip">
+          <span
+            className="mono state-word"
+            style={{
+              color: emergency
+                ? 'var(--mg-error)'
+                : running
+                  ? 'var(--mg-ok)'
+                  : 'var(--mg-muted)',
+            }}
+          >
+            {emergency ? 'EMERGENCY' : running ? 'RUNNING' : unlocked ? 'READY' : 'LOCKED'}
+          </span>
+          <span className="estop-note">
+            {running
+              ? `${SOURCES.find((s) => s.id === source)?.label} · ${status.tick_hz.toFixed(0)} Hz · window on top`
+              : 'Motor commands stopped · Esc = emergency stop'}
+          </span>
         </div>
+        <div className="controls-grid">
+          <div className="card">
+            <h3>Prop load</h3>
+            <div className="btn-row">
+              {LOADS.map((l) => (
+                <button
+                  key={l.id}
+                  className={`mode-btn ${load === l.id ? 'active' : ''}`}
+                  onClick={() => changeLoad(l.id)}
+                  title="Declared by the operator; there is no sensor to detect it"
+                >
+                  {l.label}
+                </button>
+              ))}
+            </div>
+            <div className="estop-note" style={{ marginTop: 6 }}>
+              {load === 'props'
+                ? 'Full props: type START PROPS, then hold Start for 3 s. Vehicle must be fixed to a rig.'
+                : load === 'plate'
+                  ? 'Flat plates: same start path as no props.'
+                  : 'No props: safest configuration.'}
+            </div>
+          </div>
+
+          <div className="card">
+            <h3>Command source</h3>
+            <div className="btn-row">
+              {SOURCES.map((s) => (
+                <button
+                  key={s.id}
+                  className={`mode-btn ${source === s.id ? 'active' : ''}`}
+                  disabled={running}
+                  onClick={() => setSource(s.id)}
+                  title={running ? 'Stop the test before switching source' : s.hint}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
+            <div className="estop-note" style={{ marginTop: 6 }}>
+              {SOURCES.find((s) => s.id === source)?.hint}
+            </div>
+          </div>
 
         {/* Source panel: only the selected source's controls. */}
         {source === 'manual' && (
@@ -693,56 +826,50 @@ export function ActuatorApp() {
               : 'No arming required: the test runs while the FC is disarmed.'}
           </div>
         </div>
-      </aside>
-
-      {/* Middle: compact state strip + reserved monitoring space. */}
-      <main className="actuator-mid">
-        <div className="state-strip">
-          <span
-            className="mono state-word"
-            style={{
-              color: emergency
-                ? 'var(--mg-error)'
-                : running
-                  ? 'var(--mg-ok)'
-                  : 'var(--mg-muted)',
-            }}
-          >
-            {emergency ? 'EMERGENCY' : running ? 'RUNNING' : unlocked ? 'READY' : 'LOCKED'}
-          </span>
-          <span className="estop-note">
-            {running
-              ? `${SOURCES.find((s) => s.id === source)?.label} · ${status.tick_hz.toFixed(0)} Hz · window on top`
-              : 'Motor commands stopped · Esc = emergency stop'}
-          </span>
-        </div>
-        <div className="reserved-area estop-note">
-          Realtime curves (A5) and the camera preview land here.
-        </div>
+      </div>
       </main>
 
-      {/* Right: live status. */}
+      {/* Right: the actuator output to the real PX4 (serial). */}
       <aside className="actuator-right">
-        <div className="section-title">Status</div>
+        <div className="section-title">Output — PX4 (serial)</div>
         <div className="card">
-          <div className="row">
-            <span className="text-muted">Link</span>
-            <span className={`mono ${status.connected ? 'text-ok' : 'text-error'}`}>
-              {status.connected ? 'connected' : 'down'}
+          <h3>Actuator output (ACTUATOR_TEST)</h3>
+          <input
+            className="phrase-input"
+            style={{ width: '100%', margin: 0 }}
+            value={targetEndpoint}
+            onChange={(e) => setTargetEndpoint(e.target.value)}
+            placeholder="serial:/dev/ttyACM0:115200"
+            aria-label="Target PX4 serial endpoint"
+            spellCheck={false}
+          />
+          {status.target_connected ? (
+            <button
+              className="mode-btn"
+              style={{ width: '100%', marginTop: 6 }}
+              onClick={() => tauri && void invoke('actuator_disconnect_target').catch(() => {})}
+            >
+              Disconnect PX4
+            </button>
+          ) : (
+            <button
+              className="mode-btn"
+              style={{ width: '100%', marginTop: 6 }}
+              onClick={() => tauri && void invoke('actuator_connect_target', { endpoint: targetEndpoint }).catch(() => {})}
+            >
+              Connect PX4 (serial)
+            </button>
+          )}
+          <div className="row" style={{ marginTop: 6 }}>
+            <span className="text-muted">Target link</span>
+            <span className={`mono ${status.target_connected ? 'text-ok' : 'text-error'}`}>
+              {status.target_connected ? 'connected' : 'down'}
             </span>
           </div>
           <div className="row">
             <span className="text-muted">FC heartbeat</span>
             <span className="mono">{status.fc_alive ? 'alive' : 'lost'}</span>
           </div>
-          <div className="row">
-            <span className="text-muted">Endpoint</span>
-            <span className="mono" title={status.endpoint ?? ''}>
-              {status.endpoint ?? '—'}
-            </span>
-          </div>
-        </div>
-        <div className="card">
           <div className="row">
             <span className="text-muted">FC mode</span>
             <span className="mono">
@@ -753,6 +880,50 @@ export function ActuatorApp() {
             <span className="text-muted">Armed</span>
             <span className="mono">{status.armed ? 'YES — sending forbidden' : 'no'}</span>
           </div>
+          <div className="row">
+            <span className="text-muted">COM_MOT_TEST_EN</span>
+            <span className="mot-en-light">
+              <span
+                className={`light ${
+                  !status.target_connected
+                    ? 'dim'
+                    : status.com_mot_test_en === 1
+                      ? 'on'
+                      : 'off'
+                }`}
+                aria-hidden
+              />
+              <span className="mono">
+                {!status.target_connected
+                  ? 'no target'
+                  : status.com_mot_test_en === 1
+                    ? 'enabled'
+                    : status.com_mot_test_en == null
+                      ? 'unknown'
+                      : 'disabled'}
+              </span>
+            </span>
+          </div>
+          <div className="motor-bars" style={{ marginTop: 6 }}>
+            {Array.from({ length: MOTOR_COUNT }, (_, i) => {
+              const v = status.output_values[i] ?? 0
+              return (
+                <div key={i} className="motor-bar">
+                  <span className="mono motor-label">M{i + 1}</span>
+                  <div className="bar-track">
+                    <div className="bar-fill output" style={{ width: `${v * 100}%` }} />
+                  </div>
+                  <span className="mono motor-value">{(v * 100).toFixed(0)}%</span>
+                </div>
+              )
+            })}
+          </div>
+          <div className="estop-note" style={{ marginTop: 4 }}>
+            Every ACTUATOR_TEST goes out over this serial link to the real PX4
+            (the main GCS keeps its own link — e.g. UDP SITL).
+          </div>
+        </div>
+        <div className="card">
           <div className="row">
             <span className="text-muted">Session</span>
             <span className="mono">{status.session}</span>
@@ -794,6 +965,23 @@ export function ActuatorApp() {
               {magAlarm ? 'ALARM' : 'armed'}
             </span>
           </div>
+          {tauri && (
+            <div className="row" style={{ marginTop: 6 }}>
+              <span className="text-muted">Calibration</span>
+              {calLoaded ? (
+                <>
+                  <span className="mono text-ok">CAL</span>
+                  <button className="mode-btn" onClick={clearMagCal}>
+                    Clear
+                  </button>
+                </>
+              ) : (
+                <button className="mode-btn" onClick={loadMagCal}>
+                  Load…
+                </button>
+              )}
+            </div>
+          )}
           {magAlarm && (
             <button
               className="mode-btn"

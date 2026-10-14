@@ -313,3 +313,84 @@ body,
   font-size: 12px;
   color: var(--mg-ink);
 }
+
+/* Input/output motor bars (forward mode: SITL → PX4). */
+.controls-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  align-items: start;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Source panels + safety span the full width under the load/source row. */
+.controls-grid > .card:nth-child(n + 3) {
+  grid-column: 1 / -1;
+}
+
+.motor-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.motor-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.bar-track {
+  flex: 1;
+  height: 10px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--mg-border) 55%, transparent);
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+  border-radius: 5px;
+  transition: width 120ms linear;
+}
+
+.bar-fill.input {
+  background: var(--mg-warn);
+}
+
+.bar-fill.output {
+  background: var(--mg-ok);
+}
+
+/* COM_MOT_TEST_EN indicator light: green = enabled, red = disabled/unknown
+ * on a connected target, grey = no target. */
+.mot-en-light {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.light {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  border: 1px solid rgba(0, 0, 0, 0.35);
+}
+
+.light.on {
+  background: var(--mg-ok);
+  box-shadow: 0 0 6px var(--mg-ok);
+}
+
+.light.off {
+  background: var(--mg-error);
+  box-shadow: 0 0 6px var(--mg-error);
+}
+
+.light.dim {
+  background: var(--mg-muted);
+  opacity: 0.5;
+}

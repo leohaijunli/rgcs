@@ -21,6 +21,20 @@ pub struct RunningMotorTest {
     /// read directly.
     #[allow(dead_code)]
     pub forwarder: tauri::async_runtime::JoinHandle<()>,
+    /// Latest values actually sent to the FC (post clamp/slew) — the
+    /// window's actuator-output readout.
+    pub output: tokio::sync::watch::Receiver<Vec<f32>>,
+}
+
+/// The motor test's own target link: the **real PX4** (serial), separate from
+/// the main GCS's primary link (which may be a UDP SITL). Every `ACTUATOR_TEST`
+/// frame the motor test sends goes out through this link.
+pub struct MotorTestTarget {
+    pub handle: ConnectionHandle,
+    pub endpoint: String,
+    /// `COM_MOT_TEST_EN` read from the PX4 (`None` = not read yet / unknown).
+    /// PX4 denies `ACTUATOR_TEST` while this parameter is not 1.
+    pub com_mot_test_en: std::sync::Arc<std::sync::Mutex<Option<f32>>>,
 }
 
 /// The secondary link: a PX4 SITL whose `SERVO_OUTPUT_RAW` feeds the
@@ -42,6 +56,9 @@ pub struct MotorTelemetry {
     pub calib: Option<MagCalibration>,
     /// Latest calibrated total field, nT (`None` = no mag sample yet).
     pub last_mag_total_nt: Option<f64>,
+    /// The target FC's latest heartbeat (armed / mode) decoded from the serial
+    /// link the motor test sends to — the state that gates the START button.
+    pub hb: Option<maggcs_core::telemetry::Heartbeat>,
 }
 
 /// Process-wide holder; `Default` = nothing running. `last_state` mirrors the
@@ -50,6 +67,8 @@ pub struct MotorTelemetry {
 pub struct MotorTestState {
     pub running: PLMutex<Option<RunningMotorTest>>,
     pub last_state: PLMutex<Option<SessionState>>,
+    /// The real-PX4 (serial) link the motor test sends to.
+    pub target: PLMutex<Option<MotorTestTarget>>,
     pub sitl: PLMutex<Option<SitlLink>>,
     /// Telemetry tap (mag/ESC) — `None` until a link attaches.
     pub telemetry: PLMutex<Option<MotorTelemetry>>,

@@ -662,7 +662,7 @@ export function InspectorApp() {
         const savedCal = localStorage.getItem('maggcs.magCal')
         if (savedCal) {
           try {
-            await invoke('inspector_set_mag_calibration', { json: savedCal })
+            await invoke('set_mag_calibration', { json: savedCal })
             if (!disposed) setCalLoaded(true)
           } catch {
             localStorage.removeItem('maggcs.magCal')
@@ -715,6 +715,16 @@ export function InspectorApp() {
         }
         if (s.tap_running) {
           const now = Date.now()
+          // A backend stats reset (messages counting down) means a link swap or
+          // window re-registration: the Rust tap/catalog were cleared, so the
+          // local sample rings are stale too — drop them instead of drawing the
+          // previous vehicle's data against the new link's tree (real FC → SITL
+          // must not leave the old FC's traces listed or plotted).
+          if (s.messages < lastMsgs) {
+            buffers.current.clear()
+            spectra.current.clear()
+            markDirty()
+          }
           if (lastT > 0 && s.messages >= lastMsgs) {
             const dt = (now - lastT) / 1000
             if (dt > 0) setRate((s.messages - lastMsgs) / dt)
@@ -731,7 +741,7 @@ export function InspectorApp() {
       }
     }, CATALOG_POLL_MS)
     return () => clearInterval(id)
-  }, [tauri])
+  }, [tauri, markDirty])
 
   // Trim every ring to the selected window. Runs during the redraw loop so a
   // shrinking window drops old samples immediately; the ring cap bounds
@@ -1006,7 +1016,7 @@ export function InspectorApp() {
       })
       if (!f || typeof f !== 'string') return
       const text = await readTextFile(f)
-      await invoke('inspector_set_mag_calibration', { json: text })
+      await invoke('set_mag_calibration', { json: text })
       localStorage.setItem('maggcs.magCal', text)
       setCalLoaded(true)
       showNotice('Mag calibration applied — total field is now calibrated')
@@ -1018,7 +1028,7 @@ export function InspectorApp() {
   /** Drop the calibration: the total series falls back to plain √(x²+y²+z²). */
   const clearCal = async () => {
     try {
-      await invoke('inspector_set_mag_calibration', { json: null })
+      await invoke('set_mag_calibration', { json: null })
       localStorage.removeItem('maggcs.magCal')
       setCalLoaded(false)
       showNotice('Mag calibration cleared')

@@ -174,4 +174,24 @@ mod tests {
         assert_eq!(cal.domain, CalibrationDomain::Px4Calibrated);
         assert_eq!(cal.apply([1.0, 2.0, 3.0], None), [1.0, 2.0, 3.0]);
     }
+
+    #[test]
+    fn the_committed_demo_file_parses() {
+        // `testdata/mag_calibration_demo.json` doubles as the user-facing
+        // example and the format pin: the app's file picker accepts this exact
+        // shape (a 3×3 matrix or a 3-vector, b, optional k, optional domain).
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testdata/mag_calibration_demo.json");
+        let json = std::fs::read_to_string(path).expect("demo file");
+        let cal = MagCalibration::from_json(&json).expect("parses");
+        // Near-identity soft-iron matrix, ~100 nT hard-iron offsets.
+        assert_eq!(cal.a[0][0], 1.01);
+        assert_eq!(cal.b, [120.0, -80.0, 95.0]);
+        assert_eq!(cal.k, Some([5.0, 0.0, -3.0]));
+        assert_eq!(cal.domain, CalibrationDomain::Px4Raw);
+        // A real-ish field: earth magnitude ≈ 50 µT = 50 000 nT.
+        let out = cal.apply([50_000.0, 0.0, 0.0], None);
+        let total: f64 = (out[0] * out[0] + out[1] * out[1] + out[2] * out[2]).sqrt();
+        assert!((total - 50_000.0).abs() < 3_000.0, "total {total}");
+    }
 }

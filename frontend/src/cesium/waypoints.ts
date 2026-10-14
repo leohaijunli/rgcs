@@ -55,6 +55,10 @@ export interface MapToolOptions {
   pickHeightM?: (seq: number | null) => number | null
   /** Render height (m) a draft-polygon vertex is drawn at (close-vertex hit test). */
   polygonHeightM?: (v: GeoPoint) => number
+  /** A right-click that was not a polygon-vertex removal: the picked ground
+   * point (`null` in the sky) and the screen position, so the map can surface
+   * a context menu (move-to / set-home). Works in both views. */
+  onContextMenu?: (ground: GroundPoint | null, screen: Cesium.Cartesian2) => void
 }
 
 /**
@@ -307,14 +311,24 @@ if (centerDrag) {
     if (!st.closed && st.vertices.length >= 3) st.close()
   }, Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK)
 
-  // Right-click on a polygon vertex removes it (any other right-click is a no-op).
+  // Right-click: on a polygon vertex (while drawing) removes it; anywhere
+  // else raises the context menu (move-to / set-home) regardless of view.
   handler.setInputAction(
     (click: Cesium.ScreenSpaceEventHandler.PositionedEvent) => {
-      if (tool() !== 'polygon' || !enabled()) return
-      const picked = viewer.scene.pick(click.position)
-      const entity = Cesium.defined(picked) ? (picked.id as Cesium.Entity) : undefined
-      const seq = Number.parseInt(entity?.id ? String(entity.id).replace(/^pg-/, '') : '', 10)
-      if (!Number.isNaN(seq)) usePolygonStore.getState().removeVertex(seq)
+      if (tool() === 'polygon' && enabled()) {
+        const picked = viewer.scene.pick(click.position)
+        const entity = Cesium.defined(picked) ? (picked.id as Cesium.Entity) : undefined
+        const seq = Number.parseInt(entity?.id ? String(entity.id).replace(/^pg-/, '') : '', 10)
+        if (!Number.isNaN(seq)) {
+          usePolygonStore.getState().removeVertex(seq)
+          return
+        }
+      }
+      const ground = pickLatLon(viewer, click.position)
+      opts.onContextMenu?.(
+        ground ? { lat: ground.lat, lon: ground.lon } : null,
+        click.position,
+      )
     },
     Cesium.ScreenSpaceEventType.RIGHT_CLICK,
   )

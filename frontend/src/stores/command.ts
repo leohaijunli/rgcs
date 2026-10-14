@@ -31,6 +31,10 @@ interface CommandState {
   sendSetMode: (mainMode: number, subMode: number) => Promise<void>
   /** Arm or disarm the vehicle (MS3, ADR-017). */
   sendArmDisarm: (arm: boolean) => Promise<void>
+  /** Fly the vehicle to a map point (`MAV_CMD_DO_REPOSITION`). */
+  sendGoto: (latDeg: number, lonDeg: number) => Promise<void>
+  /** Set the vehicle's home to a map point (`MAV_CMD_DO_SET_HOME`). */
+  sendSetHome: (latDeg: number, lonDeg: number) => Promise<void>
   handleEvent: (e: CommandEventPayload) => void
   reset: () => void
 }
@@ -82,6 +86,40 @@ export const useCommandStore = create<CommandState>((set) => ({
         pending: null,
         lastEvent: {
           command: 'arm_disarm',
+          kind: 'failed',
+          result: null,
+          message: String(err),
+        },
+      })
+    }
+  },
+
+  /** Fly the vehicle to a map point (`MAV_CMD_DO_REPOSITION`). */
+  sendGoto: async (latDeg, lonDeg) => {
+    try {
+      await invoke('send_goto', { latDeg, lonDeg })
+    } catch (err) {
+      set({
+        pending: null,
+        lastEvent: {
+          command: 'goto',
+          kind: 'failed',
+          result: null,
+          message: String(err),
+        },
+      })
+    }
+  },
+
+  /** Set the vehicle's home to a map point (`MAV_CMD_DO_SET_HOME`). */
+  sendSetHome: async (latDeg, lonDeg) => {
+    try {
+      await invoke('send_set_home', { latDeg, lonDeg })
+    } catch (err) {
+      set({
+        pending: null,
+        lastEvent: {
+          command: 'set_home',
           kind: 'failed',
           result: null,
           message: String(err),

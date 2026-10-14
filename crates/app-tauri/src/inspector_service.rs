@@ -144,18 +144,16 @@ impl AppState {
     /// down) and starts a fresh one for this link (plan P0-6).
     pub fn attach_inspector(&self, handle: ConnectionHandle) {
         let inspector = self.inspector();
-        if let Some(old) = inspector.tap.lock().take() {
-            let _ = old.send(());
-        }
         // A live link supersedes a ULog replay (plan decision B): only one
         // source may feed the session.
         if let Some(old) = inspector.replay.lock().take() {
             let _ = old.stop.send(());
         }
-
-        // A (re)connected link restarts the filter state but keeps the trace
-        // configuration (plan §4: "滤波状态重置并在曲线留断点").
-        inspector.session.lock().reset();
+        // Stop the previous tap, restart the filter state and drop the
+        // previous link's observed fields so the signal tree only lists what
+        // the *new* source produces (real FC → SITL, or the other way). Trace
+        // configuration survives in `session` (ADR-016).
+        self.inspector_reset_source();
 
         let events = handle.subscribe_route(MessageRoute::all());
         let subs = inspector.subs.clone();
@@ -169,6 +167,27 @@ impl AppState {
 
         tauri::async_runtime::spawn(run_tap(events, subs, catalog, tx, stats, stop_rx));
         tauri::async_runtime::spawn(batch_loop(rx, session, frame));
+    }
+
+    /// The source changed (new link attached, or the link dropped): stop the
+    /// live tap, restart the filter state and drop the previous source's
+    /// observed fields so the signal tree only lists what the next link
+    /// produces (real FC → SITL must not keep the old FC's message tree).
+    /// Trace configuration survives in `session` (ADR-016); the window
+    /// channel and its subscription refcount are untouched (callers that tear
+    /// those down use [`inspector_disconnect`](Self::inspector_disconnect)).
+    pub fn inspector_reset_source(&self) {
+        let inspector = self.inspector();
+        if let Some(stop) = inspector.tap.lock().take() {
+            let _ = stop.send(());
+        }
+        if let Ok(mut catalog) = inspector.catalog.lock() {
+            catalog.clear();
+        }
+        if let Ok(mut stats) = inspector.stats.lock() {
+            *stats = Default::default();
+        }
+        inspector.session.lock().reset();
     }
 
     /// Register the window's channel and start producing samples. Idempotent:
@@ -208,6 +227,15 @@ impl AppState {
         inspector.subs.release();
         inspector.subs.clear();
         inspector.session.lock().clear();
+        // Window closed: drop the observed message table so the next open
+        // starts empty against whatever link is current (or none) — a
+        // previous FC's messages must not linger for a later SITL session.
+        if let Ok(mut catalog) = inspector.catalog.lock() {
+            catalog.clear();
+        }
+        if let Ok(mut stats) = inspector.stats.lock() {
+            *stats = Default::default();
+        }
         *inspector.frame.lock() = None;
     }
 
@@ -530,34 +558,38 @@ pub fn inspector_catalog(state: State<'_, AppState>) -> Result<Vec<CatalogEntry>
     Ok(state.inspector_catalog())
 }
 
-/// Load (or clear with `None`) a magnetometer calibration JSON for the
-/// inspector's derived total-field curve (plan §9): the file is
-/// parsed and validated by `core::calib` and applied in the session, so the
-/// A*(m_raw - b) math runs in Rust (ADR-015).
+/// Load (or clear with `null`) the process-wide magnetometer calibration:
+/// one JSON file drives the Signal Inspector's mag traces (A·(m−b)) and the
+/// motor-test alarm's total field. The file is parsed and validated by
+/// `core::calib`; the shared value survives link swaps and is re-applied to
+/// the motor-test tap on the next attach.
 #[tauri::command]
-pub fn inspector_set_mag_calibration(
+pub fn set_mag_calibration(
     state: State<'_, AppState>,
     json: Option<String>,
 ) -> Result<bool, String> {
-    let inspector = state.inspector();
-    let session = &inspector.session;
-    match json {
-        None => {
-            session.lock().set_mag_calibration(None);
-            let ids = session.lock().subscribe_ids();
-            inspector.subs.set(ids);
-            Ok(false)
-        }
+    let cal = match json {
+        None => None,
         Some(text) => {
-            let cal =
-                maggcs_core::calib::MagCalibration::from_json(&text).map_err(|e| e.to_string())?;
-            session.lock().set_mag_calibration(Some(cal));
-            // The calibration adds the mag fields to the subscription set.
-            let ids = session.lock().subscribe_ids();
-            inspector.subs.set(ids);
-            Ok(true)
+            Some(maggcs_core::calib::MagCalibration::from_json(&text).map_err(|e| e.to_string())?)
         }
+    };
+    // 1. Shared store: the single source of truth across windows/links.
+    state.calibration.set(cal.clone());
+    // 2. Inspector session: calibrate the plotted mag traces and the derived
+    //    total series (A·(m−b) runs in Rust, ADR-015).
+    {
+        let inspector = state.inspector();
+        let mut session = inspector.session.lock();
+        session.set_mag_calibration(cal.clone());
+        inspector.subs.set(session.subscribe_ids());
     }
+    // 3. Motor-test telemetry tap: the alarm watches the calibrated total.
+    let loaded = cal.is_some();
+    if let Some(t) = state.motor_test.telemetry.lock().as_mut() {
+        t.calib = cal;
+    }
+    Ok(loaded)
 }
 
 /// Every algorithm the frontend can attach to a trace, with its parameter form.

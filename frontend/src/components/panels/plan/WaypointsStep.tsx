@@ -6,7 +6,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { commandUsesCoordinate, DEFAULT_ALT_AGL_M } from '../../../mission/compile'
+import { commandUsesCoordinate, DEFAULT_ALT_AGL_M, MIN_AGL_GROUND_M } from '../../../mission/compile'
 import { formatDms, parseCoordinates } from '../../../mission/coords'
 import { formatDistance } from '../../../mission/progress'
 import { haversineM } from '../../../mission/geo'
@@ -36,6 +36,10 @@ export default function WaypointsStep({ importNotice }: { importNotice: string[]
   const groundBySeq = useTerrainStore((s) => s.groundBySeq)
   const pos = useTelemetryStore((s) => s.snapshot?.global_position ?? null)
   const homeAmsl = home?.[2] ?? 0
+  // Relative/AGL heights with no HOME elevation: the stored "AMSL" is really
+  // height above HOME, so the row must say that instead of AMSL / AGL.
+  const relativeToUnknownHome =
+    !(home && home[2] !== 0) && (altitudeMode === 'relative' || altitudeMode === 'agl')
 
   const selected = selectedSeq !== null ? waypoints[selectedSeq] ?? null : null
   const [dragSeq, setDragSeq] = useState<number | null>(null)
@@ -118,11 +122,20 @@ export default function WaypointsStep({ importNotice }: { importNotice: string[]
                       {wp.position.longitude_deg.toFixed(6)}
                     </span>
                     <span className="shrink-0 text-right">
-                      <span className="mono block text-muted">{wp.altitude.meters.toFixed(1)} m AMSL</span>
-                      {groundBySeq?.[idx] != null && (
+                      <span className="mono block text-muted">
+                        {wp.altitude.meters.toFixed(1)} m {relativeToUnknownHome ? 'above HOME' : 'AMSL'}
+                      </span>
+                      {relativeToUnknownHome ? null : groundBySeq?.[idx] != null && groundBySeq[idx] > MIN_AGL_GROUND_M ? (
                         <span className="mono block text-[10px] text-muted">
-                          {Math.max(0, wp.altitude.meters - groundBySeq[idx]).toFixed(1)} m AGL
+                          {(wp.altitude.meters - groundBySeq[idx]).toFixed(1)} m AGL
                         </span>
+                      ) : (
+                        home &&
+                        home[2] !== 0 && (
+                          <span className="mono block text-[10px] text-muted">
+                            {(wp.altitude.meters - home[2]).toFixed(1)} m above HOME
+                          </span>
+                        )
                       )}
                       {pos && (
                         <span className="mono block text-[10px] text-muted">

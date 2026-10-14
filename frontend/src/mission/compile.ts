@@ -22,6 +22,12 @@ export const AMSL_EGM96 = 'AMSL_EGM96' as const
 /** Default clearance above home for a new waypoint when none is selected. */
 export const DEFAULT_ALT_AGL_M = 50
 
+/** A DTM/mesh ground sample at or below this is not a usable ground reference
+ * for the AGL annotation (sea level / a zero or stale sample): showing
+ * "AMSL == AGL" is misleading, so the AGL line is dropped and the absolute
+ * height stands alone. */
+export const MIN_AGL_GROUND_M = 0.5
+
 /**
  * Whether `command` is flown as a coordinate item, or as a `MAV_FRAME_MISSION`
  * command item whose arguments are the four command parameters.

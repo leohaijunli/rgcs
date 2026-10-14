@@ -245,6 +245,11 @@ pub async fn disconnect(app: AppHandle, state: State<'_, AppState>) -> Result<()
     // close, so they must be told — `detach` drops their stop switches.
     state.rtk.detach();
     state.logs.detach();
+    // Inspector: stop the live tap and clear the observed message table so
+    // the signal tree shows only what the *next* link produces (real FC → SITL
+    // must not leave the old FC's messages listed). Trace configs stay until
+    // the window closes (ADR-016); only observed fields and counters drop.
+    state.inspector_reset_source();
     state.publish_link(LinkStatus::disconnected());
     let _ = app.emit("link", LinkStatus::disconnected());
     Ok(())
@@ -499,6 +504,30 @@ fn arm_disarm_params(arm: bool) -> [f32; 7] {
     [if arm { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 }
 
+/// `MAV_CMD_DO_REPOSITION` parameters for a click-to-fly: default ground
+/// speed (`param1` = -1), altitude expressed as AMSL (no `MAV_DO_REPOSITION_FLAGS`
+/// AGL bit), `param4` = NaN so the vehicle keeps its current heading.
+fn reposition_params(lat_deg: f64, lon_deg: f64, amsl_m: f64) -> [f32; 7] {
+    let mut params = [0.0f32; 7];
+    params[0] = -1.0; // default ground speed
+    params[3] = f32::NAN; // keep the current heading
+    params[4] = lat_deg as f32;
+    params[5] = lon_deg as f32;
+    params[6] = amsl_m as f32;
+    params
+}
+
+/// `MAV_CMD_DO_SET_HOME` parameters: `param1` = 1 makes PX4 use the specified
+/// location (`param5/6/7`) instead of the vehicle's current position.
+fn set_home_params(lat_deg: f64, lon_deg: f64, amsl_m: f64) -> [f32; 7] {
+    let mut params = [0.0f32; 7];
+    params[0] = 1.0; // use the specified location
+    params[4] = lat_deg as f32;
+    params[5] = lon_deg as f32;
+    params[6] = amsl_m as f32;
+    params
+}
+
 /// Switch the PX4 flight mode (`MAV_CMD_DO_SET_MODE`, ADR-017). Fire and
 /// forget through the command service like the other flight commands: the
 /// ack verdict arrives on the `"command"` event (`set_mode`), the UI
@@ -528,6 +557,52 @@ pub async fn send_arm_disarm(arm: bool, state: State<'_, AppState>) -> Result<()
     let service = state.command().ok_or_else(|| "not connected".to_string())?;
     service
         .send(MavCmd::MAV_CMD_COMPONENT_ARM_DISARM, arm_disarm_params(arm))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Fly the vehicle to a spot clicked on the map (`MAV_CMD_DO_REPOSITION`).
+/// The altitude is the vehicle's current AMSL, so the drone holds its height
+/// and flies horizontally to `(lat, lon)` — the click-to-fly behaviour QGC's
+/// "Fly to here" exposes. The ack verdict arrives on the `"command"`
+/// event (`goto`); the vehicle must be in a mode where reposition is allowed
+/// (e.g. Guided / Offboard).
+#[tauri::command]
+pub async fn send_goto(lat_deg: f64, lon_deg: f64, state: State<'_, AppState>) -> Result<(), String> {
+    let service = state.command().ok_or_else(|| "not connected".to_string())?;
+    let fix = state
+        .hub()
+        .and_then(|h| h.snapshot().global_position)
+        .ok_or_else(|| "no position fix yet — cannot command a move".to_string())?;
+    service
+        .send(
+            MavCmd::MAV_CMD_DO_REPOSITION,
+            reposition_params(lat_deg, lon_deg, fix.altitude.meters()),
+        )
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Set the vehicle's home to a spot clicked on the map (`MAV_CMD_DO_SET_HOME`).
+/// The altitude is the vehicle's current AMSL — the drone is on the ground
+/// when a home is set, so the current fix is the local ground height. The
+/// verdict arrives on the `"command"` event (`set_home`).
+#[tauri::command]
+pub async fn send_set_home(
+    lat_deg: f64,
+    lon_deg: f64,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let service = state.command().ok_or_else(|| "not connected".to_string())?;
+    let fix = state
+        .hub()
+        .and_then(|h| h.snapshot().global_position)
+        .ok_or_else(|| "no position fix yet — cannot set home".to_string())?;
+    service
+        .send(
+            MavCmd::MAV_CMD_DO_SET_HOME,
+            set_home_params(lat_deg, lon_deg, fix.altitude.meters()),
+        )
         .await
         .map_err(|e| e.to_string())
 }
@@ -665,6 +740,26 @@ mod tests {
             arm_disarm_params(false),
             [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         );
+    }
+
+    #[test]
+    fn reposition_params_carry_position_and_keep_heading() {
+        let p = reposition_params(48.6493, -123.3982, 90.5);
+        assert_eq!(p[0], -1.0, "default ground speed");
+        assert_eq!(p[2], 0.0, "reserved");
+        assert!(p[3].is_nan(), "param4 = NaN keeps the current heading");
+        assert_eq!(p[4], 48.6493);
+        assert_eq!(p[5], -123.3982);
+        assert_eq!(p[6], 90.5);
+    }
+
+    #[test]
+    fn set_home_params_carry_the_specified_location() {
+        let p = set_home_params(48.6, -123.4, 45.0);
+        assert_eq!(p[0], 1.0, "param1 = 1 selects the specified location");
+        assert_eq!(p[4], 48.6);
+        assert_eq!(p[5], -123.4);
+        assert_eq!(p[6], 45.0);
     }
 
     #[test]

@@ -17,7 +17,7 @@ use tauri::WebviewUrl;
 use tauri::WebviewWindowBuilder;
 use tauri::WindowEvent;
 
-use maggcs_core::mavlink::connection::{spawn_connection, ConnectionEvent};
+use maggcs_core::mavlink::connection::{spawn_connection, ConnectionEvent, ConnectionHandle};
 use maggcs_core::mavlink::router::MessageRoute;
 use maggcs_core::mavlink::MavMessage;
 use maggcs_core::motor_test::service::{MotorTestCommand, MotorTestEvent, MotorTestService};
@@ -25,6 +25,7 @@ use maggcs_core::motor_test::source::ForwardSlot;
 use maggcs_core::motor_test::{SessionState, DEFAULT_TICK_HZ};
 
 use crate::motor_test_state::limits_for_load;
+use crate::motor_test_state::MotorTestTarget;
 use crate::state::AppState;
 
 /// Status snapshot for the window's header and right panel (polled ~1 Hz by
@@ -51,6 +52,16 @@ pub struct ActuatorStatus {
     pub sitl_endpoint: Option<String>,
     /// Seconds since the last SERVO_OUTPUT_RAW sample; null = none yet.
     pub sitl_feed_age_s: Option<f64>,
+    /// The motor test's own target link (real PX4, serial): connected + endpoint.
+    pub target_connected: bool,
+    pub target_endpoint: Option<String>,
+    /// `COM_MOT_TEST_EN` read from the target PX4 (`None` = unknown): PX4
+    /// denies ACTUATOR_TEST while this is not 1.
+    pub com_mot_test_en: Option<f32>,
+    /// Normalized SITL servo outputs 1–4 (the forward INPUT), latest sample.
+    pub input_values: Vec<f32>,
+    /// Values actually sent to the FC as ACTUATOR_TEST (the OUTPUT), 0 when idle.
+    pub output_values: Vec<f32>,
 }
 
 /// Open the motor-test window, or focus it if it already exists.
@@ -120,14 +131,13 @@ pub async fn actuator_start_manual(
             .await
             .map_err(|e| e.to_string());
     }
-    let handle = state
-        .connection()
-        .ok_or("no link — connect to the FC first")?;
-    let (svc, evt_rx) = MotorTestService::spawn(handle, limits_for_load(&load));
+    let handle = fc_link(&state).ok_or("no link — connect the serial PX4 first")?;
+    let (svc, evt_rx, output_rx) = MotorTestService::spawn(handle, limits_for_load(&load));
     let forwarder = tauri::async_runtime::spawn(forward_events(app.clone(), evt_rx));
     *state.motor_test.running.lock() = Some(crate::motor_test_state::RunningMotorTest {
         svc: svc.clone(),
         forwarder,
+        output: output_rx,
     });
     let _ = svc.send(MotorTestCommand::SetValues(values)).await;
     svc.send(MotorTestCommand::StartManual)
@@ -151,14 +161,13 @@ pub async fn actuator_start_preset(
     {
         return Ok(());
     }
-    let handle = state
-        .connection()
-        .ok_or("no link — connect to the FC first")?;
-    let (svc, evt_rx) = MotorTestService::spawn(handle, limits_for_load("none"));
+    let handle = fc_link(&state).ok_or("no link — connect the serial PX4 first")?;
+    let (svc, evt_rx, output_rx) = MotorTestService::spawn(handle, limits_for_load("none"));
     let forwarder = tauri::async_runtime::spawn(forward_events(app.clone(), evt_rx));
     *state.motor_test.running.lock() = Some(crate::motor_test_state::RunningMotorTest {
         svc: svc.clone(),
         forwarder,
+        output: output_rx,
     });
     svc.send(MotorTestCommand::StartPreset { preset })
         .await
@@ -286,6 +295,97 @@ pub async fn actuator_disconnect_sitl(state: State<'_, AppState>) -> Result<(), 
     Ok(())
 }
 
+/// The link the motor test sends to: its dedicated serial target (the real
+/// PX4) when one is connected, else the app's primary link (backward
+/// compatible with the old single-link setup).
+fn fc_link(state: &AppState) -> Option<maggcs_core::mavlink::ConnectionHandle> {
+    state
+        .motor_test
+        .target
+        .lock()
+        .as_ref()
+        .map(|t| t.handle.clone())
+        .or_else(|| state.connection())
+}
+
+/// Connect the motor test to the **real PX4** over a serial interface: a
+/// dedicated MAVLink link whose every `ACTUATOR_TEST` output goes to the
+/// hardware. The main GCS keeps its own link (e.g. a UDP SITL) untouched.
+/// Idempotent: a previous target link is dropped.
+#[tauri::command]
+pub async fn actuator_connect_target(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    endpoint: String,
+) -> Result<(), String> {
+    let config = maggcs_core::mavlink::ConnectionConfig {
+        endpoint: maggcs_core::mavlink::Endpoint::try_from(endpoint.as_str())
+            .map_err(|e| e.to_string())?,
+        system_id: 250,
+        component_id: 250,
+        target_system_id: 1,
+        target_component_id: 1,
+        heartbeat_timeout: Duration::from_secs(30),
+        ..Default::default()
+    };
+    let (handle, _events_rx, first_result) =
+        spawn_connection(config).await.map_err(|e| e.to_string())?;
+    match tokio::time::timeout(Duration::from_secs(3), first_result).await {
+        Ok(Ok(Ok(()))) => {}
+        Ok(Ok(Err(failure))) => {
+            handle.shutdown().await;
+            return Err(failure.message.to_string());
+        }
+        _ => {
+            handle.shutdown().await;
+            return Err("timed out waiting for the PX4 link".into());
+        }
+    }
+    // The mag/ESC alarm reads HIGHRES_IMU / ESC_STATUS from the target FC.
+    attach_motor_telemetry(&app, handle.clone());
+    // Read COM_MOT_TEST_EN from the PX4 (PX4 denies ACTUATOR_TEST while it is
+    // not 1). The read is spawned so a quiet FC never stalls the connect;
+    // the value lands in the shared slot as soon as the PARAM_VALUE arrives.
+    let com_mot_test_en = std::sync::Arc::new(std::sync::Mutex::new(None));
+    {
+        let slot = com_mot_test_en.clone();
+        let h = handle.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Some(v) = read_param(&h, "COM_MOT_TEST_EN").await {
+                if let Ok(mut guard) = slot.lock() {
+                    *guard = Some(v);
+                }
+            }
+        });
+    }
+    let old = state
+        .motor_test
+        .target
+        .lock()
+        .replace(MotorTestTarget {
+            handle,
+            endpoint,
+            com_mot_test_en,
+        });
+    if let Some(old) = old {
+        old.handle.shutdown().await;
+    }
+    Ok(())
+}
+
+/// Drop the motor test's dedicated target link (real PX4). The session (if
+/// any) is stopped first so no frames are left addressed to a dead link.
+#[tauri::command]
+pub async fn actuator_disconnect_target(state: State<'_, AppState>) -> Result<(), String> {
+    let _ = send_session(&state, MotorTestCommand::Stop).await;
+    let old = state.motor_test.target.lock().take();
+    if let Some(old) = old {
+        old.handle.shutdown().await;
+    }
+    detach_motor_telemetry(&state);
+    Ok(())
+}
+
 /// Start realtime forwarding: the live SITL actuator outputs (already
 /// normalized into the slot by the tap) drive the real FC's motors.
 #[tauri::command]
@@ -310,14 +410,13 @@ pub async fn actuator_start_forward(
     {
         return Ok(());
     }
-    let handle = state
-        .connection()
-        .ok_or("no link — connect to the FC first")?;
-    let (svc, evt_rx) = MotorTestService::spawn(handle, limits_for_load("none"));
+    let handle = fc_link(&state).ok_or("no link — connect the serial PX4 first")?;
+    let (svc, evt_rx, output_rx) = MotorTestService::spawn(handle, limits_for_load("none"));
     let forwarder = tauri::async_runtime::spawn(forward_events(app.clone(), evt_rx));
     *state.motor_test.running.lock() = Some(crate::motor_test_state::RunningMotorTest {
         svc: svc.clone(),
         forwarder,
+        output: output_rx,
     });
     svc.send(MotorTestCommand::StartForward { slot })
         .await
@@ -364,6 +463,42 @@ fn service_of(state: &AppState) -> Option<MotorTestService> {
         .lock()
         .as_ref()
         .map(|r| r.svc.clone())
+}
+
+/// Request one parameter by name from the FC and wait for its `PARAM_VALUE`
+/// (PX4 answers `PARAM_REQUEST_READ` with `param_index = -1` by name). Returns
+/// `None` on timeout / a closed link; the caller treats that as "unknown".
+async fn read_param(handle: &ConnectionHandle, name: &str) -> Option<f32> {
+    // Subscribe before sending: broadcast receivers only see future frames.
+    let mut events = handle.subscribe_route(MessageRoute::messages(&[22]));
+    let req = MavMessage::PARAM_REQUEST_READ(::mavlink::common::PARAM_REQUEST_READ_DATA {
+        target_system: 1,
+        target_component: 1,
+        param_id: maggcs_core::params::codec::encode_param_id(name).into(),
+        param_index: -1, // -1 = by name
+    });
+    if handle.send(req).await.is_err() {
+        return None;
+    }
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            match events.recv().await {
+                Ok(ConnectionEvent::Message(env)) => {
+                    if let MavMessage::PARAM_VALUE(p) = &env.message {
+                        // The requested name echoes back in the reply.
+                        if maggcs_core::params::codec::decode_param_id(&p.param_id) == name {
+                            return Some(p.param_value);
+                        }
+                    }
+                }
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    })
+    .await
+    .unwrap_or(None)
 }
 
 /// Send one command to the stored session; `Err` = no session / dead link.
@@ -422,9 +557,23 @@ impl AppState {
     /// Snapshot the link + FC state for the actuator window.
     pub fn actuator_status(&self) -> ActuatorStatus {
         let link = self.link_status();
-        let hub = self.hub();
-        let (armed, custom_mode, autopilot_px4, mode_label) =
-            match hub.and_then(|h| h.snapshot().heartbeat) {
+        // Armed/mode gates the START button, so it must come from the link
+        // that actually receives the commands: the serial target PX4 when one
+        // is connected, else the app's primary link.
+        let target_hb = self
+            .motor_test
+            .telemetry
+            .lock()
+            .as_ref()
+            .and_then(|t| t.hb.clone());
+        let (armed, custom_mode, autopilot_px4, mode_label) = match target_hb {
+            Some(hb) => (
+                hb.base_mode.safety_armed,
+                hb.custom_mode,
+                hb.autopilot == maggcs_core::telemetry::Autopilot::Px4,
+                hb.mode_label,
+            ),
+            None => match self.hub().and_then(|h| h.snapshot().heartbeat) {
                 Some(hb) => (
                     hb.base_mode.safety_armed,
                     hb.custom_mode,
@@ -432,7 +581,8 @@ impl AppState {
                     hb.mode_label,
                 ),
                 None => (false, 0, false, String::new()),
-            };
+            },
+        };
         let session = match self.motor_test.session() {
             Some(SessionState::ManualRunning) => "running",
             Some(SessionState::Stopping) => "stopping",
@@ -461,6 +611,33 @@ impl AppState {
                 None => (false, None, None),
             }
         };
+        // The forward INPUT: the SITL's normalized SERVO_OUTPUT_RAW 1–4.
+        let input_values = self
+            .motor_test
+            .sitl
+            .lock()
+            .as_ref()
+            .and_then(|l| l.slot.lock().ok().map(|st| st.values.clone()))
+            .unwrap_or_default();
+        // The OUTPUT: the values the session sent to the FC as ACTUATOR_TEST.
+        let output_values = self
+            .motor_test
+            .running
+            .lock()
+            .as_ref()
+            .map(|r| (*r.output.borrow()).clone())
+            .unwrap_or_default();
+        let (target_connected, target_endpoint, com_mot_test_en) = {
+            let guard = self.motor_test.target.lock();
+            match guard.as_ref() {
+                Some(t) => (
+                    true,
+                    Some(t.endpoint.clone()),
+                    t.com_mot_test_en.lock().ok().and_then(|g| *g),
+                ),
+                None => (false, None, None),
+            }
+        };
         ActuatorStatus {
             connected: link
                 .as_ref()
@@ -477,6 +654,11 @@ impl AppState {
             sitl_connected,
             sitl_endpoint,
             sitl_feed_age_s,
+            target_connected,
+            target_endpoint,
+            input_values,
+            output_values,
+            com_mot_test_en,
         }
     }
 }
@@ -496,8 +678,11 @@ pub fn attach_motor_telemetry(app: &AppHandle, handle: maggcs_core::mavlink::Con
     *state.motor_test.telemetry.lock() = Some(crate::motor_test_state::MotorTelemetry {
         esc: maggcs_core::signals::derived::EscAggregator::new(8),
         alarm: maggcs_core::motor_test::MagAlarm::new(Default::default()),
-        calib: None,
+        // The loaded calibration is process-wide, so it survives link swaps
+        // and is re-applied here on every attach.
+        calib: state.calibration.get(),
         last_mag_total_nt: None,
+        hb: None,
     });
     let tap_app = app.clone();
     let task = tauri::async_runtime::spawn(run_motor_telemetry_tap(tap_app, handle));
@@ -508,7 +693,8 @@ pub fn attach_motor_telemetry(app: &AppHandle, handle: maggcs_core::mavlink::Con
 /// `ESC_STATUS` (291) → the ESC aggregator. Emits `actuator_telemetry`
 /// (aggregated snapshot) at ~10 Hz.
 async fn run_motor_telemetry_tap(app: AppHandle, handle: maggcs_core::mavlink::ConnectionHandle) {
-    let mut events = handle.subscribe_route(MessageRoute::messages(&[105, 291]));
+    // HEARTBEAT (armed/mode gating), HIGHRES_IMU (mag), ESC_STATUS (curves).
+    let mut events = handle.subscribe_route(MessageRoute::messages(&[0, 105, 291]));
     let mut last_emit = tokio::time::Instant::now();
     loop {
         match events.recv().await {
@@ -521,6 +707,13 @@ async fn run_motor_telemetry_tap(app: AppHandle, handle: maggcs_core::mavlink::C
                     return; // detached
                 };
                 match &env.message {
+                    MavMessage::HEARTBEAT(_) => {
+                        // The FC that gates the START button: the target PX4's
+                        // armed/mode state (not the main GCS's link).
+                        if let Ok(hb) = maggcs_core::telemetry::Heartbeat::try_from(&*env) {
+                            telemetry.hb = Some(hb);
+                        }
+                    }
                     MavMessage::HIGHRES_IMU(imu) => {
                         // HIGHRES_IMU mag fields are gauss on the wire; the
                         // whole MagGCS mag pipeline (calibration `A·(m−b)`,
@@ -596,27 +789,6 @@ fn now_epoch_s() -> f64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0)
-}
-
-/// Load (or clear with `null`) the magnetometer calibration JSON.
-#[tauri::command]
-pub fn actuator_load_mag_calibration(
-    state: State<'_, AppState>,
-    json: Option<String>,
-) -> Result<(), String> {
-    let mut guard_opt = state.motor_test.telemetry.lock();
-    let Some(telemetry) = guard_opt.as_mut() else {
-        return Err("no telemetry tap attached".into());
-    };
-    match json {
-        None => telemetry.calib = None,
-        Some(json) => {
-            let cal =
-                maggcs_core::calib::MagCalibration::from_json(&json).map_err(|e| e.to_string())?;
-            telemetry.calib = Some(cal);
-        }
-    }
-    Ok(())
 }
 
 /// Update the alarm tunables (threshold/debounce/hysteresis/cooldown/α).
