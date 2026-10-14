@@ -14,11 +14,12 @@ Committed test fixtures for unit/SITL tests.
   the earth field is ~50 000 nT. Pinned by `crates/core/src/calib/mag.rs`.
 
 - `mag_calibration_px4.json` — a magnetometer calibration generated from a real
-  PX4's `CAL_MAG0_*` parameter set (offsets `CAL_MAG0_{X,Y,Z}OFF` converted from
-  gauss to nT, soft-iron `a` from `CAL_MAG0_{X,Y,Z}SCALE` + the `*_ODIAG`
-  off-diagonals, `domain` `"px4_raw"` — it corrects the raw `HIGHRES_IMU` the
-  motor-test tap consumes). Load it via *Load mag calibration…*; the motor-test
-  total field then matches the FC's corrected readout.
+  PX4's `CAL_MAG0_*` parameter set with the sensor rotated 270° clockwise
+  (`CAL_MAG0_ROT = 6`, ROTATION_YAW_270): offsets `CAL_MAG0_{X,Y,Z}OFF` converted
+  from gauss to nT, soft-iron `a` composed with the rotation (`A = R·S`),
+  `domain` `"px4_raw"` — it corrects the raw `HIGHRES_IMU` the motor-test tap
+  consumes back to the body frame. Load it via *Load mag calibration…*; the
+  motor-test total field then matches the FC's corrected readout.
 
 - No `.ulg` fixture is committed. ULog replay is tested against a minimal
   ULog writer in `crates/core/src/ulog/mod.rs` (`#[cfg(test)]`), which builds

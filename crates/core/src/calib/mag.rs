@@ -198,24 +198,29 @@ mod tests {
     #[test]
     fn the_px4_calibration_file_parses() {
         // `testdata/mag_calibration_px4.json` is generated from a real PX4's
-        // `CAL_MAG0_*` parameter set: the hard-iron offsets converted to nT
-        // (gauss × 1e5), the soft-iron scale matrix from XSCALE/YSCALE/ZSCALE +
-        // the off-diagonals, domain `px4_raw` (it corrects the raw HIGHRES_IMU
-        // readout the motor-test tap consumes).
+        // `CAL_MAG0_*` parameter set with the sensor rotated 270° clockwise
+        // (`CAL_MAG0_ROT = 6`, ROTATION_YAW_270): the hard-iron offsets in nT
+        // (gauss × 1e5), and the soft-iron matrix composed with the rotation
+        // A = R·S (R = [[0,1,0],[-1,0,0],[0,0,1]]), domain `px4_raw`.
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../testdata/mag_calibration_px4.json");
         let json = std::fs::read_to_string(path).expect("px4 cal file");
         let cal = MagCalibration::from_json(&json).expect("parses");
         // Offsets: -0.006, 0.035, -0.274 gauss → nT.
         assert_eq!(cal.b, [-600.0, 3_500.0, -27_400.0]);
-        // Near-identity soft iron (XSCALE = YSCALE = ZSCALE = 1.0).
-        assert_eq!(cal.a[0][0], 1.0);
+        // A = R·S: the near-identity soft iron is yaw-rotated 270° CW, so the
+        // leading column is the old soft-iron row 1 (sensor y → body x).
+        assert_eq!(cal.a[0][0], -0.012);
+        assert_eq!(cal.a[1][0], -1.0);
+        assert_eq!(cal.a[2][2], 1.0);
         assert_eq!(cal.domain, CalibrationDomain::Px4Raw);
-        // A raw reading of the true ~50 000 nT field (sensor at rest: the
-        // readout includes the hard-iron offset) must correct back to it.
-        let raw = [50_000.0 + cal.b[0], cal.b[1], cal.b[2]];
-        let out = cal.apply(raw, None);
+        // A 50 000 nT field along the body x appears along the sensor's y
+        // (270° CW): raw = b + [0, 50000, 0]. Correcting must recover the body
+        // frame — magnitude ≈ 50 000 nT, mostly on body x.
+        let out = cal.apply([cal.b[0], 50_000.0 + cal.b[1], cal.b[2]], None);
         let total: f64 = (out[0] * out[0] + out[1] * out[1] + out[2] * out[2]).sqrt();
         assert!((total - 50_000.0).abs() < 500.0, "total {total}");
+        assert!(out[0] > 49_000.0, "body x carries the field: {out:?}");
+        assert!(out[1].abs() < 1_500.0, "sensor y maps to body x: {out:?}");
     }
 }
