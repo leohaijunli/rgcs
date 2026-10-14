@@ -5,6 +5,7 @@
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { logEvent } from './eventlog'
+import { useTelemetryStore } from './telemetry'
 
 /**
  * Commands the UI may send. `takeoff`/`land` map to `MAV_CMD_NAV_TAKEOFF` /
@@ -35,13 +36,26 @@ interface CommandState {
   sendGoto: (latDeg: number, lonDeg: number) => Promise<void>
   /** Set the vehicle's home to a map point (`MAV_CMD_DO_SET_HOME`). */
   sendSetHome: (latDeg: number, lonDeg: number) => Promise<void>
+  /** Map point of the last "Move to here" click, shown as a marker until the
+   * vehicle arrives or the command fails. */
+  gotoTarget: [number, number] | null
+  clearGotoTarget: () => void
+  /** HOME the vehicle accepted via "Set home" (lat, lon, AMSL m): the HOME
+   * marker follows it, since there is no HOME_POSITION feed. */
+  homeMarker: [number, number, number] | null
   handleEvent: (e: CommandEventPayload) => void
   reset: () => void
 }
 
+/** Set-home request awaiting its ack; promoted to `homeMarker` on accept. */
+let pendingHome: [number, number, number] | null = null
+
 export const useCommandStore = create<CommandState>((set) => ({
   pending: null,
   lastEvent: null,
+  gotoTarget: null,
+  homeMarker: null,
+  clearGotoTarget: () => set({ gotoTarget: null }),
 
   send: async (name) => {
     set({ pending: name, lastEvent: null })
@@ -96,6 +110,7 @@ export const useCommandStore = create<CommandState>((set) => ({
 
   /** Fly the vehicle to a map point (`MAV_CMD_DO_REPOSITION`). */
   sendGoto: async (latDeg, lonDeg) => {
+    set({ gotoTarget: [latDeg, lonDeg] })
     try {
       await invoke('send_goto', { latDeg, lonDeg })
     } catch (err) {
@@ -103,6 +118,7 @@ export const useCommandStore = create<CommandState>((set) => ({
       // reach the backend `command` event, so log them here or they vanish.
       logEvent('command', 'err', `goto: ${String(err)}`)
       set({
+        gotoTarget: null,
         pending: null,
         lastEvent: {
           command: 'goto',
@@ -116,12 +132,16 @@ export const useCommandStore = create<CommandState>((set) => ({
 
   /** Set the vehicle's home to a map point (`MAV_CMD_DO_SET_HOME`). */
   sendSetHome: async (latDeg, lonDeg) => {
+    // Same altitude the backend sends (the current AMSL fix).
+    const alt = useTelemetryStore.getState().snapshot?.global_position?.altitude.meters ?? 0
+    pendingHome = [latDeg, lonDeg, alt]
     try {
       await invoke('send_set_home', { latDeg, lonDeg })
     } catch (err) {
       // Invoke-level failures ("not connected", "no position fix yet") never
       // reach the backend `command` event, so log them here or they vanish.
       logEvent('command', 'err', `set_home: ${String(err)}`)
+      pendingHome = null
       set({
         pending: null,
         lastEvent: {
@@ -143,11 +163,22 @@ export const useCommandStore = create<CommandState>((set) => ({
       const level = e.result === 'accepted' ? 'ok' : e.result === undefined ? 'err' : 'warn'
       logEvent('command', level, `${e.command}: ${e.result ?? e.message ?? 'failed'}`)
     }
+    // Marker bookkeeping for the two map-click commands.
+    if (e.kind !== 'sent') {
+      if (e.command === 'goto' && e.result !== 'accepted') set({ gotoTarget: null })
+      if (e.command === 'set_home') {
+        if (e.result === 'accepted' && pendingHome) set({ homeMarker: pendingHome })
+        pendingHome = null
+      }
+    }
     set((s) => ({
       lastEvent: e,
       pending: e.kind === 'sent' ? s.pending : null,
     }))
   },
 
-  reset: () => set({ pending: null, lastEvent: null }),
+  reset: () => {
+    pendingHome = null
+    set({ pending: null, lastEvent: null, gotoTarget: null, homeMarker: null })
+  },
 }))

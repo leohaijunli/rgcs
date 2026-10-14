@@ -48,6 +48,7 @@ import { usePrefsStore } from '../desktop/prefs'
 import { usePolygonStore } from '../stores/polygon'
 import { useUiStore } from '../stores/ui'
 import { useMissionStore } from '../stores/mission'
+import { useCommandStore } from '../stores/command'
 import { useTerrainStore } from '../stores/terrain'
 import type { MissionItem } from '../generated-types/MissionItem'
 import type { TelemetrySnapshot } from '../generated-types/TelemetrySnapshot'
@@ -263,20 +264,39 @@ export function useCesiumViewer(
   // drop line need the same reference to sit on the drawn path.
   const home = useMissionStore((s) => s.home)
   const homeMeshOn = useTerrainStore((s) => s.terrain3d != null)
+  // HOME the vehicle accepted via "Set home" wins over the plan's HOME for the
+  // marker only; the plan's ground reference (homeAmslRef) is untouched.
+  const vehicleHome = useCommandStore((s) => s.homeMarker)
   useEffect(() => {
     const amsl = home?.[2] ?? 0
     homeAmslRef.current = amsl
     const layer = droneRef.current
     const viewer = viewerRef.current
-    if (layer && viewer && home) {
+    const shown = vehicleHome ?? home
+    if (layer && viewer && shown) {
       // Flat globe (no 3D mesh): HOME is on the ground, i.e. on the ellipsoid
       // the vehicle is drawn relative to (see setSnapshot).
-      const homeH = homeMeshOn ? amsl + meshOffset : 0
+      const homeH = homeMeshOn ? shown[2] + meshOffset : 0
       layer.home.position = new Cesium.ConstantPositionProperty(
-        Cesium.Cartesian3.fromDegrees(home[1], home[0], homeH),
+        Cesium.Cartesian3.fromDegrees(shown[1], shown[0], homeH),
       )
     }
-  }, [home, meshOffset, homeMeshOn])
+  }, [home, vehicleHome, meshOffset, homeMeshOn])
+
+  // "Move to here" click marker.
+  const gotoTarget = useCommandStore((s) => s.gotoTarget)
+  useEffect(() => {
+    const layer = droneRef.current
+    if (!layer) return
+    if (!gotoTarget) {
+      layer.target.show = false
+      return
+    }
+    layer.target.position = new Cesium.ConstantPositionProperty(
+      Cesium.Cartesian3.fromDegrees(gotoTarget[1], gotoTarget[0], 0),
+    )
+    layer.target.show = true
+  }, [gotoTarget])
 
   // Map tool cursor: crosshair while adding, hidden ghost otherwise.
   const mapTool = useUiStore((s) => s.mapTool)
@@ -339,6 +359,14 @@ export function useCesiumViewer(
     if (!layer || !pos) return
     lastSnapshotRef.current = snapshot
     const offset = meshOffsetRef.current
+
+    // Drop the "Move to here" marker once the vehicle is within ~3 m of it.
+    const tgt = useCommandStore.getState().gotoTarget
+    if (tgt) {
+      const dNorth = (pos.latitude_deg - tgt[0]) * 111_320
+      const dEast = (pos.longitude_deg - tgt[1]) * 111_320 * Math.cos((tgt[0] * Math.PI) / 180)
+      if (Math.hypot(dNorth, dEast) < 3) useCommandStore.getState().clearGotoTarget()
+    }
 
     // Vehicle height in the frame the plan is drawn in (AMSL). Prefer the
     // AMSL PX4 reports (the HUD's AMSL readout): it does not depend on the

@@ -64,6 +64,8 @@ export interface DroneLayer {
   drone: Cesium.Entity
   predict: Cesium.Entity
   home: Cesium.Entity
+  /** "Move to here" click marker; hidden until a goto is sent. */
+  target: Cesium.Entity
   drop: DropLayer
   /** Created once and updated in place; swapping properties rebuilds the model. */
   dronePosition: Cesium.ConstantPositionProperty
@@ -172,7 +174,28 @@ export function createDroneLayer(
       fillColor: Cesium.Color.WHITE,
     },
   })
-  return { drone, predict, home, drop, dronePosition, droneOrientation }
+  // Click marker for "Move to here", clamped to the ground (flat globe or mesh).
+  const target = viewer.entities.add({
+    show: false,
+    position: Cesium.Cartesian3.fromDegrees(initial.lon, initial.lat, 0),
+    point: {
+      pixelSize: 12,
+      color: warn,
+      outlineColor: Cesium.Color.WHITE,
+      outlineWidth: 2,
+      heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+      disableDepthTestDistance: Number.POSITIVE_INFINITY,
+    },
+    label: {
+      text: i18n.t('map.gotoTarget', { defaultValue: 'Target' }),
+      font: '11px sans-serif',
+      pixelOffset: new Cesium.Cartesian2(0, -18),
+      fillColor: Cesium.Color.WHITE,
+      heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+      disableDepthTestDistance: Number.POSITIVE_INFINITY,
+    },
+  })
+  return { drone, predict, home, target, drop, dronePosition, droneOrientation }
 }
 
 /** Below this (either side of the plane) the drop line is noise: the vehicle
