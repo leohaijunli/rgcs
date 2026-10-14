@@ -954,8 +954,26 @@ fn start_scope_flusher(app: &AppHandle) {
         // True while the last command sample was non-zero, so the fall back
         // to 0 after STOP is recorded once and then the trace goes quiet.
         let mut cmd_active = false;
+        // Keep re-asking the target PX4 for the scope streams: the one-shot
+        // request at connect can be lost (busy, link settling), and the
+        // curves would stay silent forever (the reported "no mag data").
+        let mut last_stream_req = tokio::time::Instant::now() - Duration::from_secs(3);
         loop {
             tick.tick().await;
+            if last_stream_req.elapsed() >= Duration::from_secs(3) {
+                last_stream_req = tokio::time::Instant::now();
+                // Clone the target handle first: the `State` guard is not Send
+                // and must not live across the awaited sends below.
+                let target = app
+                    .try_state::<AppState>()
+                    .map(|s| s.motor_test.target.lock().as_ref().map(|t| t.handle.clone()))
+                    .flatten();
+                if let Some(target) = target {
+                    for (msg_id, hz) in TARGET_STREAMS {
+                        request_message_interval(&target, msg_id, hz).await;
+                    }
+                }
+            }
             let Some(state) = app.try_state::<AppState>() else {
                 return;
             };

@@ -194,4 +194,28 @@ mod tests {
         let total: f64 = (out[0] * out[0] + out[1] * out[1] + out[2] * out[2]).sqrt();
         assert!((total - 50_000.0).abs() < 3_000.0, "total {total}");
     }
+
+    #[test]
+    fn the_px4_calibration_file_parses() {
+        // `testdata/mag_calibration_px4.json` is generated from a real PX4's
+        // `CAL_MAG0_*` parameter set: the hard-iron offsets converted to nT
+        // (gauss × 1e5), the soft-iron scale matrix from XSCALE/YSCALE/ZSCALE +
+        // the off-diagonals, domain `px4_raw` (it corrects the raw HIGHRES_IMU
+        // readout the motor-test tap consumes).
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testdata/mag_calibration_px4.json");
+        let json = std::fs::read_to_string(path).expect("px4 cal file");
+        let cal = MagCalibration::from_json(&json).expect("parses");
+        // Offsets: -0.006, 0.035, -0.274 gauss → nT.
+        assert_eq!(cal.b, [-600.0, 3_500.0, -27_400.0]);
+        // Near-identity soft iron (XSCALE = YSCALE = ZSCALE = 1.0).
+        assert_eq!(cal.a[0][0], 1.0);
+        assert_eq!(cal.domain, CalibrationDomain::Px4Raw);
+        // A raw reading of the true ~50 000 nT field (sensor at rest: the
+        // readout includes the hard-iron offset) must correct back to it.
+        let raw = [50_000.0 + cal.b[0], cal.b[1], cal.b[2]];
+        let out = cal.apply(raw, None);
+        let total: f64 = (out[0] * out[0] + out[1] * out[1] + out[2] * out[2]).sqrt();
+        assert!((total - 50_000.0).abs() < 500.0, "total {total}");
+    }
 }
