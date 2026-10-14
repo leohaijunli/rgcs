@@ -38,7 +38,7 @@ impl EscAggregator {
 
     /// Feed one `ESC_STATUS` frame: `(index, rpm[4], voltage[4], current[4])`.
     /// `index` is 0-based in MAVLink (0 = ESCs 1–4).
-    pub fn feed(&mut self, index: u8, rpm: &[i16; 4], voltage: &[f32; 4], current: &[f32; 4]) {
+    pub fn feed(&mut self, index: u8, rpm: &[i32; 4], voltage: &[f32; 4], current: &[f32; 4]) {
         let base = index as usize * ESCS_PER_FRAME;
         for (offset, slot) in (base..base + ESCS_PER_FRAME).enumerate() {
             if slot < self.escs.len() {
@@ -72,7 +72,7 @@ impl EscAggregator {
 mod tests {
     use super::*;
 
-    const RPM: [i16; 4] = [1000, 1100, 1200, 1300];
+    const RPM: [i32; 4] = [1000, 1100, 1200, 1300];
     const VOLTS: [f32; 4] = [12.0, 12.1, 12.2, 12.3];
     const AMPS: [f32; 4] = [1.0, 2.0, 3.0, 4.0];
 
@@ -108,9 +108,10 @@ mod tests {
         let mut agg = EscAggregator::new(4);
         agg.feed(0, &RPM, &VOLTS, &AMPS);
         assert_eq!(value_of(&agg.signals(), "esc1.rpm"), 1000.0);
-        let newer = [i16::MAX - 1, 0, 0, 0];
+        // MAVLink `ESC_STATUS.rpm` is int32: values above i16::MAX must not wrap.
+        let newer = [40_000, 0, 0, 0];
         agg.feed(0, &newer, &VOLTS, &AMPS);
-        assert_eq!(value_of(&agg.signals(), "esc1.rpm"), (i16::MAX - 1) as f64);
+        assert_eq!(value_of(&agg.signals(), "esc1.rpm"), 40_000.0);
         assert_eq!(
             value_of(&agg.signals(), "esc2.rpm"),
             0.0,

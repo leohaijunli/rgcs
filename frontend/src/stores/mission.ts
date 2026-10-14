@@ -849,6 +849,6 @@ useMissionStore.subscribe((s) => {
 
 // Dev-only handle for inspecting the app from the DevTools protocol / E2E
 // scripts (same pattern as `window.__mgViewer` in `useCesiumViewer`).
-if (import.meta.env.DEV && typeof window !== 'undefined') {
+if (import.meta.env?.DEV && typeof window !== 'undefined') {
   ;(window as unknown as { __mgMission?: unknown }).__mgMission = useMissionStore
 }

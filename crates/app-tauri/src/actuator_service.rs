@@ -20,6 +20,7 @@ use tauri::WindowEvent;
 use maggcs_core::mavlink::connection::{spawn_connection, ConnectionEvent, ConnectionHandle};
 use maggcs_core::mavlink::router::MessageRoute;
 use maggcs_core::mavlink::MavMessage;
+use maggcs_core::motor_test::scope::{self, ScopeBus};
 use maggcs_core::motor_test::service::{MotorTestCommand, MotorTestEvent, MotorTestService};
 use maggcs_core::motor_test::source::ForwardSlot;
 use maggcs_core::motor_test::{SessionState, DEFAULT_TICK_HZ};
@@ -79,6 +80,7 @@ pub fn actuator_open(app: AppHandle) -> Result<(), String> {
         .min_inner_size(1024.0, 640.0)
         .build()
         .map_err(|e| e.to_string())?;
+    start_scope_flusher(&app);
     // Closing the window must stop the motors (plan §8.3).
     let app_for_cleanup = app.clone();
     win.on_window_event(move |event| {
@@ -87,6 +89,7 @@ pub fn actuator_open(app: AppHandle) -> Result<(), String> {
             stop_running_session(&state);
             state.motor_test.running.lock().take();
             detach_motor_telemetry(&state);
+            stop_scope_flusher(&state);
         }
     });
     Ok(())
@@ -98,6 +101,7 @@ pub fn actuator_close(app: AppHandle, state: State<'_, AppState>) -> Result<(), 
     stop_running_session(&state);
     state.motor_test.running.lock().take();
     detach_motor_telemetry(&state);
+    stop_scope_flusher(&state);
     if let Some(win) = app.get_webview_window("actuator") {
         let _ = win.close();
     }
@@ -264,7 +268,8 @@ pub async fn actuator_connect_sitl(
     let slot: ForwardSlot = std::sync::Arc::new(std::sync::Mutex::new(
         maggcs_core::motor_test::source::ForwardState::new(4),
     ));
-    let tap = tauri::async_runtime::spawn(run_sitl_tap(handle.clone(), slot.clone()));
+    let bus = state.motor_test.scope.clone();
+    let tap = tauri::async_runtime::spawn(run_sitl_tap(handle.clone(), slot.clone(), bus));
     let old = state
         .motor_test
         .sitl
@@ -343,6 +348,12 @@ pub async fn actuator_connect_target(
     }
     // The mag/ESC alarm reads HIGHRES_IMU / ESC_STATUS from the target FC.
     attach_motor_telemetry(&app, handle.clone());
+    // The scope needs these at useful rates; the FC defaults are low or
+    // absent (ESC_STATUS only streams when asked). Stream rates only —
+    // nothing persistent is written and a reboot reverts them.
+    for (msg_id, hz) in TARGET_STREAMS {
+        request_message_interval(&handle, msg_id, hz).await;
+    }
     // Read COM_MOT_TEST_EN from the PX4 (PX4 denies ACTUATOR_TEST while it is
     // not 1). The read is spawned so a quiet FC never stalls the connect;
     // the value lands in the shared slot as soon as the PARAM_VALUE arrives.
@@ -367,6 +378,32 @@ pub async fn actuator_connect_target(
         old.handle.shutdown().await;
     }
     Ok(())
+}
+
+/// Messages the scope asks the target FC to stream: `(MAVLink id, Hz)` —
+/// `SERVO_OUTPUT_RAW`, `HIGHRES_IMU` (mag), `ESC_STATUS`.
+const TARGET_STREAMS: [(u32, f64); 3] = [(36, 20.0), (105, 50.0), (291, 10.0)];
+
+/// Fire-and-forget `MAV_CMD_SET_MESSAGE_INTERVAL` (PX4 accepts it while
+/// disarmed; a FC that lacks the stream simply never sends it).
+async fn request_message_interval(handle: &ConnectionHandle, msg_id: u32, hz: f64) {
+    let _ = handle
+        .send(MavMessage::COMMAND_LONG(
+            ::mavlink::common::COMMAND_LONG_DATA {
+                param1: msg_id as f32,
+                param2: (1_000_000.0 / hz) as f32,
+                param3: 0.0,
+                param4: 0.0,
+                param5: 0.0,
+                param6: 0.0,
+                param7: 0.0,
+                command: ::mavlink::common::MavCmd::MAV_CMD_SET_MESSAGE_INTERVAL,
+                target_system: 1,
+                target_component: 1,
+                confirmation: 0,
+            },
+        ))
+        .await;
 }
 
 /// Drop the motor test's dedicated target link (real PX4). The session (if
@@ -421,7 +458,11 @@ pub async fn actuator_start_forward(
 
 /// Tap task: SITL `SERVO_OUTPUT_RAW` → normalized 0..=1 into the forward
 /// slot (latest value wins; the tap never blocks the sender).
-async fn run_sitl_tap(handle: maggcs_core::mavlink::ConnectionHandle, slot: ForwardSlot) {
+async fn run_sitl_tap(
+    handle: maggcs_core::mavlink::ConnectionHandle,
+    slot: ForwardSlot,
+    bus: ScopeBus,
+) {
     let mut events = handle.subscribe_route(MessageRoute::messages(&[36]));
     loop {
         match events.recv().await {
@@ -442,6 +483,18 @@ async fn run_sitl_tap(handle: maggcs_core::mavlink::ConnectionHandle, slot: Forw
                         .to_vec();
                         st.last_update_s = Some(now);
                     }
+                    // The scope plots the raw microseconds, not the clamped
+                    // 0..1 the forward slot gets.
+                    bus.push_all(scope::servo_samples(
+                        "sitl",
+                        now,
+                        [
+                            servo.servo1_raw,
+                            servo.servo2_raw,
+                            servo.servo3_raw,
+                            servo.servo4_raw,
+                        ],
+                    ));
                 }
             }
             Ok(_) => {}
@@ -522,6 +575,13 @@ async fn forward_events(app: AppHandle, mut rx: tokio::sync::mpsc::Receiver<Moto
             MotorTestEvent::StateChanged(s) => {
                 if let Some(state) = app.try_state::<AppState>() {
                     state.motor_test.note_state(s);
+                    // Exact send start/stop instants for the scope's shaded
+                    // "motor test sending" band.
+                    state.motor_test.scope.push_all(vec![scope::ScopeSample {
+                        id: "session.running".into(),
+                        t: now_epoch_s(),
+                        v: if s.is_sending() { 1.0 } else { 0.0 },
+                    }]);
                 }
                 pin_window(&app, s.is_sending());
                 let _ = app.emit("actuator_event", SessionPayload::State(s));
@@ -659,12 +719,48 @@ impl AppState {
     }
 }
 
+/// Request the streams the motor-test window plots from the FC on `handle`:
+/// `HIGHRES_IMU` (105, the mag field), `ESC_STATUS` (291, ESC current/RPM) and
+/// `SERVO_OUTPUT_RAW` (36, the servo curves) at useful rates. A bare serial
+/// link streams only the default set otherwise, so the curves would stay flat.
+fn request_motor_test_streams(handle: &maggcs_core::mavlink::ConnectionHandle) {
+    let h = handle.clone();
+    tauri::async_runtime::spawn(async move {
+        for (msg_id, interval_us) in [
+            (105u32, 100_000u32), // HIGRES_IMU @ 10 Hz (mag total)
+            (291u32, 100_000u32), // ESC_STATUS @ 10 Hz (current, RPM)
+            (36u32, 40_000u32),   // SERVO_OUTPUT_RAW @ 25 Hz (servo curves)
+        ] {
+            let _ = h
+                .send(MavMessage::COMMAND_LONG(::mavlink::common::COMMAND_LONG_DATA {
+                    param1: msg_id as f32,
+                    param2: interval_us as f32,
+                    param3: 0.0,
+                    param4: 0.0,
+                    param5: 0.0,
+                    param6: 0.0,
+                    param7: 0.0,
+                    command: ::mavlink::common::MavCmd::MAV_CMD_SET_MESSAGE_INTERVAL,
+                    target_system: 1,
+                    target_component: 1,
+                    confirmation: 0,
+                }))
+                .await;
+        }
+    });
+}
+
 /// Attach the mag/ESC telemetry tap to a link (A4 wiring): subscribes to
 /// `HIGHRES_IMU` (105, mag triple) and `ESC_STATUS` (291), applies the loaded
 /// calibration, drives the alarm state machine, and emits
 /// `actuator_telemetry` events for the window's curves. Called from
 /// `connect` after the link comes up.
 pub fn attach_motor_telemetry(app: &AppHandle, handle: maggcs_core::mavlink::ConnectionHandle) {
+    // Ask the FC to stream the messages the motor-test window plots: the mag
+    // (HIGRES_IMU), the ESC telemetry (ESC_STATUS) and the servo outputs.
+    // PX4 accepts MAV_CMD_SET_MESSAGE_INTERVAL while disarmed; fire-and-forget
+    // (a busy FC just misses this attach — the next one retries).
+    request_motor_test_streams(&handle);
     let state = app.state::<AppState>();
     // (Re)attach stops a previous tap and resets the alarm clock; the loaded
     // calibration survives (it is a file, not link state).
@@ -686,12 +782,17 @@ pub fn attach_motor_telemetry(app: &AppHandle, handle: maggcs_core::mavlink::Con
 }
 
 /// The telemetry tap: `HIGHRES_IMU` (105) → calibrated `mag_total` → alarm;
-/// `ESC_STATUS` (291) → the ESC aggregator. Emits `actuator_telemetry`
-/// (aggregated snapshot) at ~10 Hz.
+/// `ESC_STATUS` (291) → the ESC aggregator; `SERVO_OUTPUT_RAW` (36) → the
+/// target-FC servo trace. Emits `actuator_telemetry` (aggregated snapshot)
+/// at ~10 Hz for the alarm/status readout, and pushes every sample (not a
+/// snapshot) to the scope bus.
 async fn run_motor_telemetry_tap(app: AppHandle, handle: maggcs_core::mavlink::ConnectionHandle) {
     // HEARTBEAT (armed/mode gating), HIGHRES_IMU (mag), ESC_STATUS (curves).
-    let mut events = handle.subscribe_route(MessageRoute::messages(&[0, 105, 291]));
+    let mut events = handle.subscribe_route(MessageRoute::messages(&[0, 36, 105, 291]));
     let mut last_emit = tokio::time::Instant::now();
+    let Some(bus) = app.try_state::<AppState>().map(|s| s.motor_test.scope.clone()) else {
+        return;
+    };
     loop {
         match events.recv().await {
             Ok(ConnectionEvent::Message(env)) => {
@@ -716,16 +817,14 @@ async fn run_motor_telemetry_tap(app: AppHandle, handle: maggcs_core::mavlink::C
                         // `mag_total`, the alarm thresholds) is nanotesla.
                         let raw_gauss = [imu.xmag as f64, imu.ymag as f64, imu.zmag as f64];
                         let raw = raw_gauss.map(|g| g * maggcs_core::signals::GAUSS_TO_NANOTESLA);
-                        // Apply the loaded calibration (A·(raw−b), optional
-                        // K·I) — none loaded: raw pass-through.
-                        let calibrated = match &telemetry.calib {
-                            Some(cal) => cal.apply(raw, None),
-                            None => raw,
-                        };
-                        let total = (calibrated[0] * calibrated[0]
-                            + calibrated[1] * calibrated[1]
-                            + calibrated[2] * calibrated[2])
-                            .sqrt();
+                        // Raw total always; the calibrated total (A·(raw−b))
+                        // only while a calibration is loaded.
+                        let t = now_epoch_s();
+                        let totals = scope::mag_totals(raw, telemetry.calib.as_ref());
+                        bus.push_all(scope::mag_samples(t, totals));
+                        // Alarm + readout keep watching the calibrated total
+                        // (raw pass-through when none is loaded).
+                        let total = totals.effective();
                         telemetry.last_mag_total_nt = Some(total);
                         if telemetry.alarm.feed(total, now_epoch_s()) {
                             // Transition into Alarm: fire the audio + flash.
@@ -733,17 +832,30 @@ async fn run_motor_telemetry_tap(app: AppHandle, handle: maggcs_core::mavlink::C
                         }
                     }
                     MavMessage::ESC_STATUS(esc) => {
-                        telemetry.esc.feed(
+                        telemetry
+                            .esc
+                            .feed(esc.index, &esc.rpm, &esc.voltage, &esc.current);
+                        bus.push_all(scope::esc_samples(
                             esc.index,
-                            &[
-                                esc.rpm[0] as i16,
-                                esc.rpm[1] as i16,
-                                esc.rpm[2] as i16,
-                                esc.rpm[3] as i16,
-                            ],
+                            now_epoch_s(),
+                            &esc.rpm,
                             &esc.voltage,
                             &esc.current,
-                        );
+                        ));
+                    }
+                    MavMessage::SERVO_OUTPUT_RAW(servo) => {
+                        // What the target FC reports on its main outputs —
+                        // the serial-side counterpart of the SITL servos.
+                        bus.push_all(scope::servo_samples(
+                            "fc",
+                            now_epoch_s(),
+                            [
+                                servo.servo1_raw,
+                                servo.servo2_raw,
+                                servo.servo3_raw,
+                                servo.servo4_raw,
+                            ],
+                        ));
                     }
                     _ => {}
                 }
@@ -818,4 +930,61 @@ pub fn detach_motor_telemetry(state: &AppState) {
         old.abort();
     }
     *state.motor_test.telemetry.lock() = None;
+}
+
+/// How often the flusher drains the scope bus into one `actuator_samples`
+/// event (20 Hz keeps the IPC light while the plot still looks continuous).
+const SCOPE_FLUSH: Duration = Duration::from_millis(50);
+
+/// Start the scope flusher (idempotent): drains the bus, adds the sender's
+/// command readback, and emits `actuator_samples` batches while the window
+/// is open. It stops with the window.
+fn start_scope_flusher(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let mut slot = state.motor_test.scope_flusher.lock();
+    if slot.is_some() {
+        return;
+    }
+    state.motor_test.scope.clear();
+    let app = app.clone();
+    *slot = Some(tauri::async_runtime::spawn(async move {
+        let mut tick = tokio::time::interval(SCOPE_FLUSH);
+        // After a stall, do not fire a burst of catch-up ticks.
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // True while the last command sample was non-zero, so the fall back
+        // to 0 after STOP is recorded once and then the trace goes quiet.
+        let mut cmd_active = false;
+        loop {
+            tick.tick().await;
+            let Some(state) = app.try_state::<AppState>() else {
+                return;
+            };
+            let mut batch = state.motor_test.scope.drain();
+            let values = state
+                .motor_test
+                .running
+                .lock()
+                .as_ref()
+                .map(|r| (*r.output.borrow()).clone());
+            if let Some(values) = values {
+                let live = values.iter().any(|v| *v > 0.0);
+                if live || cmd_active {
+                    batch.extend(scope::command_samples(now_epoch_s(), &values));
+                }
+                cmd_active = live;
+            } else {
+                cmd_active = false;
+            }
+            if !batch.is_empty() {
+                let _ = app.emit("actuator_samples", &batch);
+            }
+        }
+    }));
+}
+
+/// Stop the scope flusher (window closed).
+fn stop_scope_flusher(state: &AppState) {
+    if let Some(task) = state.motor_test.scope_flusher.lock().take() {
+        task.abort();
+    }
 }

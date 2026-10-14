@@ -17,6 +17,7 @@
 
 pub mod interlock;
 pub mod mag_alarm;
+pub mod scope;
 pub mod service;
 pub mod source;
 

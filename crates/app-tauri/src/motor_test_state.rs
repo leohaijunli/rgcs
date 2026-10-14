@@ -9,6 +9,7 @@ use std::time::Duration;
 use maggcs_core::calib::mag::MagCalibration;
 use maggcs_core::mavlink::ConnectionHandle;
 use maggcs_core::motor_test::mag_alarm::MagAlarm;
+use maggcs_core::motor_test::scope::ScopeBus;
 use maggcs_core::motor_test::source::ForwardSlot;
 use maggcs_core::motor_test::{MotorTestService, SafetyLimits, SessionState};
 use maggcs_core::signals::derived::EscAggregator;
@@ -74,6 +75,11 @@ pub struct MotorTestState {
     pub telemetry: PLMutex<Option<MotorTelemetry>>,
     /// Abort handle for the telemetry tap task.
     pub telemetry_tap: PLMutex<Option<tauri::async_runtime::JoinHandle<()>>>,
+    /// Producer → flusher queue for the window's signal scope (SITL servo,
+    /// target-FC servo/mag/ESC, sent commands).
+    pub scope: ScopeBus,
+    /// Abort handle for the scope flusher (runs while the window is open).
+    pub scope_flusher: PLMutex<Option<tauri::async_runtime::JoinHandle<()>>>,
 }
 
 impl MotorTestState {

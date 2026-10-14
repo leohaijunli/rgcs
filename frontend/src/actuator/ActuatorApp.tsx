@@ -17,6 +17,7 @@ import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { readTextFile } from '@tauri-apps/plugin-fs'
 import type { ParamEntry } from '../generated-types/ParamEntry'
 import { isTauri } from '../inspector/mock'
+import SignalScope, { useScopeFeed } from './SignalScope'
 
 /** The parameter that gates motor tests on the FC (parameters plan PM9). */
 const MOT_TEST_EN = 'COM_MOT_TEST_EN'
@@ -118,8 +119,15 @@ const IDLE: ActuatorStatus = {
   output_values: [],
 }
 
+/** Middle column content: the control cards, or the signal scope. */
+type MidView = 'controls' | 'scope'
+
 export function ActuatorApp() {
   const tauri = isTauri()
+  // Collect scope samples for the window's whole lifetime, so the history
+  // is there when the operator switches to the Scope tab.
+  useScopeFeed()
+  const [view, setView] = useState<MidView>('controls')
   const [status, setStatus] = useState<ActuatorStatus>(IDLE)
   const [load, setLoad] = useState<Load>('none')
   const [source, setSource] = useState<Source>('manual')
@@ -144,6 +152,8 @@ export function ActuatorApp() {
   // The motor test's own target link: the real PX4 over serial (the main
   // GCS keeps its own link, e.g. UDP SITL).
   const [targetEndpoint, setTargetEndpoint] = useState('serial:/dev/ttyACM0:115200')
+  // Why the last session stopped (armed / heartbeat_stale / acks_denied / …).
+  const [stopReason, setStopReason] = useState<string | null>(null)
   // Confirmation state.
   const [phrase, setPhrase] = useState('')
   const [holdProgress, setHoldProgress] = useState(0)
@@ -210,12 +220,21 @@ export function ActuatorApp() {
     let un: (() => void) | undefined
     void (async () => {
       try {
-        un = await listen<unknown>('actuator_event', () => {
-          if (disposed) return
-          void invoke<ActuatorStatus>('actuator_status')
-            .then(setStatus)
-            .catch(() => {})
-        })
+        un = await listen<{ kind: 'state' | 'stopped'; reason?: string }>(
+          'actuator_event',
+          (e) => {
+            if (disposed) return
+            // A stopped session carries the reason — surface it so a run that
+            // "goes straight back to idle" is diagnosable (armed, heartbeat
+            // stale, acks denied, ...).
+            if (e.payload.kind === 'stopped' && e.payload.reason) {
+              setStopReason(e.payload.reason)
+            }
+            void invoke<ActuatorStatus>('actuator_status')
+              .then(setStatus)
+              .catch(() => {})
+          },
+        )
       } catch {
         /* events unavailable: the poll still runs */
       }
@@ -575,10 +594,38 @@ export function ActuatorApp() {
           <span className="estop-note">
             {running
               ? `${SOURCES.find((s) => s.id === source)?.label} · ${status.tick_hz.toFixed(0)} Hz · window on top`
-              : 'Motor commands stopped · Esc = emergency stop'}
+              : stopReason
+                ? `Stopped: ${stopReason} · Esc = emergency stop`
+                : 'Motor commands stopped · Esc = emergency stop'}
+          </span>
+          <span className="view-tabs">
+            {running && (
+              <button className="mode-btn view-tab stop-tab" onClick={stop} title="Stop sending">
+                STOP
+              </button>
+            )}
+            <button
+              className={`mode-btn view-tab ${view === 'controls' ? 'active' : ''}`}
+              onClick={() => setView('controls')}
+            >
+              Controls
+            </button>
+            <button
+              className={`mode-btn view-tab ${view === 'scope' ? 'active' : ''}`}
+              onClick={() => setView('scope')}
+            >
+              Scope
+            </button>
           </span>
         </div>
-        <div className="controls-grid">
+        {view === 'scope' && (
+          <SignalScope
+            sitlConnected={status.sitl_connected}
+            targetConnected={status.target_connected}
+            calLoaded={calLoaded}
+          />
+        )}
+        <div className="controls-grid" style={view === 'scope' ? { display: 'none' } : undefined}>
           <div className="card">
             <h3>Prop load</h3>
             <div className="btn-row">
