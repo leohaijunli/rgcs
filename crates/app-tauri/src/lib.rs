@@ -51,6 +51,8 @@ pub fn run() {
             terrain_service::terrain3d_status,
             terrain_service::terrain3d_download,
             terrain_service::terrain3d_build,
+            terrain_service::terrain3d_dem_source,
+            terrain_service::terrain3d_build_from_dem,
             console_service::console_send,
             console_service::console_close,
             logs_service::logs_request_list,

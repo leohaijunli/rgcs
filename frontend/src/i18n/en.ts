@@ -128,6 +128,7 @@ export default {
   plan: {
     waypoint: 'Waypoint',
     lockHeight: 'Lock height (re-drape keeps it)',
+    aglUnknown: 'AGL unknown (no terrain)',
     profile: {
       title: 'Altitude profile',
       planned: 'Planned (AMSL)',
@@ -201,13 +202,14 @@ export default {
       relative: 'HOME-rel',
       amsl: 'AMSL',
       agl: 'HOME-rel (flat)',
-      terrain: 'Terrain (needs DEM)',
+      terrain: 'Terrain (AGL)',
     },
     modeHint: {
       relative: 'Heights relative to HOME (the wire relative frame)',
       amsl: 'Absolute AMSL heights',
       agl: 'Heights relative to HOME on a flat plane — no terrain following',
-      terrain: 'Survey AGL over the DEM; every edit re-drapes. Needs a loaded terrain folder.',
+      terrain:
+        'Survey AGL over the loaded terrain — the 3D mesh when one is on, else the DEM tile; every edit re-drapes.',
     },
     complex: {
       label: '{{type}} · {{count}} waypoints',
@@ -270,12 +272,16 @@ export default {
           sourceLidar: 'LiDAR 1 m',
           sourceGeotiff: 'GeoTIFF 30 m (no clearance)',
           auto: 'Terrain mode: re-draped automatically on every plan change.',
-          noDem: 'No DEM loaded — plain heights in use. Load a terrain folder (LiDAR preferred).',
+          noDem: 'No terrain loaded — plain heights in use. Load a terrain folder (LiDAR preferred), or switch the 3D mesh on.',
           voidFilled: 'ground borrowed:',
           noDsm: 'no DSM (no clearance check)',
+          sourceMesh: '3D mesh',
+          agl: 'AGL',
+          ground: 'Ground',
+          meshMissing: '{{count}} waypoint(s) outside the mesh — not draped',
         },
         terrainNeedsDem:
-          'Terrain mode needs ground data: load a terrain folder first (Layers ▸ Terrain).',
+          'Terrain mode needs ground data: load a terrain folder or switch the 3D mesh on (Layers ▸ Terrain).',
     },
     op: {
       upload: 'Uploading',
@@ -330,6 +336,7 @@ export default {
     downloadHint: 'Download Copernicus GLO-30 for the map centre and build the 3D mesh (needs internet once)',
     buildLocal: 'Build from local LiDAR…',
     buildHint: 'Build the 3D mesh from a folder of BC LiDAR .laz tiles (or GeoTIFF)',
+    building: 'Building 3D mesh from the DEM folder…',
     'google-satellite': 'Satellite',
     'google-hybrid': 'Hybrid',
     grid: 'Grid',

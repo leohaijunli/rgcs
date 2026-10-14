@@ -9,6 +9,7 @@ import { useTranslation } from 'react-i18next'
 import { exportPlanFile, importPlanFile } from '../../../mission/planfile'
 import { compileWaypoints } from '../../../mission/compile'
 import { useMissionStore } from '../../../stores/mission'
+import { useTerrainStore } from '../../../stores/terrain'
 import { useLinkStore } from '../../../stores/link'
 
 /** How long a destructive item stays armed while waiting for the second click. */
@@ -98,6 +99,7 @@ export default function SyncStep({
 
   const onExport = async () => {
     setMenuOpen(false)
+    const meshDraped = useMissionStore.getState().meshDrape != null
     await exportPlanFile(
       compileWaypoints(waypoints, altitudeMode, homeAmsl),
       altitudeMode,
@@ -105,8 +107,13 @@ export default function SyncStep({
         base: planBase ?? undefined,
         home,
         blocks,
-        // Provenance (ADR-004): which DEM the drape was computed against.
+        // Provenance (ADR-004): which surface the drape was measured against —
+        // the DEM tile's content hash, or the folder of the live 3D mesh
+        // (a tileset has no version of its own).
         demVersion: useMissionStore.getState().drape?.report.dem_version ?? null,
+        terrainRef: meshDraped
+          ? `mesh:${useTerrainStore.getState().terrain3d?.folder ?? 'unknown'}`
+          : null,
       },
     )
   }

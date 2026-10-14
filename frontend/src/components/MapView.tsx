@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useCesiumViewer } from '../hooks/useCesiumViewer'
-import { compileWaypoints, toDisplayItems } from '../mission/compile'
+import { compileWaypoints, toDisplayItems, itemLatLon } from '../mission/compile'
 import { kindsBySeq } from '../mission/lineKinds'
 import { orderedMissionItems } from '../mission/planfile'
 import { usePrefsStore } from '../desktop/prefs'
@@ -16,6 +16,27 @@ import { TRAIL_AGL_HI_M, TRAIL_AGL_LO_M } from '../cesium/constants'
 import { TRAIL_BELOW_GROUND, TRAIL_RAMP } from '../cesium/trail'
 import MapToolbar from './MapToolbar'
 
+/** Live vehicle ground sampling: at most one sample per this interval, or
+ * sooner once the vehicle has moved this far (metres). Keeps a 5–20 Hz fix
+ * stream from hammering the terrain sampler while still tracking terrain. */
+const GROUND_SAMPLE_MS = 1000
+const GROUND_SAMPLE_MOVE_M = 25
+
+/** N(EGM96) geoid undulation at a point (metres), or null when unavailable —
+ * the vehicle-level counterpart of `ellipsoidBySeq` for the mesh datum. */
+async function geoidAt(lat: number, lon: number): Promise<number | null> {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const s = await invoke<Array<{ undulation_m: number | null }>>('geoid_sample', {
+      points: [[lat, lon]],
+    })
+    const u = s[0]?.undulation_m
+    return u != null && Number.isFinite(u) ? u : null
+  } catch {
+    return null
+  }
+}
+
 /** Composition shell: viewer lifecycle + store wiring + chrome (issues.md #29). */
 export default function MapView() {
   const { t } = useTranslation()
@@ -26,7 +47,7 @@ export default function MapView() {
     x: number
     y: number
   } | null>(null)
-  const { initError, setSnapshot, setMeshOffset, setTrailByAgl, setMission, setTerrainOverlay, setTerrain3d, sampleMeshGround, setLayers, setImageryStyle, focusWaypoint, fitMission, goHome, lookNorth } =
+  const { initError, setSnapshot, setMeshOffset, setVehicleGround, setTrailByAgl, setMission, setTerrainOverlay, setTerrain3d, sampleMeshGround, setLayers, setImageryStyle, focusWaypoint, fitMission, goHome, lookNorth } =
     useCesiumViewer(containerRef, {
       onContextMenu: (ground, screen) =>
         setCtxMenu(ground ? { ...ground, x: screen.x, y: screen.y } : null),
@@ -128,29 +149,37 @@ export default function MapView() {
     void useTerrainStore.getState().restore3d()
   }, [])
 
-  // Accurate AGL markers: sample the loaded DEM under every waypoint (the
-  // flat HOME plane stays the fallback). The result lives in the terrain
-  // store so the waypoint list shows the same ground; debounced for drags.
+  // The 3D mesh, once its provider swap settled, is the priority ground source
+  // for every AGL readout (below it: the 2D DEM tile, then the HOME plane).
+  const meshActive = terrain3d != null && meshEpoch > 0
+
+  // Accurate AGL markers, fallback source: the 2D DEM tile, only while the
+  // 3D mesh is not active (the mesh effect below takes precedence). The result
+  // lives in the terrain store so the waypoint list shows the same ground;
+  // debounced for drags.
   const terrainTile = useTerrainStore((st) => st.tile)
   const groundBySeq = useTerrainStore((st) => st.groundBySeq)
   const sampleGround = useTerrainStore((st) => st.sampleGround)
+  const sampleDem = useTerrainStore((st) => st.sampleDem)
   useEffect(() => {
-    // No DEM tile: the mesh effect below owns `groundBySeq`.
-    if (!terrainTile) return
+    // The 3D mesh (when active) owns `groundBySeq`; no tile either → nothing.
+    if (!terrainTile || meshActive) return
     if (missionItems.length === 0) {
       useTerrainStore.setState({ groundBySeq: null })
       return
     }
     const id = setTimeout(() => {
-      // MissionItem carries ×1e7 int lat/lon; sample in degrees. Command
-      // items (DO_*) have no coordinate and are skipped.
-      const points = missionItems
-        .filter((it) => it.x !== 0 || it.y !== 0)
-        .map((it) => [it.seq, it.y / 1e7, it.x / 1e7] as [number, number, number])
+      // Degrees, in the (lat, lon) order every sampler takes; command items
+      // (DO_*) have no coordinate and are skipped.
+      const points: Array<[number, number, number]> = []
+      missionItems.forEach((it) => {
+        const ll = itemLatLon(it)
+        if (ll) points.push([it.seq, ll[0], ll[1]])
+      })
       void sampleGround(points)
     }, 300)
     return () => clearTimeout(id)
-  }, [missionItems, terrainTile, sampleGround])
+  }, [missionItems, terrainTile, meshActive, sampleGround])
 
   const kinds = useMemo(() => kindsBySeq(lastPattern?.lines ?? []), [lastPattern])
   // Geoid offsets for the 3D-mesh datum: with the 3D tileset on, rendered
@@ -161,11 +190,13 @@ export default function MapView() {
   // Only add N(EGM96) when the tileset really is on the ellipsoid (built with
   // `--geoid`). A tileset built without it serves CGVD2013 H as if it were h,
   // and adding N (≈ −19.5 m at Sidney) would sink the trajectory below it.
-  const [meshEllipsoid, setMeshEllipsoid] = useState(false)
+  // `null` = not known yet (no mesh, or layer.json still in flight): the drape
+  // waits for the datum rather than measuring against the wrong surface.
+  const [meshDatum, setMeshDatum] = useState<'ellipsoidWgs84' | 'orthometric' | null>(null)
   const [meshBounds, setMeshBounds] = useState<[number, number, number, number] | null>(null)
   useEffect(() => {
     if (!terrain3d) {
-      setMeshEllipsoid(false)
+      setMeshDatum(null)
       setMeshBounds(null)
       return
     }
@@ -174,16 +205,19 @@ export default function MapView() {
       .then((r) => r.json())
       .then((j: { verticalDatum?: string; bounds?: number[] }) => {
         if (cancelled) return
-        setMeshEllipsoid(j.verticalDatum === 'ellipsoidWgs84')
+        setMeshDatum(j.verticalDatum === 'ellipsoidWgs84' ? 'ellipsoidWgs84' : 'orthometric')
         setMeshBounds(Array.isArray(j.bounds) && j.bounds.length === 4 ? (j.bounds as [number, number, number, number]) : null)
       })
       .catch(() => {
-        if (!cancelled) setMeshEllipsoid(false)
+        // Manifest unreadable: assume the orthometric default (the same
+        // assumption the rendering path makes) instead of blocking the mesh.
+        if (!cancelled) setMeshDatum('orthometric')
       })
     return () => {
       cancelled = true
     }
   }, [terrain3d])
+  const meshEllipsoid = meshDatum === 'ellipsoidWgs84'
   const meshOn = meshEllipsoid
   // One geoid offset at HOME (N varies ~cm per km) for the vehicle-level
   // layers — drone, trail, predict, HOME, drop line, ghost, polygon — so they
@@ -238,22 +272,29 @@ export default function MapView() {
     }, 300)
     return () => clearTimeout(id)
   }, [missionItems, meshOn])
-  // No DEM tile loaded but the 3D mesh is on: take the ground under each
-  // waypoint from the mesh itself, so the AGL chips and the list show real
-  // terrain clearance instead of falling back to a flat plane. Heights come
-  // back in the tileset's frame; on an ellipsoid mesh remove N to get AMSL.
+  // Priority ground source: with the 3D mesh active take the ground under each
+  // waypoint from the mesh itself (even when a 2D tile is also loaded), so the
+  // AGL chips and the list show real terrain clearance. Heights come back in
+  // the tileset's frame; on an ellipsoid mesh remove N to get AMSL.
   useEffect(() => {
-    if (terrainTile) return
-    if (!terrain3d || meshEpoch === 0 || missionItems.length === 0) {
+    if (!meshActive) {
+      // The 2D effect above owns `groundBySeq`; clear a stale value when there
+      // is no tile either.
+      if (!terrainTile) useTerrainStore.setState({ groundBySeq: null })
+      return
+    }
+    if (missionItems.length === 0) {
       useTerrainStore.setState({ groundBySeq: null })
       return
     }
     if (meshEllipsoid && !ellipsoidBySeq) return // N not sampled yet
     let cancelled = false
     const id = setTimeout(() => {
-      const points = missionItems
-        .filter((it) => it.x !== 0 || it.y !== 0)
-        .map((it) => [it.seq, it.y / 1e7, it.x / 1e7] as [number, number, number])
+      const points: Array<[number, number, number]> = []
+      missionItems.forEach((it) => {
+        const ll = itemLatLon(it)
+        if (ll) points.push([it.seq, ll[0], ll[1]])
+      })
       sampleMeshGround(
         points.map(([, lat, lon]) => [lat, lon] as [number, number]),
         meshBounds,
@@ -275,7 +316,72 @@ export default function MapView() {
       cancelled = true
       clearTimeout(id)
     }
-  }, [terrainTile, terrain3d, meshEpoch, meshBounds, meshEllipsoid, ellipsoidBySeq, missionItems, sampleMeshGround])
+  }, [terrainTile, meshActive, meshBounds, meshEllipsoid, ellipsoidBySeq, missionItems, sampleMeshGround])
+
+  // The terrain drape prefers the same surface the map draws, but it runs in
+  // the mission store and cannot reach the Cesium viewer: publish a sampler
+  // while the mesh is live (and its vertical datum is known) so terrain mode
+  // can measure the survey AGL against the mesh instead of only the 2D tile.
+  useEffect(() => {
+    if (!meshActive || !meshDatum) {
+      useTerrainStore.setState({ meshSampler: null })
+      return
+    }
+    useTerrainStore.setState({
+      meshSampler: {
+        verticalDatum: meshDatum,
+        sample: (points) => sampleMeshGround(points, meshBounds),
+      },
+    })
+    return () => useTerrainStore.setState({ meshSampler: null })
+  }, [meshActive, meshDatum, meshBounds, sampleMeshGround])
+
+  // Ground under the live vehicle for the AGL drop line / readout: the 3D
+  // mesh first, then the 2D DEM tile, else the HOME plane (null). Throttled.
+  const lastGroundSampleRef = useRef<{ t: number; lat: number; lon: number } | null>(null)
+  useEffect(() => {
+    const pos = snapshot?.global_position
+    if (!pos) return
+    if (!meshActive && !terrainTile) {
+      setVehicleGround(null)
+      return
+    }
+    const now = performance.now()
+    const prev = lastGroundSampleRef.current
+    const movedM = prev
+      ? Math.hypot(
+          (pos.latitude_deg - prev.lat) * 111_320,
+          (pos.longitude_deg - prev.lon) *
+            111_320 *
+            Math.cos((pos.latitude_deg * Math.PI) / 180),
+        )
+      : Infinity
+    if (prev && now - prev.t < GROUND_SAMPLE_MS && movedM < GROUND_SAMPLE_MOVE_M) return
+    lastGroundSampleRef.current = { t: now, lat: pos.latitude_deg, lon: pos.longitude_deg }
+    const { latitude_deg: lat, longitude_deg: lon } = pos
+    void (async () => {
+      let ground: number | null = null
+      if (meshActive) {
+        try {
+          const [h] = await sampleMeshGround([[lat, lon]], meshBounds)
+          if (h != null) {
+            // Heights come back in the tileset frame; on an ellipsoid mesh
+            // remove N to land on the AMSL the plan uses.
+            const n = meshEllipsoid ? await geoidAt(lat, lon) : 0
+            ground = n != null ? h - n : null
+          }
+        } catch {
+          ground = null
+        }
+      }
+      if (ground == null && terrainTile) {
+        const [g] = await sampleDem([[lat, lon]])
+        ground = g ?? null
+      }
+      setVehicleGround(ground)
+    })()
+  }, [snapshot, meshActive, terrainTile, meshBounds, meshEllipsoid, sampleMeshGround, sampleDem, setVehicleGround])
+
   useEffect(() => {
     setMission(missionItems, selectedSeq, {
       kinds,

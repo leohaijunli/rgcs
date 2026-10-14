@@ -132,3 +132,24 @@ for the Layers ▸ Terrain (3D mesh) picker; afterwards no network is needed.
 - One 1° tile covers a whole degree; a small survey box still downloads the
   whole tile (documented in the script). Default maxzoom follows the 30 m
   resolution (z14, ~11 k tiles for one tile in the Sidney verification).
+### Toggle reads the DEM GeoTIFF folder directly (2026-10-14)
+
+The Layers ▸ Terrain (3D mesh) toggle no longer opens a folder dialog on
+the usual path. It resolves the raw DEM GeoTIFF folder — `$MAGCS_DEM_DIR`
+verbatim, else `dem/BC` beside the app (working directory first, then up
+to four parents of the executable, so dev builds under
+`target/<profile>` find the repo one) — and builds the tileset from it:
+
+- `<source>-3d/processed` ← `dem-prep process <source>`, skipped when a
+  `<tile>/dem.json` already exists there;
+- `<source>-3d/tileset` ← `dem-prep terrain <processed>`, returned
+  untouched when `layer.json` is already present.
+
+So the first toggle runs the pipeline (progress streams in the popover via
+the existing `terrain3d_progress` events) and every later toggle is a cache
+hit. Commands: `terrain3d_dem_source` (resolve the folder, `None` = the
+frontend falls back to the picker) and `terrain3d_build_from_dem` (build /
+reuse). DTM-only DEMs are supported: the GeoTIFF path synthesizes an empty
+DSM and records `has_dsm: false`, and the mesh is built from `dtm.tif`
+alone. `terrain3d_build` (the manual "Build from local LiDAR…" button)
+keeps its always-rebuild semantics.

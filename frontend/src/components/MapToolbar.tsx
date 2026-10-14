@@ -223,26 +223,28 @@ function Terrain3DToggle() {
       )}
       {!terrain3d && (
         <div className="mt-1 space-y-1 border-t border-line pt-1">
-          <button
-            onClick={downloadHere}
-            disabled={building3d != null || !mapCenter}
-            title={t('terrain.downloadHint')}
-            className="w-full rounded border border-line bg-canvas px-2 py-1 text-[11px] text-ink hover:bg-panel disabled:opacity-50"
-          >
-            {t('terrain.downloadHere')}
-          </button>
-          <button
-            onClick={() => void buildLocal()}
-            disabled={building3d != null}
-            title={t('terrain.buildHint')}
-            className="w-full rounded border border-line bg-canvas px-2 py-1 text-[11px] text-ink hover:bg-panel disabled:opacity-50"
-          >
-            {t('terrain.buildLocal')}
-          </button>
-          {building3d && (
+          {building3d ? (
             <div className="mono px-1 text-[10px] text-muted">
-              [{building3d.stage}] {building3d.line.slice(-60)}
+              [{building3d.stage}] {building3d.line.slice(-60) || t('terrain.building')}
             </div>
+          ) : (
+            <>
+              <button
+                onClick={downloadHere}
+                disabled={!mapCenter}
+                title={t('terrain.downloadHint')}
+                className="w-full rounded border border-line bg-canvas px-2 py-1 text-[11px] text-ink hover:bg-panel disabled:opacity-50"
+              >
+                {t('terrain.downloadHere')}
+              </button>
+              <button
+                onClick={() => void buildLocal()}
+                title={t('terrain.buildHint')}
+                className="w-full rounded border border-line bg-canvas px-2 py-1 text-[11px] text-ink hover:bg-panel disabled:opacity-50"
+              >
+                {t('terrain.buildLocal')}
+              </button>
+            </>
           )}
           {buildError3d && <div className="px-1 text-[10px] text-error">{buildError3d}</div>}
         </div>

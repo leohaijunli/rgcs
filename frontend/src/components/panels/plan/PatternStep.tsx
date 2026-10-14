@@ -59,6 +59,7 @@ export default function PatternStep({ kind, onKind, sweep, onSweep, clover, onCl
   // pattern field. Mixing the two is what made "50 AGL" show up as
   // "50 AMSL" in the waypoint list.
   const terrainTile = useTerrainStore((s) => s.tile)
+  const meshSampler = useTerrainStore((s) => s.meshSampler)
   const surveyAglM = useMissionStore((s) => s.surveyAglM)
   const altitudeLabel =
     altitudeMode === 'terrain' ? t('plan.pattern.altitudeAgl') : t('plan.pattern.altitude')
@@ -75,11 +76,12 @@ export default function PatternStep({ kind, onKind, sweep, onSweep, clover, onCl
     setError(null)
     setBusy(true)
     try {
-      // Terrain mode needs a DEM to mean anything: the altitude input is an
+      // Terrain mode needs ground to mean anything: the altitude input is an
       // AGL, and without terrain there is nothing to drape against — the
       // waypoints would silently carry AMSL-looking numbers (the reported
-      // "50 AGL shows as 50 AMSL" bug). Require the tile instead.
-      if (altitudeMode === 'terrain' && !terrainTile) {
+      // "50 AGL shows as 50 AMSL" bug). The 3D mesh counts as ground (the
+      // drape measures against it), so require either.
+      if (altitudeMode === 'terrain' && !terrainTile && !meshSampler) {
         setError(t('plan.pattern.terrainNeedsDem'))
         setBusy(false)
         return
@@ -350,8 +352,10 @@ function DrapeBlock() {
   const drape = useMissionStore((s) => s.drape)
   const drapeError = useMissionStore((s) => s.drapeError)
   const drapeToTerrain = useMissionStore((s) => s.drapeToTerrain)
+  const meshDrape = useMissionStore((s) => s.meshDrape)
   const ensureTile = useTerrainStore((s) => s.ensureTile)
   const tile = useTerrainStore((s) => s.tile)
+  const meshSampler = useTerrainStore((s) => s.meshSampler)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const auto = altitudeMode === 'terrain'
@@ -391,8 +395,29 @@ function DrapeBlock() {
           Terrain drape failed — heights are not terrain-following: {drapeError}
         </div>
       )}
-      {auto && !tile && (
+      {auto && !tile && !meshSampler && (
         <div className="text-[11px] text-warn">{t('plan.pattern.drape.noDem')}</div>
+      )}
+      {/* Mesh reference: the surface on screen, so it wins over the tile. No
+       * DTM/DSM pair exists for a tileset — the clearance check is absent, not
+       * passing, and the report says so instead of showing a fake margin. */}
+      {meshDrape && (
+        <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-[11px]">
+          <span className="text-muted">{t('plan.pattern.drape.sourceMesh')}</span>
+          <span className="text-muted">{t('plan.pattern.drape.noDsm')}</span>
+          <span>
+            {t('plan.pattern.drape.agl')} {meshDrape.minAglM.toFixed(1)} m
+          </span>
+          <span>
+            {t('plan.pattern.drape.ground')} {meshDrape.minGroundAmslM.toFixed(1)}–
+            {meshDrape.maxGroundAmslM.toFixed(1)} m
+          </span>
+          {meshDrape.missing > 0 && (
+            <span className="text-error">
+              {t('plan.pattern.drape.meshMissing', { count: meshDrape.missing })}
+            </span>
+          )}
+        </div>
       )}
 {drape && (
         <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-[11px]">

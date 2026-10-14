@@ -406,29 +406,165 @@ pub async fn terrain3d_build(
     if !source.is_dir() {
         return Err(format!("{} is not a folder", source.display()));
     }
-    // The tileset lands next to the source folder: <folder>-3d/tileset.
-    let root = source.parent().unwrap_or(&source).join(format!(
+    // Manual build: always re-process (the operator may have swapped the
+    // source rasters under the same folder name).
+    build_tileset(app, bin, source, maxzoom, false).await
+}
+
+/// The `dem/BC` subfolder (raw DEM GeoTIFFs) below every lookup root.
+const DEM_SOURCE_SUBDIR: [&str; 2] = ["dem", "BC"];
+
+/// How many executable parents to walk looking for the DEM folder — dev
+/// builds live in `target/<profile>` (or `target/<profile>/deps`).
+const DEM_LOOKUP_DEPTH: usize = 4;
+
+/// Candidate folders holding the raw DEM GeoTIFF(s): `dem/BC` under the
+/// working directory first, then under each parent of the app executable.
+/// Pure so the walk-up logic is unit-testable without touching disk.
+fn dem_candidates(cwd: Option<&Path>, exe: Option<&Path>) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Some(cwd) = cwd {
+        out.push(
+            DEM_SOURCE_SUBDIR
+                .iter()
+                .fold(cwd.to_path_buf(), |p, s| p.join(s)),
+        );
+    }
+    let mut dir = exe;
+    for _ in 0..DEM_LOOKUP_DEPTH {
+        match dir {
+            Some(d) => {
+                out.push(
+                    DEM_SOURCE_SUBDIR
+                        .iter()
+                        .fold(d.to_path_buf(), |p, s| p.join(s)),
+                );
+                dir = d.parent();
+            }
+            None => break,
+        }
+    }
+    out
+}
+
+/// The folder the 3D-mesh layer reads raw DEM GeoTIFF(s) from:
+/// `$MAGCS_DEM_DIR` (used verbatim, so an operator can point it anywhere)
+/// wins, else the first existing `dem/BC` candidate. `None` when nothing
+/// exists — the frontend then falls back to the manual folder picker.
+fn resolve_dem_source() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("MAGCS_DEM_DIR") {
+        let path = PathBuf::from(dir);
+        if path.is_dir() {
+            return Some(path);
+        }
+    }
+    let cwd = std::env::current_dir().ok();
+    let exe = std::env::current_exe().ok();
+    dem_candidates(cwd.as_deref(), exe.as_deref())
+        .into_iter()
+        .find(|p| p.is_dir())
+}
+
+/// The raw-DEM source folder the 3D-mesh layer will read, or `None` when
+/// none is found (the frontend falls back to the folder picker).
+///
+/// # Errors
+///
+/// Never fails today; kept `Result` for command symmetry.
+#[tauri::command]
+pub async fn terrain3d_dem_source() -> Result<Option<String>, String> {
+    Ok(resolve_dem_source().map(|p| p.display().to_string()))
+}
+
+/// Toggle-path build (ADR-004 addendum): read the raw DEM GeoTIFF folder
+/// (`terrain3d_dem_source`) and return a tileset folder, building it on
+/// first use. Unlike [`terrain3d_build`] this **reuses** a completed
+/// tileset untouched and skips `dem-prep process` when a processed tile
+/// folder is already present, so flipping the mesh on/off stays fast.
+/// Progress streams as `terrain3d_progress` events.
+///
+/// # Errors
+///
+/// A stringified error when no DEM folder is found, `dem-prep` is missing,
+/// or a stage fails.
+#[tauri::command]
+pub async fn terrain3d_build_from_dem(
+    app: tauri::AppHandle,
+    maxzoom: Option<u8>,
+) -> Result<String, String> {
+    let source = resolve_dem_source().ok_or_else(|| {
+        "no DEM folder found (expected dem/BC beside the app; override with MAGCS_DEM_DIR)"
+            .to_string()
+    })?;
+    let bin = dem_prep_binary()?;
+    build_tileset(app, bin, source, maxzoom, true).await
+}
+
+/// The `<source>-3d/{processed,tileset}` artifact pair for a DEM source.
+fn build_paths(source: &Path) -> (PathBuf, PathBuf) {
+    let root = source.parent().unwrap_or(source).join(format!(
         "{}-3d",
         source
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("terrain")
     ));
-    let processed = root.join("processed");
-    let tileset = root.join("tileset");
-    let tileset_path = tileset.display().to_string();
+    (root.join("processed"), root.join("tileset"))
+}
 
+/// Count processed tiles (`<tile>/dem.json`) under `dir`.
+fn count_processed_tiles(dir: &Path) -> usize {
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    let path = e.path();
+                    path.is_dir() && path.join("dem.json").is_file()
+                })
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+/// Whether `processed` already holds as many tiles as `source` has top-level
+/// rasters — the cheap check that lets a toggle reuse a previous
+/// `dem-prep process` (a partial run must not be mistaken for a complete
+/// one). With no top-level rasters (raw LiDAR downloads nest one folder per
+/// grid tile) any processed tile counts, like [`terrain_process_raw`].
+fn has_processed_tiles(processed: &Path, source: &Path) -> bool {
+    let done = count_processed_tiles(processed);
+    done > 0 && done >= count_input_rasters(source).max(1)
+}
+
+/// Run `dem-prep process` (unless `reuse` finds processed tiles already) then
+/// `dem-prep terrain`, returning the tileset folder. With `reuse` a finished
+/// tileset is returned untouched before any work is spawned.
+async fn build_tileset(
+    app: tauri::AppHandle,
+    bin: PathBuf,
+    source: PathBuf,
+    maxzoom: Option<u8>,
+    reuse: bool,
+) -> Result<String, String> {
+    let (processed, tileset) = build_paths(&source);
+    let tileset_path = tileset.display().to_string();
+    if reuse && tileset.join("layer.json").is_file() {
+        return Ok(tileset_path);
+    }
     let handle = app.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let process_args = vec![
-            "process".to_string(),
-            source.display().to_string(),
-            "--out".to_string(),
-            processed.display().to_string(),
-            "--resolution".to_string(),
-            "1.0".to_string(),
-        ];
-        run_stage(&handle, &bin, &process_args, "process")?;
+        if !reuse || !has_processed_tiles(&processed, &source) {
+            let process_args = vec![
+                "process".to_string(),
+                source.display().to_string(),
+                "--out".to_string(),
+                processed.display().to_string(),
+                "--resolution".to_string(),
+                "1.0".to_string(),
+            ];
+            run_stage(&handle, &bin, &process_args, "process")?;
+        }
         let mut terrain_args = vec![
             "terrain".to_string(),
             processed.display().to_string(),
@@ -444,7 +580,6 @@ pub async fn terrain3d_build(
     })
     .await
     .map_err(|e| format!("terrain build task: {e}"))??;
-
     Ok(tileset_path)
 }
 
@@ -649,4 +784,58 @@ fn count_input_rasters(dir: &Path) -> usize {
                 .count()
         })
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod dem_source_tests {
+    use super::*;
+
+    #[test]
+    fn candidates_prefer_cwd_then_walk_up_from_the_exe() {
+        let cands = dem_candidates(
+            Some(Path::new("/work")),
+            Some(Path::new("/w/target/release")),
+        );
+        assert_eq!(cands[0], PathBuf::from("/work/dem/BC"));
+        assert!(cands.contains(&PathBuf::from("/w/target/release/dem/BC")));
+        assert!(cands.contains(&PathBuf::from("/w/dem/BC")));
+    }
+
+    #[test]
+    fn candidates_without_roots_are_empty() {
+        assert!(dem_candidates(None, None).is_empty());
+    }
+
+    #[test]
+    fn build_paths_park_artifacts_next_to_the_source() {
+        let (processed, tileset) = build_paths(Path::new("/data/dem/BC"));
+        assert_eq!(processed, PathBuf::from("/data/dem/BC-3d/processed"));
+        assert_eq!(tileset, PathBuf::from("/data/dem/BC-3d/tileset"));
+    }
+
+    #[test]
+    fn processed_tiles_must_cover_the_source_rasters() {
+        let base = std::env::temp_dir().join(format!("maggcs-demtest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let source = base.join("src");
+        let processed = base.join("src-3d/processed");
+        std::fs::create_dir_all(&source).unwrap();
+        // Stray file, no `<tile>/dem.json`: not processed.
+        std::fs::create_dir_all(processed.join("loose")).unwrap();
+        std::fs::write(processed.join("loose/readme.txt"), "x").unwrap();
+        assert!(!has_processed_tiles(&processed, &source));
+        // Two source rasters, one processed tile: a partial run is not done.
+        std::fs::create_dir_all(processed.join("tile")).unwrap();
+        std::fs::write(processed.join("tile/dem.json"), "{}").unwrap();
+        std::fs::write(source.join("a.tif"), "x").unwrap();
+        std::fs::write(source.join("b.tif"), "x").unwrap();
+        assert!(!has_processed_tiles(&processed, &source));
+        // A second processed tile completes the set.
+        std::fs::create_dir_all(processed.join("tile2")).unwrap();
+        std::fs::write(processed.join("tile2/dem.json"), "{}").unwrap();
+        assert!(has_processed_tiles(&processed, &source));
+        // An absent processed folder is never "done".
+        assert!(!has_processed_tiles(&base.join("empty"), &source));
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

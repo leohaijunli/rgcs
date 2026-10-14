@@ -27,6 +27,21 @@ await build({
 const { parseCoordinates, formatDms, formatDecimal } = await import(`file://${out}`)
 await rm(dirname(out), { recursive: true, force: true })
 
+// Mission-item ints: `x` is latitude and `y` is longitude, in that order. Two
+// map effects had it reversed and every ground sample missed the DEM, so the
+// AGL readouts said "unknown" whatever terrain was loaded.
+const compileOut = join(dirname(out), 'compile.mjs')
+await build({
+  entryPoints: [join(srcDir, 'mission', 'compile.ts')],
+  outfile: compileOut,
+  bundle: true,
+  format: 'esm',
+  platform: 'neutral',
+  logLevel: 'silent',
+})
+const { itemLatLon } = await import(`file://${compileOut}`)
+await rm(dirname(compileOut), { recursive: true, force: true })
+
 const failures = []
 let passed = 0
 function check(name, fn) {
@@ -156,6 +171,26 @@ check('formatDecimal is fixed precision', () => {
 check('a southern/western pair lands in the right hemisphere', () => {
   const v = ok(`33°52'4.0"S, 151°12'26.0"E`)
   assert(v.lat < 0 && v.lon > 0, `${v.lat}, ${v.lon}`)
+})
+
+check('a mission item maps to (lat, lon) in that order', () => {
+  const ll = itemLatLon({ x: 486573396, y: -1235156969 })
+  assert(ll !== null, 'coordinate item must yield a pair')
+  near(ll[0], 48.6573396, 'latitude from x')
+  near(ll[1], -123.5156969, 'longitude from y')
+})
+
+check('a command item (no coordinate) has no lat/lon', () => {
+  assert(itemLatLon({ x: 0, y: 0 }) === null, 'DO_* items must be skipped')
+})
+
+check('an equator waypoint (lat 0) keeps its longitude', () => {
+  // Only the *both*-zero pair means "no coordinate" (MAVLink's unset value):
+  // a real waypoint on the equator must not be dropped from ground sampling.
+  const ll = itemLatLon({ x: 0, y: -1235156969 })
+  assert(ll !== null, 'equator waypoint must yield a pair')
+  near(ll[0], 0, 'latitude')
+  near(ll[1], -123.5156969, 'longitude')
 })
 
 if (failures.length > 0) {

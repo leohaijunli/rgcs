@@ -29,6 +29,16 @@ export interface TerrainOverlay {
   loading: boolean
 }
 
+/** A live 3D mesh the frontend can sample: published by the map while the
+ * Cesium terrain provider holds the tileset (the backend cannot read it). */
+export interface MeshSampler {
+  /** Raw tileset heights under `[lat, lon]` points, `null` outside coverage. */
+  sample: (points: Array<[number, number]>) => Promise<Array<number | null>>
+  /** The tileset's vertical datum: `ellipsoidWgs84` heights are `h` (AMSL =
+   * `h − N(EGM96)`), `orthometric` heights are CGVD2013 `H` (≈ AMSL). */
+  verticalDatum: 'ellipsoidWgs84' | 'orthometric'
+}
+
 interface TerrainState {
   /** The picked dem-prep output folder (parent with index.json, or a tile). */
   folder: string | null
@@ -55,8 +65,15 @@ interface TerrainState {
   /** DTM under each mission waypoint (seq → metres), sampled by the map and
    * shared with the waypoint list — the AGL readouts' ground truth. */
   groundBySeq: Record<number, number> | null
+  /** The live 3D mesh sampler (see [`MeshSampler`]), or `null` when no mesh
+   * is active. The terrain drape prefers it over the 2D tile. */
+  meshSampler: MeshSampler | null
   /** Re-sample the DEM under `[seq, lat, lon]` entries into `groundBySeq`. */
   sampleGround: (points: Array<[number, number, number]>) => Promise<void>
+  /** DTM under `[lat, lon]` points (metres, the DEM's own datum), sampled
+   * from the loaded 2D tile. `null` outside coverage — the caller falls back
+   * to the mesh or the HOME plane. Does not touch state. */
+  sampleDem: (points: Array<[number, number]>) => Promise<Array<number | null>>
   load: () => Promise<void>
   /** Pick + load a tile against the current survey area (no dialog). */
   repick: () => Promise<void>
@@ -134,23 +151,32 @@ export const useTerrainStore = create<TerrainState>((set, get) => ({
   building3d: null,
   buildError3d: null,
   groundBySeq: null,
+  meshSampler: null,
   sampleGround: async (points) => {
+    if (points.length === 0) {
+      set({ groundBySeq: null })
+      return
+    }
+    const heights = await get().sampleDem(points.map(([, lat, lon]) => [lat, lon]))
+    const next: Record<number, number> = {}
+    points.forEach(([seq], i) => {
+      const dtm = heights[i]
+      if (dtm != null) next[seq] = dtm
+    })
+    set({ groundBySeq: Object.keys(next).length > 0 ? next : null })
+  },
+  sampleDem: async (points) => {
     const tile = get().tile
-    if (!tile || points.length === 0) return
+    if (!tile || points.length === 0) return points.map(() => null)
     try {
       const { invoke } = await import('@tauri-apps/api/core')
       const samples = await invoke<Array<{ lat: number; lon: number; dtm_m: number | null }>>(
         'terrain_sample',
-        { folder: tile.path, points: points.map(([, lat, lon]) => [lat, lon]) },
+        { folder: tile.path, points },
       )
-      const next: Record<number, number> = {}
-      points.forEach(([seq], i) => {
-        const dtm = samples[i]?.dtm_m
-        if (dtm != null) next[seq] = dtm
-      })
-      set({ groundBySeq: Object.keys(next).length > 0 ? next : null })
+      return points.map((_, i) => samples[i]?.dtm_m ?? null)
     } catch {
-      set({ groundBySeq: null }) // DEM gone: fall back to the flat plane
+      return points.map(() => null) // DEM gone: fall back to the flat plane
     }
   },
   load: async () => {
@@ -212,9 +238,23 @@ export const useTerrainStore = create<TerrainState>((set, get) => ({
   },
   clear: () => set({ overlay: null, tile: null, tiles: [], folder: null, uncovered: false, loading: false, error: null }),
   start3d: async () => {
+    // A build is already running (double-click): ignore.
+    if (get().building3d) return
     set({ error3d: null })
     try {
       const { invoke } = await import('@tauri-apps/api/core')
+      // Preferred path (no dialog): read the local DEM GeoTIFF folder and
+      // serve a tileset built from it once, then reuse the cached tileset.
+      const source = await invoke<string | null>('terrain3d_dem_source')
+      if (source) {
+        startBuildWatcher()
+        set({ building3d: { stage: 'process', line: '' }, buildError3d: null })
+        const tileset = await invoke<string>('terrain3d_build_from_dem', { maxzoom: null })
+        await serveBuilt3d(tileset, source)
+        set({ building3d: null })
+        return
+      }
+      // No DEM folder on hand: fall back to the manual folder picker.
       const { open } = await import('@tauri-apps/plugin-dialog')
       const folder = await open({ multiple: false, directory: true })
       if (!folder || typeof folder !== 'string') return // cancelled
@@ -222,7 +262,7 @@ export const useTerrainStore = create<TerrainState>((set, get) => ({
       sessionStorage.setItem('maggcs.terrain3dFolder', folder)
       set({ terrain3d: { url, folder }, error3d: null })
     } catch (e) {
-      set({ error3d: String(e) })
+      set({ building3d: null, error3d: String(e) })
     }
   },
   stop3d: async () => {
@@ -300,13 +340,15 @@ async function defaultOutDir(name: string): Promise<string> {
 }
 
 /** Serve a freshly built tileset: start the loopback server on it and flip
- * the toggle on (the same state `start3d` would produce, minus the dialog). */
-async function serveBuilt3d(tileset: string): Promise<void> {
+ * the toggle on (the same state `start3d` would produce, minus the dialog).
+ * `displayFolder` is what the popover names — the DEM source folder for the
+ * auto path, the tileset itself otherwise. */
+async function serveBuilt3d(tileset: string, displayFolder: string = tileset): Promise<void> {
   const { invoke } = await import('@tauri-apps/api/core')
   const url = await invoke<string>('terrain3d_start', { dir: tileset })
-  sessionStorage.setItem('maggcs.terrain3dFolder', tileset)
+  sessionStorage.setItem('maggcs.terrain3dFolder', displayFolder)
   useTerrainStore.setState({
-    terrain3d: { url, folder: tileset },
+    terrain3d: { url, folder: displayFolder },
     error3d: null,
   })
 }
@@ -395,4 +437,10 @@ async function hasDemIndex(
   } catch {
     return false
   }
+}
+
+// Dev-only handle for inspecting the app from the DevTools protocol / E2E
+// scripts (same pattern as `window.__mgViewer` in `useCesiumViewer`).
+if (import.meta.env.DEV && typeof window !== 'undefined') {
+  ;(window as unknown as { __mgTerrain?: unknown }).__mgTerrain = useTerrainStore
 }

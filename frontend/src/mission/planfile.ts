@@ -315,6 +315,10 @@ export function buildPlan(
     blocks?: PlanBlock[]
     /** DEM version the plan was draped against (ADR-004 archives). */
     demVersion?: string | null
+    /** Non-DEM surface the drape was measured against (ADR-004 archives) —
+     * `mesh:<folder>` when terrain mode draped over the live 3D mesh, whose
+     * tileset carries no content hash. */
+    terrainRef?: string | null
   } = {},
 ): string {
   const base = opts.base ? structuredClone(opts.base) : ({ fileType: 'Plan', version: 1 } as QgcPlan)
@@ -366,6 +370,7 @@ export function buildPlan(
       // MagGCS extension: provenance of the terrain drape (ADR-004). QGC
       // ignores unknown mission keys.
       ...(opts.demVersion ? { maggcsDemVersion: opts.demVersion } : {}),
+      ...(opts.terrainRef ? { maggcsTerrainRef: opts.terrainRef } : {}),
     },
   }
   return JSON.stringify(plan, null, 2)
@@ -388,6 +393,7 @@ export async function exportPlanFile(
     home?: [number, number, number] | null
     blocks?: PlanBlock[]
     demVersion?: string | null
+    terrainRef?: string | null
   } = {},
 ): Promise<boolean> {
   const path = await save({ defaultPath: 'mission.plan', filters: QGC_FILTER })

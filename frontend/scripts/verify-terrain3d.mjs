@@ -83,6 +83,10 @@ await page.addInitScript(
         if (window.__mockStartFail && cmd === 'terrain3d_start') {
           throw new Error('mock start failure')
         }
+        // 3D-mesh toggle now reads the DEM folder and builds from it (no
+        // dialog); return the mocked source + a ready tileset.
+        if (cmd === 'terrain3d_dem_source') return '/mock/dem/BC'
+        if (cmd === 'terrain3d_build_from_dem') return '/mock/tileset/BC-DEMO'
         if (cmd === 'plugin:dialog|open') return '/mock/tileset/BC-DEMO'
         // Event subscriptions (devices_changed): register only, never fired.
         if (cmd === 'plugin:event|listen') return 'mock-event-id'
@@ -143,7 +147,8 @@ try {
   check((await toggle.getAttribute('aria-pressed')) === 'false', 'toggle starts OFF')
   await page.screenshot({ path: join(shotsDir, 'terrain3d-popover-off.png') })
 
-  // 2. Turn ON: folder dialog is mocked, server URL goes to the store.
+  // 2. Turn ON: the mocked DEM folder is read + built, server URL goes to
+  // the store.
   await toggle.click()
   await page.waitForFunction(
     () => document.querySelector('[aria-pressed="true"] button[aria-pressed="true"]') != null ||
@@ -240,6 +245,87 @@ try {
   const errShown = await page.getByText(/mock start failure/).isVisible().catch(() => false)
   check(errShown, 'start error surfaced in popover')
   await page.screenshot({ path: join(shotsDir, 'terrain3d-popover-error.png') })
+
+  // 7. Terrain mode drapes against the mesh (operator bug: the requested
+  //    "40 m AGL" was displayed as an absolute "40 m AMSL" — the survey AGL
+  //    was never measured against the terrain, and the row only ever showed
+  //    AMSL). Turn the mesh back on, plan a waypoint over it, and read the row.
+  await page.evaluate(() => {
+    window.__mockStartFail = false
+  })
+  if (!(await toggle.isVisible().catch(() => false))) {
+    await page.getByRole('button', { name: 'Layers', exact: true }).click()
+  }
+  await toggle.click()
+  await page.waitForFunction(
+    () => window.__mgViewer?.terrainProvider?.constructor?.name === 'CesiumTerrainProvider',
+    undefined,
+    { timeout: 15000 },
+  )
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(500)
+
+  await page.getByRole('button', { name: 'Plan', exact: true }).click()
+  await page.getByRole('button', { name: /^Terrain/ }).click()
+  await page.getByTitle(/Add waypoints/).click()
+  const canvasBox = await page.locator('canvas').first().boundingBox()
+  await page.mouse.click(canvasBox.x + canvasBox.width / 2, canvasBox.y + canvasBox.height / 2)
+  // 600 ms drape debounce + mesh sampling + the store round-trip.
+  await page.waitForTimeout(4000)
+  const panel = page.locator('aside')
+  // The mesh tiles under the new point may still be downloading on a cold
+  // provider (the test toggled the mesh on seconds ago): wait for the map's
+  // ground sample instead of racing it.
+  await page
+    .waitForFunction(() => window.__mgTerrain?.getState?.().groundBySeq != null, undefined, {
+      timeout: 20000,
+    })
+    .catch(() => console.log('  debug: groundBySeq never populated'))
+  // The step cards collapse by default; the height readouts live in step 3.
+  await panel.getByRole('button', { name: /Waypoints/ }).click()
+  await page.waitForTimeout(300)
+  const aglRows = await panel.getByText(/^\d+\.\d m AGL$/).allTextContents()
+  const amslRows = await panel.getByText(/^\d+\.\d m AMSL$/).allTextContents()
+  if (aglRows.length === 0) {
+    // Diagnostics: what did the drape decide, and what ground did the map
+    // sample for the rows?
+    const diag = await page.evaluate(() => {
+      const t = window.__mgTerrain?.getState?.()
+      const m = window.__mgMission?.getState?.()
+      return {
+        mesh3d: t?.terrain3d?.url ?? null,
+        meshSampler: t?.meshSampler
+          ? { ...t.meshSampler, sample: t.meshSampler.sample ? 'fn' : null }
+          : null,
+        groundBySeq: t?.groundBySeq ?? null,
+        tile: t?.tile?.path ?? null,
+        mode: m?.altitudeMode ?? null,
+        wpAlt: m?.waypoints?.map((w) => w.altitude.meters) ?? null,
+        meshDrape: m?.meshDrape ?? null,
+        drapeError: m?.drapeError ?? null,
+      }
+    })
+    console.log(`  debug: stores = ${JSON.stringify(diag)}`)
+    const probe = await page.evaluate(async () => {
+      const t = window.__mgTerrain.getState()
+      const wp = window.__mgMission.getState().waypoints[0]
+      const pt = [wp.position.latitude_deg, wp.position.longitude_deg]
+      const h = t.meshSampler ? await t.meshSampler.sample([pt]) : null
+      return { point: pt, sample: h, provider: window.__mgViewer?.terrainProvider?.constructor?.name }
+    })
+    console.log(`  debug: probe = ${JSON.stringify(probe)}`)
+    // Diagnostics: is the panel even mounted, and what does it say?
+    console.log(`  debug: aside count = ${await page.locator('aside').count()}`)
+    const text = await panel.innerText().catch((e) => `<no aside: ${e}>`)
+    console.log(`  debug: panel text = ${text.replace(/\n+/g, ' | ').slice(0, 1200)}`)
+    console.log(`  debug: body text = ${(await page.locator('body').innerText()).replace(/\n+/g, ' | ').slice(0, 1200)}`)
+  }
+  check(
+    aglRows.includes('40.0 m AGL'),
+    `terrain drape bakes the requested 40 m AGL (got: ${aglRows.join(', ') || 'nothing'})`,
+  )
+  check(amslRows.length > 0, `the absolute height is still shown (${amslRows.join(', ')})`)
+  await page.screenshot({ path: join(shotsDir, 'terrain3d-draped-waypoint.png') })
 
   check(pageErrors.length === 0, `no page errors${pageErrors.length ? `: ${pageErrors.join(' | ')}` : ''}`)
 } catch (e) {

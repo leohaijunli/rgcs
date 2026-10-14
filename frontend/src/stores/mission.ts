@@ -24,7 +24,8 @@ import {
 import { orderedMissionItems } from '../mission/planfile'
 import { itemsHash } from '../mission/hash'
 import type { PlanBlock, PlanImport, QgcPlan } from '../mission/planfile'
-import { useTerrainStore } from './terrain'
+import { drapeToMesh, type MeshDrapeResult } from '../mission/meshDrape'
+import { useTerrainStore, type MeshSampler } from './terrain'
 
 /**
  * Altitude semantics of the editable plan.
@@ -33,10 +34,11 @@ import { useTerrainStore } from './terrain'
  * - `agl`       — z stored as AMSL; the HUD/labels show height − HOME AMSL.
  * - `terrain`   — terrain following (ADR-005/013 addendum): the Pattern
  *   altitude is a **survey AGL**; every plan change is automatically draped
- *   over the loaded DEM (DTM + AGL, raised above the DSM clearance), so the
+ *   over the loaded surface — the live 3D mesh first (the surface on screen),
+ *   else the 2D DEM tile (DTM + AGL, raised above the DSM clearance) — so the
  *   stored waypoints stay absolute AMSL (ADR-013 discipline) while always
- *   hugging the terrain. Without a loaded DEM the plan keeps plain heights
- *   and the panel says so.
+ *   hugging the terrain. Without a surface the plan keeps plain heights, the
+ *   panel warns and the waypoint rows mark their AGL unknown.
  */
 export type AltitudeMode = 'relative' | 'amsl' | 'agl' | 'terrain'
 
@@ -86,8 +88,12 @@ interface MissionState {
   dirty: boolean
   /** Hash of the items at the last successful sync (upload or download). */
   lastSyncedHash: string | null
-  /** Terrain drape result (S3/D5): dem version + report. */
+  /** Terrain drape result (S3/D5): dem version + report. Set when the drape
+   * ran against the 2D DEM tile — `meshDrape` is its 3D-mesh twin and exactly
+   * one of the two is set (the mesh wins when both are available). */
   drape: DrapeState | null
+  /** Terrain drape computed against the live 3D mesh (frontend path). */
+  meshDrape: MeshDrapeResult | null
   /** Last automatic (terrain-mode) drape failure, `null` when the last drape
    * succeeded. Without it a failed drape leaves stale heights silently. */
   drapeError: string | null
@@ -187,6 +193,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
   fcMatches: null,
   verifying: false,
   drape: null,
+  meshDrape: null,
   drapeError: null,
   planBase: null,
   blocks: [],
@@ -317,6 +324,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
         dirty: true,
         fcMatches: null,
         drape: { report, folder },
+        meshDrape: null,
       })
       return null
     } catch (e) {
@@ -355,6 +363,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
         dirty: true,
         fcMatches: null,
         drape: null,
+        meshDrape: null,
         planCleared: false,
       }
     }),
@@ -604,6 +613,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       fcMatches: null,
       verifying: false,
       drape: null,
+      meshDrape: null,
       drapeError: null,
       planBase: null,
       blocks: [],
@@ -631,17 +641,30 @@ export function mavIntFromDeg(v: number): number {
 //
 // In `terrain` mode the stored waypoints are absolute AMSL but their *input*
 // is the survey AGL: every plan change (pattern generate, waypoint drag,
-// AGL change, DEM change) is re-draped over the loaded DEM so the flight
-// keeps hugging the terrain. The drape output is compared against the last
-// draped input — identical plan+AGL+DEM short-circuits the loop the drape's
-// own `set` would otherwise create.
+// AGL change, terrain change) is re-draped over the loaded surface so the
+// flight keeps hugging the terrain. The drape output is compared against the
+// last draped input — identical plan+AGL+surface short-circuits the loop the
+// drape's own `set` would otherwise create.
+//
+// The surface is picked mesh-first (operator request: the drape must measure
+// the AGL against the mesh the operator sees), then the 2D DEM tile, then
+// nothing — in which case the heights stay as they were and the waypoint rows
+// mark their AGL unknown instead of showing a bare AMSL that looks draped.
 // ---------------------------------------------------------------------------
 
 /** Milliseconds to settle plan edits before re-draping. */
 const TERRAIN_DRAPE_DEBOUNCE_MS = 600
 
+/** DSM clearance the backend DEM drape enforces. A mesh carries no surface
+ * model, so the mesh path cannot check it (the panel says so). */
+const DEM_DSM_CLEARANCE_M = 5
+
+/** Drape failure reasons the panel renders after its own label. */
+const MESH_UNCOVERED_ERROR = 'no 3D mesh coverage under the plan'
+const MESH_NO_GEOID_ERROR = 'EGM96 geoid undulation unavailable for the ellipsoid mesh'
+
 let drapeTimer: ReturnType<typeof setTimeout> | undefined
-/** Input fingerprint of the last completed drape (plan + AGL + DEM). */
+/** Input fingerprint of the last completed drape (plan + AGL + surface). */
 let lastDrapedKey = ''
 let draping = false
 
@@ -656,6 +679,112 @@ function planKey(waypoints: PlannedWaypoint[]): string {
   )
 }
 
+/** The surface the survey AGL is measured against, mesh first. */
+type DrapeReference =
+  | { kind: 'mesh'; cacheKey: string; sampler: MeshSampler }
+  | { kind: 'dem'; cacheKey: string; folder: string }
+
+function drapeReference(): DrapeReference | null {
+  const terrain = useTerrainStore.getState()
+  const sampler = terrain.meshSampler
+  if (sampler) {
+    // The mesh is the surface on screen, so it wins over the 2D tile. The key
+    // only has to change when the surface does: a rebuilt tileset keeps its
+    // loopback URL, and any plan edit re-drapes anyway.
+    return {
+      kind: 'mesh',
+      sampler,
+      cacheKey: `mesh:${sampler.verticalDatum}:${terrain.terrain3d?.url ?? ''}`,
+    }
+  }
+  const tile = terrain.tile
+  if (tile) return { kind: 'dem', folder: tile.path, cacheKey: `dem:${tile.version}` }
+  return null
+}
+
+/** One drape run's result, before it is applied to the store. */
+interface DrapeOutcome {
+  waypoints: PlannedWaypoint[]
+  drape: DrapeState | null
+  meshDrape: MeshDrapeResult | null
+  /** Set when nothing could be draped: the plan keeps its heights. */
+  error: string | null
+}
+
+/** Bake `aglM` above the live 3D mesh (the frontend drape path). */
+async function drapeAgainstMesh(
+  waypoints: PlannedWaypoint[],
+  aglM: number,
+  sampler: MeshSampler,
+): Promise<DrapeOutcome> {
+  // Sample every waypoint, pinned ones included: the map fills `groundBySeq`
+  // from the same points for the row readouts, while `drapeToMesh` leaves a
+  // locked height alone.
+  const points: Array<[number, number]> = waypoints.map((w) => [
+    w.position.latitude_deg,
+    w.position.longitude_deg,
+  ])
+  // The sampler retries a completely empty answer itself (mesh warm-up), so a
+  // still-null point here really has no mesh under it.
+  const heights = await sampler.sample(points)
+  const ground = new Map<number, number>()
+  heights.forEach((h, i) => {
+    if (h != null && Number.isFinite(h)) ground.set(i, h)
+  })
+  // An ellipsoid-datum mesh serves `h`; AMSL = h − N(EGM96), with N taken per
+  // waypoint (it varies ~cm per km, so one value per point is exact enough).
+  // An orthometric mesh already serves CGVD2013 `H` (≈ AMSL, ≤ ~20 cm).
+  let geoid: Map<number, number> | null = null
+  if (sampler.verticalDatum === 'ellipsoidWgs84' && ground.size > 0) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      const samples = await invoke<Array<{ undulation_m: number | null }>>('geoid_sample', {
+        points,
+      })
+      const next = new Map<number, number>()
+      samples.forEach((sample, i) => {
+        const n = sample?.undulation_m
+        if (n != null && Number.isFinite(n)) next.set(i, n)
+      })
+      if (next.size > 0) geoid = next
+    } catch {
+      // Handled below: without N an ellipsoid height cannot become AMSL.
+    }
+  }
+  if (sampler.verticalDatum === 'ellipsoidWgs84' && ground.size > 0 && geoid === null) {
+    return { waypoints, drape: null, meshDrape: null, error: MESH_NO_GEOID_ERROR }
+  }
+  const result = drapeToMesh(waypoints, ground, {
+    aglM,
+    geoidByIndex: geoid,
+    floorBelowStartM: null,
+  })
+  return {
+    waypoints: result.waypoints,
+    drape: null,
+    meshDrape: result,
+    // A few points outside the tileset are reported per row (missing count) and
+    // are not an error; nothing draped at all means the plan is not covered.
+    error: result.draped === 0 && result.missing > 0 ? MESH_UNCOVERED_ERROR : null,
+  }
+}
+
+/** Bake `aglM` above the 2D DEM tile (`core::terrain::drape`, backend path). */
+async function drapeAgainstDem(
+  waypoints: PlannedWaypoint[],
+  aglM: number,
+  folder: string,
+): Promise<DrapeOutcome> {
+  const { invoke } = await import('@tauri-apps/api/core')
+  const report = await invoke<DrapeReport>('terrain_drape', {
+    waypoints,
+    folder,
+    aglM,
+    minDsmClearanceM: DEM_DSM_CLEARANCE_M,
+  })
+  return { waypoints: report.waypoints, drape: { report, folder }, meshDrape: null, error: null }
+}
+
 function scheduleTerrainDrape(): void {
   if (drapeTimer !== undefined) clearTimeout(drapeTimer)
   drapeTimer = setTimeout(() => void runTerrainDrape(), TERRAIN_DRAPE_DEBOUNCE_MS)
@@ -664,38 +793,47 @@ function scheduleTerrainDrape(): void {
 async function runTerrainDrape(): Promise<void> {
   const s = useMissionStore.getState()
   if (s.altitudeMode !== 'terrain' || s.waypoints.length === 0 || draping) return
-  const terrain = useTerrainStore.getState()
-  const tile = terrain.tile
-  if (!tile) return // no DEM: plain heights stay, the panel says so
-  const key = `${planKey(s.waypoints)}|${s.surveyAglM}|${tile.version}`
+  const ref = drapeReference()
+  if (!ref) return // no surface: heights stay, the panel and the rows say so
+  const key = `${planKey(s.waypoints)}|${s.surveyAglM}|${ref.cacheKey}`
   if (key === lastDrapedKey) return // already draped against this input
   draping = true
   try {
-    const { invoke } = await import('@tauri-apps/api/core')
-    const report = await invoke<DrapeReport>('terrain_drape', {
-      waypoints: s.waypoints,
-      folder: tile.path,
-      aglM: s.surveyAglM,
-      minDsmClearanceM: 5,
-    })
-    // The plan may have been edited while the backend was draping: applying
-    // the result would overwrite those edits with a stale snapshot. Drop it
-    // and re-drape the current plan instead.
+    const outcome =
+      ref.kind === 'mesh'
+        ? await drapeAgainstMesh(s.waypoints, s.surveyAglM, ref.sampler)
+        : await drapeAgainstDem(s.waypoints, s.surveyAglM, ref.folder)
+    // The plan may have been edited while the drape was running (mesh sampling
+    // and the backend call are async): applying the result would overwrite
+    // those edits with a stale snapshot. Drop it and re-drape the current plan.
     if (planKey(useMissionStore.getState().waypoints) !== planKey(s.waypoints)) {
       scheduleTerrainDrape()
       return
     }
-    lastDrapedKey = `${planKey(report.waypoints)}|${s.surveyAglM}|${tile.version}`
+    if (outcome.error) {
+      // Remember the failed input too: the panel's error line is a store write,
+      // and re-running would retry the same failing input forever.
+      lastDrapedKey = key
+      useMissionStore.setState({
+        drape: null,
+        meshDrape: null,
+        drapeError: outcome.error,
+      })
+      return
+    }
+    lastDrapedKey = `${planKey(outcome.waypoints)}|${s.surveyAglM}|${ref.cacheKey}`
     useMissionStore.setState({
-      waypoints: report.waypoints,
+      waypoints: outcome.waypoints,
       dirty: true,
       fcMatches: null,
-      drape: { report, folder: tile.path },
+      drape: outcome.drape,
+      meshDrape: outcome.meshDrape,
       drapeError: null,
     })
   } catch (e) {
     // Outside coverage / DEM void: keep the plan editable but say so — the
     // heights are NOT terrain-following until this clears.
+    lastDrapedKey = key
     useMissionStore.setState({ drapeError: String(e) })
   } finally {
     draping = false
@@ -708,3 +846,9 @@ async function runTerrainDrape(): Promise<void> {
 useMissionStore.subscribe((s) => {
   if (s.altitudeMode === 'terrain') scheduleTerrainDrape()
 })
+
+// Dev-only handle for inspecting the app from the DevTools protocol / E2E
+// scripts (same pattern as `window.__mgViewer` in `useCesiumViewer`).
+if (import.meta.env.DEV && typeof window !== 'undefined') {
+  ;(window as unknown as { __mgMission?: unknown }).__mgMission = useMissionStore
+}

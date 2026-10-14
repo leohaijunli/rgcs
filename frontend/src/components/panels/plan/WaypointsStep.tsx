@@ -18,6 +18,59 @@ import { useUiStore } from '../../../stores/ui'
 import { useTerrainStore } from '../../../stores/terrain'
 import type { PlannedWaypoint } from '../../../generated-types/PlannedWaypoint'
 
+/** Two-line height readout under each waypoint. In terrain mode the AGL is
+ * what the operator asked for (the Pattern input), so it leads and the
+ * absolute AMSL follows; every other mode keeps AMSL first with the AGL
+ * second (operator request: show both). Both lines need a ground reference;
+ * in terrain mode a missing one is called out instead of leaving a bare AMSL
+ * that looks terrain-following. */
+function HeightReadout({
+  wp,
+  groundM,
+  relativeToUnknownHome,
+  terrainMode,
+  homeAmsl,
+}: {
+  wp: PlannedWaypoint
+  /** Ground (AMSL) under the waypoint, `null` when nothing is loaded. */
+  groundM: number | null
+  relativeToUnknownHome: boolean
+  terrainMode: boolean
+  homeAmsl: number | null
+}) {
+  const { t } = useTranslation()
+  const amsl = wp.altitude.meters
+  const agl = groundM != null && groundM > MIN_AGL_GROUND_M ? amsl - groundM : null
+  if (relativeToUnknownHome) {
+    return <span className="mono block text-muted">{amsl.toFixed(1)} m above HOME</span>
+  }
+  if (terrainMode) {
+    return agl != null ? (
+      <>
+        <span className="mono block text-ink">{agl.toFixed(1)} m AGL</span>
+        <span className="mono block text-[10px] text-muted">{amsl.toFixed(1)} m AMSL</span>
+      </>
+    ) : (
+      <>
+        <span className="mono block text-muted">{amsl.toFixed(1)} m AMSL</span>
+        <span className="mono block text-[10px] text-warn">{t('plan.aglUnknown')}</span>
+      </>
+    )
+  }
+  return (
+    <>
+      <span className="mono block text-muted">{amsl.toFixed(1)} m AMSL</span>
+      {agl != null ? (
+        <span className="mono block text-[10px] text-muted">{agl.toFixed(1)} m AGL</span>
+      ) : homeAmsl != null && homeAmsl !== 0 ? (
+        <span className="mono block text-[10px] text-muted">
+          {(amsl - homeAmsl).toFixed(1)} m above HOME
+        </span>
+      ) : null}
+    </>
+  )
+}
+
 export default function WaypointsStep({ importNotice }: { importNotice: string[] }) {
   const { t } = useTranslation()
   const waypoints = useMissionStore((s) => s.waypoints)
@@ -122,21 +175,13 @@ export default function WaypointsStep({ importNotice }: { importNotice: string[]
                       {wp.position.longitude_deg.toFixed(6)}
                     </span>
                     <span className="shrink-0 text-right">
-                      <span className="mono block text-muted">
-                        {wp.altitude.meters.toFixed(1)} m {relativeToUnknownHome ? 'above HOME' : 'AMSL'}
-                      </span>
-                      {relativeToUnknownHome ? null : groundBySeq?.[idx] != null && groundBySeq[idx] > MIN_AGL_GROUND_M ? (
-                        <span className="mono block text-[10px] text-muted">
-                          {(wp.altitude.meters - groundBySeq[idx]).toFixed(1)} m AGL
-                        </span>
-                      ) : (
-                        home &&
-                        home[2] !== 0 && (
-                          <span className="mono block text-[10px] text-muted">
-                            {(wp.altitude.meters - home[2]).toFixed(1)} m above HOME
-                          </span>
-                        )
-                      )}
+                      <HeightReadout
+                        wp={wp}
+                        groundM={groundBySeq?.[idx] ?? null}
+                        relativeToUnknownHome={relativeToUnknownHome}
+                        terrainMode={altitudeMode === 'terrain'}
+                        homeAmsl={home?.[2] ?? null}
+                      />
                       {pos && (
                         <span className="mono block text-[10px] text-muted">
                           {formatDistance(

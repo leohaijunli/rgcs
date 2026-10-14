@@ -50,12 +50,29 @@ in [ARCHITECTURE.md](ARCHITECTURE.md); open work in [issues.md](../issues.md).
   `scripts/fetch-global-dem.py <lat> <lon>` downloads a Copernicus GLO-30
   patch and builds the tileset in one step (works offline afterwards;
   `--geoid` converts heights to ellipsoid with a matching grid).
+  Toggling on reads the local DEM GeoTIFF folder directly (no dialog):
+  `dem/BC` beside the app (or `$MAGCS_DEM_DIR`) is processed into a cached
+  tileset on first use, then reused. DTM-only DEMs are fine — no DSM
+  required. The popover's two buttons remain for a one-off download or a
+  different source folder.
 - Tool strip (top-left): Select (Esc), Add waypoint (W), Draw polygon (P) in
   Plan; Follow, 2D/3D in Fly. Layers ▸ (imagery style, grid, waypoint
   heights) and View ▸ (north up, go home) popovers.
 - Waypoints: numbered markers colored by flight state (flown dimmed, target
   green halo, selected white halo), height sticks + AGL chips, drag to move,
   right-click a polygon vertex to remove.
+- AGL ground (all `m AGL` readouts — map chips, plan list, altitude profile,
+  the vehicle's drop line and the track's height-above-ground colour) comes
+  from one reference, by priority: the **3D mesh** under the point, then the
+  loaded **2D DEM tile**, then the **HOME plane** (plan HOME elevation, else
+  PX4's own HOME = `AMSL − relative_alt`, else 0). So the clearance tracks the
+  terrain the vehicle is over instead of a flat home plane, and a landed
+  vehicle reads 0 AGL rather than echoing its AMSL altitude. The live vehicle
+  is sampled under itself at most every 1 s / 25 m. The terrain-mode drape
+  uses the same reference (mesh first), so the heights it plans are measured
+  against the surface the readouts are measured against
+  (guard: `scripts/check-agl.mjs`, `cesium/heights.ts`,
+  `mission/meshDrape.ts`).
 
 ## Plan view (right panel, step-by-step)
 
@@ -68,22 +85,33 @@ in [ARCHITECTURE.md](ARCHITECTURE.md); open work in [issues.md](../issues.md).
    path, ETA and coverage are shown; magnetometer survey-line boundaries
    stay GCS-side by default (the line table + MISSION_CURRENT), with an
    optional camera-trigger gating mode.
-   **Drape to terrain (40 m AGL)** rewrites the heights over a dem-prep
-   tile folder: constant AGL over the DTM, raised where the DSM (surface
-   incl. trees) breaks the 5 m clearance; the report shows the tightest
-   clearance, raised count and DEM version (recorded in exported `.plan`s
-   as `maggcsDemVersion`). Fallback sources (CDEM / Copernicus GeoTIFF)
-   are DTM-only — the clearance check is skipped with `has_dsm: false`.
+   **Drape to terrain (40 m AGL)** rewrites the heights over the loaded
+   surface, mesh first: with the 3D mesh on, the survey AGL is measured
+   against the mesh the operator sees (no DTM/DSM pair exists for a
+   tileset — the report says "no DSM" instead of showing an unmeasured
+   margin, and exported plans record `maggcsTerrainRef`). Otherwise it runs
+   over a dem-prep tile folder: constant AGL over the DTM, raised where the
+   DSM (surface incl. trees) breaks the 5 m clearance; the report shows the
+   tightest clearance, raised count and DEM version (recorded in exported
+   `.plan`s as `maggcsDemVersion`). Fallback sources (CDEM / Copernicus
+   GeoTIFF) are DTM-only — the clearance check is skipped with
+   `has_dsm: false`. Either way the stored heights stay absolute AMSL
+   (ADR-013) and the waypoint rows show the AGL next to the AMSL.
 3. **Waypoints** — list with distance-from-vehicle, coordinate entry (DMS or
    decimal), add/remove, inline editor under the selected row; rows colored
-   by flight state.
+   by flight state. Each row shows the height above ground and the absolute
+   AMSL below it (terrain mode leads with the AGL — the value the Pattern
+   input asked for).
 4. **Sync** — Upload / Download, ⋯ menu: Import `.plan` (QGC), Export, Clear
    local plan, Clear FC mission (two-click confirms). One sync badge in the
    header (empty/unsynced/dirty/mismatch/synced — post-upload read-back
    verification).
 
-Altitude mode (relative / AMSL / AGL) is a mission-wide setting in the
-always-visible panel header.
+Altitude mode (relative / AMSL / AGL / terrain) is a mission-wide setting in
+the always-visible panel header. In terrain mode the Pattern altitude is a
+**survey AGL** and every plan edit re-drapes. Waypoint rows show both the AGL
+and the absolute AMSL; with no terrain loaded they say "AGL unknown" instead
+of a bare AMSL that looks draped.
 
 ## Fly view (nav bar + map)
 

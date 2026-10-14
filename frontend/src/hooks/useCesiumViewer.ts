@@ -50,8 +50,16 @@ import { useUiStore } from '../stores/ui'
 import { useMissionStore } from '../stores/mission'
 import { useCommandStore } from '../stores/command'
 import { useTerrainStore } from '../stores/terrain'
+import { groundReferenceAmsl } from '../cesium/heights'
 import type { MissionItem } from '../generated-types/MissionItem'
 import type { TelemetrySnapshot } from '../generated-types/TelemetrySnapshot'
+
+/** How many extra sampling passes a mesh that answered nothing gets (right
+ * after a provider swap or a camera move the tiles under the points are not
+ * resolved yet, and the AGL readouts would say "unknown" next to a mesh that is
+ * plainly on screen), and how long to wait between passes, milliseconds. */
+const MESH_SAMPLE_RETRIES = 3
+const MESH_SAMPLE_RETRY_MS = 900
 
 export interface CesiumViewerHandle {
   /** Set when the map could not initialise (e.g. no WebGL). */
@@ -62,6 +70,9 @@ export interface CesiumViewerHandle {
    * 3D mesh is on, so the vehicle, trail, HOME and plan share one datum;
    * `0` when it is off. */
   setMeshOffset(offsetM: number): void
+  /** DEM/mesh ground elevation (AMSL) under the live vehicle, or `null`
+   * outside coverage — the ground the drop line and AGL readout stand on. */
+  setVehicleGround(groundAmslM: number | null): void
   /** Colour the recorded track by height above ground, or one solid colour. */
   setTrailByAgl(byAgl: boolean): void
   /** Re-render the mission waypoint layer. */
@@ -126,6 +137,7 @@ export function useCesiumViewer(
   const lastSnapshotRef = useRef<TelemetrySnapshot | null>(null)
   const wpOptsRef = useRef<WaypointRenderOptions>({})
   const meshOffsetRef = useRef(0)
+  const vehicleGroundRef = useRef<number | null>(null)
   const [meshOffset, setMeshOffsetState] = useState(0)
   const predictPos = useRef<Cesium.Cartesian3[]>([])
   const wpLayerRef = useRef<WaypointLayer | null>(null)
@@ -374,8 +386,19 @@ export function useCesiumViewer(
     // home it is `relative_alt` alone, which hangs the marker below the path
     // by the site elevation, and a HOME that changes in flight would step
     // the whole trail. (Once the 3D mesh is on the datum offset is added.)
-    const homeAmsl = homeAmslRef.current
     const reportedAmsl = pos.altitude.meters
+    // Ground reference for the AGL drop line / readout, by priority: the
+    // DEM/mesh surface under the vehicle (sampled by MapView), else the plan's
+    // HOME elevation, else PX4's own HOME (AMSL − relative_alt). Without the
+    // DEM the label echoed the AMSL altitude (a hovering vehicle read its MSL
+    // value as clearance). See `cesium/heights.ts`.
+    const groundAmsl = vehicleGroundRef.current
+    const homeAmsl = groundReferenceAmsl({
+      planHomeAmslM: homeAmslRef.current,
+      reportedAmslM: reportedAmsl,
+      relativeAltM: pos.relative_alt_m,
+      demGroundAmslM: groundAmsl,
+    })
     const droneAmsl = Number.isFinite(reportedAmsl) ? reportedAmsl : homeAmsl + pos.relative_alt_m
     // Without the 3D terrain mesh the globe is the bare ellipsoid (height 0),
     // so the visible ground is NOT at HOME's AMSL: a landed vehicle drawn at
@@ -385,7 +408,14 @@ export function useCesiumViewer(
     const meshOn = useTerrainStore.getState().terrain3d != null
     const useRel = !meshOn && Number.isFinite(pos.relative_alt_m)
     const renderAmsl = useRel ? pos.relative_alt_m : droneAmsl + offset
-    const groundRender = useRel ? 0 : homeAmsl + offset
+    // The flat globe's vertical origin is the home ground, so a DEM surface
+    // has to be expressed relative to it (0 = the plane itself, no DEM).
+    const vehicleHomeAmsl = reportedAmsl - pos.relative_alt_m
+    const groundRender = useRel
+      ? groundAmsl != null && Number.isFinite(vehicleHomeAmsl)
+        ? groundAmsl - vehicleHomeAmsl
+        : 0
+      : homeAmsl + offset
     const cart = Cesium.Cartesian3.fromDegrees(pos.longitude_deg, pos.latitude_deg, renderAmsl)
 
     // Attitude straight from the MAVLink ATTITUDE message; fall back to the
@@ -425,8 +455,9 @@ export function useCesiumViewer(
         ? projectAhead(pos, PREDICT_HORIZON_S, PREDICT_STEP_S, renderAmsl)
         : []
 
-    // Record the track: AMSL for position, height above the ground plane
-    // (HOME's AMSL, the same reference as the drop line) for the colour.
+    // Record the track: AMSL for position, height above the same ground the
+    // drop line stands on (the DEM/mesh surface, else the HOME plane) for the
+    // colour.
     if (record) {
       // The trail bakes `offset` in at render time; in the flat-globe case it
       // must share the marker's height-above-HOME frame (offset is 0 there).
@@ -449,6 +480,19 @@ export function useCesiumViewer(
   const setTrailByAgl = useCallback((byAgl: boolean) => {
     trailRef.current?.setColorByAgl(byAgl)
   }, [])
+
+  // DEM/mesh ground under the live vehicle changed (MapView sampled it):
+  // re-render the marker so the drop line lands on the terrain and the AGL
+  // label updates, without recording another trail point.
+  const setVehicleGround = useCallback(
+    (groundAmslM: number | null) => {
+      const next = groundAmslM != null && Number.isFinite(groundAmslM) ? groundAmslM : null
+      if (next === vehicleGroundRef.current) return
+      vehicleGroundRef.current = next
+      setSnapshot(lastSnapshotRef.current, false)
+    },
+    [setSnapshot],
+  )
 
   const setMission = useCallback(
     (
@@ -543,13 +587,25 @@ export function useCesiumViewer(
         if (inside) covered.push(i)
       })
       if (covered.length === 0) return out
-      const sampled = await Cesium.sampleTerrainMostDetailed(
-        provider,
-        covered.map((i) => Cesium.Cartographic.fromDegrees(points[i][1], points[i][0])),
-      )
-      sampled.forEach((c, k) => {
-        if (Number.isFinite(c.height)) out[covered[k]] = c.height
-      })
+      const once = async (): Promise<void> => {
+        const sampled = await Cesium.sampleTerrainMostDetailed(
+          provider,
+          covered.map((i) => Cesium.Cartographic.fromDegrees(points[i][1], points[i][0])),
+        )
+        sampled.forEach((c, k) => {
+          if (Number.isFinite(c.height)) out[covered[k]] = c.height
+        })
+      }
+      await once()
+      for (
+        let attempt = 0;
+        attempt < MESH_SAMPLE_RETRIES && out.every((h) => h == null) && !viewer.isDestroyed();
+        attempt += 1
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, MESH_SAMPLE_RETRY_MS))
+        if (viewer.isDestroyed()) break
+        await once()
+      }
       return out
     },
     [],
@@ -567,5 +623,5 @@ export function useCesiumViewer(
     applyLayerVisibility(viewer, showGrid)
   }, [])
 
-  return { initError, setSnapshot, setMeshOffset, setTrailByAgl, setMission, setTerrainOverlay, setTerrain3d, sampleMeshGround, setLayers, setImageryStyle, focusWaypoint, fitMission, goHome, lookNorth }
+  return { initError, setSnapshot, setMeshOffset, setVehicleGround, setTrailByAgl, setMission, setTerrainOverlay, setTerrain3d, sampleMeshGround, setLayers, setImageryStyle, focusWaypoint, fitMission, goHome, lookNorth }
 }

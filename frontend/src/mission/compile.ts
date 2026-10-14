@@ -224,6 +224,21 @@ export function toDisplayItems(items: MissionItem[], homeAmslM: number): Mission
   )
 }
 
+/**
+ * Lat/lon (degrees) of a coordinate-bearing mission item, or `null` for a
+ * command item (`DO_*`, which carries no coordinate).
+ *
+ * `x` is **latitude** and `y` is **longitude** in a global frame (MAVLink
+ * `MISSION_ITEM_INT`, both ×1e7). This helper exists because two map effects
+ * built the pair as `[y/1e7, x/1e7]` and handed it to samplers that take
+ * `(lat, lon)`: every ground sample fell outside the DEM, so the AGL readouts
+ * said "unknown" no matter what terrain was loaded.
+ */
+export function itemLatLon(item: MissionItem): [number, number] | null {
+  if (item.x === 0 && item.y === 0) return null
+  return [item.x / 1e7, item.y / 1e7]
+}
+
 /** Convert a wire item (FC download or QGC import) to a planned AMSL waypoint. */
 export function waypointFromItem(item: MissionItem, homeAmslM: number): PlannedWaypoint {
   return {
