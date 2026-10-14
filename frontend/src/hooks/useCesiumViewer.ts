@@ -342,8 +342,19 @@ export function useCesiumViewer(
     // home it is `relative_alt` alone, which hangs the marker below the path
     // by the site elevation, and a HOME that changes in flight would step
     // the whole trail. (Once the 3D mesh is on the datum offset is added.)
-    const homeAmsl = homeAmslRef.current
     const reportedAmsl = pos.altitude.meters
+    // Ground reference for the AGL readout. The plan's HOME altitude when it
+    // has one; otherwise the vehicle's own home elevation (AMSL − relative_alt,
+    // i.e. where PX4 set HOME). Without this the reference defaults to 0 and a
+    // landed vehicle shows AGL == AMSL (e.g. 3.3 m / 3.3 m).
+    const planHomeAmsl = homeAmslRef.current
+    const vehicleHomeAmsl = reportedAmsl - pos.relative_alt_m
+    const homeAmsl =
+      planHomeAmsl !== 0
+        ? planHomeAmsl
+        : Number.isFinite(vehicleHomeAmsl)
+          ? vehicleHomeAmsl
+          : 0
     const droneAmsl = Number.isFinite(reportedAmsl) ? reportedAmsl : homeAmsl + pos.relative_alt_m
     const renderAmsl = droneAmsl + offset
     const cart = Cesium.Cartesian3.fromDegrees(pos.longitude_deg, pos.latitude_deg, renderAmsl)
