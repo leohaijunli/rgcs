@@ -25,6 +25,10 @@ raised: number,
  */
 void_filled: number, 
 /**
+ * Landing waypoints draped onto the ground rather than `agl_m` above it.
+ */
+landed: number, 
+/**
  * Waypoints skipped because they are command items (no coordinate).
  */
 command_items_skipped: number, 

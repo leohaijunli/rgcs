@@ -99,7 +99,10 @@ in [ARCHITECTURE.md](ARCHITECTURE.md); open work in [issues.md](../issues.md).
    (ADR-013) and the waypoint rows show the AGL next to the AMSL.
 3. **Waypoints** — list with distance-from-vehicle, coordinate entry (DMS or
    decimal), add/remove, inline editor under the selected row; rows colored
-   by flight state. Each row shows the height above ground and the absolute
+   by flight state. A `NAV_LAND` item in an imported plan is draped **onto
+   the ground** in terrain mode (the cruise `agl` and the DSM clearance do
+   not apply to it), and the Pattern step reports how many landing targets
+   were placed. Each row shows the height above ground and the absolute
    AMSL below it (terrain mode leads with the AGL — the value the Pattern
    input asked for).
 4. **Sync** — Upload / Download, ⋯ menu: Import `.plan` (QGC), Export, Clear
@@ -122,7 +125,11 @@ carry everything.
   each behind a two-click confirm. Takeoff replicates PX4's `commander
   takeoff` flow — NAV_TAKEOFF (param7 = current AMSL + 10 m relative)
   → await ACK → arm (Commander.cpp:336-345; a bare mode intent never
-  leaves the ground). PX4 runs its own preflight checks for GCS arming
+  leaves the ground). **Land** carries the *ground under the vehicle*
+  (param5/6 = current position, param7 = terrain AMSL, mesh first, else
+  the current fix) so the descent targets the surface: with the old
+  all-zero payload the vehicle held altitude over lower ground instead
+  of touching down (SITL report). PX4 runs its own preflight checks for GCS arming
   and denies with `temporarily_rejected` plus a reason (ADR-017); the
   21196 kill code is never sent from the UI. (Pause/Continue removed:
   PX4 v1.17 NACKs `MAV_CMD_DO_PAUSE_CONTINUE`.)

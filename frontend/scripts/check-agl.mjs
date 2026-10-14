@@ -195,6 +195,43 @@ check('the return-climb floor lifts a valley waypoint', () => {
   near(r.waypoints[1].altitude.meters, 130, 'floored to start − 10')
 })
 
+check('a landing waypoint is draped onto the ground, not 40 m above it', () => {
+  // Operator report (SITL): the landing target kept a HOME-plane height and
+  // the aircraft hovered over lower ground instead of touching down.
+  const ground = new Map([
+    [0, 100],
+    [1, 20],
+  ])
+  const geoid = new Map([
+    [0, 0],
+    [1, 0],
+  ])
+  // Cruise leg over the high ground, landing item at the low point.
+  const plan = [wp(0, 0), wp(1, 0, { command: 21 })]
+  const r = drapeToMesh(plan, ground, { aglM: 40, geoidByIndex: geoid })
+  near(r.waypoints[0].altitude.meters, 140, 'the cruise leg keeps its AGL')
+  near(r.waypoints[1].altitude.meters, 20, 'landing on the ground')
+  assert(r.landed === 1, 'one landing item reported')
+  assert(r.draped === 2, 'both rewritten')
+})
+
+check('a landing clearance may hold the target just above the ground', () => {
+  const r = drapeToMesh([wp(0, 0, { command: 21 })], new Map([[0, 20]]), {
+    aglM: 40,
+    landClearanceM: 0.5,
+  })
+  near(r.waypoints[0].altitude.meters, 20.5, 'landing target')
+  near(r.minAglM, 0.5, 'clearance flown')
+})
+
+check('a locked landing waypoint keeps its pin', () => {
+  const r = drapeToMesh([wp(0, 77, { command: 21, locked: true })], new Map([[0, 100]]), {
+    aglM: 40,
+  })
+  near(r.waypoints[0].altitude.meters, 77, 'locked height')
+  assert(r.landed === 0 && r.draped === 0, 'nothing draped')
+})
+
 check('the drape never guesses: an empty sample set drapes nothing', () => {
   const r = drapeToMesh([wp(0, 33)], new Map(), { aglM: 40 })
   near(r.waypoints[0].altitude.meters, 33, 'untouched height')

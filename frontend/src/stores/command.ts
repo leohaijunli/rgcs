@@ -6,6 +6,24 @@ import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { logEvent } from './eventlog'
 import { useTelemetryStore } from './telemetry'
+import { useTerrainStore } from './terrain'
+
+/** Ground (AMSL) under a point, for the commands that must name a terrain
+ * target: the mesh/DEM sample when terrain is loaded, else the vehicle's own
+ * altitude (a vehicle on the ground knows its height). */
+async function groundAmslAt(
+  latDeg: number,
+  lonDeg: number,
+  fallbackAmslM: number,
+): Promise<number> {
+  try {
+    const ground = await useTerrainStore.getState().samplePointAmsl(latDeg, lonDeg)
+    if (ground != null && Number.isFinite(ground)) return ground
+  } catch {
+    /* no terrain: fall back to the vehicle's altitude */
+  }
+  return fallbackAmslM
+}
 
 /**
  * Commands the UI may send. `takeoff`/`land` map to `MAV_CMD_NAV_TAKEOFF` /
@@ -59,8 +77,17 @@ export const useCommandStore = create<CommandState>((set) => ({
 
   send: async (name) => {
     set({ pending: name, lastEvent: null })
+    // Landing: name the ground under the vehicle so the FC lands on the
+    // terrain instead of a HOME plane (operator report: the aircraft held
+    // altitude over lower ground at the end of a landing). Takeoff does the
+    // same with its AMSL climb target.
+    const fix = useTelemetryStore.getState().snapshot?.global_position
+    const ground =
+      name === 'land' && fix
+        ? await groundAmslAt(fix.latitude_deg, fix.longitude_deg, fix.altitude.meters)
+        : null
     try {
-      await invoke('send_command', { name })
+      await invoke('send_command', { name, groundAmslM: ground })
     } catch (err) {
       set({
         pending: null,
@@ -132,11 +159,16 @@ export const useCommandStore = create<CommandState>((set) => ({
 
   /** Set the vehicle's home to a map point (`MAV_CMD_DO_SET_HOME`). */
   sendSetHome: async (latDeg, lonDeg) => {
-    // Same altitude the backend sends (the current AMSL fix).
-    const alt = useTelemetryStore.getState().snapshot?.global_position?.altitude.meters ?? 0
+    // The terrain height under the *clicked* point, not the vehicle's own
+    // altitude: home is usually re-set while airborne over the next site, and
+    // an airborne altitude bakes a home plane far above the ground (every
+    // HOME-referenced height, the landing target included, then sits too
+    // high). Falls back to the current fix when no terrain is loaded.
+    const fix = useTelemetryStore.getState().snapshot?.global_position
+    const alt = await groundAmslAt(latDeg, lonDeg, fix?.altitude.meters ?? 0)
     pendingHome = [latDeg, lonDeg, alt]
     try {
-      await invoke('send_set_home', { latDeg, lonDeg })
+      await invoke('send_set_home', { latDeg, lonDeg, amslM: alt })
     } catch (err) {
       // Invoke-level failures ("not connected", "no position fix yet") never
       // reach the backend `command` event, so log them here or they vanish.

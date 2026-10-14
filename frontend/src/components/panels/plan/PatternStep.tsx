@@ -412,6 +412,12 @@ function DrapeBlock() {
             {t('plan.pattern.drape.ground')} {meshDrape.minGroundAmslM.toFixed(1)}–
             {meshDrape.maxGroundAmslM.toFixed(1)} m
           </span>
+          {meshDrape.landed > 0 && (
+            <span className="text-ink">
+              {t('plan.pattern.drape.landed')} {meshDrape.landed} (
+              {t('plan.pattern.drape.landing')})
+            </span>
+          )}
           {meshDrape.missing > 0 && (
             <span className="text-error">
               {t('plan.pattern.drape.meshMissing', { count: meshDrape.missing })}
@@ -446,6 +452,14 @@ function DrapeBlock() {
           <span>
             {t('plan.pattern.drape.raised')} {drape.report.raised}
           </span>
+          {/* Landing items are draped onto the ground, not 40 m above it —
+           * the one height in the plan that must not carry the survey AGL. */}
+          {drape.report.landed > 0 && (
+            <span className="text-ink">
+              {t('plan.pattern.drape.landed')} {drape.report.landed} (
+              {t('plan.pattern.drape.landing')})
+            </span>
+          )}
           {drape.report.void_filled > 0 && (
             <span>
               {t('plan.pattern.drape.voidFilled')} {drape.report.void_filled}

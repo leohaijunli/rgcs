@@ -278,6 +278,8 @@ export default {
           sourceMesh: '3D mesh',
           agl: 'AGL',
           ground: 'Ground',
+          landed: 'landing targets:',
+          landing: 'landing on the ground',
           meshMissing: '{{count}} waypoint(s) outside the mesh — not draped',
         },
         terrainNeedsDem:

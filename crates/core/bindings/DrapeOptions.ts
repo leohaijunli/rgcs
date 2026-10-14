@@ -15,6 +15,13 @@ agl_m: number,
  */
 min_dsm_clearance_m: number, 
 /**
+ * How far above the ground a landing waypoint's target is placed
+ * (`NAV_LAND` / `NAV_VTOL_LAND`), metres. Zero aims at the surface
+ * itself; a small clearance keeps the *commanded* target above the
+ * ground while the final descent still ends on it.
+ */
+land_clearance_m: number, 
+/**
  * Draped heights must never fall below the first waypoint's draped
  * height minus this much (the return-climb floor), metres. `None` =
  * no floor.

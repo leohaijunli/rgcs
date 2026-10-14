@@ -22,6 +22,11 @@ import type { PlannedWaypoint } from '../generated-types/PlannedWaypoint'
  * (`DO_*`) pass through — mirrors `core::terrain::drape`. */
 const NAV_WAYPOINT = 16
 
+/** Coordinate commands that must finish *on* the ground rather than `aglM`
+ * above it: `NAV_LAND` / `NAV_VTOL_LAND` (operator report: a landing whose
+ * target sat on the HOME plane left the vehicle hovering over lower ground). */
+const LAND_COMMANDS: readonly number[] = [21, 85]
+
 /** Drape options for the mesh path. The DSM clearance check has no mesh
  * equivalent (a tileset is one surface, no DTM/DSM pair): the report says so
  * instead of pretending a clearance was measured. */
@@ -32,6 +37,9 @@ export interface MeshDrapeOptions {
    * ellipsoid-datum mesh sample to reach AMSL. `null`/missing = the sample is
    * already AMSL (orthometric mesh) — no conversion. */
   geoidByIndex?: ReadonlyMap<number, number> | null
+  /** How far above the ground a landing waypoint's target is placed, metres.
+   * Zero aims at the surface itself. */
+  landClearanceM?: number
   /** Draped heights must never fall below the first waypoint's draped height
    * minus this much (the return-climb floor), metres. `null` = no floor. */
   floorBelowStartM?: number | null
@@ -43,6 +51,8 @@ export interface MeshDrapeResult {
   waypoints: PlannedWaypoint[]
   /** Coordinate waypoints whose height was rewritten. */
   draped: number
+  /** Landing waypoints placed on the ground (not `aglM` above it). */
+  landed: number
   /** Coordinate waypoints with no mesh sample (outside the tileset): left
    * untouched — the operator must clip the survey to the coverage. */
   missing: number
@@ -68,13 +78,15 @@ export function drapeToMesh(
 ): MeshDrapeResult {
   const out: PlannedWaypoint[] = []
   let draped = 0
+  let landed = 0
   let missing = 0
   let minGround = Number.POSITIVE_INFINITY
   let maxGround = Number.NEGATIVE_INFINITY
   let minAgl = Number.POSITIVE_INFINITY
 
   waypoints.forEach((wp, index) => {
-    if (wp.command !== NAV_WAYPOINT || wp.locked) {
+    const landing = LAND_COMMANDS.includes(wp.command)
+    if ((wp.command !== NAV_WAYPOINT && !landing) || wp.locked) {
       out.push(wp)
       return
     }
@@ -85,9 +97,13 @@ export function drapeToMesh(
       return
     }
     const groundAmsl = sample - (options.geoidByIndex?.get(index) ?? 0)
-    const height = groundAmsl + options.aglM
+    // A landing waypoint aims at the ground itself; `aglM` (and the DEM
+    // path's DSM clearance) would hold it in the air instead.
+    const clearance = landing ? (options.landClearanceM ?? 0) : options.aglM
+    const height = groundAmsl + clearance
     out.push({ ...wp, altitude: { ...wp.altitude, meters: height } })
     draped += 1
+    if (landing) landed += 1
     minGround = Math.min(minGround, groundAmsl)
     maxGround = Math.max(maxGround, groundAmsl)
     minAgl = Math.min(minAgl, height - groundAmsl)
@@ -110,6 +126,7 @@ export function drapeToMesh(
   return {
     waypoints: out,
     draped,
+    landed,
     missing,
     minGroundAmslM: Number.isFinite(minGround) ? minGround : 0,
     maxGroundAmslM: Number.isFinite(maxGround) ? maxGround : 0,

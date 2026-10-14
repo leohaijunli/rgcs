@@ -57,3 +57,30 @@ against a 2D dem-prep tile — with just the 3D mesh switched on, the requested
 - Provenance (ADR-004) in exported plans: `maggcsDemVersion` as before for
   the tile path, plus `maggcsTerrainRef: mesh:<folder>` for the mesh path —
   a tileset has no content hash to record.
+
+## Addendum — landing and HOME target the terrain, not the HOME plane (2026-10-14)
+
+Operator report (SITL): after `Land` completed, the aircraft held altitude over
+lower ground instead of touching down — the landing target was the HOME plane.
+
+- `MAV_CMD_NAV_LAND` no longer goes out as `[0.0; 7]`. PX4 reads `param7` as an
+  **AMSL** altitude (same as takeoff), so the GCS now sends the ground under
+  the vehicle: `param5/6` = current position, `param7` = terrain AMSL sampled
+  by the frontend (mesh → DEM tile → the current fix as the last resort, which
+  is right for a vehicle already on the ground).
+- The drape places a **landing waypoint** (`NAV_LAND` / `NAV_VTOL_LAND`, i.e.
+  21/85) on the ground (`DrapeOptions.land_clearance_m`, default 0) rather
+  than `agl_m` above it, and skips the DSM clearance for it — a clearance
+  raise would strand the landing above the surface. Locked items still keep
+  their pin, and voids/coverage behave like any other waypoint. Both paths
+  report a `landed` count (Pattern step).
+- `DO_SET_HOME` no longer takes the vehicle's own altitude. The frontend
+  samples the terrain under the **clicked point** (`terrain.samplePointAmsl`,
+  mesh → DEM) and sends it as `param7`; the command falls back to the current
+  fix only when no terrain is loaded. Setting home while airborne over the
+  next site used to bake a home plane far above the ground, and every
+  HOME-referenced height (relative legs, the landing target) then sat too
+  high.
+- Still FC-side: PX4's own land detector decides touchdown; nothing here
+  changes `MPC_LAND_*` or the EKF. If a SITL landing still holds altitude,
+  the remaining suspect is the FC's landing parameters, not the GCS payload.

@@ -419,7 +419,11 @@ pub fn terrain_drape(
 /// (SITL-confirmed NACK, operator report 2026-10-10); takeoff/land are the
 /// flight-phase commands PX4 v1.17 actually supports.
 #[tauri::command]
-pub async fn send_command(name: String, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn send_command(
+    name: String,
+    ground_amsl_m: Option<f64>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     let service = state.command().ok_or_else(|| "not connected".to_string())?;
     let (command, params) = named_command(&name)?;
 
@@ -457,6 +461,30 @@ pub async fn send_command(name: String, state: State<'_, AppState>) -> Result<()
         return Ok(());
     }
 
+    // Landing (operator report, SITL): PX4 reads `NAV_LAND`'s `param7` as an
+    // **AMSL** altitude exactly like takeoff, so a bare `[0.0; 7]` asked the
+    // vehicle to land at AMSL 0 — a descending-to-nowhere target that ended
+    // with the aircraft holding altitude over lower ground. Send the ground
+    // under the vehicle instead (the frontend samples the terrain, mesh
+    // first); without a terrain sample the current fix stands in, since a
+    // vehicle on the ground knows its own height.
+    if name == "land" {
+        let fix = state
+            .hub()
+            .and_then(|h| h.snapshot().global_position)
+            .ok_or_else(|| "no position fix yet — cannot compute the landing target".to_string())?;
+        let ground = ground_amsl_m
+            .filter(|m| m.is_finite())
+            .unwrap_or_else(|| fix.altitude.meters());
+        return service
+            .send(
+                MavCmd::MAV_CMD_NAV_LAND,
+                land_params(fix.latitude_deg, fix.longitude_deg, ground),
+            )
+            .await
+            .map_err(|e| e.to_string());
+    }
+
     service
         .send(command, params)
         .await
@@ -489,6 +517,20 @@ fn takeoff_params(lat_deg: f64, lon_deg: f64, current_amsl_m: f64) -> [f32; 7] {
     params[4] = lat_deg as f32;
     params[5] = lon_deg as f32;
     params[6] = (current_amsl_m as f32) + TAKEOFF_ALTITUDE_M;
+    params
+}
+
+/// `MAV_CMD_NAV_LAND` parameters.
+///
+/// Same convention as takeoff: PX4's navigator treats `param7` as an **AMSL**
+/// altitude, so the GCS sends the ground under the vehicle. `param5/6` carry
+/// the current lat/lon because `PX4_ISFINITE(0.0)` is true — zeros would aim
+/// the landing at 0°N/0°E (the equator).
+fn land_params(lat_deg: f64, lon_deg: f64, ground_amsl_m: f64) -> [f32; 7] {
+    let mut params = [0.0; 7];
+    params[4] = lat_deg as f32;
+    params[5] = lon_deg as f32;
+    params[6] = ground_amsl_m as f32;
     params
 }
 
@@ -599,14 +641,21 @@ pub async fn send_goto(
 
 /// Set the vehicle's home to a spot clicked on the map (`MAV_CMD_DO_SET_HOME`).
 /// `param1` = 0 carries the clicked coordinates (`param5/6/7`), so PX4 sets
-/// home there rather than at the vehicle's current position. The altitude is
-/// the vehicle's current AMSL — the drone is on the ground when a home is
-/// set, so the current fix is the local ground height. The verdict arrives
-/// on the `"command"` event (`set_home`).
+/// home there rather than at the vehicle's current position.
+///
+/// `amsl_m` is the **terrain height under the clicked point**, sampled by the
+/// frontend (mesh first, then the DEM tile). It must not default to the
+/// vehicle's own altitude: home is usually re-set while *airborne* over the
+/// next site, and an airborne altitude bakes a home plane far above the
+/// ground — every HOME-referenced height (relative legs, the landing target)
+/// then sits too high. Without a terrain sample the current fix stands in,
+/// which is correct for the landed case. The verdict arrives on the
+/// `"command"` event (`set_home`).
 #[tauri::command]
 pub async fn send_set_home(
     lat_deg: f64,
     lon_deg: f64,
+    amsl_m: Option<f64>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let service = state.command().ok_or_else(|| "not connected".to_string())?;
@@ -614,10 +663,13 @@ pub async fn send_set_home(
         .hub()
         .and_then(|h| h.snapshot().global_position)
         .ok_or_else(|| "no position fix yet — cannot set home".to_string())?;
+    let alt = amsl_m
+        .filter(|m| m.is_finite())
+        .unwrap_or_else(|| fix.altitude.meters());
     service
         .send(
             MavCmd::MAV_CMD_DO_SET_HOME,
-            set_home_params(lat_deg, lon_deg, fix.altitude.meters()),
+            set_home_params(lat_deg, lon_deg, alt),
         )
         .await
         .map_err(|e| e.to_string())
@@ -717,6 +769,10 @@ pub async fn install_udev_rules(vid_pids: Vec<(String, String)>) -> Result<Strin
 }
 
 /// Map a UI command name to its MAVLink command and parameters.
+///
+/// The returned parameters are the *default* payload; `takeoff` and `land`
+/// are overridden in [`send_command`] with the position/altitude targets
+/// computed from telemetry (see [`takeoff_params`] / [`land_params`]).
 fn named_command(name: &str) -> Result<(MavCmd, [f32; 7]), String> {
     let command = match name {
         "takeoff" => MavCmd::MAV_CMD_NAV_TAKEOFF,
@@ -803,8 +859,22 @@ mod tests {
         let (land_cmd, land) = named_command("land").expect("land");
         assert_eq!(takeoff_cmd, MavCmd::MAV_CMD_NAV_TAKEOFF);
         assert_eq!(land_cmd, MavCmd::MAV_CMD_NAV_LAND);
+        // Defaults only: `send_command` replaces them with the computed
+        // position/altitude targets (takeoff_params / land_params).
         assert_eq!(takeoff, [0.0; 7]);
         assert_eq!(land, [0.0; 7]);
+    }
+
+    #[test]
+    fn land_params_carry_the_ground_target() {
+        // param7 must be the terrain AMSL under the vehicle — a bare 0.0
+        // asked PX4 to land at sea level, which left the aircraft hovering
+        // over lower ground (operator report, SITL).
+        let p = land_params(48.6493, -123.3982, 12.5);
+        assert_eq!(p[4], 48.6493);
+        assert_eq!(p[5], -123.3982);
+        assert_eq!(p[6], 12.5);
+        assert_eq!(p[0], 0.0, "param1: land at the position given below");
     }
 
     #[test]

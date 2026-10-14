@@ -74,6 +74,11 @@ interface TerrainState {
    * from the loaded 2D tile. `null` outside coverage — the caller falls back
    * to the mesh or the HOME plane. Does not touch state. */
   sampleDem: (points: Array<[number, number]>) => Promise<Array<number | null>>
+  /** Ground (AMSL) under one point: the live 3D mesh first (converting an
+   * ellipsoid tileset with N(EGM96)), then the loaded DEM tile, else `null`.
+   * The flight commands that need a terrain target (land, set home) use this
+   * so they follow the same reference as every AGL readout. */
+  samplePointAmsl: (lat: number, lon: number) => Promise<number | null>
   load: () => Promise<void>
   /** Pick + load a tile against the current survey area (no dialog). */
   repick: () => Promise<void>
@@ -164,6 +169,29 @@ export const useTerrainStore = create<TerrainState>((set, get) => ({
       if (dtm != null) next[seq] = dtm
     })
     set({ groundBySeq: Object.keys(next).length > 0 ? next : null })
+  },
+  samplePointAmsl: async (lat, lon) => {
+    const mesh = get().meshSampler
+    if (mesh) {
+      try {
+        const [h] = await mesh.sample([[lat, lon]])
+        if (h != null && Number.isFinite(h)) {
+          if (mesh.verticalDatum === 'orthometric') return h
+          const { invoke } = await import('@tauri-apps/api/core')
+          const samples = await invoke<Array<{ undulation_m: number | null }>>('geoid_sample', {
+            points: [[lat, lon]],
+          })
+          const n = samples[0]?.undulation_m
+          // No geoid: an ellipsoid height cannot become AMSL — let the DEM
+          // tile answer instead of returning a height that is ~N metres off.
+          if (n != null && Number.isFinite(n)) return h - n
+        }
+      } catch {
+        /* mesh gone: fall through to the DEM tile */
+      }
+    }
+    const [dtm] = await get().sampleDem([[lat, lon]])
+    return dtm ?? null
   },
   sampleDem: async (points) => {
     const tile = get().tile

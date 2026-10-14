@@ -1,6 +1,10 @@
 //! Terrain-following draping (ADR-005 Path A / comprehensive plan S3, D3):
 //! rewrite survey waypoint heights so the aircraft flies a constant AGL
-//! above the DTM, cross-checked against the DSM.
+//! above the DTM, cross-checked against the DSM. Landing waypoints
+//! (`NAV_LAND` / `NAV_VTOL_LAND`) are the exception: they are draped *onto*
+//! the ground, not `agl_m` above it — a plan whose last item kept its
+//! HOME-plane height ended with the vehicle hovering over lower ground
+//! instead of touching down (operator report, SITL).
 //!
 //! The ground station precomputes everything (ADR-005): the draped heights
 //! are baked into the mission at planning time, keeping the flight
@@ -34,6 +38,11 @@ pub struct DrapeOptions {
     /// draped height does not clear the surface by this much is **raised**
     /// to DSM + clearance, metres.
     pub min_dsm_clearance_m: f64,
+    /// How far above the ground a landing waypoint's target is placed
+    /// (`NAV_LAND` / `NAV_VTOL_LAND`), metres. Zero aims at the surface
+    /// itself; a small clearance keeps the *commanded* target above the
+    /// ground while the final descent still ends on it.
+    pub land_clearance_m: f64,
     /// Draped heights must never fall below the first waypoint's draped
     /// height minus this much (the return-climb floor), metres. `None` =
     /// no floor.
@@ -51,6 +60,7 @@ impl Default for DrapeOptions {
         Self {
             agl_m: 40.0,
             min_dsm_clearance_m: 5.0,
+            land_clearance_m: 0.0,
             floor_below_start_m: None,
             void_bridge_radius_m: 100.0,
         }
@@ -73,11 +83,17 @@ pub struct DrapeReport {
     /// ground within the bridge radius instead (small classification
     /// holes); the report lets the operator judge the borrow.
     pub void_filled: u32,
+    /// Landing waypoints draped onto the ground rather than `agl_m` above it.
+    pub landed: u32,
     /// Waypoints skipped because they are command items (no coordinate).
     pub command_items_skipped: u32,
     /// The DEM version the drape was computed against (ADR-004 archives).
     pub dem_version: String,
 }
+
+/// `MAV_CMD` values that carry a coordinate but must finish *on* the ground
+/// rather than `agl_m` above it: `NAV_LAND` and `NAV_VTOL_LAND`.
+const LAND_COMMANDS: [u16; 2] = [21, 85];
 
 /// Metres per degree of latitude for the void-bridge search offsets.
 const M_PER_DEG: f64 = 111_320.0;
@@ -120,8 +136,10 @@ fn sample_with_void_bridge(
 ///
 /// Coordinate-bearing waypoints get `height = DTM + agl`, then the DSM check:
 /// below `DSM + min_dsm_clearance` means the DTM+AGL line clips the surface —
-/// raised to `DSM + clearance`. Command items (`DO_*`) carry no coordinate and
-/// pass through untouched.
+/// raised to `DSM + clearance`. Landing waypoints get `DTM + land_clearance`
+/// instead: they aim at the ground, so neither the AGL nor the DSM clearance
+/// applies (a clearance-raise would strand the landing above the surface).
+/// Command items (`DO_*`) carry no coordinate and pass through untouched.
 ///
 /// # Errors
 ///
@@ -141,9 +159,10 @@ pub fn drape_to_terrain(
     let mut min_clearance = f64::INFINITY;
 
     for wp in waypoints {
+        let landing = LAND_COMMANDS.contains(&wp.command);
         // Command items (no coordinate) pass through — their `z` is a
         // command argument, not an altitude.
-        if wp.command != 16 {
+        if wp.command != 16 && !landing {
             report.command_items_skipped += 1;
             out.push(wp.clone());
             continue;
@@ -169,6 +188,18 @@ pub fn drape_to_terrain(
         };
         if bridged {
             report.void_filled += 1;
+        }
+        // A landing waypoint aims at the ground itself: `agl_m` and the DSM
+        // clearance would both hold it above the surface (the hover report).
+        if landing {
+            report.landed += 1;
+            let mut landed = wp.clone();
+            landed.altitude = crate::height::Height::new(
+                wp.altitude.datum(),
+                dtm.meters() + options.land_clearance_m,
+            );
+            out.push(landed);
+            continue;
         }
         let mut height = dtm.meters() + options.agl_m;
         // DSM clearance: the draped height must clear the surface. A void
@@ -256,6 +287,13 @@ mod tests {
         PlannedWaypoint::waypoint(GeoPoint::new(0.5, lon), 0.0)
     }
 
+    /// A landing item (`NAV_LAND`; 21 carries a coordinate like 16).
+    fn land_wp(lon: f64) -> PlannedWaypoint {
+        let mut item = wp(lon);
+        item.command = 21;
+        item
+    }
+
     #[test]
     fn locked_waypoints_keep_their_height() {
         let mut pinned = wp(0.001);
@@ -306,6 +344,56 @@ mod tests {
         // height = dsm + 100 = ground + 100 (dsm == dtm in the fake).
         assert!((report.waypoints[0].altitude.meters() - 101.0).abs() < 1e-9);
         assert!(report.min_dsm_clearance_m >= 99.999);
+    }
+
+    #[test]
+    fn landing_items_are_draped_onto_the_ground() {
+        // Operator report (SITL): a plan whose landing target kept its
+        // HOME-plane height left the vehicle hovering over lower ground.
+        let options = DrapeOptions {
+            agl_m: 40.0,
+            min_dsm_clearance_m: 100.0, // must not lift the landing target
+            ..DrapeOptions::default()
+        };
+        let report =
+            drape_to_terrain(&[wp(0.001), land_wp(0.002)], &Slope, &options).expect("drape");
+        // Cruise keeps its AGL (raised by the clearance), the landing ends on
+        // the ground: 2 m at lon 0.002.
+        assert!((report.waypoints[0].altitude.meters() - 101.0).abs() < 1e-9);
+        assert!((report.waypoints[1].altitude.meters() - 2.0).abs() < 1e-9);
+        assert_eq!(report.landed, 1);
+        assert_eq!(report.command_items_skipped, 0);
+    }
+
+    #[test]
+    fn landing_clearance_holds_the_target_just_above_the_ground() {
+        let options = DrapeOptions {
+            agl_m: 40.0,
+            land_clearance_m: 0.5,
+            ..DrapeOptions::default()
+        };
+        let report = drape_to_terrain(&[land_wp(0.003)], &Slope, &options).expect("drape");
+        assert!((report.waypoints[0].altitude.meters() - 3.5).abs() < 1e-9);
+        assert_eq!(report.landed, 1);
+    }
+
+    #[test]
+    fn a_locked_landing_item_keeps_its_pin() {
+        let mut pinned = land_wp(0.002);
+        pinned.altitude = Height::new(crate::height::HeightDatum::AmslEgm96, 77.0);
+        pinned.locked = true;
+        let report = drape_to_terrain(&[pinned], &Slope, &DrapeOptions::default()).expect("drape");
+        assert!((report.waypoints[0].altitude.meters() - 77.0).abs() < 1e-9);
+        assert_eq!(report.landed, 0);
+    }
+
+    #[test]
+    fn other_command_items_still_pass_through() {
+        let mut speed = wp(0.002);
+        speed.command = 178; // DO_CHANGE_SPEED
+        let report = drape_to_terrain(&[speed], &Slope, &DrapeOptions::default()).expect("drape");
+        assert_eq!(report.command_items_skipped, 1);
+        assert_eq!(report.landed, 0);
     }
 
     #[test]
