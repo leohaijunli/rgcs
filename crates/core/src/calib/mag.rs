@@ -197,30 +197,23 @@ mod tests {
 
     #[test]
     fn the_px4_calibration_file_parses() {
-        // `testdata/mag_calibration_px4.json` is generated from a real PX4's
-        // `CAL_MAG0_*` parameter set with the sensor rotated 270° clockwise
-        // (`CAL_MAG0_ROT = 6`, ROTATION_YAW_270): the hard-iron offsets in nT
-        // (gauss × 1e5), and the soft-iron matrix composed with the rotation
-        // A = R·S (R = [[0,1,0],[-1,0,0],[0,0,1]]), domain `px4_raw`.
+        // `testdata/mag_calibration_px4.json` is an **identity** calibration:
+        // the raw total field from the PX4's `HIGHRES_IMU` is already ~50 000 nT
+        // (the true earth field — the FC applies its own `CAL_MAG*` correction
+        // before publishing), so re-applying the CAL_MAG0 offsets double-
+        // corrects and inflates the total (the reported 80 000 nT). The
+        // identity calibration documents that no further correction is needed;
+        // domain `px4_calibrated` records the values are against PX4's output.
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../testdata/mag_calibration_px4.json");
         let json = std::fs::read_to_string(path).expect("px4 cal file");
         let cal = MagCalibration::from_json(&json).expect("parses");
-        // Offsets: -0.006, 0.035, -0.274 gauss → nT.
-        assert_eq!(cal.b, [-600.0, 3_500.0, -27_400.0]);
-        // A = R·S: the near-identity soft iron is yaw-rotated 270° CW, so the
-        // leading column is the old soft-iron row 1 (sensor y → body x).
-        assert_eq!(cal.a[0][0], -0.012);
-        assert_eq!(cal.a[1][0], -1.0);
-        assert_eq!(cal.a[2][2], 1.0);
-        assert_eq!(cal.domain, CalibrationDomain::Px4Raw);
-        // A 50 000 nT field along the body x appears along the sensor's y
-        // (270° CW): raw = b + [0, 50000, 0]. Correcting must recover the body
-        // frame — magnitude ≈ 50 000 nT, mostly on body x.
-        let out = cal.apply([cal.b[0], 50_000.0 + cal.b[1], cal.b[2]], None);
-        let total: f64 = (out[0] * out[0] + out[1] * out[1] + out[2] * out[2]).sqrt();
-        assert!((total - 50_000.0).abs() < 500.0, "total {total}");
-        assert!(out[0] > 49_000.0, "body x carries the field: {out:?}");
-        assert!(out[1].abs() < 1_500.0, "sensor y maps to body x: {out:?}");
+        assert_eq!(cal.a, [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]);
+        assert_eq!(cal.b, [0.0, 0.0, 0.0]);
+        assert_eq!(cal.k, None);
+        assert_eq!(cal.domain, CalibrationDomain::Px4Calibrated);
+        // Identity: the corrected total equals the raw total.
+        let out = cal.apply([30_000.0, -20_000.0, 35_000.0], None);
+        assert_eq!(out, [30_000.0, -20_000.0, 35_000.0]);
     }
 }
