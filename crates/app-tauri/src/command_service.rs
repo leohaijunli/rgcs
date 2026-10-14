@@ -30,6 +30,8 @@ pub fn command_name(command: MavCmd) -> &'static str {
         MavCmd::MAV_CMD_NAV_LAND => "land",
         MavCmd::MAV_CMD_DO_SET_MODE => "set_mode",
         MavCmd::MAV_CMD_COMPONENT_ARM_DISARM => "arm_disarm",
+        MavCmd::MAV_CMD_DO_REPOSITION => "goto",
+        MavCmd::MAV_CMD_DO_SET_HOME => "set_home",
         _ => "unknown",
     }
 }
@@ -110,6 +112,8 @@ mod tests {
         );
         assert_eq!(command_name(MavCmd::MAV_CMD_NAV_TAKEOFF), "takeoff");
         assert_eq!(command_name(MavCmd::MAV_CMD_NAV_LAND), "land");
+        assert_eq!(command_name(MavCmd::MAV_CMD_DO_REPOSITION), "goto");
+        assert_eq!(command_name(MavCmd::MAV_CMD_DO_SET_HOME), "set_home");
     }
 
     #[test]

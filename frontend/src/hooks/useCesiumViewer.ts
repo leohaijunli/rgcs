@@ -262,17 +262,21 @@ export function useCesiumViewer(
   // store's home altitude: the plan is drawn in AMSL, so the vehicle and the
   // drop line need the same reference to sit on the drawn path.
   const home = useMissionStore((s) => s.home)
+  const homeMeshOn = useTerrainStore((s) => s.terrain3d != null)
   useEffect(() => {
     const amsl = home?.[2] ?? 0
     homeAmslRef.current = amsl
     const layer = droneRef.current
     const viewer = viewerRef.current
     if (layer && viewer && home) {
+      // Flat globe (no 3D mesh): HOME is on the ground, i.e. on the ellipsoid
+      // the vehicle is drawn relative to (see setSnapshot).
+      const homeH = homeMeshOn ? amsl + meshOffset : 0
       layer.home.position = new Cesium.ConstantPositionProperty(
-        Cesium.Cartesian3.fromDegrees(home[1], home[0], amsl + meshOffset),
+        Cesium.Cartesian3.fromDegrees(home[1], home[0], homeH),
       )
     }
-  }, [home, meshOffset])
+  }, [home, meshOffset, homeMeshOn])
 
   // Map tool cursor: crosshair while adding, hidden ghost otherwise.
   const mapTool = useUiStore((s) => s.mapTool)
@@ -342,21 +346,18 @@ export function useCesiumViewer(
     // home it is `relative_alt` alone, which hangs the marker below the path
     // by the site elevation, and a HOME that changes in flight would step
     // the whole trail. (Once the 3D mesh is on the datum offset is added.)
+    const homeAmsl = homeAmslRef.current
     const reportedAmsl = pos.altitude.meters
-    // Ground reference for the AGL readout. The plan's HOME altitude when it
-    // has one; otherwise the vehicle's own home elevation (AMSL − relative_alt,
-    // i.e. where PX4 set HOME). Without this the reference defaults to 0 and a
-    // landed vehicle shows AGL == AMSL (e.g. 3.3 m / 3.3 m).
-    const planHomeAmsl = homeAmslRef.current
-    const vehicleHomeAmsl = reportedAmsl - pos.relative_alt_m
-    const homeAmsl =
-      planHomeAmsl !== 0
-        ? planHomeAmsl
-        : Number.isFinite(vehicleHomeAmsl)
-          ? vehicleHomeAmsl
-          : 0
     const droneAmsl = Number.isFinite(reportedAmsl) ? reportedAmsl : homeAmsl + pos.relative_alt_m
-    const renderAmsl = droneAmsl + offset
+    // Without the 3D terrain mesh the globe is the bare ellipsoid (height 0),
+    // so the visible ground is NOT at HOME's AMSL: a landed vehicle drawn at
+    // AMSL (e.g. 4 m) hovers above the map. Draw it at its height above HOME
+    // instead, so HOME / the ground sits on the globe. With the mesh on, keep
+    // the AMSL + geoid-offset datum the plan uses.
+    const meshOn = useTerrainStore.getState().terrain3d != null
+    const useRel = !meshOn && Number.isFinite(pos.relative_alt_m)
+    const renderAmsl = useRel ? pos.relative_alt_m : droneAmsl + offset
+    const groundRender = useRel ? 0 : homeAmsl + offset
     const cart = Cesium.Cartesian3.fromDegrees(pos.longitude_deg, pos.latitude_deg, renderAmsl)
 
     // Attitude straight from the MAVLink ATTITUDE message; fall back to the
@@ -386,7 +387,7 @@ export function useCesiumViewer(
     // Straight down to the ground plane, labelled with the height above it, so
     // the clearance is visible in the scene and not only in the HUD
     // (issues.md #40). Same datum as the vehicle marker above.
-    updateDropLine(layer.drop, pos.longitude_deg, pos.latitude_deg, renderAmsl, homeAmsl + offset)
+    updateDropLine(layer.drop, pos.longitude_deg, pos.latitude_deg, renderAmsl, groundRender)
 
     // Rebuild the forward projection from the live fix so the segment already
     // flown disappears and only the predicted track ahead is drawn. It starts
@@ -398,7 +399,12 @@ export function useCesiumViewer(
 
     // Record the track: AMSL for position, height above the ground plane
     // (HOME's AMSL, the same reference as the drop line) for the colour.
-    if (record) trailRef.current?.push(pos.longitude_deg, pos.latitude_deg, droneAmsl, droneAmsl - homeAmsl)
+    if (record) {
+      // The trail bakes `offset` in at render time; in the flat-globe case it
+      // must share the marker's height-above-HOME frame (offset is 0 there).
+      const trailH = useRel ? pos.relative_alt_m : droneAmsl
+      trailRef.current?.push(pos.longitude_deg, pos.latitude_deg, trailH, droneAmsl - homeAmsl)
+    }
   }, [])
 
   // Datum offset changed (3D mesh toggled): re-render everything that bakes

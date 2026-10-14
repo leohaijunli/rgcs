@@ -99,6 +99,9 @@ export const useCommandStore = create<CommandState>((set) => ({
     try {
       await invoke('send_goto', { latDeg, lonDeg })
     } catch (err) {
+      // Invoke-level failures ("not connected", "no position fix yet") never
+      // reach the backend `command` event, so log them here or they vanish.
+      logEvent('command', 'err', `goto: ${String(err)}`)
       set({
         pending: null,
         lastEvent: {
@@ -116,6 +119,9 @@ export const useCommandStore = create<CommandState>((set) => ({
     try {
       await invoke('send_set_home', { latDeg, lonDeg })
     } catch (err) {
+      // Invoke-level failures ("not connected", "no position fix yet") never
+      // reach the backend `command` event, so log them here or they vanish.
+      logEvent('command', 'err', `set_home: ${String(err)}`)
       set({
         pending: null,
         lastEvent: {
