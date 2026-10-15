@@ -294,10 +294,16 @@ impl ManagedService for TerrainStage {
     }
 }
 
+/// The policy every teardown runs under. One accessor so the guard the UI
+/// asks about (L4) and the supervisor that enforces it cannot drift apart.
+pub fn policy() -> LifecyclePolicy {
+    LifecyclePolicy::default()
+}
+
 /// Build a fresh registry from what is attached right now. Called once per
 /// teardown: a handle taken here is never reused by a later teardown.
 fn build(app: &AppHandle) -> Lifecycle {
-    let lifecycle = Lifecycle::new(LifecyclePolicy::default());
+    let lifecycle = Lifecycle::new(policy());
     let state = app.state::<AppState>();
     // Only registered while a session exists: an idle motor-test window owns
     // no link state, and its scope flusher belongs to the window, not to us.
@@ -326,7 +332,20 @@ fn build(app: &AppHandle) -> Lifecycle {
 pub async fn run(app: &AppHandle, reason: StopReason) -> Result<ShutdownReport, ShutdownError> {
     let lifecycle = build(app);
     let state = app.state::<AppState>();
-    let report = match lifecycle.shutdown(reason, vehicle_state(&state)).await {
+    let vehicle = vehicle_state(&state);
+    // The window chrome forces (see `StopReason::forces`): an armed or airborne
+    // exit still happens, but it must not happen silently — record what it
+    // walked past, so the log and the alert history say so (L4).
+    if reason.forces() {
+        if let Some(refused) = lifecycle.refusal(vehicle) {
+            state.alerts().raise(AlertInput::new(
+                AlertSource::System,
+                Severity::Warn,
+                format!("forced shutdown ({}): {refused}", reason.as_str()),
+            ));
+        }
+    }
+    let report = match lifecycle.shutdown(reason, vehicle).await {
         Ok(report) => report,
         Err(err) => {
             state.alerts().raise(AlertInput::new(

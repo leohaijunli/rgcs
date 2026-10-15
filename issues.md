@@ -129,7 +129,8 @@ HUD "STALE n s · 最后时刻"、地图飞机标 `UAV · OLD DATA`（Cesium 实
 右下角角标）。验收脚本 `frontend/scripts/check-heartbeat.mjs`（26 条断言：
 3 s 超时前不亮横幅、时长递增、Flight 菜单不可用、遥测置灰、重连提示与
 `mission_download` 重读）。
-下一步按 P0 顺序推进 L2/L4。全部 WP 落地后再按计划并入
+**L4 断开/退出护栏已完成**：core `LifecyclePolicy::refusal`（纯策略，UI 可先问）+ `StopReason::confirm_keyword()`（`DISCONNECT`/`QUIT`）+ 新增 `TeardownGuard::of(policy, reason, vehicle, at_stake)`（拒绝优先，被拒时永不给出关键字；关键字只在"允许但有代价"时出现），`StopReason`/`TeardownGuard` 走 ts-rs 导出；app-tauri 新增只读命令 `teardown_guard(reason, at_stake)`（复用同一个 `lifecycle_service::policy()`，UI 与监督器不会各写一份规则），关窗强制退出（`StopReason::WindowClose`）在被拒情形下补一条 Warn 告警，强制退出不再静默；前端 `stores/teardown.ts` + `dialogs/TeardownDialog.tsx` 把三个入口（LinkPopover 断开、Settings 断开、Settings 退出）统一到一个对话框：已解锁/飞行中显示拒绝原因与出路且无确认按钮，有未上传任务时显示"n waypoints are not on the flight controller yet"并要求逐字输入关键字（`teardown_guard` 收到 `atStake: true`），干净退出只需一次确认。验收脚本 `frontend/scripts/check-teardown.mjs`（20 条断言，含真实在 Plan 面板输入坐标造出未上传任务）。核对（读码，非自动测）：主窗口 `CloseRequested` 走 `Lifecycle::shutdown(WindowClose)` 后 `app.exit(0)`，**子窗口仍开也会退出**（A1 既有行为）；该路径需要 Tauri 运行时，未进自动测试。
+下一步按 P0 顺序推进 L2、U2、U3、U4（L2 依赖 A7/U4）。全部 WP 落地后再按计划并入
 `FEATURES.md`/`ARCHITECTURE.md` 并删除本计划文件。
 
 ### N6 [P1][frontend] `devices` store 信任后端返回，null 会把整个外壳拆掉

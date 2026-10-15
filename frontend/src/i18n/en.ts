@@ -68,6 +68,22 @@ export default {
       other: 'Error',
     },
   },
+  // Teardown guard (plan §4 L4): one dialog for every in-app exit. The
+  // refusal text is the shell's own sentence, so it is interpolated as-is.
+  teardown: {
+    disconnect: 'Disconnect from the vehicle?',
+    quit: 'Shut down MagGCS?',
+    cancel: 'Cancel',
+    confirm: 'Confirm',
+    working: 'Working…',
+    refused: 'Refused: {{reason}}',
+    refusedHint: 'Land and disarm first, or close the window to force the quit.',
+    unsaved_one: '{{count}} waypoint is not on the flight controller yet.',
+    unsaved_other: '{{count}} waypoints are not on the flight controller yet.',
+    typeKeyword: 'Type {{keyword}} to confirm',
+    keywordRequired: 'Type the keyword to enable this',
+    failed: 'Failed — {{message}}',
+  },
   eventLog: {
     title: 'Event log',
     clear: 'Clear',
@@ -418,7 +434,6 @@ export default {
     language: 'Language',
     disconnect: 'Disconnect',
     shutdown: 'Shut down',
-    shutdownConfirm: 'Confirm shutdown?',
     linkStatus: 'Link status',
     tab: {
       connection: 'Connection',

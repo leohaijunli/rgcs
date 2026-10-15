@@ -36,6 +36,7 @@ pub fn run() {
             commands::connect,
             commands::disconnect,
             commands::shutdown_app,
+            commands::teardown_guard,
             commands::link_status,
             alert_service::alert_snapshot,
             alert_service::alert_raise,

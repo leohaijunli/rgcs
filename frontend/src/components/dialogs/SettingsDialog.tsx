@@ -4,7 +4,7 @@ import * as Tabs from '@radix-ui/react-tabs'
 import { X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { allAreas, isValidAreaInput, loadCustomAreas, presetArea, saveCustomAreas, type PresetArea } from '../../cesium/presets'
-import { connectEndpoint, disconnect, reportConnectError, shutdownApp } from '../../desktop/connect'
+import { connectEndpoint, reportConnectError } from '../../desktop/connect'
 import {
   BAUD_RATES,
   DEFAULT_DRAFT,
@@ -22,6 +22,7 @@ import {
   usePrefsStore,
 } from '../../desktop/prefs'
 import { useDevicesStore } from '../../stores/devices'
+import { useTeardownStore } from '../../stores/teardown'
 import { useLinkStore } from '../../stores/link'
 import { useTelemetryStore } from '../../stores/telemetry'
 import { useUiStore } from '../../stores/ui'
@@ -130,7 +131,7 @@ function ConnectionTab() {
     () => parseEndpoint(savedEndpoint) ?? DEFAULT_DRAFT,
   )
   const [busy, setBusy] = useState(false)
-  const [confirmShutdown, setConfirmShutdown] = useState(false)
+  const requestTeardown = useTeardownStore((s) => s.request)
   const link = useLinkStore((s) => s.link)
   const errorHistory = useLinkStore((s) => s.errorHistory)
   const droppedFrames = useLinkStore((s) => s.droppedFrames)
@@ -270,7 +271,8 @@ function ConnectionTab() {
           {busy ? '…' : t('map.connect')}
         </button>
         <button
-          onClick={() => disconnect().catch(reportConnectError)}
+          data-testid="settings-disconnect"
+          onClick={() => requestTeardown('disconnect')}
           className="touch-target h-11 rounded border border-line bg-canvas px-4 text-muted hover:text-ink"
         >
           {t('settings.disconnect')}
@@ -324,15 +326,14 @@ function ConnectionTab() {
         </div>
       </div>
 
+      {/* The confirm dialog replaces the old two-click button: it shows the
+       * refusal or asks for the keyword the shell names (L4). */}
       <button
-        onClick={() =>
-          confirmShutdown
-            ? void shutdownApp().catch(reportConnectError)
-            : setConfirmShutdown(true)
-        }
+        data-testid="settings-shutdown"
+        onClick={() => requestTeardown('shutdown_app')}
         className="touch-target h-11 rounded border border-error px-4 text-error"
       >
-        {confirmShutdown ? t('settings.shutdownConfirm') : t('settings.shutdown')}
+        {t('settings.shutdown')}
       </button>
     </div>
   )

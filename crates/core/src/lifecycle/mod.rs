@@ -104,7 +104,11 @@ impl Stage {
 }
 
 /// Why the app or the link is being torn down.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Exported to the frontend (L4): the confirm dialog asks the shell what a
+/// teardown would do (`teardown_guard`) instead of re-implementing the policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub enum StopReason {
     /// The operator disconnected.
@@ -134,9 +138,20 @@ impl StopReason {
 
     /// The window chrome is the operator's escape hatch: closing the window
     /// may be *explained* but never blocked, or a stale "armed" bit would hold
-    /// the window hostage. The refusal is logged instead (L4 archives it).
+    /// the window hostage. The forced shutdown is raised as a warn alert
+    /// instead, so the log says an armed teardown happened (L4).
     pub fn forces(self) -> bool {
         matches!(self, Self::WindowClose)
+    }
+
+    /// The word the operator types to confirm this teardown once the shell has
+    /// said it is allowed but lossy (L4). Uppercase: the dialog compares it
+    /// verbatim so a stray Enter cannot confirm.
+    pub fn confirm_keyword(self) -> &'static str {
+        match self {
+            Self::Disconnect => "DISCONNECT",
+            Self::ShutdownApp | Self::WindowClose => "QUIT",
+        }
     }
 }
 
@@ -219,6 +234,71 @@ impl Default for LifecyclePolicy {
             refuse_when_flying: true,
             stage_timeout: DEFAULT_STAGE_TIMEOUT,
             total_timeout: DEFAULT_TOTAL_TIMEOUT,
+        }
+    }
+}
+
+impl LifecyclePolicy {
+    /// Whether this policy would refuse a teardown right now, and why.
+    ///
+    /// Pure and registry-free on purpose: the UI asks for this *before* the
+    /// operator commits (L4's confirm bar), and the app-level guard command
+    /// answers from the same code the supervisor enforces.
+    pub fn refusal(&self, vehicle: VehicleState) -> Option<String> {
+        if self.refuse_when_armed && vehicle.armed == Some(true) {
+            return Some("the vehicle is armed".to_string());
+        }
+        if self.refuse_when_flying && vehicle.on_ground == Some(false) {
+            return Some("the vehicle is airborne".to_string());
+        }
+        None
+    }
+}
+
+/// What one teardown would do right now, answered *before* the operator
+/// commits (L4).
+///
+/// The UI renders this instead of re-deriving the policy: the refusal, the
+/// word to type and whether the window-chrome escape hatch applies all come
+/// from the same code the supervisor enforces.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct TeardownGuard {
+    pub reason: StopReason,
+    /// Why a teardown would be refused; `None` when it would proceed.
+    pub refusal: Option<String>,
+    /// The word the operator types to confirm an allowed-but-lossy teardown;
+    /// `None` when a plain confirm is enough.
+    pub keyword: Option<String>,
+    /// True when this reason bypasses the refusal gate (the window close
+    /// button is the operator's escape hatch).
+    pub forced: bool,
+    pub armed: Option<bool>,
+    pub on_ground: Option<bool>,
+}
+
+impl TeardownGuard {
+    /// `at_stake` is the caller's own state — local work that would be lost
+    /// (an unuploaded mission), which core cannot see. Whether that warrants a
+    /// keyword is a rule, and stays here.
+    pub fn of(
+        policy: LifecyclePolicy,
+        reason: StopReason,
+        vehicle: VehicleState,
+        at_stake: bool,
+    ) -> Self {
+        let refusal = policy.refusal(vehicle);
+        Self {
+            reason,
+            keyword: if refusal.is_none() && at_stake {
+                Some(reason.confirm_keyword().to_string())
+            } else {
+                None
+            },
+            refusal,
+            forced: reason.forces(),
+            armed: vehicle.armed,
+            on_ground: vehicle.on_ground,
         }
     }
 }
@@ -331,13 +411,7 @@ impl Lifecycle {
     /// Whether a teardown would be refused right now. Pure, so the UI can ask
     /// before the operator commits (L4's confirm bar).
     pub fn refusal(&self, vehicle: VehicleState) -> Option<String> {
-        if self.policy.refuse_when_armed && vehicle.armed == Some(true) {
-            return Some("the vehicle is armed".to_string());
-        }
-        if self.policy.refuse_when_flying && vehicle.on_ground == Some(false) {
-            return Some("the vehicle is airborne".to_string());
-        }
-        None
+        self.policy.refusal(vehicle)
     }
 
     /// Stop every stage in scope, in order, each inside its own budget.
@@ -862,5 +936,107 @@ mod tests {
         assert!(!Stage::Terrain.is_link_scoped());
         assert!(Stage::MotorTest.is_mandatory() && Stage::Link.is_mandatory());
         assert!(!Stage::Rtk.is_mandatory());
+    }
+
+    #[test]
+    fn the_confirm_keyword_names_the_action() {
+        assert_eq!(StopReason::Disconnect.confirm_keyword(), "DISCONNECT");
+        assert_eq!(StopReason::ShutdownApp.confirm_keyword(), "QUIT");
+        assert_eq!(StopReason::WindowClose.confirm_keyword(), "QUIT");
+        // Uppercase and single-word by contract: the dialog compares the typed
+        // text verbatim, so a stray Enter or a lowercase name must not confirm.
+        for reason in [
+            StopReason::Disconnect,
+            StopReason::ShutdownApp,
+            StopReason::WindowClose,
+        ] {
+            let keyword = reason.confirm_keyword();
+            assert!(keyword.chars().all(|c| c.is_ascii_uppercase()), "{keyword}");
+            assert_eq!(keyword, keyword.trim());
+        }
+    }
+
+    #[test]
+    fn the_guard_asks_for_a_keyword_only_when_something_is_at_stake() {
+        let policy = LifecyclePolicy::default();
+        let grounded = VehicleState {
+            armed: Some(false),
+            on_ground: Some(true),
+        };
+        let clean = TeardownGuard::of(policy, StopReason::Disconnect, grounded, false);
+        assert_eq!(clean.refusal, None);
+        assert_eq!(
+            clean.keyword, None,
+            "nothing to lose: a plain confirm is enough"
+        );
+        assert!(!clean.forced);
+
+        let lossy = TeardownGuard::of(policy, StopReason::Disconnect, grounded, true);
+        assert_eq!(lossy.keyword.as_deref(), Some("DISCONNECT"));
+        assert_eq!(lossy.armed, Some(false));
+        assert_eq!(
+            TeardownGuard::of(policy, StopReason::ShutdownApp, grounded, true)
+                .keyword
+                .as_deref(),
+            Some("QUIT")
+        );
+    }
+
+    #[test]
+    fn a_refused_teardown_never_offers_a_keyword() {
+        // The typo-proof interlock must not look like the way through: while
+        // the vehicle is armed the only answer is the refusal (+ the forcing
+        // window chrome, which says so).
+        let policy = LifecyclePolicy::default();
+        let armed = VehicleState {
+            armed: Some(true),
+            on_ground: Some(true),
+        };
+        let guard = TeardownGuard::of(policy, StopReason::Disconnect, armed, true);
+        assert_eq!(guard.refusal.as_deref(), Some("the vehicle is armed"));
+        assert_eq!(guard.keyword, None);
+
+        let forced = TeardownGuard::of(policy, StopReason::WindowClose, armed, true);
+        assert!(forced.forced);
+        assert_eq!(
+            forced.refusal.as_deref(),
+            Some("the vehicle is armed"),
+            "the escape hatch still reports what it walked past"
+        );
+    }
+
+    #[test]
+    fn the_registry_free_refusal_is_the_one_the_supervisor_enforces() {
+        // L4: the UI asks the policy directly, so the two answers must be the
+        // same function, not two copies of the rule.
+        let policy = LifecyclePolicy::default();
+        let lifecycle = Lifecycle::new(LifecyclePolicy::default());
+        for vehicle in [
+            VehicleState::unknown(),
+            VehicleState {
+                armed: Some(true),
+                on_ground: Some(true),
+            },
+            VehicleState {
+                armed: Some(false),
+                on_ground: Some(false),
+            },
+            VehicleState {
+                armed: Some(false),
+                on_ground: Some(true),
+            },
+        ] {
+            assert_eq!(policy.refusal(vehicle), lifecycle.refusal(vehicle));
+        }
+        assert_eq!(
+            policy
+                .refusal(VehicleState {
+                    armed: Some(true),
+                    on_ground: Some(false)
+                })
+                .as_deref(),
+            Some("the vehicle is armed"),
+            "armed is reported first: it is the reason the operator must fix"
+        );
     }
 }

@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use ::mavlink::common::MavCmd;
 use maggcs_core::devices::{DeviceDatabase, DeviceManager, SerialDeviceInfo};
-use maggcs_core::lifecycle::{ShutdownError, StopReason};
+use maggcs_core::lifecycle::{ShutdownError, StopReason, TeardownGuard};
 use maggcs_core::mavlink::connection::{
     spawn_connection, ConnectionEvent, ConnectionHandle, LinkStatus,
 };
@@ -268,6 +268,28 @@ fn refusal_message(action: &str, err: &ShutdownError) -> String {
         ),
         other => format!("{action} failed: {other}"),
     }
+}
+
+/// Ask what a teardown would do *right now*, before the operator commits (L4).
+///
+/// Read-only: it answers from the same policy the supervisor enforces, so the
+/// dialog can show "refused: the vehicle is armed" or ask for the typed
+/// keyword while the command that follows re-checks it anyway.
+///
+/// `at_stake` is the UI's own state — local work that would be lost (an
+/// unuploaded mission); core decides whether that warrants a keyword.
+#[tauri::command]
+pub async fn teardown_guard(
+    state: State<'_, AppState>,
+    reason: StopReason,
+    at_stake: bool,
+) -> Result<TeardownGuard, String> {
+    Ok(TeardownGuard::of(
+        lifecycle_service::policy(),
+        reason,
+        lifecycle_service::vehicle_state(&state),
+        at_stake,
+    ))
 }
 
 /// Latest known link status (fallback when events were missed).

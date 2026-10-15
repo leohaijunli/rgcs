@@ -7,6 +7,7 @@ import MockBanner from './components/MockBanner'
 import MapView from './components/MapView'
 import ErrorBanner from './components/ErrorBanner'
 import HeartbeatBanner from './components/HeartbeatBanner'
+import TeardownDialog from './components/dialogs/TeardownDialog'
 
 export default function App() {
   useTelemetryBridge()
@@ -25,6 +26,7 @@ export default function App() {
         <RightInspector />
       </div>
       <Dock />
+      <TeardownDialog />
     </div>
   )
 }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { disconnect, reportConnectError } from '../desktop/connect'
+import { useTeardownStore } from '../stores/teardown'
 import { useDataAge, useFieldAge } from '../hooks/useDataAge'
 import { useLinkStore } from '../stores/link'
 import { useTelemetryStore } from '../stores/telemetry'
@@ -17,6 +17,7 @@ export default function LinkPopover({
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
   const link = useLinkStore((s) => s.link)
+  const requestTeardown = useTeardownStore((s) => s.request)
   const heartbeat = useTelemetryStore((s) => s.snapshot?.heartbeat ?? null)
   const heartbeatAge = useFieldAge(
     useTelemetryStore((s) => s.snapshot?.field_ages.heartbeat_at_ms),
@@ -84,7 +85,11 @@ export default function LinkPopover({
           <div className="mt-3 flex flex-col gap-1.5">
             {connected ? (
               <button
-                onClick={() => void disconnect().catch(reportConnectError)}
+                data-testid="link-disconnect"
+                onClick={() => {
+                  setOpen(false)
+                  requestTeardown('disconnect')
+                }}
                 className="rounded border border-line bg-canvas px-2 py-1 text-xs text-ink hover:bg-panel"
               >
                 {t('link.disconnect')}
