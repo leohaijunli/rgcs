@@ -69,6 +69,7 @@ export default function FlightMenu() {
   const pending = useCommandStore((s) => s.pending)
   const send = useCommandStore((s) => s.send)
   const sendArmDisarm = useCommandStore((s) => s.sendArmDisarm)
+  const dismissResult = useCommandStore((s) => s.dismissResult)
   const progress = useCommandProgress()
 
   // Close on outside click / Esc.
@@ -94,6 +95,8 @@ export default function FlightMenu() {
       phase={status?.text ?? null}
       elapsedMs={progress.elapsedMs}
       tone={status?.tone}
+      onDismiss={progress.phase === 'done' ? dismissResult : undefined}
+      dismissLabel={t('plan.cmd.dismiss')}
     />
   )
 

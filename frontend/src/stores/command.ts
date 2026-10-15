@@ -68,6 +68,9 @@ interface CommandState {
    * marker follows it, since there is no HOME_POSITION feed. */
   homeMarker: [number, number, number] | null
   handleEvent: (e: CommandEventPayload) => void
+  /** Drop the last result from the status strip once it is acknowledged (L2:
+   * a rejection is kept on screen until the operator confirms it). */
+  dismissResult: () => void
   reset: () => void
 }
 
@@ -232,6 +235,10 @@ export const useCommandStore = create<CommandState>((set) => ({
         ? { lastEvent: e, pending: s.pending }
         : { lastEvent: e, pending: null, ...settled(s.sentAtMs) },
     )
+  },
+
+  dismissResult: () => {
+    set({ lastEvent: null, lastElapsedMs: null })
   },
 
   reset: () => {

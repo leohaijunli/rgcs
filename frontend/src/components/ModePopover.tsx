@@ -16,6 +16,7 @@ import type { ModeAvailability } from '../generated-types/ModeAvailability'
 import { Button, HoldButton, HOLD_MS } from '../design-system/components'
 import { useCommandStore } from '../stores/command'
 import { modeRisk } from '../util/commandRisk'
+import { packCustomMode } from '../util/px4mode'
 import ConfirmContextBar from './ConfirmContextBar'
 import { useLinkStore } from '../stores/link'
 import { useMissionStore } from '../stores/mission'
@@ -26,11 +27,6 @@ import { modeLabel } from '../util/modeLabel'
 const READBACK_TIMEOUT_MS = 3000
 /** localStorage key for the "advanced modes" preference (Manual/Acro/Offboard). */
 const ADVANCED_KEY = 'maggcs.advancedModes'
-
-/** PX4 custom_mode bit packing (ADR-017): main 16–23, sub 24–31. */
-function packCustomMode(main: number, sub: number): number {
-  return ((main & 0xff) << 16) | ((sub & 0xff) << 24)
-}
 
 interface Switching {
   id: string

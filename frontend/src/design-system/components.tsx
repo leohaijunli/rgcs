@@ -4,6 +4,7 @@
 
 import type { ButtonHTMLAttributes, ReactNode } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { X } from 'lucide-react'
 
 /** Shared size scale for buttons (touch targets stay ≥ 32px tall). */
 const SIZES = {
@@ -202,6 +203,9 @@ export interface HoldButtonProps
   hint?: string
   /** Hold length; defaults to [`HOLD_MS`]. */
   holdMs?: number
+  /** A press started / ended (either way: committed, released or cancelled) —
+   * for callers that surface their own confirm context while the ring fills. */
+  onHoldChange?: (holding: boolean) => void
   variant?: ButtonVariant
   size?: ButtonSize
   children: ReactNode
@@ -219,6 +223,7 @@ export function HoldButton({
   onConfirm,
   hint,
   holdMs = HOLD_MS,
+  onHoldChange,
   variant = 'default',
   size = 'md',
   className = '',
@@ -234,6 +239,8 @@ export function HoldButton({
   const startedAt = useRef(0)
   const confirmRef = useRef(onConfirm)
   confirmRef.current = onConfirm
+  const holdChangeRef = useRef(onHoldChange)
+  holdChangeRef.current = onHoldChange
 
   const clear = useCallback(() => {
     if (frame.current !== null) {
@@ -253,6 +260,7 @@ export function HoldButton({
     clear()
     setHolding(false)
     setProgress(1)
+    holdChangeRef.current?.(false)
     confirmRef.current()
   }, [clear])
 
@@ -263,6 +271,7 @@ export function HoldButton({
     clear()
     setHolding(false)
     setProgress(0)
+    holdChangeRef.current?.(false)
   }, [clear])
 
   /**
@@ -288,6 +297,7 @@ export function HoldButton({
     fired.current = false
     setHolding(true)
     setProgress(0)
+    holdChangeRef.current?.(true)
     startedAt.current = performance.now()
     // The ring is animation; the *commit* is a timer, so a starved frame loop
     // cannot swallow a deliberate hold.
@@ -444,12 +454,19 @@ export function CommandStatusStrip({
   phase,
   elapsedMs,
   tone = 'muted',
+  onDismiss,
+  dismissLabel,
   className = '',
 }: {
   command: string | null
   phase: string | null
   elapsedMs: number | null
   tone?: Tone
+  /** When set, the strip carries an acknowledge button (a rejection is kept
+   * on screen until the operator confirms it — plan §4 L2). */
+  onDismiss?: () => void
+  /** Accessible name for that button. */
+  dismissLabel?: string
   className?: string
 }) {
   if (command === null || phase === null) return null
@@ -466,6 +483,17 @@ export function CommandStatusStrip({
         <span data-testid="command-status-elapsed" className="mono text-muted">
           {elapsed}
         </span>
+      )}
+      {onDismiss !== undefined && (
+        <button
+          data-testid="command-status-dismiss"
+          onClick={onDismiss}
+          title={dismissLabel}
+          aria-label={dismissLabel}
+          className="flex h-4 w-4 items-center justify-center rounded text-muted hover:text-ink"
+        >
+          <X size={11} />
+        </button>
       )}
     </div>
   )

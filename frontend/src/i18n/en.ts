@@ -371,6 +371,11 @@ export default {
       holdNote: 'Hold a button for {{s}} s to send it — the ring shows the hold.',
       sending: 'Sending…',
       sent: 'Sent — awaiting ack…',
+      // L2: the always-visible safety pair on the nav bar.
+      holdMode: 'Hold',
+      willHold: 'Stop and hold position',
+      rtlNotArmed: 'RTL needs an armed vehicle',
+      dismiss: 'Acknowledge',
       willTakeoff: 'Take off and climb out',
       willLand: 'Land on the ground below',
       willRtl: 'Return to HOME and land',

@@ -16,6 +16,7 @@ import LinkPopover from './LinkPopover'
 import RtkDrawer from './RtkDrawer'
 import ModePopover from './ModePopover'
 import FlightMenu from './FlightMenu'
+import SafetyCommands from './SafetyCommands'
 import EventLogDrawer from './EventLogDrawer'
 
 const VIEWS: View[] = ['planning', 'flight']
@@ -181,6 +182,10 @@ export default function TopBar() {
           />
           <Pill label={t('link.batt')} value={batteryText} tone={batteryTone} />
         </div>
+        {/* L2: the safety pair sits outside the stale group — dimming RTL is
+         * not the same as losing the link, and the buttons stay reachable
+         * while another command is in flight (A7 arbitrates). */}
+        <SafetyCommands />
         <LinkPopover onOpenSettings={openConnection} />
 
         {/* Tools ▾ groups the window launchers (motor-test plan §2.2-10) so
