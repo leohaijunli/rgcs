@@ -110,9 +110,11 @@ survey 编译器已输出 PatternLine 表（S1），`MagTrigger::GcsSide` 是默
 v3 已落盘为 `docs/plans/lifecycle-survey-hrdem-plan.md`（v2
 `comprehensive-implementation-plan.md` 待删除）。执行进度：**A3 AlertCenter
 已完成**（core `alerts` + app-tauri 适配 + 前端 store/badge/banner/drawer，
-`frontend/scripts/check-alerts.mjs` 为验收脚本）；下一步按 P0 顺序推进
-A1（◆，需先确认设计）→ L1/L2/L3/L4。全部 WP 落地后再按计划并入
-`FEATURES.md`/`ARCHITECTURE.md` 并删除本计划文件。
+`frontend/scripts/check-alerts.mjs` 为验收脚本）；**A1 生命周期监督器已完成**
+（core `lifecycle` + 单测/假飞控集成测，app-tauri `lifecycle_service` 适配，
+`disconnect`/`shutdown_app`/主窗口 `CloseRequested` 三条路径统一走它；L4 的
+关键字确认 UI 与分级告警留待后续 WP）。下一步按 P0 顺序推进 L1/L2/L3/L4。
+全部 WP 落地后再按计划并入 `FEATURES.md`/`ARCHITECTURE.md` 并删除本计划文件。
 
 ### N6 [P1][frontend] `devices` store 信任后端返回，null 会把整个外壳拆掉
 `stores/devices.ts` 的 `load()` 直接把 `enumerate_devices` 的返回值塞进

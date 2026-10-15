@@ -10,6 +10,7 @@ mod command_service;
 mod commands;
 mod console_service;
 mod inspector_service;
+mod lifecycle_service;
 mod logs_service;
 mod mission_service;
 mod motor_test_state;
@@ -20,7 +21,9 @@ mod telemetry_pump;
 mod terrain_server;
 mod terrain_service;
 
+use maggcs_core::lifecycle::StopReason;
 use state::AppState;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -123,7 +126,6 @@ pub fn run() {
             // One alert pump for the process: every transition the core
             // alert center records is forwarded to all webviews (A3).
             {
-                use tauri::Manager;
                 let alert_app = app.handle().clone();
                 let alerts = app.state::<AppState>().alerts();
                 tauri::async_runtime::spawn(alert_service::pump(alert_app, alerts));
@@ -155,6 +157,28 @@ pub fn run() {
                 }
             });
             Ok(())
+        })
+        // Closing the main window (X, Alt-F4, session logout) runs the same
+        // teardown as the in-app Shut down, then exits — even while a
+        // sub-window is still open. It **forces** the shutdown (plan §3 A1 /
+        // L4): an armed vehicle must never trap the operator in the app.
+        .on_window_event(|window, event| {
+            if window.label() != "main" {
+                return;
+            }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let app = window.app_handle().clone();
+                if !app.state::<AppState>().begin_close() {
+                    return; // a teardown is already in flight
+                }
+                tauri::async_runtime::spawn(async move {
+                    if let Err(err) = lifecycle_service::run(&app, StopReason::WindowClose).await {
+                        eprintln!("window-close teardown: {err}");
+                    }
+                    app.exit(0);
+                });
+            }
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

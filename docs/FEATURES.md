@@ -36,9 +36,41 @@ Behaviour (plan §3 A3, `core::alerts`): the same key raised again inside the
 a repeat after the window, or a severity escalation, alerts again; level
 alerts (threshold conditions, L7) stay until the condition has been clear for
 3 s. Raising the same key inside the window never adds a second row. Alert
-sources today: MAVLink link failures and terrain-drape failures; STATUSTEXT,
-battery, GPS/RTK, magnetometer and VIC follow in L1/L3/L7/M2/M7. Rust owns
-the model, so every window sees the same count and the same rows.
+sources today: MAVLink link failures, terrain-drape failures and refused
+disconnects/quits (`system`); STATUSTEXT, battery, GPS/RTK, magnetometer and
+VIC follow in L1/L3/L7/M2/M7. Rust owns the model, so every window sees the
+same count and the same rows.
+
+## Exiting and disconnecting (guards)
+
+Three paths stop the link or the app, and all three run the same ordered
+teardown (`core::lifecycle`, plan §3 A1):
+
+```
+motor test → RTK → FC logs → parameters → mission/command → (recorder) → link → terrain
+```
+
+- Settings ▸ Disconnect stops the **link-scoped** services only: the local 3D
+  terrain server keeps running, so a reconnect keeps the 3D view. A running
+  motor test is stopped first, whatever link it drives (its own serial target
+  or the primary link), so no props keep spinning after the GCS lets go.
+- Settings ▸ Shut down and closing the main window stop everything and exit.
+- The motor test is stopped *while its link is still up*, and the `Stop` is
+  awaited (not fire-and-forget), so the release frames reach the flight
+  controller before the socket closes instead of waiting for PX4's own 3 s
+  timeout.
+- Each stage has its own 2 s budget and the whole best-effort sequence a 10 s
+  one; a hung service is cut off and reported, never blocks the exit. Stages
+  that time out or fail raise a `warn` alert naming the stage.
+- **Refusal**: Disconnect and Shut down are refused while the vehicle is armed
+  or airborne — the error names the reason and the way out, and a `warn` alert
+  is raised so it is visible in the alert drawer. Closing the main window is
+  the forced exit and is never refused (L4 adds the typed `DISCONNECT`/`QUIT`
+  confirmation on top). With no link, or with stale telemetry, nothing is
+  refused: a ground station that will not quit on a dead link is worse than
+  the risk it guards against.
+- Closing the main window while sub-windows (inspector / motor test /
+  parameters) are still open exits the whole process, by design.
 
 ## RTK (Tools-less: TopBar GPS/RTK pill ▸ drawer)
 

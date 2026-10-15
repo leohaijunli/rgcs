@@ -28,6 +28,8 @@ crates/core          maggcs_core — all domain logic (ADR-001):
   commands/            single-slot COMMAND_LONG service (retransmit, ack)
   alerts/              alert center (A3): dedup window, Critical latching,
                        hysteresis for level alerts, acknowledge, history cap
+  lifecycle/           teardown supervisor (A1): ordered, deadline-bounded
+                       stop of every service; armed/airborne refusal policy
   signals/             inspector tap: field extraction, mag_total synthesis,
                        ESC aggregation (ESC_STATUS index×4 → esc{k})
   dsp/                 biquad / moving average / detrend / FFT + registry
@@ -44,8 +46,10 @@ crates/core          maggcs_core — all domain logic (ADR-001):
                        mode table + send_await (ADR-017), ULog reader
 crates/app-tauri     desktop shell: Tauri commands + thin service adapters
                      (mission/command/inspector/actuator/params/rtk/alerts),
-                     telemetry pump + alert pump (one `alert` event per
-                     transition, every window), windows: main / inspector /
+                     lifecycle supervisor adapter (disconnect / in-app quit /
+                     window close all run one ordered teardown), telemetry
+                     pump + alert pump (one `alert` event per transition,
+                     every window), windows: main / inspector /
                      actuator / params, loopback terrain tileset server
                      (ADR-004)
 crates/server        headless REST/WebSocket (planned)

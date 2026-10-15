@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use ::mavlink::common::MavCmd;
 use maggcs_core::devices::{DeviceDatabase, DeviceManager, SerialDeviceInfo};
+use maggcs_core::lifecycle::{ShutdownError, StopReason};
 use maggcs_core::mavlink::connection::{
     spawn_connection, ConnectionEvent, ConnectionHandle, LinkStatus,
 };
@@ -20,6 +21,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::command_service;
+use crate::lifecycle_service;
 use crate::mission_service;
 use crate::state::{ActiveLink, AppState, LinkId};
 use crate::telemetry_pump;
@@ -232,19 +234,21 @@ async fn resolve_target(handle: &ConnectionHandle, config: &ConnectionConfig) ->
 }
 
 /// Stop the active connection and hub.
+///
+/// Runs the link-scoped half of the teardown supervisor (A1): motor test →
+/// RTK → logs → params → mission/command → link, in that order and each
+/// inside its own budget. The app-scoped terrain server is left running so
+/// the 3D view survives a reconnect.
+///
+/// Refused while the vehicle is armed or airborne (L4): the operator must
+/// land and disarm, or close the main window to force the exit. The refusal
+/// raises a `warn` alert (visible even if the caller ignores the error).
 #[tauri::command]
 pub async fn disconnect(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let _guard = state.ops().lock().await;
-    if let Some(link) = state.take_primary_link() {
-        link.hub.shutdown();
-        link.connection.shutdown().await;
-        // Dropping the mission/command handles stops their service tasks.
-    }
-    // Stop the link-scoped service tasks too (M1): the RTK stats/injection
-    // and log-download tasks hold ConnectionHandles and never see the bus
-    // close, so they must be told — `detach` drops their stop switches.
-    state.rtk.detach();
-    state.logs.detach();
+    lifecycle_service::run(&app, StopReason::Disconnect)
+        .await
+        .map_err(|err| refusal_message("Disconnect", &err))?;
     // Inspector: stop the live tap and clear the observed message table so
     // the signal tree shows only what the *next* link produces (real FC → SITL
     // must not leave the old FC's messages listed). Trace configs stay until
@@ -253,6 +257,17 @@ pub async fn disconnect(app: AppHandle, state: State<'_, AppState>) -> Result<()
     state.publish_link(LinkStatus::disconnected());
     let _ = app.emit("link", LinkStatus::disconnected());
     Ok(())
+}
+
+/// One operator-facing sentence for a refused teardown: the reason plus the
+/// way out (L4's guidance, shown before the typed confirmation exists).
+fn refusal_message(action: &str, err: &ShutdownError) -> String {
+    match err {
+        ShutdownError::Refused { reason } => format!(
+            "{action} refused: {reason}. Land and disarm first, or close the window to force quit."
+        ),
+        other => format!("{action} failed: {other}"),
+    }
 }
 
 /// Latest known link status (fallback when events were missed).
@@ -269,10 +284,12 @@ pub async fn link_status(state: State<'_, AppState>) -> Result<Option<LinkStatus
 #[tauri::command]
 pub async fn shutdown_app(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let _guard = state.ops().lock().await;
-    if let Some(link) = state.take_primary_link() {
-        link.hub.shutdown();
-        link.connection.shutdown().await;
-    }
+    // The full teardown, every stage including the terrain server (A1).
+    // Refused while armed or airborne (L4) — the window close button is the
+    // forced escape hatch.
+    lifecycle_service::run(&app, StopReason::ShutdownApp)
+        .await
+        .map_err(|err| refusal_message("Shut down", &err))?;
     let _ = app.emit("link", LinkStatus::disconnected());
     app.exit(0);
     Ok(())
@@ -812,6 +829,25 @@ mod tests {
             arm_disarm_params(false),
             [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         );
+    }
+
+    #[test]
+    fn refused_teardown_message_gives_the_way_out() {
+        let msg = refusal_message(
+            "Disconnect",
+            &ShutdownError::Refused {
+                reason: "the vehicle is armed".to_string(),
+            },
+        );
+        assert!(msg.contains("Disconnect refused"), "{msg}");
+        assert!(msg.contains("armed"), "reason survives: {msg}");
+        assert!(
+            msg.contains("close the window"),
+            "the forced exit is spelled out: {msg}"
+        );
+
+        let other = refusal_message("Shut down", &ShutdownError::AlreadyRunning);
+        assert!(other.contains("Shut down failed"), "{other}");
     }
 
     #[test]

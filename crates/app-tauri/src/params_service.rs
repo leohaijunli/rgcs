@@ -49,6 +49,22 @@ impl ParamsState {
         *guard = Some(RunningParams { svc, forwarder });
     }
 
+    /// Stop the protocol task and its forwarder (link teardown, A1).
+    ///
+    /// Returns whether a task was live, so the supervisor reports
+    /// `NotRunning` for a link that never opened the Parameters window.
+    pub fn release(&self) -> bool {
+        match self.inner.lock().expect("params state lock").take() {
+            Some(running) => {
+                running.forwarder.abort();
+                // Dropping `running.svc` drops the last command handle: the
+                // protocol task ends.
+                true
+            }
+            None => false,
+        }
+    }
+
     fn service(&self) -> Option<ParamService> {
         self.inner
             .lock()

@@ -15,6 +15,7 @@ pub mod devices;
 pub mod dsp;
 pub mod height;
 pub mod inspector;
+pub mod lifecycle;
 pub mod logs;
 pub mod mavlink;
 pub mod mission;
@@ -33,6 +34,10 @@ pub use alerts::{
 };
 pub use commands::{CommandError, CommandEvent, CommandResult, CommandService, CommandSession};
 pub use devices::{DeviceDatabase, DeviceEvent, DeviceManager, DeviceRole, SerialDeviceInfo};
+pub use lifecycle::{
+    Lifecycle, LifecyclePolicy, ManagedService, ShutdownError, ShutdownReport, Stage, StopOutcome,
+    StopReason, VehicleState,
+};
 pub use mavlink::connection::{ConnectionConfig, ConnectionEvent, ConnectionHandle};
 pub use mavlink::endpoint::Endpoint;
 pub use mavlink::error::MavlinkError;

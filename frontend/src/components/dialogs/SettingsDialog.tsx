@@ -325,7 +325,11 @@ function ConnectionTab() {
       </div>
 
       <button
-        onClick={() => (confirmShutdown ? void shutdownApp() : setConfirmShutdown(true))}
+        onClick={() =>
+          confirmShutdown
+            ? void shutdownApp().catch(reportConnectError)
+            : setConfirmShutdown(true)
+        }
         className="touch-target h-11 rounded border border-error px-4 text-error"
       >
         {confirmShutdown ? t('settings.shutdownConfirm') : t('settings.shutdown')}

@@ -6,7 +6,7 @@
 //! two concurrent commands cannot race the swap.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use maggcs_core::calib::mag::MagCalibration;
@@ -108,12 +108,21 @@ pub struct AppState {
     /// Held for the whole duration of a `connect`/`disconnect` command so the
     /// link swap is atomic with respect to other commands (issues.md #21).
     ops: tokio::sync::Mutex<()>,
+    /// One-shot guard for the window-close teardown (A1): the close button
+    /// can fire again before the process actually exits, and the teardown
+    /// must run once.
+    closing: AtomicBool,
 }
 
 impl AppState {
     /// Serialization lock for connection lifecycle commands.
     pub fn ops(&self) -> &tokio::sync::Mutex<()> {
         &self.ops
+    }
+
+    /// Claim the window-close teardown. `false` = one is already in flight.
+    pub fn begin_close(&self) -> bool {
+        !self.closing.swap(true, Ordering::SeqCst)
     }
 
     fn with_primary<T>(&self, f: impl FnOnce(&ActiveLink) -> T) -> Option<T> {
@@ -190,6 +199,15 @@ mod tests {
         let b = LinkId::next();
         assert_ne!(a, b);
         assert!(a < b);
+    }
+
+    #[test]
+    fn begin_close_is_one_shot() {
+        // The close button can fire again while the teardown runs; only the
+        // first event may start it (A1).
+        let state = AppState::default();
+        assert!(state.begin_close());
+        assert!(!state.begin_close());
     }
 
     #[test]

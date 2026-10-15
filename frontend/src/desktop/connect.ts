@@ -9,12 +9,24 @@ export async function connectEndpoint(endpoint: string): Promise<LinkStatus | nu
   return invoke<LinkStatus | null>('link_status')
 }
 
-/** Ask the desktop shell to close the active connection. */
+/**
+ * Ask the desktop shell to close the active connection.
+ *
+ * Runs the link-scoped teardown supervisor (A1). Rejects with the reason when
+ * the supervisor refuses (the vehicle is armed or airborne, L4) — the shell
+ * also raises a `warn` alert, so the reason is visible even if a caller
+ * swallows the error.
+ */
 export async function disconnect(): Promise<void> {
   await invoke('disconnect')
 }
 
-/** Ask the desktop shell to stop the link and quit the application. */
+/**
+ * Ask the desktop shell to stop the link and quit the application.
+ *
+ * The full teardown (A1). Rejects with the refusal reason while the vehicle
+ * is armed or airborne (L4); closing the window is the forced exit.
+ */
 export async function shutdownApp(): Promise<void> {
   await invoke('shutdown_app')
 }

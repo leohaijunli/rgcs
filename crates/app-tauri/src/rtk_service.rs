@@ -55,14 +55,18 @@ impl RtkState {
     /// Drop the previous link's service (link swap or disconnect): ends the
     /// stats task (channel close), the injection service (last command
     /// handle dropped) and the foreign observer (`foreign_stop` dropped).
-    pub fn detach(&self) {
-        *self.handle.lock().expect("rtk handle lock poisoned") = None;
+    ///
+    /// Returns whether there was a link to stop, so the lifecycle supervisor
+    /// (A1) can report `NotRunning` instead of a no-op `Stopped`.
+    pub fn detach(&self) -> bool {
+        let handle = self.handle.lock().expect("rtk handle lock poisoned").take();
         *self.last.lock().expect("rtk stats lock poisoned") = None;
         *self.foreign.lock().expect("rtk foreign lock poisoned") = None;
         *self
             .foreign_stop
             .lock()
             .expect("rtk foreign stop lock poisoned") = None;
+        handle.is_some()
     }
 
     /// Observe inbound `GPS_RTCM_DATA` for the multi-injector warning

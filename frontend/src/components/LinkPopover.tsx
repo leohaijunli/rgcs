@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { disconnect } from '../desktop/connect'
+import { disconnect, reportConnectError } from '../desktop/connect'
 import { useDataAge, useFieldAge } from '../hooks/useDataAge'
 import { useLinkStore } from '../stores/link'
 import { useTelemetryStore } from '../stores/telemetry'
@@ -84,7 +84,7 @@ export default function LinkPopover({
           <div className="mt-3 flex flex-col gap-1.5">
             {connected ? (
               <button
-                onClick={() => void disconnect()}
+                onClick={() => void disconnect().catch(reportConnectError)}
                 className="rounded border border-line bg-canvas px-2 py-1 text-xs text-ink hover:bg-panel"
               >
                 {t('link.disconnect')}

@@ -136,9 +136,13 @@ impl LogsState {
     }
 
     /// Drop the previous link's task (link swap).
-    pub fn detach(&self) {
-        *self.inner.lock().expect("logs state lock") = None;
+    ///
+    /// Returns whether a download task was running, so the lifecycle
+    /// supervisor (A1) reports `NotRunning` for an idle service.
+    pub fn detach(&self) -> bool {
+        let task = self.inner.lock().expect("logs state lock").take();
         *self.last_error.lock().expect("logs err lock") = None;
+        task.is_some()
     }
 
     fn sender(&self) -> Option<tokio::sync::mpsc::Sender<LogCommand>> {
