@@ -57,6 +57,10 @@ await page.addInitScript(() => {
     alerts.set(alert.id, alert)
     return deliver('alert', { kind, alert })
   }
+  // L1: a STATUSTEXT the hub publishes (already assembled, command attached
+  // when it explains a rejection).
+  window.__mockStatustext = (text) => deliver('statustext', text)
+
   // What Rust does on `alert_ack`: flip the flag, publish the transition.
   window.__mockAck = (id) => {
     const alert = alerts.get(id)
@@ -225,6 +229,34 @@ await page.waitForFunction(
   { timeout: 5000 },
 )
 check((await rows.count()) === 0, 'clear drops the acknowledged history')
+// --- 7. the FC's own status texts reach the event log (L1) ------------------
+// The shell delivers the assembled message exactly as Rust does; the Events
+// tab must show the FC's words, tagged as coming from the FC, with the
+// rejected command named.
+const deliveredText = await page.evaluate(() =>
+  window.__mockStatustext({
+    severity: 'warning',
+    text: 'Preflight Fail: no GPS',
+    command: 'arm_disarm',
+    at_ms: Date.now(),
+  }),
+)
+check(deliveredText, 'the statustext listener is registered at boot')
+await page.getByRole('button', { name: 'Events' }).click()
+await page.waitForFunction(() => document.body.innerText.includes('arm_disarm rejected'), undefined, {
+  timeout: 5000,
+})
+const eventsText = await page.locator('[data-testid="alert-drawer"]').innerText()
+check(
+  eventsText.includes('arm_disarm rejected: Preflight Fail: no GPS'),
+  'a rejected command shows the FC reason it explains',
+)
+const sources = await page
+  .locator('[data-testid="event-row"]')
+  .evaluateAll((els) => els.map((e) => e.dataset.eventSource))
+check(sources.includes('fc'), `the line is tagged as coming from the FC (got ${sources.join(', ')})`)
+await page.screenshot({ path: join(shotsDir, 'events-statustext.png') })
+
 const unhandled = await page.evaluate(() => window.__mockUnhandled)
 if (unhandled.length > 0) console.log(`  unmocked commands (ignored): ${[...new Set(unhandled)].join(', ')}`)
 await page.screenshot({ path: join(shotsDir, 'alerts-cleared.png') })

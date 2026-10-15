@@ -704,6 +704,7 @@ mod tests {
                     pressure_alt: 0.0,
                     temperature: 0.0,
                     fields_updated: ::mavlink::common::HighresImuUpdatedFlags::empty(),
+                    ..Default::default()
                 }),
             ))))
             .unwrap();

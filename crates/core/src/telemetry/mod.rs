@@ -8,6 +8,7 @@
 
 pub mod hub;
 pub mod px4_mode;
+pub mod statustext;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -897,6 +898,7 @@ mod tests {
             errors_count3: 0,
             errors_count4: 0,
             battery_remaining: 76,
+            ..Default::default()
         });
         let s = SysStatus::try_from(&msg).expect("parse");
         assert_eq!(s.battery_voltage_mv, 16_800);
@@ -927,6 +929,7 @@ mod tests {
             battery_function: ::mavlink::common::MavBatteryFunction::MAV_BATTERY_FUNCTION_ALL,
             mavtype: ::mavlink::common::MavBatteryType::MAV_BATTERY_TYPE_LIPO,
             battery_remaining: 80,
+            ..Default::default()
         });
         let b = BatteryStatus::try_from(&msg).expect("parse");
         assert_eq!(b.voltage_cells_mv, vec![4100, 4090, 4080]);
@@ -948,6 +951,7 @@ mod tests {
             cog: 45_000,
             fix_type: ::mavlink::common::GpsFixType::GPS_FIX_TYPE_RTK_FIXED,
             satellites_visible: 18,
+            ..Default::default()
         });
         let g = GpsRawInt::try_from(&msg).expect("parse");
         assert_eq!(g.fix_type, GpsFixType::RtkFixed);
@@ -1054,6 +1058,7 @@ mod tests {
                 cog: 0,
                 fix_type: ::mavlink::common::GpsFixType::GPS_FIX_TYPE_3D_FIX,
                 satellites_visible: 10,
+                ..Default::default()
             },
         ));
         agg.apply(
@@ -1187,6 +1192,7 @@ mod tests {
                 rollspeed: 0.0,
                 pitchspeed: 0.0,
                 yawspeed: 0.0,
+                ..Default::default()
             },
         ));
         assert!(TelemetryUpdate::try_from_envelope(&env).is_none());

@@ -119,6 +119,7 @@ fn shell_frame(command: &str) -> ::mavlink::common::SERIAL_CONTROL_DATA {
         baudrate: 0,
         count: count as u8,
         data,
+        ..Default::default()
     }
 }
 
@@ -165,6 +166,7 @@ pub async fn console_close(
         baudrate: 0,
         count: 0,
         data: [0u8; 70],
+        ..Default::default()
     };
     connection
         .send(MavMessage::SERIAL_CONTROL(payload))

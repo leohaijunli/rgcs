@@ -32,7 +32,9 @@ pub mod ulog;
 pub use alerts::{
     Alert, AlertCenter, AlertEvent, AlertEventKind, AlertInput, AlertSource, Severity,
 };
-pub use commands::{CommandError, CommandEvent, CommandResult, CommandService, CommandSession};
+pub use commands::{
+    command_label, CommandError, CommandEvent, CommandResult, CommandService, CommandSession,
+};
 pub use devices::{DeviceDatabase, DeviceEvent, DeviceManager, DeviceRole, SerialDeviceInfo};
 pub use lifecycle::{
     Lifecycle, LifecyclePolicy, ManagedService, ShutdownError, ShutdownReport, Stage, StopOutcome,

@@ -166,6 +166,8 @@ export default function EventLogDrawer({
               {events.map((e, i) => (
                 <li
                   key={`${e.ts}-${i}`}
+                  data-testid="event-row"
+                  data-event-source={e.source}
                   className="rounded border border-line bg-canvas px-2 py-1 text-xs"
                 >
                   <span className="mono mr-2 text-[10px] text-muted">

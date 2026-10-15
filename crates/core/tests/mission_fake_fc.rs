@@ -69,6 +69,7 @@ impl FakeFc {
             target_system: GCS_SYS,
             target_component: GCS_COMP,
             mavtype: result,
+            ..Default::default()
         })
     }
 
@@ -77,6 +78,7 @@ impl FakeFc {
             target_system: GCS_SYS,
             target_component: GCS_COMP,
             seq,
+            ..Default::default()
         })
     }
 
@@ -125,6 +127,7 @@ impl FakeFc {
                     target_system: GCS_SYS,
                     target_component: GCS_COMP,
                     count: self.items.len() as u16,
+                    ..Default::default()
                 })]
             }
             MavMessage::MISSION_REQUEST_INT(req) => {
@@ -149,6 +152,7 @@ impl FakeFc {
             MavMessage::MISSION_SET_CURRENT(m) => {
                 vec![MavMessage::MISSION_CURRENT(MISSION_CURRENT_DATA {
                     seq: m.seq,
+                    ..Default::default()
                 })]
             }
             _ => Vec::new(),

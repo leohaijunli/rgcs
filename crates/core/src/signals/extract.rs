@@ -586,6 +586,7 @@ mod tests {
             pressure_alt: 0.0,
             temperature: 0.0,
             fields_updated: HighresImuUpdatedFlags::empty(),
+            ..Default::default()
         });
         let ex = extract(&msg).expect("extract");
         assert_eq!(value_of(&ex.fields, "mag_total"), Some(5.0), "3-4-5 total");

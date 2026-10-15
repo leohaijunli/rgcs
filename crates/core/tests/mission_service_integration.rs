@@ -209,6 +209,7 @@ async fn upload_walks_progress_to_completed() {
                 target_system: 250,
                 target_component: 250,
                 seq,
+                ..Default::default()
             }),
         )
         .await;
@@ -226,6 +227,7 @@ async fn upload_walks_progress_to_completed() {
             target_system: 250,
             target_component: 250,
             mavtype: mavlink::common::MavMissionResult::MAV_MISSION_ACCEPTED,
+            ..Default::default()
         }),
     )
     .await;
@@ -262,6 +264,7 @@ async fn download_emits_assembled_plan() {
             target_system: 250,
             target_component: 250,
             count: 2,
+            ..Default::default()
         }),
     )
     .await;

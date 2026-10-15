@@ -113,8 +113,15 @@ v3 已落盘为 `docs/plans/lifecycle-survey-hrdem-plan.md`（v2
 `frontend/scripts/check-alerts.mjs` 为验收脚本）；**A1 生命周期监督器已完成**
 （core `lifecycle` + 单测/假飞控集成测，app-tauri `lifecycle_service` 适配，
 `disconnect`/`shutdown_app`/主窗口 `CloseRequested` 三条路径统一走它；L4 的
-关键字确认 UI 与分级告警留待后续 WP）。下一步按 P0 顺序推进 L1/L2/L3/L4。
-全部 WP 落地后再按计划并入 `FEATURES.md`/`ARCHITECTURE.md` 并删除本计划文件。
+关键字确认 UI 与分级告警留待后续 WP）。**L1 STATUSTEXT 已完成**：core
+`telemetry::statustext`（MAV_SEVERITY 映射、分片拼接、`temporarily_rejected`
+与随后 STATUSTEXT 的关联）+ hub `subscribe_status_text` 通道 + app-tauri 转
+AlertCenter/`statustext` 事件 + 前端事件日志 `fc` 行；顺带开启 mavlink
+`emit-extensions`（分片字段 `id`/`chunk_seq` 属 MAVLink 2 扩展，此前被生成
+代码丢弃），全仓库 29 处消息字面量补 `..Default::default()`——编码端
+`remove_trailing_zeroes` 保证零值扩展不上线，发送字节不变。
+下一步按 P0 顺序推进 L2/L3/L4。全部 WP 落地后再按计划并入
+`FEATURES.md`/`ARCHITECTURE.md` 并删除本计划文件。
 
 ### N6 [P1][frontend] `devices` store 信任后端返回，null 会把整个外壳拆掉
 `stores/devices.ts` 的 `load()` 直接把 `enumerate_devices` 的返回值塞进

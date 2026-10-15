@@ -170,6 +170,7 @@ mod tests {
             MavMessage::COMMAND_ACK(::mavlink::common::COMMAND_ACK_DATA {
                 command: ::mavlink::common::MavCmd::MAV_CMD_NAV_RETURN_TO_LAUNCH,
                 result: ::mavlink::common::MavResult::MAV_RESULT_ACCEPTED,
+                ..Default::default()
             })
         )));
     }

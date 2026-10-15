@@ -23,7 +23,8 @@ crates/core          maggcs_core — all domain logic (ADR-001):
   mavlink/             connection worker + router (multi-link, primary
                        pointer), heartbeat monitor, link state model
   telemetry/           TelemetryHub: latest-snapshot + broadcast, per-field
-                       staleness
+                       staleness; STATUSTEXT decoding, chunk reassembly and
+                       the rejected-command correlation (L1)
   mission/             MISSION protocol state machine + service task
   commands/            single-slot COMMAND_LONG service (retransmit, ack)
   alerts/              alert center (A3): dedup window, Critical latching,

@@ -5,9 +5,11 @@
 //! - `"link"` — `LinkStatus` on change.
 //! - `"link_error"` — `TelemetryError` (kind + message + timestamp), lossless.
 //! - `"telemetry_dropped"` — cumulative inbound frames dropped by the hub.
+//! - `"statustext"` — every assembled `STATUSTEXT` (L1): the FC's own words,
+//!   with the command it explains when it answers a rejection.
 //!
-//! Link failures also go into the alert center (A3), so the badge and the
-//! banner stack read the same state.
+//! Link failures and alarming status texts also go into the alert center
+//! (A3/L1), so the badge and the banner stack read the same state.
 
 use maggcs_core::alerts::{AlertInput, AlertSource, Severity};
 use maggcs_core::telemetry::hub::TelemetryHub;
@@ -20,6 +22,7 @@ pub async fn run(app: AppHandle, hub: TelemetryHub) {
     let mut snap_rx = hub.subscribe_snapshot();
     let mut link_rx = hub.subscribe_link();
     let mut err_rx = hub.subscribe_error();
+    let mut status_rx = hub.subscribe_status_text();
     let mut dropped_rx = hub.subscribe_dropped_frames();
 
     loop {
@@ -54,6 +57,34 @@ pub async fn run(app: AppHandle, hub: TelemetryHub) {
                     }
                     // The pump fell behind the error channel; the hub already
                     // counts such gaps separately, so keep draining.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                }
+            }
+            text = status_rx.recv() => {
+                match text {
+                    Ok(text) => {
+                        // L1: the FC's own words. Anything it calls a problem
+                        // (Emergency…Warning) becomes an alert, so dedup,
+                        // latching and the badge stay in one place; the whole
+                        // stream lands in the event log via the same event.
+                        // A rejected command's reason is never silent — that
+                        // is the one case the operator must not miss.
+                        if text.severity.is_alarming() || text.command.is_some() {
+                            let body = match &text.command {
+                                Some(command) => format!("{command} rejected: {}", text.text),
+                                None => text.text.clone(),
+                            };
+                            app.state::<AppState>().alerts().raise(AlertInput::new(
+                                AlertSource::Statustext,
+                                text.severity.alert_severity(),
+                                body,
+                            ));
+                        }
+                        let _ = app.emit("statustext", &text);
+                    }
+                    // A webview that fell behind re-reads what it needs; the
+                    // FC's log is not worth stalling the pump for.
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
                 }

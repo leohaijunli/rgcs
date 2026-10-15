@@ -23,17 +23,11 @@ pub struct CommandEventPayload {
 }
 
 /// Map a `MAV_CMD` onto the stable name shared with the UI.
+///
+/// One table for the whole product: `core::commands::command_label` (the
+/// alert text for a rejected command uses it too, L1).
 pub fn command_name(command: MavCmd) -> &'static str {
-    match command {
-        MavCmd::MAV_CMD_NAV_RETURN_TO_LAUNCH => "rtl",
-        MavCmd::MAV_CMD_NAV_TAKEOFF => "takeoff",
-        MavCmd::MAV_CMD_NAV_LAND => "land",
-        MavCmd::MAV_CMD_DO_SET_MODE => "set_mode",
-        MavCmd::MAV_CMD_COMPONENT_ARM_DISARM => "arm_disarm",
-        MavCmd::MAV_CMD_DO_REPOSITION => "goto",
-        MavCmd::MAV_CMD_DO_SET_HOME => "set_home",
-        _ => "unknown",
-    }
+    maggcs_core::commands::command_label(command)
 }
 
 /// Map a `CommandResult` onto the UI vocabulary.

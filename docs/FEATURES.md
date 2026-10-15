@@ -29,17 +29,34 @@ One alert center backs three surfaces, so they can never disagree:
   because the next message pushed it aside.
 - **Drawer** — `Alerts` tab: every alert (severity, source, text, count,
   time, ack button) with `Ack all` and a history-clear action; `Events` tab:
-  the local event ring (command acks, mode switches, arm/disarm, RTK).
+  the local event ring (command acks, mode switches, arm/disarm, RTK, and
+  the FC's own `STATUSTEXT` lines, tagged `fc`).
 
 Behaviour (plan §3 A3, `core::alerts`): the same key raised again inside the
 30 s dedup window only increments the count — the operator is not re-alerted;
 a repeat after the window, or a severity escalation, alerts again; level
 alerts (threshold conditions, L7) stay until the condition has been clear for
 3 s. Raising the same key inside the window never adds a second row. Alert
-sources today: MAVLink link failures, terrain-drape failures and refused
-disconnects/quits (`system`); STATUSTEXT, battery, GPS/RTK, magnetometer and
-VIC follow in L1/L3/L7/M2/M7. Rust owns the model, so every window sees the
-same count and the same rows.
+sources today: MAVLink link failures, terrain-drape failures, refused
+disconnects/quits (`system`) and the flight controller's own status texts
+(`FC`, L1); battery, GPS/RTK, magnetometer and VIC follow in L3/L7/M2/M7.
+Rust owns the model, so every window sees the same count and the same rows.
+
+### Flight controller messages (STATUSTEXT)
+
+- Every `STATUSTEXT` the FC sends appears in the `Events` tab with the FC's
+  own severity. Long messages are split into several frames by MAVLink; they
+  are reassembled in Rust and shown once, whole.
+- Anything the FC calls a problem (Emergency…Warning) also becomes an alert,
+  so it colours the badge and the banner: `Critical`/`Error` are red,
+  `Warning` amber. `Notice`/`Info`/`Debug` are log-only — PX4 emits them
+  continuously and a badge that is never zero tells the operator nothing.
+- When the FC rejects a command with `temporarily_rejected`, the reason it
+  sends next is attached to the command: the alert and the log line read
+  `arm_disarm rejected: Preflight Fail: …` instead of an anonymous sentence.
+  That correlation happens in the telemetry hub, where both frames arrive in
+  order, so it cannot race the ack.
+- The recorder (A4) will write the same stream to the flight's event log.
 
 ## Exiting and disconnecting (guards)
 

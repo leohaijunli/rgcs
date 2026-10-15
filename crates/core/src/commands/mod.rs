@@ -64,6 +64,24 @@ impl CommandResult {
     }
 }
 
+/// Map a `MAV_CMD` onto the stable name shared with the UI.
+///
+/// One table for the app shell, the alert text and the event log: a command
+/// the operator sees as "arm_disarm" everywhere (L1 uses it to label a
+/// `STATUSTEXT` that explains a rejection).
+pub fn command_label(command: MavCmd) -> &'static str {
+    match command {
+        MavCmd::MAV_CMD_NAV_RETURN_TO_LAUNCH => "rtl",
+        MavCmd::MAV_CMD_NAV_TAKEOFF => "takeoff",
+        MavCmd::MAV_CMD_NAV_LAND => "land",
+        MavCmd::MAV_CMD_DO_SET_MODE => "set_mode",
+        MavCmd::MAV_CMD_COMPONENT_ARM_DISARM => "arm_disarm",
+        MavCmd::MAV_CMD_DO_REPOSITION => "goto",
+        MavCmd::MAV_CMD_DO_SET_HOME => "set_home",
+        _ => "unknown",
+    }
+}
+
 /// Events emitted by the command session.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CommandEvent {
@@ -315,7 +333,11 @@ mod tests {
     }
 
     fn ack(command: MavCmd, result: MavResult) -> MavMessage {
-        MavMessage::COMMAND_ACK(COMMAND_ACK_DATA { command, result })
+        MavMessage::COMMAND_ACK(COMMAND_ACK_DATA {
+            command,
+            result,
+            ..Default::default()
+        })
     }
 
     fn fc_header() -> MavHeader {

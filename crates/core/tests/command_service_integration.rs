@@ -97,7 +97,11 @@ async fn peer_send_ack(
     command: mavlink::common::MavCmd,
     result: mavlink::common::MavResult,
 ) {
-    let ack = MavMessage::COMMAND_ACK(mavlink::common::COMMAND_ACK_DATA { command, result });
+    let ack = MavMessage::COMMAND_ACK(mavlink::common::COMMAND_ACK_DATA {
+        command,
+        result,
+        ..Default::default()
+    });
     peer.send(
         &MavHeader {
             system_id: 1,

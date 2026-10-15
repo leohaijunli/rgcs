@@ -163,6 +163,7 @@ impl MissionProtocol {
             target_system: self.target_sys,
             target_component: self.target_comp,
             count,
+            ..Default::default()
         });
         Ok(self.queue(msg, "MISSION_COUNT"))
     }
@@ -179,6 +180,7 @@ impl MissionProtocol {
         let msg = MavMessage::MISSION_REQUEST_LIST(MISSION_REQUEST_LIST_DATA {
             target_system: self.target_sys,
             target_component: self.target_comp,
+            ..Default::default()
         });
         self.queue(msg, "MISSION_REQUEST_LIST")
     }
@@ -195,6 +197,7 @@ impl MissionProtocol {
         let msg = MavMessage::MISSION_CLEAR_ALL(MISSION_CLEAR_ALL_DATA {
             target_system: self.target_sys,
             target_component: self.target_comp,
+            ..Default::default()
         });
         self.queue(msg, "MISSION_CLEAR_ALL")
     }
@@ -397,6 +400,7 @@ impl MissionProtocol {
                     target_system: self.target_sys,
                     target_component: self.target_comp,
                     seq: 0,
+                    ..Default::default()
                 });
                 let frames = self.queue(msg, "MISSION_REQUEST_INT");
                 self.state = State::Download {
@@ -459,6 +463,7 @@ impl MissionProtocol {
                         target_system: self.target_sys,
                         target_component: self.target_comp,
                         seq: sent,
+                        ..Default::default()
                     });
                     let frames = self.queue(msg, "MISSION_REQUEST_INT");
                     self.state = State::Download {
@@ -479,6 +484,7 @@ impl MissionProtocol {
                         target_system: self.target_sys,
                         target_component: self.target_comp,
                         mavtype: MavMissionResult::MAV_MISSION_ACCEPTED,
+                        ..Default::default()
                     });
                     self.last_downloaded = items;
                     let frames = self.queue(msg, "MISSION_ACK");
@@ -588,6 +594,7 @@ pub fn mission_item_to_mav(
         frame: item.frame.to_mav(),
         current: if item.current { 1 } else { 0 },
         autocontinue: if item.autocontinue { 1 } else { 0 },
+        ..Default::default()
     }
 }
 
@@ -651,6 +658,7 @@ mod tests {
             target_system: SELF_SYS,
             target_component: SELF_COMP,
             seq,
+            ..Default::default()
         })
     }
 
@@ -672,6 +680,7 @@ mod tests {
             target_system: SELF_SYS,
             target_component: SELF_COMP,
             mavtype: ty,
+            ..Default::default()
         })
     }
 
@@ -732,6 +741,7 @@ mod tests {
                 target_system: SELF_SYS,
                 target_component: SELF_COMP,
                 count: 2,
+                ..Default::default()
             }),
         );
         assert!(events.is_empty());
@@ -768,6 +778,7 @@ mod tests {
                 target_system: SELF_SYS,
                 target_component: SELF_COMP,
                 count: 1,
+                ..Default::default()
             }),
         );
 
@@ -802,7 +813,10 @@ mod tests {
         };
         let (events, frames) = p.handle(
             &foreign,
-            &M::MISSION_CURRENT(MISSION_CURRENT_DATA { seq: 7 }),
+            &M::MISSION_CURRENT(MISSION_CURRENT_DATA {
+                seq: 7,
+                ..Default::default()
+            }),
         );
         assert!(events.is_empty());
         assert!(frames.is_empty());
@@ -818,6 +832,7 @@ mod tests {
                 target_system: SELF_SYS,
                 target_component: SELF_COMP,
                 count: 3,
+                ..Default::default()
             }),
         );
         for seq in 0..3u16 {
@@ -860,7 +875,10 @@ mod tests {
         let mut p = MissionProtocol::new(SELF_SYS, SELF_COMP, FC_SYS, FC_COMP);
         let (events, frames) = p.handle(
             &fc_header(),
-            &M::MISSION_CURRENT(MISSION_CURRENT_DATA { seq: 5 }),
+            &M::MISSION_CURRENT(MISSION_CURRENT_DATA {
+                seq: 5,
+                ..Default::default()
+            }),
         );
         assert!(events.contains(&MissionEvent::CurrentChanged { seq: 5 }));
         assert!(frames.is_empty(), "no reply to a broadcast");
@@ -873,7 +891,10 @@ mod tests {
         assert!(matches!(&frames[0], M::MISSION_SET_CURRENT(_)));
         let (events, _) = p.handle(
             &fc_header(),
-            &M::MISSION_CURRENT(MISSION_CURRENT_DATA { seq: 3 }),
+            &M::MISSION_CURRENT(MISSION_CURRENT_DATA {
+                seq: 3,
+                ..Default::default()
+            }),
         );
         assert!(events.contains(&MissionEvent::CurrentChanged { seq: 3 }));
         assert!(events.contains(&MissionEvent::Completed(MissionOperation::SetCurrent(3))));
@@ -891,6 +912,7 @@ mod tests {
                 target_system: 99,
                 target_component: 99,
                 seq: 0,
+                ..Default::default()
             }),
         );
         assert!(events.is_empty() && frames.is_empty());
@@ -1056,6 +1078,7 @@ mod tests {
                 target_system: SELF_SYS,
                 target_component: SELF_COMP,
                 count: 2,
+                ..Default::default()
             }),
         );
         p.handle(&fc_header(), &item_msg(0));
@@ -1101,6 +1124,7 @@ mod tests {
                 target_system: SELF_SYS,
                 target_component: SELF_COMP,
                 count: 1,
+                ..Default::default()
             }),
         );
         let mut raw = mission_item_to_mav(FC_SYS, FC_COMP, &mk_item(0, 48.0, -123.0, 50.0));

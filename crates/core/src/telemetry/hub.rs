@@ -9,9 +9,13 @@ use std::time::Duration;
 
 use tokio::sync::{broadcast, watch};
 
+use crate::commands::command_label;
 use crate::mavlink::connection::{ConnectionEvent, LinkStatus};
 use crate::mavlink::router::{MessageRoute, RoutedEvents};
 use crate::mavlink::LinkState;
+use crate::telemetry::statustext::{
+    decode_command_ack, RejectionCorrelator, StatusChunk, StatusText, StatusTextAssembler,
+};
 use crate::telemetry::{
     TelemetryAggregator, TelemetryError, TelemetrySnapshot, TelemetryUpdate, VehicleId,
 };
@@ -22,12 +26,18 @@ pub const DEFAULT_PUSH_HZ: u64 = 20;
 /// Buffer depth for the lossless error channel.
 const ERROR_BUFFER: usize = 64;
 
+/// Buffer depth for the `STATUSTEXT` channel (L1). Status messages are
+/// low-rate; a subscriber that falls this far behind has stopped reading, and
+/// the alert center's snapshot covers the gap.
+const STATUS_BUFFER: usize = 64;
+
 /// Aggregation/throttling hub owned by the app layer.
 #[derive(Debug, Clone)]
 pub struct TelemetryHub {
     snapshot_rx: watch::Receiver<TelemetrySnapshot>,
     link_rx: watch::Receiver<LinkStatus>,
     error_tx: broadcast::Sender<TelemetryError>,
+    status_tx: broadcast::Sender<StatusText>,
     dropped_rx: watch::Receiver<u64>,
     shutdown_tx: watch::Sender<bool>,
 }
@@ -48,6 +58,7 @@ impl TelemetryHub {
         // Errors go through a broadcast channel so two errors arriving between
         // reads are not collapsed into one (issues.md #17).
         let (error_tx, _error_rx) = broadcast::channel(ERROR_BUFFER);
+        let (status_tx, _status_rx) = broadcast::channel(STATUS_BUFFER);
         let (dropped_tx, dropped_rx) = watch::channel(0u64);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
@@ -62,6 +73,7 @@ impl TelemetryHub {
                 snapshot: snapshot_tx,
                 link: link_tx,
                 error: error_tx.clone(),
+                status: status_tx.clone(),
                 dropped: dropped_tx,
             },
             shutdown_rx,
@@ -71,6 +83,7 @@ impl TelemetryHub {
             snapshot_rx,
             link_rx,
             error_tx,
+            status_tx,
             dropped_rx,
             shutdown_tx,
         }
@@ -96,6 +109,14 @@ impl TelemetryHub {
         self.error_tx.subscribe()
     }
 
+    /// Subscribe to assembled `STATUSTEXT`s (lossless, in arrival order).
+    ///
+    /// Multi-frame messages arrive once, reassembled; a message that carries
+    /// the reason for a rejected command has `command` set (L1).
+    pub fn subscribe_status_text(&self) -> broadcast::Receiver<StatusText> {
+        self.status_tx.subscribe()
+    }
+
     /// Total inbound frames dropped because the pump lagged the event bus.
     pub fn subscribe_dropped_frames(&self) -> watch::Receiver<u64> {
         self.dropped_rx.clone()
@@ -112,6 +133,7 @@ struct PumpSinks {
     snapshot: watch::Sender<TelemetrySnapshot>,
     link: watch::Sender<LinkStatus>,
     error: broadcast::Sender<TelemetryError>,
+    status: broadcast::Sender<StatusText>,
     dropped: watch::Sender<u64>,
 }
 
@@ -126,9 +148,14 @@ async fn pump(
         snapshot: snapshot_tx,
         link: link_tx,
         error: error_tx,
+        status: status_tx,
         dropped: dropped_tx,
     } = sinks;
     let mut agg = TelemetryAggregator::for_vehicle(target);
+    // STATUSTEXT assembly + the "which command was rejected" correlation both
+    // need the frames in arrival order, which only this loop has (L1).
+    let mut statuses = StatusTextAssembler::new();
+    let mut rejections = RejectionCorrelator::default();
     let mut dropped_frames: u64 = 0;
     let mut dirty = false;
     let period = Duration::from_millis(1000 / hz.max(1));
@@ -149,9 +176,23 @@ async fn pump(
                 Ok(ConnectionEvent::Message(env)) => {
                     let source = VehicleId::from_envelope(&env);
                     if agg.accepts(source) {
+                        let now = epoch_ms();
                         if let Some(update) = TelemetryUpdate::try_from_envelope(&env) {
-                            agg.apply(source, update, epoch_ms());
+                            agg.apply(source, update, now);
                             dirty = true;
+                        }
+                        // Remember a rejection so the `STATUSTEXT` PX4 sends
+                        // next can be labelled with the command it explains.
+                        if let Some((command, result)) = decode_command_ack(&env) {
+                            rejections.note_ack(command, result, now);
+                        }
+                        if let Some(chunk) = StatusChunk::decode(&env) {
+                            if let Some(mut text) = statuses.push(chunk, now) {
+                                text.command = rejections
+                                    .take_explains(text.at_ms)
+                                    .map(|cmd| command_label(cmd).to_string());
+                                let _ = status_tx.send(text);
+                            }
                         }
                     }
                 }
@@ -225,6 +266,7 @@ mod tests {
     use crate::mavlink::connection::{ConnectionEvent, LinkErrorKind, LinkFailure};
     use crate::mavlink::message::{MavMessage, MessageEnvelope};
     use crate::mavlink::{Endpoint, LinkState};
+    use crate::telemetry::statustext::StatusSeverity;
 
     fn link_error_event(message: &str) -> ConnectionEvent {
         ConnectionEvent::LinkError(LinkFailure {
@@ -250,6 +292,123 @@ mod tests {
             }),
             received_at: std::time::Instant::now(),
         }))
+    }
+
+    fn statustext_event(id: u16, chunk_seq: u8, severity: u8, text: &str) -> ConnectionEvent {
+        use ::mavlink::common::MavSeverity as S;
+        let severity = match severity {
+            3 => S::MAV_SEVERITY_ERROR,
+            4 => S::MAV_SEVERITY_WARNING,
+            5 => S::MAV_SEVERITY_NOTICE,
+            _ => S::MAV_SEVERITY_INFO,
+        };
+        ConnectionEvent::Message(Box::new(MessageEnvelope {
+            header: ::mavlink::MavHeader {
+                system_id: 1,
+                component_id: 1,
+                sequence: 0,
+            },
+            message: MavMessage::STATUSTEXT(::mavlink::common::STATUSTEXT_DATA {
+                severity,
+                text: text.into(),
+                id,
+                chunk_seq,
+            }),
+            received_at: std::time::Instant::now(),
+        }))
+    }
+
+    fn ack_event(
+        command: ::mavlink::common::MavCmd,
+        result: ::mavlink::common::MavResult,
+    ) -> ConnectionEvent {
+        ConnectionEvent::Message(Box::new(MessageEnvelope {
+            header: ::mavlink::MavHeader {
+                system_id: 1,
+                component_id: 1,
+                sequence: 0,
+            },
+            message: MavMessage::COMMAND_ACK(::mavlink::common::COMMAND_ACK_DATA {
+                command,
+                result,
+                ..Default::default()
+            }),
+            received_at: std::time::Instant::now(),
+        }))
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn statustext_is_assembled_and_labelled_with_the_rejected_command() {
+        // L1 end to end through the hub: a rejected arm, the prearm reason
+        // that follows it, then an unrelated status message.
+        let (events_tx, events_rx) = broadcast::channel(16);
+        let hub = TelemetryHub::spawn(events_rx, 100, VehicleId::new(1, 1));
+        let mut status_rx = hub.subscribe_status_text();
+
+        events_tx
+            .send(ack_event(
+                ::mavlink::common::MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
+                ::mavlink::common::MavResult::MAV_RESULT_TEMPORARILY_REJECTED,
+            ))
+            .expect("send ack");
+        events_tx
+            .send(statustext_event(0, 0, 4, "Preflight Fail: no GPS"))
+            .expect("send reason");
+
+        let text = tokio::time::timeout(Duration::from_secs(2), status_rx.recv())
+            .await
+            .expect("statustext timed out")
+            .expect("statustext delivered");
+        assert_eq!(text.text, "Preflight Fail: no GPS");
+        assert_eq!(text.severity, StatusSeverity::Warning);
+        assert_eq!(
+            text.command.as_deref(),
+            Some("arm_disarm"),
+            "the reason is labelled with the command it explains"
+        );
+
+        // One rejection explains one text: the next message is not labelled.
+        events_tx
+            .send(statustext_event(0, 0, 5, "Home set"))
+            .expect("send unrelated");
+        let text = tokio::time::timeout(Duration::from_secs(2), status_rx.recv())
+            .await
+            .expect("second statustext timed out")
+            .expect("second statustext delivered");
+        assert_eq!(text.severity, StatusSeverity::Notice);
+        assert!(text.command.is_none());
+        hub.shutdown();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_chunked_statustext_reaches_the_subscriber_once() {
+        let (events_tx, events_rx) = broadcast::channel(16);
+        let hub = TelemetryHub::spawn(events_rx, 100, VehicleId::new(1, 1));
+        let mut status_rx = hub.subscribe_status_text();
+
+        let head = "F".repeat(50);
+        let tail = "E".repeat(50);
+        events_tx
+            .send(statustext_event(9, 0, 3, &head))
+            .expect("chunk 0");
+        events_tx
+            .send(statustext_event(9, 1, 3, &tail))
+            .expect("chunk 1");
+        events_tx
+            .send(statustext_event(9, 2, 3, "END"))
+            .expect("last chunk");
+
+        let text = tokio::time::timeout(Duration::from_secs(2), status_rx.recv())
+            .await
+            .expect("statustext timed out")
+            .expect("statustext delivered");
+        assert_eq!(text.text.len(), 103);
+        assert!(text.text.ends_with("END"));
+        assert!(
+            status_rx.try_recv().is_err(),
+            "the chunks produced one message, not three"
+        );
+        hub.shutdown();
     }
 
     #[tokio::test(flavor = "multi_thread")]
