@@ -10,6 +10,11 @@ interface LinkState {
   lastError: string | null
   errorHistory: TelemetryError[]
   droppedFrames: number
+  /**
+   * Epoch ms of the last lost->alive transition (L3), `null` before the first
+   * one. The UI shows a "link restored" notice for a few seconds after it.
+   */
+  restoredAtMs: number | null
   setLink: (l: LinkStatus) => void
   setError: (e: string | null) => void
   pushError: (e: TelemetryError) => void
@@ -22,7 +27,16 @@ export const useLinkStore = create<LinkState>((set) => ({
   lastError: null,
   errorHistory: [],
   droppedFrames: 0,
-  setLink: (link) => set({ link }),
+  restoredAtMs: null,
+  // The lost->alive edge is the only place that knows a *reconnect* happened
+  // (a plain `link` event carries no history), so the timestamp is stamped
+  // here and every view — banner, mission re-read, event log — reads it.
+  setLink: (link) =>
+    set((state) => ({
+      link,
+      restoredAtMs:
+        link.fc_alive && state.link?.fc_alive === false ? Date.now() : state.restoredAtMs,
+    })),
   setError: (lastError) => set({ lastError }),
   pushError: (e) =>
     set((state) => ({

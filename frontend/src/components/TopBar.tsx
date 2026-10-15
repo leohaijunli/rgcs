@@ -3,7 +3,9 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { invoke } from '@tauri-apps/api/core'
 import { useTelemetryStore } from '../stores/telemetry'
+import { useLinkStore } from '../stores/link'
 import { useAlerts } from '../stores/alerts'
+import { FIELD_STALE_MS, useHeartbeatAge } from '../hooks/useDataAge'
 import type { Severity } from '../generated-types/Severity'
 import { IconButton, StatusDot, Tabs } from '../design-system/components'
 import { useUiStore, type View } from '../stores/ui'
@@ -80,6 +82,8 @@ export default function TopBar() {
   const alertSeverity = useAlerts((s) => s.highest)
   const view = useUiStore((s) => s.view)
   const setView = useUiStore((s) => s.setView)
+  const link = useLinkStore((s) => s.link)
+  const heartbeatAgeMs = useHeartbeatAge()
   const heartbeat = useTelemetryStore((s) => s.snapshot?.heartbeat ?? null)
   const gps = useTelemetryStore((s) => s.snapshot?.gps ?? null)
   const sys = useTelemetryStore((s) => s.snapshot?.sys_status ?? null)
@@ -121,6 +125,15 @@ export default function TopBar() {
   const batteryTone: 'ok' | 'warn' | 'err' | 'off' =
     batteryPct == null ? 'off' : batteryPct < 15 ? 'err' : batteryPct < 30 ? 'warn' : 'ok'
   const batteryText = sys ? `${(sys.battery_voltage_mv / 1000).toFixed(1)}V ${sys.battery_remaining_percent}%` : undefined
+  // L3: mode / armed / RTK / battery are heartbeat readouts. Once the FC is
+  // silent they are history, and a live-looking "ARMED · RTK FIXED" is the
+  // dangerous failure mode — so the group dims and carries the age of its
+  // last sample.
+  const linkLost = link !== null && !link.fc_alive
+  const stale = linkLost || heartbeatAgeMs > FIELD_STALE_MS
+  const staleSeconds = Number.isFinite(heartbeatAgeMs) ? Math.round(heartbeatAgeMs / 1000) : null
+  const staleText =
+    staleSeconds !== null ? t('link.staleSince', { s: staleSeconds }) : t('link.noLink')
 
   return (
     <header className="flex h-12 shrink-0 items-center gap-3 border-b border-line bg-panel px-3">
@@ -136,27 +149,38 @@ export default function TopBar() {
       />
 
       <div className="ml-auto flex items-center gap-2">
+        {stale && (
+          <span data-testid="link-stale-age" className="text-[10px] text-warn">
+            {staleText}
+          </span>
+        )}
         <div
-          role="status"
-          className={`flex h-8 items-center gap-1.5 rounded border px-2.5 text-xs font-medium ${
-            armed
-              ? 'border-ok bg-ok text-ok-ink'
-              : 'border-line bg-canvas text-muted'
-          }`}
+          data-testid="link-stale"
+          data-stale={stale ? 'true' : 'false'}
+          className={`flex items-center gap-2 ${stale ? 'opacity-45' : ''}`}
         >
-          <span className={`h-1.5 w-1.5 rounded-full ${armed ? 'bg-ok-ink' : 'bg-muted'}`} />
-          {armed ? t('link.armed') : t('link.disarmed')}
+          <div
+            role="status"
+            className={`flex h-8 items-center gap-1.5 rounded border px-2.5 text-xs font-medium ${
+              armed
+                ? 'border-ok bg-ok text-ok-ink'
+                : 'border-line bg-canvas text-muted'
+            }`}
+          >
+            <span className={`h-1.5 w-1.5 rounded-full ${armed ? 'bg-ok-ink' : 'bg-muted'}`} />
+            {armed ? t('link.armed') : t('link.disarmed')}
+          </div>
+          <FlightMenu />
+          <ModePopover />
+          <Pill
+            label={t('link.rtk')}
+            value={gps ? `${t(`hud.fix.${fixKey(rtk ?? 'NO_GPS')}`)} ${gps.satellites_visible}sv` : '—'}
+            tone={rtkTone}
+            onClick={() => setRtkDrawerOpen(true)}
+            title={t('rtk.title')}
+          />
+          <Pill label={t('link.batt')} value={batteryText} tone={batteryTone} />
         </div>
-        <FlightMenu />
-        <ModePopover />
-        <Pill
-          label={t('link.rtk')}
-          value={gps ? `${t(`hud.fix.${fixKey(rtk ?? 'NO_GPS')}`)} ${gps.satellites_visible}sv` : '—'}
-          tone={rtkTone}
-          onClick={() => setRtkDrawerOpen(true)}
-          title={t('rtk.title')}
-        />
-        <Pill label={t('link.batt')} value={batteryText} tone={batteryTone} />
         <LinkPopover onOpenSettings={openConnection} />
 
         {/* Tools ▾ groups the window launchers (motor-test plan §2.2-10) so

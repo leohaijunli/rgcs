@@ -157,6 +157,8 @@ interface MissionState {
   clearPlan: () => void
   /** The link dropped: no mission event will arrive, so stop showing progress. */
   linkLost: () => void
+  /** The heartbeat came back: re-read the mission state the FC holds (L3). */
+  linkRestored: () => void
   setCurrent: (seq: number) => Promise<void>
   handleEvent: (e: MissionEventPayload) => void
   handlePlan: (items: MissionItem[]) => void
@@ -394,6 +396,21 @@ export const useMissionStore = create<MissionState>((set, get) => ({
   // sit on "Uploading…" with every button disabled.
   linkLost: () =>
     set({ busy: false, verifying: false, syncState: 'idle' }),
+
+  // Reconnect (L3, plan §4): mode and armed state ride on the heartbeat and
+  // resume by themselves, but the *mission* state is only known from an
+  // exchange. Re-read the sync state in whichever way is already meaningful:
+  // a plan we synced gets its read-back; an empty panel fetches whatever the
+  // FC is flying (the same rule `current_changed` uses). An in-flight
+  // operation is never interrupted.
+  linkRestored: () => {
+    const s = get()
+    if (s.busy || s.verifying) return
+    if (s.lastSyncedHash) void get().verifyFc()
+    else if (s.waypoints.length === 0 && s.blocks.length === 0 && !s.planCleared) {
+      void get().download()
+    }
+  },
 
   upload: async () => {
     const items = get().flyable()

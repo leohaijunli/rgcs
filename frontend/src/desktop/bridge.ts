@@ -24,6 +24,7 @@ import type { TelemetryError } from '../generated-types/TelemetryError'
 import type { MissionEventPayload } from '../stores/mission'
 import type { AlertEvent } from '../generated-types/AlertEvent'
 import type { StatusText } from '../generated-types/StatusText'
+import i18n from '../i18n'
 import { loadAlerts, useAlerts } from '../stores/alerts'
 import { reportConnectError } from './connect'
 import { logEvent, type EventLevel } from '../stores/eventlog'
@@ -79,6 +80,9 @@ export function useTelemetryBridge() {
       unlisteners.push(un1)
 
       const un2 = await listen<LinkStatus>('link', (e) => {
+        // The lost->alive edge is the reconnect (L3): read it *before* the
+        // store is updated, because `setLink` is what consumes it.
+        const wasAlive = useLinkStore.getState().link?.fc_alive
         useLinkStore.getState().setLink(e.payload)
         // A dead link ends any in-flight command or mission operation; their
         // acks/events will never arrive (the mission service exits with the
@@ -86,6 +90,13 @@ export function useTelemetryBridge() {
         if (!e.payload.fc_alive) {
           useCommandStore.getState().reset()
           useMissionStore.getState().linkLost()
+        } else if (wasAlive === false) {
+          // Reconnect: mode and armed state resume with the heartbeat; the
+          // mission state is only known from an exchange, so re-read it, and
+          // say so — a banner that vanishes silently leaves the operator
+          // wondering whether the panel is live again.
+          useMissionStore.getState().linkRestored()
+          logEvent('link', 'ok', i18n.t('link.restored'))
         }
       })
       if (disposed) return un2()

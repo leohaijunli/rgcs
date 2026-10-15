@@ -42,3 +42,14 @@ export function useFieldAge(
   if (atMs == null) return Number.POSITIVE_INFINITY
   return Math.max(0, now - atMs)
 }
+
+/**
+ * Age (ms) of the last MAVLink heartbeat, from the snapshot's own epoch-ms
+ * field stamp. While the FC is silent this keeps counting up, so the UI can
+ * show how long the link has been dead (plan §4 L3) instead of a frozen
+ * position that looks live.
+ */
+export function useHeartbeatAge(): number {
+  const atMs = useTelemetryStore((s) => s.snapshot?.field_ages.heartbeat_at_ms ?? null)
+  return useFieldAge(atMs)
+}

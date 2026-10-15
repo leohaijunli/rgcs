@@ -120,7 +120,16 @@ AlertCenter/`statustext` 事件 + 前端事件日志 `fc` 行；顺带开启 mav
 `emit-extensions`（分片字段 `id`/`chunk_seq` 属 MAVLink 2 扩展，此前被生成
 代码丢弃），全仓库 29 处消息字面量补 `..Default::default()`——编码端
 `remove_trailing_zeroes` 保证零值扩展不上线，发送字节不变。
-下一步按 P0 顺序推进 L2/L3/L4。全部 WP 落地后再按计划并入
+**L3 心跳丢失处理已完成**：前端 `HeartbeatBanner`（丢失时长计时、最后位置/
+高度/电量、告警音 + 静音开关、`link_state === 'connected' && !fc_alive` 才
+亮，正常断开不误报）、`FlightMenu` 置灰并就地说明原因（不再整体消失）、
+`link` store 的 lost→alive 边沿时间戳 + `mission.linkRestored()`（重连后重读
+任务状态；模式/解锁状态随心跳自动恢复）、TopBar 遥测组置灰并标出样本年龄、
+HUD "STALE n s · 最后时刻"、地图飞机标 `UAV · OLD DATA`（Cesium 实体标签 +
+右下角角标）。验收脚本 `frontend/scripts/check-heartbeat.mjs`（26 条断言：
+3 s 超时前不亮横幅、时长递增、Flight 菜单不可用、遥测置灰、重连提示与
+`mission_download` 重读）。
+下一步按 P0 顺序推进 L2/L4。全部 WP 落地后再按计划并入
 `FEATURES.md`/`ARCHITECTURE.md` 并删除本计划文件。
 
 ### N6 [P1][frontend] `devices` store 信任后端返回，null 会把整个外壳拆掉

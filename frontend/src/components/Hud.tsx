@@ -26,6 +26,17 @@ export default function Hud() {
   const stale = age > STALE_MS
   const dim = stale || age > DIM_MS
   const gpsStale = snapshot != null && gpsAge > FIELD_STALE_MS
+  // L3: while the fix is stale the numbers must not read as live — say how
+  // old they are and stamp the last sample's wall-clock time.
+  const lastFixAtMs = snapshot?.field_ages.heartbeat_at_ms ?? null
+  const staleText = stale
+    ? [
+        t('hud.staleFor', { s: Math.max(0, Math.round(age / 1000)) }),
+        lastFixAtMs != null ? new Date(lastFixAtMs).toLocaleTimeString() : null,
+      ]
+        .filter((part) => part !== null)
+        .join(' · ')
+    : ''
 
   if (collapsed) {
     return (
@@ -38,6 +49,7 @@ export default function Hud() {
         >
           <ChevronUp size={12} />
           {t('hud.speed')} {speedMs.toFixed(1)} m/s
+          {stale && <span className="text-warn">· {t('hud.staleFor', { s: Math.max(0, Math.round(age / 1000)) })}</span>}
         </button>
       </div>
     )
@@ -50,8 +62,11 @@ export default function Hud() {
       <AttitudeIndicator rollDeg={att?.roll_deg ?? 0} pitchDeg={att?.pitch_deg ?? 0} size={92} />
       <div className="grid grid-cols-2 gap-x-4 gap-y-1 pb-1">
         {stale && (
-          <div className="col-span-2 rounded bg-error px-2 py-0.5 text-center text-[10px] font-medium text-white">
-            STALE
+          <div
+            data-testid="hud-stale"
+            className="col-span-2 rounded bg-error px-2 py-0.5 text-center text-[10px] font-medium text-white"
+          >
+            {staleText}
           </div>
         )}
         {gpsStale && (

@@ -198,6 +198,26 @@ export function createDroneLayer(
   return { drone, predict, home, target, drop, dronePosition, droneOrientation }
 }
 
+/**
+ * Relabel the vehicle marker while the FC heartbeat is gone (plan §4 L3): the
+ * model sits at the *last* fix, so it must not read as the live position. The
+ * label and silhouette switch to the warn tone — the same shape, a different
+ * meaning, so the marker stays findable on the map.
+ */
+export function setDroneStale(layer: DroneLayer, stale: boolean): void {
+  const accent = Cesium.Color.fromCssColorString(cssVar('--mg-accent'))
+  const warn = Cesium.Color.fromCssColorString(cssVar('--mg-warn'))
+  if (layer.drone.label) {
+    layer.drone.label.text = new Cesium.ConstantProperty(
+      stale ? i18n.t('map.uavStale') : i18n.t('map.uav'),
+    )
+    layer.drone.label.fillColor = new Cesium.ConstantProperty(stale ? warn : Cesium.Color.WHITE)
+  }
+  if (layer.drone.model) {
+    layer.drone.model.silhouetteColor = new Cesium.ConstantProperty(stale ? warn : accent)
+  }
+}
+
 /** Below this (either side of the plane) the drop line is noise: the vehicle
  * is on the ground. A vehicle under HOME's plane keeps its line — hiding it
  * made a flight into a valley look like no clearance data at all. */

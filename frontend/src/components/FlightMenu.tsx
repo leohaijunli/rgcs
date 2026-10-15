@@ -56,7 +56,27 @@ export default function FlightMenu() {
     }
   }, [open])
 
-  if (!link?.fc_alive) return null
+  // L3: keep the menu on the bar when the heartbeat is gone — vanishing read
+  // as a UI bug. It is greyed out with the reason, because a flight command
+  // against a dead link can only fail. The menu itself cannot open.
+  if (!link?.fc_alive) {
+    const reason = t('plan.cmd.noLink')
+    return (
+      <div className="relative" ref={rootRef}>
+        <button
+          data-testid="flight-menu-blocked"
+          disabled
+          title={reason}
+          aria-label={reason}
+          className="flex h-8 cursor-not-allowed items-center gap-1 rounded border border-line bg-canvas px-2.5 text-xs text-muted"
+        >
+          {t('plan.cmd.menu')}
+          <span className="text-[9px] text-muted">▾</span>
+          <span className="ml-1 text-[10px] text-warn">{t('link.noLink')}</span>
+        </button>
+      </div>
+    )
+  }
 
   // Disruptive commands arm on the first click; a second click within the
   // confirm window sends them.

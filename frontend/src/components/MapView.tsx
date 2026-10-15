@@ -527,12 +527,27 @@ export default function MapView() {
 }
 
 /** Vehicle position readout, bottom-right corner (§4.3: moved out of the
- * toolbar so the strip carries only tools). */
+ * toolbar so the strip carries only tools).
+ *
+ * The map's own "old data" mark (L3) lives here as well: the marker on the
+ * globe is relabelled too, but a chip survives the vehicle being off-screen or
+ * behind terrain, and it is what the checks can assert on. */
 function CoordinateReadout() {
+  const { t } = useTranslation()
   const pos = useTelemetryStore((s) => s.snapshot?.global_position ?? null)
+  const link = useLinkStore((s) => s.link)
   if (!pos) return null
+  const stale = link !== null && !link.fc_alive
   return (
     <div className="mono pointer-events-none absolute bottom-3 right-3 rounded border border-line bg-panel/85 px-2 py-1 text-right text-[10px] leading-tight text-muted shadow-lg">
+      {stale && (
+        <div
+          data-testid="map-stale"
+          className="mb-0.5 rounded bg-warn px-1 py-px text-center font-medium text-canvas"
+        >
+          {t('map.uavStale')}
+        </div>
+      )}
       {pos.latitude_deg.toFixed(5)} · {pos.longitude_deg.toFixed(5)}
       <br />
       {Math.round(pos.altitude.meters)} m

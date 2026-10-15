@@ -19,6 +19,7 @@ import {
   disposeWaypointLayer,
   previewWaypoint,
   renderWaypoints,
+  setDroneStale,
   setGhostPoint,
   updateCenterHandle,
   updateDropLine,
@@ -50,6 +51,7 @@ import { useUiStore } from '../stores/ui'
 import { useMissionStore } from '../stores/mission'
 import { useCommandStore } from '../stores/command'
 import { useTerrainStore } from '../stores/terrain'
+import { useLinkStore } from '../stores/link'
 import { groundReferenceAmsl } from '../cesium/heights'
 import type { MissionItem } from '../generated-types/MissionItem'
 import type { TelemetrySnapshot } from '../generated-types/TelemetrySnapshot'
@@ -270,6 +272,19 @@ export function useCesiumViewer(
       predictPos.current = []
     }
   }, [containerRef])
+
+  // Heartbeat lost (L3): the marker keeps the last fix, so it must not read as
+  // the live position — relabel it "OLD DATA" (same shape, warn tone) until the
+  // heartbeat is back. Outside React's render so the entity is updated in
+  // place, once per transition.
+  useEffect(() => {
+    const apply = () => {
+      const layer = droneRef.current
+      if (layer) setDroneStale(layer, !(useLinkStore.getState().link?.fc_alive ?? true))
+    }
+    apply()
+    return useLinkStore.subscribe(apply)
+  }, [])
 
   // Keep the scene's ground plane (and the HOME marker on it) in step with the
   // store's home altitude: the plan is drawn in AMSL, so the vehicle and the

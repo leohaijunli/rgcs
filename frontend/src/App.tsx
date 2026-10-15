@@ -6,6 +6,7 @@ import Hud from './components/Hud'
 import MockBanner from './components/MockBanner'
 import MapView from './components/MapView'
 import ErrorBanner from './components/ErrorBanner'
+import HeartbeatBanner from './components/HeartbeatBanner'
 
 export default function App() {
   useTelemetryBridge()
@@ -18,6 +19,7 @@ export default function App() {
           <MapView />
           <MockBanner />
           <Hud />
+          <HeartbeatBanner />
           <ErrorBanner />
         </main>
         <RightInspector />
