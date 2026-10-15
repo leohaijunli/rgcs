@@ -9,4 +9,6 @@ frontend/.vite/
 *.laz
 dem/
 *.tif
+# Committed HRDEM test fixture (ADR-018). See testdata/hrdem/ATTRIBUTION.md.
+!testdata/hrdem/*.tif
 terrain-drape-fixes-v2.patch

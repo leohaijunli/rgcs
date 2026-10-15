@@ -151,8 +151,43 @@ pointercancel 一律不发送；**按下超过 1 s 才松开也算完成**——
 发送且只发一条、状态条三个阶段与耗时、**RTL 从飞行视图 2 次交互发出**、
 键盘按住 Enter 同样可发（且自动重复不会发第二条）、模式弹层里 Hold 单击即
 切 / Return 单击无效而按住才切。排查途中定位到一个通用陷阱见 N8。
-下一步按 P0 顺序推进 L2（依赖 A7/U4）与 U2、U3。全部 WP 落地后再按计划并入
+**L2 常驻 RTL/Hold 已完成**（commit `891bda3`，本轮补记）：`SafetyCommands.tsx`
+把 RTL（medium，`HoldButton`）与 Hold（low，单击）作为常驻按钮放在 TopBar，
+位于 L3 置灰分组**之外**——链路可疑时正是要用 RTL，所以它不随遥测置灰；两者
+同为唯一不自己在 UI 里判优先级的命令按钮，A7 的 `begin_with_priority` 是唯一
+仲裁者（在途 Normal 时 RTL 仍立即上线，被抢占者回 `superseded`）。Hold 用
+PX4 `AUTO/LOITER`（main 4 / sub 3），落地后按钮点亮 `data-mode-current`。
+验收脚本 `frontend/scripts/check-safety.mjs`（22 条断言，2026-10-15 实测全过）：
+任一视图/阶段 RTL 常驻、单击不发、**从 Plan 阶段一次按住即发出（RTL ≤ 2 次
+交互，实测 1 次）**、按住时确认条显示 MODE/AGL/BATT、在途命令时下拉被挡而
+RTL 仍可发、`superseded` 结果保留到操作员确认、Hold 单击切模式并点亮、心跳
+丢失时两者置灰。
+**U2 TopBar 信息层级已完成**（本轮）：TopBar 重构为三组——状态（armed / mode /
+link）、健康（RTK、battery）、工具（Tools、告警、设置），组间细分隔线；臂章加
+`ShieldCheck/ShieldOff`、mode 加 `Compass`、link 加 `Radio`、RTK 加 `Satellite`、
+battery 加 `BatteryMedium` 图标（"状态 pill 带图标"）；控件高度统一到 32px
+（`CONTROL = 'h-8'`），修掉 `Tools` 的 44px 与其余 32px 的不一致，返回
+`IconButton` 由默认 44 改为 `size={32}`；新增 `hooks/useIsNarrow.ts`
+（`matchMedia(max-width:1366px)`，可响应 resize）。窄屏（≤1366）时**健康组**
+折叠进 `topbar-more` 弹出层，**状态组与 L2 安全对永不折叠**（§7.2 的"关键状态
+一眼可读"在宽屏完整满足；窄屏下电量/GNSS 的降级仍由 L7/告警中心兜底，故按
+U2 的显式折叠规则处理）。验收脚本 `frontend/scripts/check-topbar.mjs`（28 条
+断言，2026-10-15 实测全过）：1920/1280 下状态组完整且在视口内、与安全对不
+重叠；1280 下健康组折叠且 More 能展开 RTK/battery；8 个交互控件均 ≥32px。
+既有 `check-heartbeat`/`check-alerts`/`check-teardown`/`check-command-ux`
+回归全过（`link-stale` data 属性与 `alert-open` 语义不变）。截图
+`frontend/screenshots/u2/topbar-{1280,1920}.png`。
+下一步 P0 只剩 **U3 告警中心界面**。全部 WP 落地后再按计划并入
 `FEATURES.md`/`ARCHITECTURE.md` 并删除本计划文件。
+**U3 告警中心界面已完成**（本轮）：新增两个共享组件，每个窗口都挂载——`AlertLayer.tsx`（Critical 顶部锁存横幅 + Warning 不遮挡 toast + **新 Critical 的全屏红色闪光** + 分级告警音 + `aria-live` 播报，并在此处统一挂 `useAlertStream()`）、`AlertCenter.tsx`（抽屉：Alerts/Events/**Console** 三视图，严重度与来源过滤，严重度图标，音量的**限时静音**——默认 5 分钟后自动恢复）。
+- **全屏红光**（操作员明确要求）：`stores/alerts` 新增可见告警的"新增检测"（忽略首个快照，所以窗口重载时锁存的 Critical 不会重新闪光），新 Critical 触发 `AlertFlash`——约 1 s 的 3 次脉冲（`index.css` 的 `@keyframes mg-alert-flash`，用 `--mg-error` 令牌而非硬编码红），**尊重 `prefers-reduced-motion`（关闭动画）**；静音只静音声音，不抑制视觉闪光（脚本已验证）。
+- 事件流从 `desktop/bridge.ts` 移到 `stores/alerts::useAlertStream()`，因此 Inspector/Actuator/Params 三个子窗口只挂 `AlertLayer` 就能收到 `alert` + `statustext`；`ErrorBanner.tsx` 只保留链路 I/O 错误（Critical 横幅移入 AlertLayer）；`HeartbeatBanner` 在 Critical 横幅存在时下移（`top-16`）避免遮挡；`EventLogDrawer.tsx` 删除（其内容并入 `AlertCenter.tsx`）。
+- 告警音：`audio/alarm.ts` 增加 `alertBeep(severity, volume)`（Critical 双高音、Warn 单低音、Info 静音）；`stores/alertSound.ts` 保存音量与 `mutedUntil`。
+- 旁路修复：`check-mission-sync`/`check-planfile` 的 tauri stub 补 `listen` 导出（`alerts.ts` 现在静态 import `@tauri-apps/api/event`）。
+- 验收：`frontend/scripts/check-alert-ux.mjs`（**24 条断言，2026-10-15 实测全过**）：安静时无闪光、新 Critical 触发闪光且覆盖整个 1440×900 视口、闪光自行结束、Critical 横幅锁存且 `aria-live` 播报、Warn 只出 toast 且不闪光、Info 不出 toast、toast 可关闭不 ack、抽屉按严重度/来源过滤、Console 显示 FC STATUSTEXT、静音/音量可用、静音期间 Critical 仍闪光、`reduced-motion` 下不闪光。既有 6 个 E2E（safety/topbar/command-ux/teardown/alerts/heartbeat）与全部静态检查（typecheck/build/colors/contrast/i18n/planfile/mission-sync/coords/agl/progress/polygon）回归全过。截图 `frontend/screenshots/u3/`。
+至此计划 §2 的 **P0 全部完成**（L1–L4、A1、A3、H0/W0 由后续阶段处理，U2/U3/U4）。全部 WP 落地后再按计划并入 `FEATURES.md`/`ARCHITECTURE.md` 并删除本计划文件。
+**A6 Rust 侧配置存储已完成**（P1，本轮）：core 新增 `config` 模块（`AppConfig`：`version`/`endpoint`/`auto_connect`/`initial_position`(复用 `GeoPoint`，不裸 `f64`)/`model_orientation`/`alert_volume`，`ModelOrientation` 走 ts-rs 导出为 `crates/core/bindings/AppConfig.ts`+`ModelOrientation.ts`，已复制到 `frontend/src/generated-types/`）。解析策略：容器级 `#[serde(default)]` 让缺字段回落到 `AppConfig::default()`，未知字段忽略；`version` 缺失按 0 迁移、**比当前新则拒绝**（`UnsupportedVersion`）；坏值（越界位置/非有限音量）就地修复而非整份丢弃，`endpoint` 空白回落默认。app-tauri 新增 `config_service.rs`：`config_load`（缺失/损坏文件返回 `None` 并 `eprintln!` Warn，绝不崩溃）、`config_save`（写入前 `normalized()`，临时文件 + `rename` 原子落盘），文件在 `app_config_dir/config.json`，已注册到 `invoke_handler`。前端新增 `desktop/appConfig.ts`：主窗口启动时 `initAppConfig(true)` 先 `config_load`，**首次启动无文件时把 localStorage 引导值写回文件做迁移**，随后订阅 `prefs`/`alertSound` store 防抖 300 ms 写穿 `config_save`；三个子窗口 `initAppConfig()` 只读水合（拿到告警音量）不写文件，避免与主窗口抢写。四个入口（`main.tsx`/`inspector`/`actuator`/`params`）均在首帧前 `await` 水合。非 Tauri（浏览器/dev）下 `initAppConfig` 直接返回，localStorage 行为不变。旁路修复：`check-mission-sync`/`check-planfile` 的 tauri stub 补 `listen`。验收：core `config` 单测 9 条（默认值、往返、缺字段、未知字段、v0 迁移、拒绝新版本、坏 JSON、坏值修复、空 endpoint）+ app `config_service` 单测 4 条（往返、缺文件、损坏文件回退且默认可用、保存时归一化）；`typecheck`/`build` 通过；`check-topbar`/`check-alert-ux`/`check-safety`/`colors`/`i18n` 回归全过。
+**H0 HRDEM 调研与决策已完成（ADR-018，本轮）**：新增 `docs/adr/018-hrdem.md`（状态 **Accepted**，操作员已确认 AOI 与 §D 空变换决策）。要点：数据入口 NRCan `hrdem-lidar` STAC 集合（`https://datacube.services.geo.ca/stac/api`，许可 **OGL-Canada-2.0**，垂直基准 **CGVD2013/EPSG:6647**，分发为 **EPSG:3979** NAD83(CSRS)/Canada Atlas Lambert；集合注明项目间**无接边**，故 AOI 跨项目一律报警不拼接）；维多利亚测区仅 1 个 item 覆盖——**`BC-Vancouver_Island_Sunshine_Coast_2018-1m`**（datetime 2019-10-01，DTM+DSM 资产在 S3 上 HTTPS **免认证**，`HEAD`/`Range` 200/206 已验证）；COG 为 BigTIFF、512×512 分块、Float32、LZW、**nodata −32767**、8 级 overview；垂直精度引 HRDEM Product Specification（Ed 1.7, 2026-05-19）"一般优于 1 m"（按项目精度在项目 File Geodatabase，未随 STAC 提供）。**NAD83(CSRS)↔WGS84 水平处理决定（§D）**：取**空变换**（视 NAD83(CSRS)≡WGS84），依据 EPSG:1842（null/copy，"for many purposes … coincident"）、EPSG:4617（≈1 m 精度）、EPSG:1946（7 参数，操作精度亦仅 1.0 m 且基于 1997 历元），残留约 1 m 记录在案，交由 M9/H7 控制点核对（< 0.5 m）暴露系统性偏差，届时回退 EPSG:1946；不手写基准变换。**夹具（§H0(e)）**：`testdata/hrdem/victoria-aoi-{dtm,dsm}.tif`（AOI 中心 48.55606,−123.38136；140×140＝100 m 核心＋20 m 缓冲，EPSG:3979，Float32，nodata −32767，DEFLATE 分块 COG，**与源 COG 逐像元精确一致**，5×5 抽样比对相同），随附 `provenance.json`（item/采集日期/资产 href/窗口/sha256/许可）与 `ATTRIBUTION.md`（OGL 署名）；总 130 317 B ≪ 2 MB。`.gitignore` 加 `!testdata/hrdem/*.tif` 例外以便提交夹具。来源与抓取日期（2026-10-15）均记入 ADR。
 
 ### N6 [P1][frontend] `devices` store 信任后端返回，null 会把整个外壳拆掉
 `stores/devices.ts` 的 `load()` 直接把 `enumerate_devices` 的返回值塞进
