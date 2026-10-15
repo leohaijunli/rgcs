@@ -1,0 +1,50 @@
+[
+  {
+    "folder": "bc_092b053_xl1m_utm10_2019",
+    "bounds": {
+      "north": 48.60098791016354,
+      "south": 48.49885798747652,
+      "east": -123.49158077604353,
+      "west": -123.56460516102905
+    },
+    "version": "f3123d6ead881d48",
+    "has_dsm": false,
+    "source": "geotiff"
+  },
+  {
+    "folder": "bc_092b054_xli1m_utm10_20231117_20240404",
+    "bounds": {
+      "north": 48.60097695853878,
+      "south": 48.499027000473234,
+      "east": -123.3124182946021,
+      "west": -123.40147461194688
+    },
+    "version": "3c76e36ddc0af254",
+    "has_dsm": false,
+    "source": "geotiff"
+  },
+  {
+    "folder": "bc_092b063_xl1m_utm10_2019",
+    "bounds": {
+      "north": 48.70132241411495,
+      "south": 48.59867959225672,
+      "east": -123.5121602163731,
+      "west": -123.60070694158355
+    },
+    "version": "4228ad6daabd7faf",
+    "has_dsm": false,
+    "source": "geotiff"
+  },
+  {
+    "folder": "bc_092b064_xli1m_utm10_20231117_20240205",
+    "bounds": {
+      "north": 48.70097839297335,
+      "south": 48.59901943667673,
+      "east": -123.31277353030268,
+      "west": -123.40148103669749
+    },
+    "version": "29938bb8690dcc0b",
+    "has_dsm": false,
+    "source": "geotiff"
+  }
+]

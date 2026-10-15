@@ -1,0 +1,63 @@
+diff --git a/crates/app-tauri/src/actuator_service.rs b/crates/app-tauri/src/actuator_service.rs
+--- a/crates/app-tauri/src/actuator_service.rs
++++ b/crates/app-tauri/src/actuator_service.rs
+@@ -45,15 +45,18 @@ impl ActuatorService {
+     pub async fn start_motor_test(&self) -> Result<()> {
+         let mut session = self.inner_session.lock().await;
+         
+-        // 错误：如果在此处直接重置了状态或未检查当前运行状态
+-        session.is_running = false;
+-        session.scope_buffer.clear();
++        // 如果已经在运行，直接返回
++        if session.is_running {
++            return Ok(());
++        }
++
++        // 1. 仅清空示波器数据缓存区，保持会话控制标志独立
++        session.scope_buffer.clear();
++
++        // 2. 正式置位运行状态
++        session.is_running = true;
+ 
+-        session.is_running = true;
+-        
+-        // 启动后台 flusher
+         drop(session);
+         self.spawn_scope_flusher().await?;
+         
+         Ok(())
+     }
+diff --git a/frontend/src/actuator/scopeStore.ts b/frontend/src/actuator/scopeStore.ts
+--- a/frontend/src/actuator/scopeStore.ts
++++ b/frontend/src/actuator/scopeStore.ts
+@@ -5,11 +5,11 @@ interface ScopeState {
+   data: Point[];
+-  clear: () => void;
++  clearScopeData: () => void;
+ }
+ 
+ export const useScopeStore = create<ScopeState>((set) => ({
+   data: [],
+-  clear: () => {
+-    set({ data: [] });
+-  },
++  // 修正：明确命名并严格限制仅清空 data 数组
++  clearScopeData: () => set({ data: [] }),
+ }));
+diff --git a/frontend/src/actuator/ActuatorApp.tsx b/frontend/src/actuator/ActuatorApp.tsx
+--- a/frontend/src/actuator/ActuatorApp.tsx
++++ b/frontend/src/actuator/ActuatorApp.tsx
+@@ -12,8 +12,8 @@ const handleStartClick = async () => {
+   try {
+-    // 错误顺序或混用可能导致状态被提前冲掉
+-    await invoke('start_motor_test');
+-    useScopeStore.getState().clear();
++    // 1. 先清理上一次的波形残留
++    useScopeStore.getState().clearScopeData();
++    
++    // 2. 调用后端启动接口
++    await invoke('start_motor_test');
+   } catch (err) {
+     console.error("Failed to start motor test:", err);
+   }
+ };
