@@ -374,6 +374,7 @@ export default {
       denied: 'Denied by the FC',
       rejected: 'Rejected by the FC',
       unsupported: 'Not supported by the FC',
+      superseded: 'Superseded by an emergency command',
       failed: 'Failed — {{message}}',
       unknown: 'No ack',
     },

@@ -8,7 +8,10 @@
 //!
 //! Sessions are single-slot: at most one command may be in flight per
 //! instance. Starting a second command while one is pending fails with
-//! [`CommandError::Busy`].
+//! [`CommandError::Busy`] — unless the newcomer is an *emergency* command
+//! (§3 A7): RTL, land and arm/disarm take the slot from an in-flight normal
+//! command, which is reported as [`CommandError::Superseded`] instead of
+//! being dropped silently. An emergency command is never preempted.
 
 pub mod service;
 
@@ -82,6 +85,38 @@ pub fn command_label(command: MavCmd) -> &'static str {
     }
 }
 
+/// Command urgency (plan §3 A7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Priority {
+    /// Waits its turn: at most one command is in flight, and this one queues
+    /// behind nothing.
+    #[default]
+    Normal,
+    /// Takes effect now: preempts an in-flight [`Priority::Normal`] command.
+    Emergency,
+}
+
+impl Priority {
+    pub fn is_emergency(self) -> bool {
+        matches!(self, Self::Emergency)
+    }
+}
+
+/// Urgency of a `MAV_CMD`.
+///
+/// The list is the plan's (RTL / land / disarm) with arm folded in: both
+/// directions of `COMPONENT_ARM_DISARM` are safety commands nobody wants
+/// queued behind a `goto`, and PX4 runs its own prearm checks on the arm
+/// direction anyway.
+pub fn command_priority(command: MavCmd) -> Priority {
+    match command {
+        MavCmd::MAV_CMD_NAV_RETURN_TO_LAUNCH
+        | MavCmd::MAV_CMD_NAV_LAND
+        | MavCmd::MAV_CMD_COMPONENT_ARM_DISARM => Priority::Emergency,
+        _ => Priority::Normal,
+    }
+}
+
 /// Events emitted by the command session.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CommandEvent {
@@ -111,6 +146,10 @@ pub enum CommandError {
     /// The link to the flight controller was lost mid-session.
     #[error("link to the flight controller was lost")]
     LinkLost,
+    /// An emergency command took the single session slot (A7). The command was
+    /// abandoned before its ack arrived: the FC may or may not have run it.
+    #[error("superseded by an emergency command")]
+    Superseded,
     /// The command service task terminated.
     #[error("command service stopped")]
     ServiceStopped,
@@ -126,6 +165,7 @@ enum State {
     AwaitAck {
         command: MavCmd,
         params: [f32; 7],
+        priority: Priority,
         confirmation: u8,
         deadline: Instant,
         retries: u32,
@@ -180,31 +220,89 @@ impl CommandSession {
         matches!(self.state, State::Idle)
     }
 
-    /// Send a command and start awaiting its ack. Returns the events and
-    /// frames to emit/send.
+    /// Urgency of the command in flight, `None` when the slot is free. Lets
+    /// the caller predict whether [`Self::begin_with_priority`] would preempt
+    /// or refuse.
+    pub fn in_flight_priority(&self) -> Option<Priority> {
+        match &self.state {
+            State::Idle => None,
+            State::AwaitAck { priority, .. } => Some(*priority),
+        }
+    }
+
+    /// Send a command of the given urgency and start awaiting its ack.
+    ///
+    /// A7: while something is in flight, an emergency command takes the slot
+    /// and the command it displaced is reported as
+    /// [`CommandError::Superseded`] *before* the new `Sent`. A normal command
+    /// arriving during anything, or an emergency arriving during an emergency,
+    /// is refused with [`CommandError::Busy`] — there is still only ever one
+    /// command in flight, so an ack can never be matched to the wrong
+    /// `COMMAND_LONG`.
+    pub fn begin_with_priority(
+        &mut self,
+        command: MavCmd,
+        params: [f32; 7],
+        priority: Priority,
+    ) -> Result<(Vec<CommandEvent>, Vec<MavMessage>), CommandError> {
+        let in_flight = match &self.state {
+            State::Idle => None,
+            State::AwaitAck {
+                command, priority, ..
+            } => Some((*command, *priority)),
+        };
+        let Some((in_flight, in_flight_priority)) = in_flight else {
+            return Ok(self.start(command, params, priority));
+        };
+        if !(priority.is_emergency() && in_flight_priority == Priority::Normal) {
+            return Err(CommandError::Busy);
+        }
+        let (mut events, frames) = self.start(command, params, priority);
+        // The displaced command is reported first: its caller learns that the
+        // command ended (and why) instead of waiting out a retry budget for an
+        // ack that will now be ignored.
+        events.insert(
+            0,
+            CommandEvent::Failed {
+                command: in_flight,
+                error: CommandError::Superseded,
+            },
+        );
+        Ok((events, frames))
+    }
+
+    /// Send a normal-priority command and start awaiting its ack.
     pub fn begin(
         &mut self,
         command: MavCmd,
         params: [f32; 7],
     ) -> Result<(Vec<CommandEvent>, Vec<MavMessage>), CommandError> {
-        if !self.is_idle() {
-            return Err(CommandError::Busy);
-        }
+        self.begin_with_priority(command, params, Priority::Normal)
+    }
+
+    /// Take the slot for `command` (the caller has already checked that it may).
+    fn start(
+        &mut self,
+        command: MavCmd,
+        params: [f32; 7],
+        priority: Priority,
+    ) -> (Vec<CommandEvent>, Vec<MavMessage>) {
         let msg = command_long(command, params, 0, self.target_sys, self.target_comp);
         self.state = State::AwaitAck {
             command,
             params,
+            priority,
             confirmation: 0,
             deadline: Instant::now() + COMMAND_RETRY_TIMEOUT,
             retries: 0,
         };
-        Ok((
+        (
             vec![CommandEvent::Sent {
                 command,
                 confirmation: 0,
             }],
             vec![msg],
-        ))
+        )
     }
 
     /// Handle an incoming frame. Only `COMMAND_ACK` frames from the target FC
@@ -239,6 +337,7 @@ impl CommandSession {
             confirmation,
             deadline,
             retries,
+            ..
         } = &mut self.state
         else {
             return (Vec::new(), Vec::new());
@@ -530,5 +629,142 @@ mod tests {
         let mut s = CommandSession::new(FC_SYS, FC_COMP);
         let (events, frames) = s.handle(&fc_header(), &ack(rtl(), MavResult::MAV_RESULT_ACCEPTED));
         assert!(events.is_empty() && frames.is_empty());
+    }
+
+    /// GOTO: the normal-priority command the acceptance case preempts.
+    fn goto() -> MavCmd {
+        MavCmd::MAV_CMD_DO_REPOSITION
+    }
+
+    #[test]
+    fn the_safety_commands_are_emergencies() {
+        assert_eq!(command_priority(rtl()), Priority::Emergency);
+        assert_eq!(
+            command_priority(MavCmd::MAV_CMD_NAV_LAND),
+            Priority::Emergency
+        );
+        assert_eq!(
+            command_priority(MavCmd::MAV_CMD_COMPONENT_ARM_DISARM),
+            Priority::Emergency
+        );
+        for normal in [
+            goto(),
+            MavCmd::MAV_CMD_NAV_TAKEOFF,
+            MavCmd::MAV_CMD_DO_SET_MODE,
+            MavCmd::MAV_CMD_DO_SET_HOME,
+        ] {
+            assert_eq!(command_priority(normal), Priority::Normal, "{normal:?}");
+        }
+        assert!(Priority::Emergency.is_emergency() && !Priority::Normal.is_emergency());
+    }
+
+    #[test]
+    fn emergency_preempts_a_normal_command() {
+        let mut s = CommandSession::new(FC_SYS, FC_COMP);
+        s.begin_with_priority(goto(), [0.0; 7], Priority::Normal)
+            .unwrap();
+        assert_eq!(s.in_flight_priority(), Some(Priority::Normal));
+
+        let (events, frames) = s
+            .begin_with_priority(rtl(), [1.0; 7], Priority::Emergency)
+            .unwrap();
+        assert_eq!(
+            events,
+            vec![
+                // The displaced command is reported first: its caller learns
+                // it ended instead of waiting out the retry budget.
+                CommandEvent::Failed {
+                    command: goto(),
+                    error: CommandError::Superseded,
+                },
+                CommandEvent::Sent {
+                    command: rtl(),
+                    confirmation: 0,
+                },
+            ]
+        );
+        assert_eq!(frames.len(), 1, "one frame: the new COMMAND_LONG");
+        let MavMessage::COMMAND_LONG(c) = &frames[0] else {
+            panic!("expected COMMAND_LONG")
+        };
+        assert_eq!(c.command, rtl());
+        assert_eq!(c.confirmation, 0, "the preempting command starts fresh");
+        assert_eq!(c.param1, 1.0);
+        assert_eq!(s.in_flight_priority(), Some(Priority::Emergency));
+    }
+
+    #[test]
+    fn only_an_emergency_may_preempt() {
+        let mut s = CommandSession::new(FC_SYS, FC_COMP);
+        s.begin_with_priority(goto(), [0.0; 7], Priority::Normal)
+            .unwrap();
+        // A normal command behind a normal one still waits.
+        assert_eq!(
+            s.begin_with_priority(rtl(), [0.0; 7], Priority::Normal),
+            Err(CommandError::Busy)
+        );
+    }
+
+    #[test]
+    fn an_emergency_command_is_never_preempted() {
+        let mut s = CommandSession::new(FC_SYS, FC_COMP);
+        s.begin_with_priority(rtl(), [0.0; 7], Priority::Emergency)
+            .unwrap();
+        assert_eq!(
+            s.begin_with_priority(MavCmd::MAV_CMD_NAV_LAND, [0.0; 7], Priority::Emergency),
+            Err(CommandError::Busy),
+            "two emergency commands still queue: one session, one ack"
+        );
+        assert_eq!(
+            s.begin_with_priority(goto(), [0.0; 7], Priority::Normal),
+            Err(CommandError::Busy)
+        );
+        assert_eq!(s.in_flight_priority(), Some(Priority::Emergency));
+    }
+
+    #[test]
+    fn a_preempted_command_stops_retransmitting_and_its_late_ack_is_ignored() {
+        let mut s = CommandSession::new(FC_SYS, FC_COMP);
+        s.begin_with_priority(goto(), [0.0; 7], Priority::Normal)
+            .unwrap();
+        let (_, frames) = s
+            .begin_with_priority(rtl(), [0.0; 7], Priority::Emergency)
+            .unwrap();
+        assert_eq!(frames.len(), 1);
+
+        // The retransmit carries the new command, never the superseded one.
+        let (events, frames) = s.retransmit_due(Instant::now() + COMMAND_RETRY_TIMEOUT);
+        assert_eq!(
+            events,
+            vec![CommandEvent::Sent {
+                command: rtl(),
+                confirmation: 1,
+            }]
+        );
+        let MavMessage::COMMAND_LONG(c) = &frames[0] else {
+            panic!("expected COMMAND_LONG")
+        };
+        assert_eq!(c.command, rtl());
+        assert_eq!(
+            s.take_timeout_failure(),
+            None,
+            "the superseded command must not fail the *new* session"
+        );
+
+        // A late ack for the superseded goto changes nothing.
+        let (events, _) = s.handle(&fc_header(), &ack(goto(), MavResult::MAV_RESULT_ACCEPTED));
+        assert!(events.is_empty());
+        assert_eq!(s.in_flight_priority(), Some(Priority::Emergency));
+
+        // The new command's own ack still completes.
+        let (events, _) = s.handle(&fc_header(), &ack(rtl(), MavResult::MAV_RESULT_ACCEPTED));
+        assert_eq!(
+            events,
+            vec![CommandEvent::Completed {
+                command: rtl(),
+                result: CommandResult::Accepted,
+            }]
+        );
+        assert!(s.is_idle());
     }
 }

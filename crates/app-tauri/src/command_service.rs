@@ -7,7 +7,7 @@
 //! terminal `completed`/`failed` event ends the operation.
 
 use ::mavlink::common::MavCmd;
-use maggcs_core::commands::{CommandEvent, CommandResult, CommandService};
+use maggcs_core::commands::{CommandError, CommandEvent, CommandResult, CommandService};
 use maggcs_core::mavlink::connection::ConnectionHandle;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -67,7 +67,10 @@ fn payload(e: &CommandEvent) -> CommandEventPayload {
         CommandEvent::Failed { command, error } => CommandEventPayload {
             command: command_name(*command),
             kind: "failed",
-            result: None,
+            // A7: "superseded" is a verdict, not a transport error — the
+            // operator has to recognise that an emergency command replaced
+            // this one, so it travels as a result like any FC verdict.
+            result: matches!(error, CommandError::Superseded).then_some("superseded"),
             message: Some(error.to_string()),
         },
     }
@@ -94,7 +97,6 @@ pub fn spawn(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use maggcs_core::commands::CommandError;
 
     #[test]
     fn maps_known_commands_and_falls_back_to_unknown() {
@@ -141,6 +143,19 @@ mod tests {
             result: CommandResult::Denied,
         });
         assert_eq!(denied.result, Some("denied"));
+    }
+
+    #[test]
+    fn a_superseded_command_reports_a_verdict() {
+        // A7: the UI must be able to say "an emergency command took over",
+        // not "failed — superseded by an emergency command".
+        let superseded = payload(&CommandEvent::Failed {
+            command: MavCmd::MAV_CMD_DO_REPOSITION,
+            error: CommandError::Superseded,
+        });
+        assert_eq!(superseded.kind, "failed");
+        assert_eq!(superseded.command, "goto");
+        assert_eq!(superseded.result, Some("superseded"));
     }
 
     #[test]

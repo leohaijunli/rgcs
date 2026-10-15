@@ -13,7 +13,9 @@ use ::mavlink::common::{MavCmd, COMMAND_ACK_DATA};
 use ::mavlink::MessageData;
 use tokio::sync::{mpsc, oneshot};
 
-use super::{CommandError, CommandEvent, CommandResult, CommandSession};
+use super::{
+    command_priority, CommandError, CommandEvent, CommandResult, CommandSession, Priority,
+};
 use crate::mavlink::connection::{ConnectionEvent, ConnectionHandle};
 use crate::mavlink::router::MessageRoute;
 
@@ -24,12 +26,17 @@ pub const RETRANSMIT_TICK: Duration = Duration::from_millis(200);
 #[derive(Debug)]
 pub enum CommandCommand {
     /// Send a `COMMAND_LONG` and track it until its ack (or failure).
-    Send { command: MavCmd, params: [f32; 7] },
+    Send {
+        command: MavCmd,
+        params: [f32; 7],
+        priority: Priority,
+    },
     /// Like [`Send`](CommandCommand::Send), but the task answers the
     /// terminal outcome through `reply` (see [`CommandService::send_await`]).
     SendAwait {
         command: MavCmd,
         params: [f32; 7],
+        priority: Priority,
         reply: oneshot::Sender<Result<CommandResult, CommandError>>,
     },
 }
@@ -58,9 +65,29 @@ impl CommandService {
     }
 
     /// Enqueue a command; returns `Err` if the service stopped.
+    ///
+    /// The urgency comes from [`command_priority`] — the one table — so an RTL
+    /// preempts whatever is in flight from whichever call site sends it (A7),
+    /// and a caller cannot accidentally send an emergency command as normal.
     pub async fn send(&self, command: MavCmd, params: [f32; 7]) -> Result<(), CommandError> {
+        self.send_with_priority(command, params, command_priority(command))
+            .await
+    }
+
+    /// Enqueue a command with an explicit urgency. Used by tests and by any
+    /// future call site whose urgency is not a property of the `MAV_CMD`.
+    pub async fn send_with_priority(
+        &self,
+        command: MavCmd,
+        params: [f32; 7],
+        priority: Priority,
+    ) -> Result<(), CommandError> {
         self.cmd_tx
-            .send(CommandCommand::Send { command, params })
+            .send(CommandCommand::Send {
+                command,
+                params,
+                priority,
+            })
             .await
             .map_err(|_| CommandError::ServiceStopped)
     }
@@ -81,6 +108,7 @@ impl CommandService {
             .send(CommandCommand::SendAwait {
                 command,
                 params,
+                priority: command_priority(command),
                 reply: reply_tx,
             })
             .await
@@ -118,14 +146,14 @@ async fn run(
             cmd = cmd_rx.recv() => {
                 let Some(cmd) = cmd else { return; };
                 match cmd {
-                    CommandCommand::Send { command, params } => {
-                        match session.begin(command, params) {
+                    CommandCommand::Send { command, params, priority } => {
+                        match session.begin_with_priority(command, params, priority) {
                             Ok(out) => out,
                             Err(e) => (vec![CommandEvent::Failed { command, error: e }], Vec::new()),
                         }
                     }
-                    CommandCommand::SendAwait { command, params, reply } => {
-                        match session.begin(command, params) {
+                    CommandCommand::SendAwait { command, params, priority, reply } => {
+                        match session.begin_with_priority(command, params, priority) {
                             Ok(out) => {
                                 pending = Some((command, reply));
                                 out

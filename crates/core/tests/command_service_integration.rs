@@ -15,6 +15,8 @@ use maggcs_core::mavlink::{
 use tokio::time::timeout;
 
 const RTL: mavlink::common::MavCmd = mavlink::common::MavCmd::MAV_CMD_NAV_RETURN_TO_LAUNCH;
+/// The normal-priority command the A7 acceptance case preempts.
+const GOTO: mavlink::common::MavCmd = mavlink::common::MavCmd::MAV_CMD_DO_REPOSITION;
 
 fn free_udp_port() -> u16 {
     let sock = UdpSocket::bind("127.0.0.1:0").expect("bind ephemeral");
@@ -315,6 +317,86 @@ async fn lost_ack_retransmits_with_confirmation() {
             command: RTL,
             result: CommandResult::Accepted,
         }
+    );
+
+    h.handle.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_emergency_command_preempts_an_in_flight_goto() {
+    let mut h = harness().await;
+
+    // A goto is in flight and the FC has not answered it.
+    h.svc.send(GOTO, [0.0; 7]).await.expect("enqueue goto");
+    let first = peer_recv_command_long(&mut h.peer).await;
+    assert_eq!(first.command, GOTO);
+    assert_eq!(first.confirmation, 0);
+
+    // RTL behind it: it goes out now instead of waiting out the goto's retry
+    // budget (the acceptance case for A7).
+    h.svc.send(RTL, [0.0; 7]).await.expect("enqueue rtl");
+    let preempting = peer_recv_command_long(&mut h.peer).await;
+    assert_eq!(
+        preempting.command, RTL,
+        "the emergency command must not queue behind the goto"
+    );
+    assert_eq!(preempting.confirmation, 0);
+
+    // The displaced goto is reported to its caller, not dropped silently.
+    let e = wait_for(&mut h.evt, Duration::from_secs(2), |e| {
+        matches!(
+            e,
+            CommandEvent::Failed {
+                error: CommandError::Superseded,
+                ..
+            }
+        )
+    })
+    .await;
+    assert_eq!(
+        e,
+        CommandEvent::Failed {
+            command: GOTO,
+            error: CommandError::Superseded,
+        }
+    );
+
+    // RTL's ack is lost: the retransmission carries RTL with the incremented
+    // confirmation — the superseded goto must never come back out of order.
+    let retry = peer_recv_command_long(&mut h.peer).await;
+    assert_eq!(retry.command, RTL);
+    assert_eq!(retry.confirmation, 1);
+
+    peer_send_ack(
+        &mut h.peer,
+        retry.command,
+        mavlink::common::MavResult::MAV_RESULT_ACCEPTED,
+    )
+    .await;
+    let done = wait_for(&mut h.evt, Duration::from_secs(2), |e| {
+        matches!(e, CommandEvent::Completed { .. })
+    })
+    .await;
+    assert_eq!(
+        done,
+        CommandEvent::Completed {
+            command: RTL,
+            result: CommandResult::Accepted,
+        }
+    );
+
+    // A late ack for the preempted goto arrives after everything settled: the
+    // session is idle again and nothing surfaces.
+    peer_send_ack(
+        &mut h.peer,
+        GOTO,
+        mavlink::common::MavResult::MAV_RESULT_ACCEPTED,
+    )
+    .await;
+    let quiet = timeout(Duration::from_millis(500), h.evt.recv()).await;
+    assert!(
+        quiet.is_err(),
+        "a late ack for a superseded command must not surface"
     );
 
     h.handle.shutdown().await;

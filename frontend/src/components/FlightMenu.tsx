@@ -22,6 +22,8 @@ const RESULT_LABELS: Record<string, string> = {
   unsupported: 'plan.cmd.unsupported',
   temporarily_rejected: 'plan.cmd.rejected',
   failed: 'plan.cmd.rejected',
+  // A7: an emergency command (RTL/land/arm) took the single session slot.
+  superseded: 'plan.cmd.superseded',
 }
 
 export default function FlightMenu() {
