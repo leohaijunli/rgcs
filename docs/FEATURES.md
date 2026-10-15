@@ -17,6 +17,29 @@ in [ARCHITECTURE.md](ARCHITECTURE.md); open work in [issues.md](../issues.md).
   (Settings → Vehicle) is mirrored to the SITL helper so PX4 spawns at the
   same spot.
 
+## Alerts (TopBar badge ▸ drawer)
+
+One alert center backs three surfaces, so they can never disagree:
+
+- **TopBar badge** — how many alerts still need attention, coloured by the
+  worst severity; opens the drawer (with or without alerts).
+- **Banner stack** (bottom right) — the newest unacknowledged *Critical*
+  alert, plus the existing link-error banner with history. A Critical alert
+  is latched in the backend, so it disappears only when acknowledged, never
+  because the next message pushed it aside.
+- **Drawer** — `Alerts` tab: every alert (severity, source, text, count,
+  time, ack button) with `Ack all` and a history-clear action; `Events` tab:
+  the local event ring (command acks, mode switches, arm/disarm, RTK).
+
+Behaviour (plan §3 A3, `core::alerts`): the same key raised again inside the
+30 s dedup window only increments the count — the operator is not re-alerted;
+a repeat after the window, or a severity escalation, alerts again; level
+alerts (threshold conditions, L7) stay until the condition has been clear for
+3 s. Raising the same key inside the window never adds a second row. Alert
+sources today: MAVLink link failures and terrain-drape failures; STATUSTEXT,
+battery, GPS/RTK, magnetometer and VIC follow in L1/L3/L7/M2/M7. Rust owns
+the model, so every window sees the same count and the same rows.
+
 ## RTK (Tools-less: TopBar GPS/RTK pill ▸ drawer)
 
 - **Base station**: the drawer lists operator-pluggable serial ports

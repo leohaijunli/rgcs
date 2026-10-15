@@ -5,7 +5,11 @@
 //! - `"link"` — `LinkStatus` on change.
 //! - `"link_error"` — `TelemetryError` (kind + message + timestamp), lossless.
 //! - `"telemetry_dropped"` — cumulative inbound frames dropped by the hub.
+//!
+//! Link failures also go into the alert center (A3), so the badge and the
+//! banner stack read the same state.
 
+use maggcs_core::alerts::{AlertInput, AlertSource, Severity};
 use maggcs_core::telemetry::hub::TelemetryHub;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -39,6 +43,13 @@ pub async fn run(app: AppHandle, hub: TelemetryHub) {
             error = err_rx.recv() => {
                 match error {
                     Ok(err) => {
+                        // Same source of truth as the banner: the alert
+                        // center owns dedup and the badge (A3). L3 promotes a
+                        // full heartbeat loss to a latched Critical banner on
+                        // top of this.
+                        app.state::<AppState>().alerts().raise(
+                            AlertInput::new(AlertSource::Link, Severity::Warn, err.message.clone()),
+                        );
                         let _ = app.emit("link_error", err);
                     }
                     // The pump fell behind the error channel; the hub already

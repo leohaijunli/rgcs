@@ -66,6 +66,34 @@ export default {
     clear: 'Clear',
     empty: 'No events yet',
   },
+  // Alert center (plan §3 A3). Severity and source labels are ours; the alert
+  // text itself comes from the source (FC/protocol text arrives written).
+  alerts: {
+    title: 'Alerts',
+    eventsTab: 'Events',
+    open: 'Alerts and event log',
+    ack: 'Ack',
+    ackAll: 'Ack all',
+    empty: 'Nothing needs attention',
+    clear: 'Clear history',
+    severity: {
+      info: 'Info',
+      warn: 'Warning',
+      critical: 'Critical',
+    },
+    source: {
+      statustext: 'FC',
+      link: 'Link',
+      battery: 'Battery',
+      gps: 'GPS',
+      rtk: 'RTK',
+      mag: 'Mag',
+      command: 'Command',
+      dem: 'Terrain',
+      diurnal: 'Diurnal',
+      system: 'System',
+    },
+  },
   rtk: {
     title: 'RTK GPS',
     rover: 'Rover',

@@ -5,6 +5,7 @@
 //! Tauri events, and commands let the UI control the link.
 
 mod actuator_service;
+mod alert_service;
 mod command_service;
 mod commands;
 mod console_service;
@@ -33,6 +34,11 @@ pub fn run() {
             commands::disconnect,
             commands::shutdown_app,
             commands::link_status,
+            alert_service::alert_snapshot,
+            alert_service::alert_raise,
+            alert_service::alert_ack,
+            alert_service::alert_ack_all,
+            alert_service::alert_clear_acknowledged,
             commands::get_snapshot,
             commands::enumerate_devices,
             commands::set_sitl_home,
@@ -114,6 +120,15 @@ pub fn run() {
             inspector_service::inspector_source
         ])
         .setup(|app| {
+            // One alert pump for the process: every transition the core
+            // alert center records is forwarded to all webviews (A3).
+            {
+                use tauri::Manager;
+                let alert_app = app.handle().clone();
+                let alerts = app.state::<AppState>().alerts();
+                tauri::async_runtime::spawn(alert_service::pump(alert_app, alerts));
+            }
+
             // Serial hotplug watcher (issues.md #40): pushes a fresh device
             // list to the frontend whenever a port appears or disappears, so
             // the connection dropdown stays live without a manual refresh.

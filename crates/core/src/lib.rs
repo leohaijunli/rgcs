@@ -8,6 +8,7 @@
 //! Absolute heights are never represented as bare `f64`. Use [`height::Height`],
 //! which carries a [`height::HeightDatum`] tag. See ADR-006.
 
+pub mod alerts;
 pub mod calib;
 pub mod commands;
 pub mod devices;
@@ -27,6 +28,9 @@ pub mod telemetry;
 pub mod terrain;
 pub mod ulog;
 
+pub use alerts::{
+    Alert, AlertCenter, AlertEvent, AlertEventKind, AlertInput, AlertSource, Severity,
+};
 pub use commands::{CommandError, CommandEvent, CommandResult, CommandService, CommandSession};
 pub use devices::{DeviceDatabase, DeviceEvent, DeviceManager, DeviceRole, SerialDeviceInfo};
 pub use mavlink::connection::{ConnectionConfig, ConnectionEvent, ConnectionHandle};

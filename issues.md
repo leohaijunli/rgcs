@@ -107,9 +107,25 @@ survey 编译器已输出 PatternLine 表（S1），`MagTrigger::GcsSide` 是默
 相关）。依赖 ULog 读取器扩展（A6 同类）；实机验收需要雷达硬件。
 
 ### N5 [P3][docs/plans] 综合方案 v3
-`comprehensive-implementation-plan.md` v2 的 W6 参数窗口已基本落地、
-RTK R0-R4 完成、MS 线完成、领域主线（survey/mag/QC）独立推进中；按仓库
-惯例出 v3 状态修订或并入 issues.md 后删除。
+v3 已落盘为 `docs/plans/lifecycle-survey-hrdem-plan.md`（v2
+`comprehensive-implementation-plan.md` 待删除）。执行进度：**A3 AlertCenter
+已完成**（core `alerts` + app-tauri 适配 + 前端 store/badge/banner/drawer，
+`frontend/scripts/check-alerts.mjs` 为验收脚本）；下一步按 P0 顺序推进
+A1（◆，需先确认设计）→ L1/L2/L3/L4。全部 WP 落地后再按计划并入
+`FEATURES.md`/`ARCHITECTURE.md` 并删除本计划文件。
+
+### N6 [P1][frontend] `devices` store 信任后端返回，null 会把整个外壳拆掉
+`stores/devices.ts` 的 `load()` 直接把 `enumerate_devices` 的返回值塞进
+store，`RtkDrawer` 随后读 `devices.length`。任何返回 null 的情形（mock/旧
+后端/命令失败）都会抛错，被挂在下方的 `ErrorBoundary` 兜住——本次写
+`check-alerts.mjs` 时实测：TopBar/告警角标/横幅一起消失。建议 `load()` 做
+`Array.isArray` 兜底并在失败时发一条 Alert（A3）。已用 mock 返回 `[]` 绕过，
+未改动业务代码。
+
+### N7 [P2][core/test] `connection_integration::gcs_heartbeat_is_announced_automatically` 在满负载下偶发失败
+`cargo test --all-targets` 并行跑全部 target 时该用例 3 s 收不到 GCS
+heartbeat 而 panic；单独跑（或重跑）稳定通过。属既有计时/负载敏感用例，
+非本次改动引入。
 
 ## Deferred（操作员指示暂缓）
 

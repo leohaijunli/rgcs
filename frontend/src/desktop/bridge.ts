@@ -1,7 +1,8 @@
 // Bridges the desktop shell and the UI.
 //
 // Inside Tauri: subscribes to Rust-pushed events (`telemetry`, `link`,
-// `link_error`) and calls commands (`connect`, `disconnect`, `link_status`).
+// `link_error`, `alert`) and calls commands (`connect`, `disconnect`,
+// `link_status`).
 // In a plain browser (Vite dev): starts the mock feed so the layout stays
 // alive until the desktop shell is built.
 //
@@ -17,6 +18,8 @@ import type { TelemetrySnapshot } from '../generated-types/TelemetrySnapshot'
 import type { MissionItem } from '../generated-types/MissionItem'
 import type { TelemetryError } from '../generated-types/TelemetryError'
 import type { MissionEventPayload } from '../stores/mission'
+import type { AlertEvent } from '../generated-types/AlertEvent'
+import { loadAlerts, useAlerts } from '../stores/alerts'
 import { reportConnectError } from './connect'
 import { syncSitlHome, usePrefsStore } from './prefs'
 import type { CommandEventPayload } from '../stores/command'
@@ -79,6 +82,14 @@ export function useTelemetryBridge() {
       if (disposed) return un3b()
       unlisteners.push(un3b)
 
+      // Alert center (A3): one `alert` stream for every window; the badge,
+      // banner and drawer all read the store it feeds.
+      const un3c = await listen<AlertEvent>('alert', (e) => {
+        useAlerts.getState().apply(e.payload)
+      })
+      if (disposed) return un3c()
+      unlisteners.push(un3c)
+
       const un4 = await listen<MissionEventPayload>('mission', (e) => {
         useMissionStore.getState().handleEvent(e.payload)
       })
@@ -100,6 +111,10 @@ export function useTelemetryBridge() {
       const snap = await invoke<LinkStatus | null>('link_status')
       if (disposed) return
       if (snap) useLinkStore.getState().setLink(snap)
+
+      // Alerts raised before this webview booted (the badge must survive a
+      // window reload).
+      await loadAlerts().catch(() => {})
 
       if (!connectStarted) {
         connectStarted = true

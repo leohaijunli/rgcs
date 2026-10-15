@@ -26,6 +26,8 @@ crates/core          maggcs_core — all domain logic (ADR-001):
                        staleness
   mission/             MISSION protocol state machine + service task
   commands/            single-slot COMMAND_LONG service (retransmit, ack)
+  alerts/              alert center (A3): dedup window, Critical latching,
+                       hysteresis for level alerts, acknowledge, history cap
   signals/             inspector tap: field extraction, mag_total synthesis,
                        ESC aggregation (ESC_STATUS index×4 → esc{k})
   dsp/                 biquad / moving average / detrend / FFT + registry
@@ -41,9 +43,11 @@ crates/core          maggcs_core — all domain logic (ADR-001):
                        (R1-R3), MAVLink params (pull/set/echo/cache),
                        mode table + send_await (ADR-017), ULog reader
 crates/app-tauri     desktop shell: Tauri commands + thin service adapters
-                     (mission/command/inspector/actuator/params/rtk),
-                     telemetry pump, windows: main / inspector / actuator /
-                     params, loopback terrain tileset server (ADR-004)
+                     (mission/command/inspector/actuator/params/rtk/alerts),
+                     telemetry pump + alert pump (one `alert` event per
+                     transition, every window), windows: main / inspector /
+                     actuator / params, loopback terrain tileset server
+                     (ADR-004)
 crates/server        headless REST/WebSocket (planned)
 frontend/            React app, four Vite entries (index / inspector /
                      actuator / params — separate webviews, no Cesium in

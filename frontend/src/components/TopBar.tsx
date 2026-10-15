@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { invoke } from '@tauri-apps/api/core'
 import { useTelemetryStore } from '../stores/telemetry'
+import { useAlerts } from '../stores/alerts'
+import type { Severity } from '../generated-types/Severity'
 import { IconButton, StatusDot, Tabs } from '../design-system/components'
 import { useUiStore, type View } from '../stores/ui'
 import { isTauri } from '../inspector/mock'
@@ -15,6 +17,14 @@ import FlightMenu from './FlightMenu'
 import EventLogDrawer from './EventLogDrawer'
 
 const VIEWS: View[] = ['planning', 'flight']
+
+/** Badge colour per severity — tokens only, and the number carries the
+ * meaning as well as the colour (design principle: never colour alone). */
+const BADGE_TONE: Record<Severity, { border: string; text: string }> = {
+  info: { border: 'border-line', text: 'text-muted' },
+  warn: { border: 'border-warn', text: 'text-warn' },
+  critical: { border: 'border-error', text: 'text-error' },
+}
 
 function pillTone(kind: 'ok' | 'warn' | 'err' | 'off'): 'ok' | 'warn' | 'error' | 'muted' {
   switch (kind) {
@@ -66,6 +76,8 @@ export default function TopBar() {
   const [rtkDrawerOpen, setRtkDrawerOpen] = useState(false)
   const [logsOpen, setLogsOpen] = useState(false)
   const [logDrawerOpen, setLogDrawerOpen] = useState(false)
+  const alertCount = useAlerts((s) => s.count)
+  const alertSeverity = useAlerts((s) => s.highest)
   const view = useUiStore((s) => s.view)
   const setView = useUiStore((s) => s.setView)
   const heartbeat = useTelemetryStore((s) => s.snapshot?.heartbeat ?? null)
@@ -155,9 +167,30 @@ export default function TopBar() {
           onParams={openParams}
           onLogs={() => setLogsOpen(true)}
         />
-        <IconButton title={t('eventLog.title')} onClick={() => setLogDrawerOpen(true)}>
-          <List size={16} />
-        </IconButton>
+        {/* One badge for every window's alert count (A3): severity-coloured
+         * number that opens the alert center. */}
+        <span className="relative">
+          <IconButton
+            title={alertCount > 0 ? t('alerts.open') : t('eventLog.title')}
+            active={false}
+            data-testid="alert-open"
+            onClick={() => setLogDrawerOpen(true)}
+          >
+            <span className={alertSeverity ? BADGE_TONE[alertSeverity].text : undefined}>
+              <List size={16} />
+            </span>
+          </IconButton>
+          {alertCount > 0 && (
+            <span
+              data-testid="alert-badge"
+              className={`pointer-events-none absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full border bg-panel px-1 text-[10px] font-semibold tabular-nums ${
+                BADGE_TONE[alertSeverity ?? 'info'].border
+              } ${BADGE_TONE[alertSeverity ?? 'info'].text}`}
+            >
+              {alertCount > 99 ? '99+' : alertCount}
+            </span>
+          )}
+        </span>
         <IconButton title={t('settings.menu')} onClick={() => setSettingsOpen(true)}>
           <Settings size={16} />
         </IconButton>

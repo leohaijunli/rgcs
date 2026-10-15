@@ -17,6 +17,7 @@ use maggcs_core::telemetry::hub::TelemetryHub;
 use maggcs_core::CommandService;
 use parking_lot::Mutex;
 
+use crate::alert_service::AlertState;
 use crate::inspector_service::InspectorState;
 use crate::logs_service::LogsState;
 use crate::motor_test_state::MotorTestState;
@@ -90,6 +91,9 @@ pub struct AppState {
     /// service itself stops with its link and is re-spawned on the next
     /// start).
     pub motor_test: MotorTestState,
+    /// Process-wide alert center (plan §3 A3): dedup, latching and the badge
+    /// count for every window.
+    pub alerts: Arc<AlertState>,
     /// RTK injection service handle + 1 Hz stats forwarder (R4).
     pub rtk: Arc<RtkState>,
     /// Log download protocol task (O1).
@@ -158,6 +162,11 @@ impl AppState {
     /// The connection handle of the primary link, if any.
     pub fn connection(&self) -> Option<ConnectionHandle> {
         self.with_primary(|l| l.connection.clone())
+    }
+
+    /// The process-wide alert center.
+    pub fn alerts(&self) -> Arc<AlertState> {
+        self.alerts.clone()
     }
 
     /// Latest link status published by the pump.

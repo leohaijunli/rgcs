@@ -969,16 +969,13 @@ fn start_scope_flusher(app: &AppHandle) {
                 last_stream_req = tokio::time::Instant::now();
                 // Clone the target handle first: the `State` guard is not Send
                 // and must not live across the awaited sends below.
-                let target = app
-                    .try_state::<AppState>()
-                    .map(|s| {
-                        s.motor_test
-                            .target
-                            .lock()
-                            .as_ref()
-                            .map(|t| t.handle.clone())
-                    })
-                    .flatten();
+                let target = app.try_state::<AppState>().and_then(|s| {
+                    s.motor_test
+                        .target
+                        .lock()
+                        .as_ref()
+                        .map(|t| t.handle.clone())
+                });
                 if let Some(target) = target {
                     for (msg_id, hz) in TARGET_STREAMS {
                         request_message_interval(&target, msg_id, hz).await;

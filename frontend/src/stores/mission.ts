@@ -26,6 +26,7 @@ import { itemsHash } from '../mission/hash'
 import type { PlanBlock, PlanImport, QgcPlan } from '../mission/planfile'
 import { drapeToMesh, type MeshDrapeResult } from '../mission/meshDrape'
 import { useTerrainStore, type MeshSampler } from './terrain'
+import { DRAPE_ALERT_KEY, clearAlert, raiseAlert } from './alerts'
 
 /**
  * Altitude semantics of the editable plan.
@@ -819,9 +820,21 @@ async function runTerrainDrape(): Promise<void> {
         meshDrape: null,
         drapeError: outcome.error,
       })
+      // One alert row for the whole condition (A3): the plan view shows the
+      // detail, the badge shows that something is wrong from any view.
+      raiseAlert({
+        source: 'dem',
+        severity: 'warn',
+        text: `Terrain drape failed: ${outcome.error}`,
+        key: DRAPE_ALERT_KEY,
+      })
       return
     }
     lastDrapedKey = `${planKey(outcome.waypoints)}|${s.surveyAglM}|${ref.cacheKey}`
+    if (s.drapeError) {
+      // Recovered: the terrain condition is gone, so retire its alert row.
+      clearAlert('dem', DRAPE_ALERT_KEY)
+    }
     useMissionStore.setState({
       waypoints: outcome.waypoints,
       dirty: true,
@@ -835,6 +848,12 @@ async function runTerrainDrape(): Promise<void> {
     // heights are NOT terrain-following until this clears.
     lastDrapedKey = key
     useMissionStore.setState({ drapeError: String(e) })
+    raiseAlert({
+      source: 'dem',
+      severity: 'warn',
+      text: `Terrain drape failed: ${String(e)}`,
+      key: DRAPE_ALERT_KEY,
+    })
   } finally {
     draping = false
   }
