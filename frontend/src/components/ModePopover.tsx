@@ -2,19 +2,26 @@
 // their availability (resolved in core via `flight_mode_table`), sends
 // `DO_SET_MODE` through the command service and confirms via the heartbeat
 // readback — never optimistically.
+//
+// U4 (plan §7): the core's `confirm` flag on an entry (Return / Land) is the
+// medium risk tier, so those entries are hold-to-send instead of this
+// popover's old "click twice within 5 s" — a stray tap no longer switches the
+// aircraft into RTL. The confirm bar carries the state the switch runs
+// against (mode, height above ground, battery).
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { invoke } from '@tauri-apps/api/core'
 import type { ModeAvailability } from '../generated-types/ModeAvailability'
+import { Button, HoldButton, HOLD_MS } from '../design-system/components'
 import { useCommandStore } from '../stores/command'
+import { modeRisk } from '../util/commandRisk'
+import ConfirmContextBar from './ConfirmContextBar'
 import { useLinkStore } from '../stores/link'
 import { useMissionStore } from '../stores/mission'
 import { useTelemetryStore } from '../stores/telemetry'
 import { modeLabel } from '../util/modeLabel'
 
-/** How long a confirm-required entry stays armed for the second click. */
-const CONFIRM_WINDOW_MS = 5000
 /** Readback window: the heartbeat must show the new mode within this. */
 const READBACK_TIMEOUT_MS = 3000
 /** localStorage key for the "advanced modes" preference (Manual/Acro/Offboard). */
@@ -37,13 +44,11 @@ export default function ModePopover() {
   const rootRef = useRef<HTMLDivElement>(null)
   const [table, setTable] = useState<ModeAvailability[] | null>(null)
   const [tableError, setTableError] = useState<string | null>(null)
-  const [confirming, setConfirming] = useState<string | null>(null)
   const [switching, setSwitching] = useState<Switching | null>(null)
   const [status, setStatus] = useState<string | null>(null)
   const [advanced, setAdvanced] = useState(
     () => localStorage.getItem(ADVANCED_KEY) === '1',
   )
-  const confirmTimer = useRef<number | undefined>(undefined)
   const statusTimer = useRef<number | undefined>(undefined)
 
   const link = useLinkStore((s) => s.link)
@@ -72,13 +77,7 @@ export default function ModePopover() {
     }
   }, [open])
 
-  useEffect(
-    () => () => {
-      window.clearTimeout(confirmTimer.current)
-      window.clearTimeout(statusTimer.current)
-    },
-    [],
-  )
+  useEffect(() => () => window.clearTimeout(statusTimer.current), [])
 
   // Resolve the table against the vehicle state whenever the popover opens.
   useEffect(() => {
@@ -148,19 +147,11 @@ export default function ModePopover() {
     return () => window.clearTimeout(timer)
   }, [switching, showStatus, t])
 
-  const press = (entry: ModeAvailability) => {
+  // The only path that sends a mode switch: low-risk entries call it from a
+  // click, medium-risk ones only once their hold completes (U4).
+  const commit = (entry: ModeAvailability) => {
     const { option } = entry
     if (pending === 'set_mode') return
-    if (option.confirm && confirming !== option.id) {
-      setConfirming(option.id)
-      window.clearTimeout(confirmTimer.current)
-      confirmTimer.current = window.setTimeout(
-        () => setConfirming(null),
-        CONFIRM_WINDOW_MS,
-      )
-      return
-    }
-    setConfirming(null)
     void sendSetMode(option.main_mode, option.sub_mode)
     showStatus('')
     setSwitching({
@@ -184,6 +175,7 @@ export default function ModePopover() {
   return (
     <div className="relative" ref={rootRef}>
       <button
+        data-testid="mode-menu"
         onClick={() => setOpen((o) => !o)}
         title={t('modePopover.title')}
         className="flex h-8 items-center gap-1 rounded border border-line bg-canvas px-2.5 text-xs hover:bg-panel"
@@ -202,7 +194,9 @@ export default function ModePopover() {
             <span className="mono text-[10px] text-muted">{currentLabel ?? '—'}</span>
           </div>
 
-          <div className="flex flex-col gap-1">
+          <ConfirmContextBar />
+
+          <div className="mt-2 flex flex-col gap-1">
             {tableError && (
               <span className="text-[11px] text-warn">{tableError}</span>
             )}
@@ -214,33 +208,72 @@ export default function ModePopover() {
                 customMode ===
                 packCustomMode(entry.option.main_mode, entry.option.sub_mode)
               const disabled = !entry.enabled || busy
-              return (
-                <button
-                  key={entry.option.id}
-                  onClick={() => !disabled && press(entry)}
-                  disabled={disabled}
-                  title={entry.reason ?? undefined}
-                  className={`flex items-center justify-between rounded border px-2 py-1 text-xs ${
+              const hold = modeRisk(entry.option.confirm) === 'medium'
+              const trailing = isCurrent
+                ? t('modePopover.current')
+                : hold
+                  ? t('modePopover.hold')
+                  : (entry.reason ?? '')
+              if (disabled) {
+                return (
+                  <Button
+                    key={entry.option.id}
+                    data-testid={`mode-${entry.option.id}`}
+                    variant="ghost"
+                    size="sm"
                     disabled
-                      ? 'cursor-not-allowed border-transparent bg-transparent text-muted opacity-70'
-                      : 'border-line bg-canvas text-ink hover:bg-panel'
-                  } ${isCurrent ? 'border-accent' : ''}`}
-                >
+                    title={entry.reason ?? undefined}
+                    className={`w-full justify-between ${isCurrent ? 'border-accent' : ''}`}
+                  >
+                    <span>{entry.option.label}</span>
+                    <span className="mono text-[9px] text-muted">{trailing}</span>
+                  </Button>
+                )
+              }
+              const body = (
+                <>
                   <span>{entry.option.label}</span>
-                  <span className="mono text-[9px] text-muted">
-                    {isCurrent
-                      ? t('modePopover.current')
-                      : confirming === entry.option.id
-                        ? t('modePopover.confirm')
-                        : (entry.reason ?? '')}
-                  </span>
-                </button>
+                  <span className="mono text-[9px] text-muted">{trailing}</span>
+                </>
+              )
+              // U4: switching into Return / Land moves the aircraft, so the
+              // core's `confirm` flag buys a 1 s hold, not a single click.
+              return hold ? (
+                <HoldButton
+                  key={entry.option.id}
+                  data-testid={`mode-${entry.option.id}`}
+                  size="sm"
+                  data-current={isCurrent}
+                  hint={t('modePopover.willSwitch', { mode: entry.option.label })}
+                  onConfirm={() => commit(entry)}
+                  className={`w-full justify-between ${isCurrent ? 'border-accent' : ''}`}
+                >
+                  {body}
+                </HoldButton>
+              ) : (
+                <Button
+                  key={entry.option.id}
+                  data-testid={`mode-${entry.option.id}`}
+                  size="sm"
+                  onClick={() => commit(entry)}
+                  className={`w-full justify-between ${isCurrent ? 'border-accent' : ''}`}
+                >
+                  {body}
+                </Button>
               )
             })}
           </div>
 
+          {entries.some((e) => e.enabled && modeRisk(e.option.confirm) === 'medium') && (
+            <div className="mt-1.5 text-[10px] text-muted">
+              {t('modePopover.holdNote', { s: HOLD_MS / 1000 })}
+            </div>
+          )}
+
           {busy && (
-            <div className="mt-2 text-[11px] text-muted">{t('modePopover.switching')}</div>
+            <div data-testid="mode-switching" className="mt-2 text-[11px] text-muted">
+              {t('modePopover.switching')}
+            </div>
           )}
           {status && status !== '' && (
             <div className="mt-2 text-[11px] text-warn">{status}</div>

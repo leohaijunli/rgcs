@@ -131,7 +131,27 @@ HUD "STALE n s · 最后时刻"、地图飞机标 `UAV · OLD DATA`（Cesium 实
 `mission_download` 重读）。
 **L4 断开/退出护栏已完成**：core `LifecyclePolicy::refusal`（纯策略，UI 可先问）+ `StopReason::confirm_keyword()`（`DISCONNECT`/`QUIT`）+ 新增 `TeardownGuard::of(policy, reason, vehicle, at_stake)`（拒绝优先，被拒时永不给出关键字；关键字只在"允许但有代价"时出现），`StopReason`/`TeardownGuard` 走 ts-rs 导出；app-tauri 新增只读命令 `teardown_guard(reason, at_stake)`（复用同一个 `lifecycle_service::policy()`，UI 与监督器不会各写一份规则），关窗强制退出（`StopReason::WindowClose`）在被拒情形下补一条 Warn 告警，强制退出不再静默；前端 `stores/teardown.ts` + `dialogs/TeardownDialog.tsx` 把三个入口（LinkPopover 断开、Settings 断开、Settings 退出）统一到一个对话框：已解锁/飞行中显示拒绝原因与出路且无确认按钮，有未上传任务时显示"n waypoints are not on the flight controller yet"并要求逐字输入关键字（`teardown_guard` 收到 `atStake: true`），干净退出只需一次确认。验收脚本 `frontend/scripts/check-teardown.mjs`（20 条断言，含真实在 Plan 面板输入坐标造出未上传任务）。核对（读码，非自动测）：主窗口 `CloseRequested` 走 `Lifecycle::shutdown(WindowClose)` 后 `app.exit(0)`，**子窗口仍开也会退出**（A1 既有行为）；该路径需要 Tauri 运行时，未进自动测试。
 **A7 命令优先通道已完成**：core `commands` 新增 `Priority{Normal,Emergency}` 与 `command_priority(MavCmd)`（RTL / LAND / ARM_DISARM 为 Emergency），`CommandSession` 的 AwaitAck 状态记录在途优先级；`begin_with_priority` 只允许 Emergency 抢占 Normal（被抢占者回 `CommandError::Superseded`，且**先**于新的 `Sent` 上报），Emergency 之间仍 `Busy`，**同时最多一条在途命令**的约束不变；`CommandService::send/send_await` 自动按 `command_priority` 取优先级（调用点无需也不该自行判断），另留 `send_with_priority`。app 层把 `Superseded` 作为 verdict 上报（`result: "superseded"`），前端 `FlightMenu` 与 i18n 显示"Superseded by an emergency command"。验收：core 单测 6 条（分类、抢占、不许抢占、Emergency 不被抢占、被抢占者停止重传且迟到 ACK 被忽略）+ 假飞控集成测 `an_emergency_command_preempts_an_in_flight_goto`（在途 goto 时发 RTL：RTL 立即上线并 ACK；goto 收到 Superseded；RTL 丢 ACK 重传带 confirmation=1 且 goto 不会重新上线；迟到的 goto ACK 无副作用）。
-下一步按 P0 顺序推进 U4（依赖 A7，已完成）与 L2（依赖 A7/U4），其后 U2/U3。全部 WP 落地后再按计划并入
+**U4 命令交互分级已完成**：设计系统新增 `HoldButton`（按住 `HOLD_MS = 1 s`
+时按钮外圈自绘进度环，按住期间按钮文字换成"将要执行的内容"，提前松开/Esc/
+pointercancel 一律不发送；**按下超过 1 s 才松开也算完成**——渲染被地图挤住时
+`setTimeout` 可能迟到数秒，早于计时器到达的"松手"不应吞掉一次真正的长按）、
+`ConfirmBar`（模式 / 相对高度 / 电池三格，可带一条 warn 备注）与
+`CommandStatusStrip`（已发送 → 等待 ACK → 结果 + 耗时）；新增
+`util/commandRisk.ts` 把风险分级集中成一张表（`takeoff/land/rtl/arm_disarm`
+= medium，`set_mode` = low，`modeRisk(option.confirm)` 让 core 的 `confirm`
+标记等价于 medium；高风险（强制解锁 L5、退出/断开 L4）仍是关键字层）。
+`stores/command.ts` 记录 `sentAtMs`/`lastElapsedMs` 并导出 `useCommandProgress()`
+（在途时按 200 ms 刷新耗时，落地后冻结在 ACK 时刻的数值）；`FlightMenu` 用
+`HoldButton` 替换"5 秒内点两次"、弹出层顶部加 `ConfirmContextBar`（AGL 走
+`cesium/heights.ts` 的同一套地面参考：DEM/3D mesh 优先，其次 HOME 平面）、
+导航条上常驻命令状态条；`ModePopover` 把 core 标记 `confirm` 的 Return/Land
+改成按住发送，低风险模式仍是单击。验收脚本
+`frontend/scripts/check-command-ux.mjs`（30 条断言，假飞控 + `command` 事件
+驱动）：四个飞行命令逐个单击都不发送、未满窗口的按住不发送、满窗口按住才
+发送且只发一条、状态条三个阶段与耗时、**RTL 从飞行视图 2 次交互发出**、
+键盘按住 Enter 同样可发（且自动重复不会发第二条）、模式弹层里 Hold 单击即
+切 / Return 单击无效而按住才切。排查途中定位到一个通用陷阱见 N8。
+下一步按 P0 顺序推进 L2（依赖 A7/U4）与 U2、U3。全部 WP 落地后再按计划并入
 `FEATURES.md`/`ARCHITECTURE.md` 并删除本计划文件。
 
 ### N6 [P1][frontend] `devices` store 信任后端返回，null 会把整个外壳拆掉
@@ -141,6 +161,20 @@ store，`RtkDrawer` 随后读 `devices.length`。任何返回 null 的情形（m
 `check-alerts.mjs` 时实测：TopBar/告警角标/横幅一起消失。建议 `load()` 做
 `Array.isArray` 兜底并在失败时发一条 Alert（A3）。已用 mock 返回 `[]` 绕过，
 未改动业务代码。
+
+### N8 [P1][frontend] 弹层的"点击外部关闭"会被按下瞬间改动的 DOM 骗到
+`ModePopover`/`FlightMenu`/`ToolsPopover` 的关闭逻辑都是
+`window` 上的 `pointerdown` + `rootRef.current.contains(e.target)`。React 的事件
+监听挂在 `#root`（冒泡阶段早于 `window`），所以处理顺序是：目标的
+`onPointerDown` 先改 DOM → 再轮到 `window` 上的这个判断。写 U4 的
+`HoldButton` 时踩到：按钮在 pointerdown 里把子节点从 Fragment 换成字符串，
+React 把原来那两个 `<span>` 摘了下来，`e.target` 于是成了**已脱离文档**的节点，
+`contains()` 返回 false，弹层把自己关了——表现为"按住模式条目时弹层消失"，
+且被 `hidden` 类切换的写法掩盖（现在 HoldButton 的 label 与 hint 都常驻、只用
+`hidden` 切换）。建议把这几个判断改成捕获阶段监听
+（`addEventListener('pointerdown', onDown, true)`）或改判
+`e.target.isConnected === false ? 忽略 : contains(...)`，否则任何"按下即改变
+自身 DOM"的内容都会复现。
 
 ### N7 [P2][core/test] `connection_integration::gcs_heartbeat_is_announced_automatically` 在满负载下偶发失败
 `cargo test --all-targets` 并行跑全部 target 时该用例 3 s 收不到 GCS

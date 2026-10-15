@@ -1,21 +1,33 @@
 // Flight command menu (operator request 2026-10-11): one nav-bar dropdown
-// instead of a row of buttons — Takeoff / Land / RTL / Arm-Disarm behind
-// two-click confirms. The ack outcome is not shown inline any more; it
-// lands in the event log drawer (which is also where "Accepted" went).
+// instead of a row of buttons — Takeoff / Land / RTL / Arm-Disarm.
+//
+// U4 (plan §7) settled how a command is confirmed, once for the whole app:
+//   • medium risk (takeoff / land / RTL / arm-disarm) — hold the button for
+//     `HOLD_MS` while the ring draws itself; a plain click cannot fire it,
+//     which is what a stray tap on a touch screen used to do through the
+//     "click twice within 5 s" pattern this replaced
+//   • the confirm bar above the buttons carries the state the command will
+//     run against (mode, height above ground, battery)
+//   • the status strip on the nav bar keeps the round trip visible:
+//     sent → awaiting ACK → result + elapsed
 //
 // Takeoff (MS3, ADR-017): the backend replicates PX4's `commander takeoff`
 // flow (NAV_TAKEOFF -> ACK -> ARM), so no separate arm click is needed.
 
 import { useTranslation } from 'react-i18next'
 import { useEffect, useRef, useState } from 'react'
-import { useCommandStore, type CommandName } from '../stores/command'
+import {
+  CommandStatusStrip,
+  HoldButton,
+  HOLD_MS,
+  type Tone,
+} from '../design-system/components'
+import { useCommandProgress, useCommandStore } from '../stores/command'
 import { useLinkStore } from '../stores/link'
 import { useTelemetryStore } from '../stores/telemetry'
+import ConfirmContextBar from './ConfirmContextBar'
 
-/** How long a confirm-required entry stays armed for the second click. */
-const CONFIRM_WINDOW_MS = 5000
-
-/** Terminal ack results the menu surfaces in the popover status line. */
+/** Terminal ack results the menu surfaces in the status strip. */
 const RESULT_LABELS: Record<string, string> = {
   accepted: 'plan.cmd.accepted',
   denied: 'plan.cmd.denied',
@@ -24,6 +36,26 @@ const RESULT_LABELS: Record<string, string> = {
   failed: 'plan.cmd.rejected',
   // A7: an emergency command (RTL/land/arm) took the single session slot.
   superseded: 'plan.cmd.superseded',
+}
+
+type Translate = (key: string, options?: Record<string, unknown>) => string
+
+/** Name a command for the status strip. */
+function commandName(t: Translate, command: string, armed: boolean): string {
+  switch (command) {
+    case 'takeoff':
+      return t('plan.takeoff')
+    case 'land':
+      return t('plan.land')
+    case 'rtl':
+      return t('plan.rtl')
+    case 'set_mode':
+      return t('link.mode')
+    case 'arm_disarm':
+      return armed ? t('plan.cmd.disarm') : t('plan.cmd.arm')
+    default:
+      return command
+  }
 }
 
 export default function FlightMenu() {
@@ -35,13 +67,9 @@ export default function FlightMenu() {
     (s) => s.snapshot?.heartbeat?.base_mode.safety_armed === true,
   )
   const pending = useCommandStore((s) => s.pending)
-  const lastEvent = useCommandStore((s) => s.lastEvent)
   const send = useCommandStore((s) => s.send)
   const sendArmDisarm = useCommandStore((s) => s.sendArmDisarm)
-  const [confirming, setConfirming] = useState<string | null>(null)
-  const confirmTimer = useRef<number | undefined>(undefined)
-
-  useEffect(() => () => window.clearTimeout(confirmTimer.current), [])
+  const progress = useCommandProgress()
 
   // Close on outside click / Esc.
   useEffect(() => {
@@ -58,13 +86,25 @@ export default function FlightMenu() {
     }
   }, [open])
 
+  // The round trip always stays visible, whatever the link does.
+  const status = progressText(t, progress.phase, progress.result)
+  const strip = (
+    <CommandStatusStrip
+      command={progress.command === null ? null : commandName(t, progress.command, armed)}
+      phase={status?.text ?? null}
+      elapsedMs={progress.elapsedMs}
+      tone={status?.tone}
+    />
+  )
+
   // L3: keep the menu on the bar when the heartbeat is gone — vanishing read
   // as a UI bug. It is greyed out with the reason, because a flight command
   // against a dead link can only fail. The menu itself cannot open.
   if (!link?.fc_alive) {
     const reason = t('plan.cmd.noLink')
     return (
-      <div className="relative" ref={rootRef}>
+      <div className="relative flex items-center gap-1.5" ref={rootRef}>
+        {strip}
         <button
           data-testid="flight-menu-blocked"
           disabled
@@ -80,68 +120,49 @@ export default function FlightMenu() {
     )
   }
 
-  // Disruptive commands arm on the first click; a second click within the
-  // confirm window sends them.
-  const press = (name: CommandName) => {
-    if (confirming !== name) {
-      setConfirming(name)
-      window.clearTimeout(confirmTimer.current)
-      confirmTimer.current = window.setTimeout(
-        () => setConfirming(null),
-        CONFIRM_WINDOW_MS,
-      )
-      return
-    }
-    window.clearTimeout(confirmTimer.current)
-    setConfirming(null)
-    void send(name)
-  }
-
-  // Arm/disarm (MS3, ADR-017): both directions behind the two-click
-  // confirm; PX4 runs its own preflight checks and answers on the ack.
-  const pressArm = () => {
-    if (confirming !== 'arm_disarm') {
-      setConfirming('arm_disarm')
-      window.clearTimeout(confirmTimer.current)
-      confirmTimer.current = window.setTimeout(
-        () => setConfirming(null),
-        CONFIRM_WINDOW_MS,
-      )
-      return
-    }
-    window.clearTimeout(confirmTimer.current)
-    setConfirming(null)
-    void sendArmDisarm(!armed)
-  }
-
   const busy = pending !== null
-  // The status line only shows failures: an "Accepted" on the nav bar is
-  // noise (operator request) — the ack lands in the event log instead.
-  const failure =
-    !busy && lastEvent && lastEvent.kind !== 'sent' && lastEvent.result !== 'accepted'
-      ? lastEvent
-      : null
 
   const entries: Array<{
     key: string
     label: string
+    hint: string
     danger?: boolean
     action: () => void
   }> = [
-    { key: 'takeoff', label: t('plan.takeoff'), action: () => press('takeoff') },
-    { key: 'land', label: t('plan.land'), action: () => press('land') },
-    { key: 'rtl', label: t('plan.rtl'), action: () => press('rtl') },
+    {
+      key: 'takeoff',
+      label: t('plan.takeoff'),
+      hint: t('plan.cmd.willTakeoff'),
+      action: () => void send('takeoff'),
+    },
+    {
+      key: 'land',
+      label: t('plan.land'),
+      hint: t('plan.cmd.willLand'),
+      action: () => void send('land'),
+    },
+    {
+      key: 'rtl',
+      label: t('plan.rtl'),
+      hint: t('plan.cmd.willRtl'),
+      action: () => void send('rtl'),
+    },
     {
       key: 'arm_disarm',
       label: armed ? t('plan.cmd.disarm') : t('plan.cmd.arm'),
+      hint: armed ? t('plan.cmd.willDisarm') : t('plan.cmd.willArm'),
       danger: !armed,
-      action: pressArm,
+      // Arm/disarm (MS3, ADR-017): PX4 runs its own preflight checks and
+      // answers on the ack.
+      action: () => void sendArmDisarm(!armed),
     },
   ]
 
   return (
-    <div className="relative" ref={rootRef}>
+    <div className="relative flex items-center gap-1.5" ref={rootRef}>
+      {strip}
       <button
+        data-testid="flight-menu"
         onClick={() => setOpen((o) => !o)}
         title={t('plan.cmd.menu')}
         className={`flex h-8 items-center gap-1 rounded border px-2.5 text-xs ${
@@ -153,54 +174,50 @@ export default function FlightMenu() {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full z-50 mt-1 w-48 rounded border border-line bg-panel p-2 shadow-2xl">
-          <div className="flex flex-col gap-1">
-            {entries.map((entry) => {
-              const isConfirming = confirming === entry.key
-              return (
-                <button
-                  key={entry.key}
-                  onClick={entry.action}
-                  disabled={busy}
-                  className={`rounded border px-2 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
-                    isConfirming
-                      ? entry.danger
-                        ? 'border-warn bg-warn text-canvas'
-                        : 'border-warn bg-canvas text-warn'
-                      : 'border-line bg-canvas text-ink hover:bg-panel'
-                  }`}
-                >
-                  {isConfirming
-                    ? t(
-                        entry.key === 'takeoff'
-                          ? 'plan.cmd.confirmTakeoff'
-                          : entry.key === 'land'
-                            ? 'plan.cmd.confirmLand'
-                            : entry.key === 'rtl'
-                              ? 'plan.cmd.confirmRtl'
-                              : armed
-                                ? 'plan.cmd.confirmDisarm'
-                                : 'plan.cmd.confirmArm',
-                      )
-                    : entry.label}
-                </button>
-              )
-            })}
+        <div className="absolute right-0 top-full z-50 mt-1 w-64 rounded border border-line bg-panel p-2 shadow-2xl">
+          <ConfirmContextBar />
+          <div className="mt-2 flex flex-col gap-1">
+            {entries.map((entry) => (
+              <HoldButton
+                key={entry.key}
+                data-testid={`flight-cmd-${entry.key}`}
+                variant={entry.danger ? 'danger' : 'default'}
+                disabled={busy}
+                hint={entry.hint}
+                onConfirm={entry.action}
+                className="w-full"
+              >
+                {entry.label}
+              </HoldButton>
+            ))}
           </div>
-          {busy && (
-            <div className="mt-1.5 text-[11px] text-warn">{t('plan.cmd.sent')}</div>
-          )}
-          {failure && (
-            <div className="mt-1.5 text-[11px] text-error">
-              {failure.result
-                ? t(RESULT_LABELS[failure.result] ?? 'plan.cmd.unknown')
-                : t('plan.cmd.failed', {
-                    message: failure.message ?? t('plan.cmd.unknown'),
-                  })}
-            </div>
-          )}
+          <div className="mt-1.5 text-[10px] text-muted">
+            {t('plan.cmd.holdNote', { s: HOLD_MS / 1000 })}
+          </div>
         </div>
       )}
     </div>
   )
+}
+
+/** Strip copy for the current phase; `null` before the first command. */
+function progressText(
+  t: Translate,
+  phase: string | null,
+  result: { kind: string; result?: string | null; message?: string | null } | null,
+): { text: string; tone: Tone } | null {
+  if (phase === null) return null
+  if (phase === 'sending') return { text: t('plan.cmd.sending'), tone: 'muted' }
+  if (phase === 'awaiting_ack') return { text: t('plan.cmd.sent'), tone: 'muted' }
+  if (result === null) return null
+  if (result.result) {
+    return {
+      text: t(RESULT_LABELS[result.result] ?? 'plan.cmd.unknown'),
+      tone: result.result === 'accepted' ? 'ok' : 'warn',
+    }
+  }
+  return {
+    text: t('plan.cmd.failed', { message: result.message ?? t('plan.cmd.unknown') }),
+    tone: 'error',
+  }
 }

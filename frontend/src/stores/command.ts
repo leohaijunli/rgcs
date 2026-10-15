@@ -2,6 +2,7 @@
 // desktop command service, which retransmits a COMMAND_LONG until the flight
 // controller acks it. The terminal outcome arrives on the `"command"` event.
 
+import { useEffect, useState } from 'react'
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { logEvent } from './eventlog'
@@ -45,6 +46,11 @@ interface CommandState {
   pending: CommandName | null
   /** Most recent event, kept for the status line. */
   lastEvent: CommandEventPayload | null
+  /** Wall-clock time the command left the UI, or `null` when nothing is in
+   * flight. The status strip measures the round trip from here (plan §7 U4). */
+  sentAtMs: number | null
+  /** Round trip of the last terminal ack, in ms (frozen at the ack). */
+  lastElapsedMs: number | null
   send: (name: CommandName) => Promise<void>
   /** Switch the PX4 flight mode (MS3, ADR-017). */
   sendSetMode: (mainMode: number, subMode: number) => Promise<void>
@@ -68,15 +74,28 @@ interface CommandState {
 /** Set-home request awaiting its ack; promoted to `homeMarker` on accept. */
 let pendingHome: [number, number, number] | null = null
 
+/** Terminal bookkeeping: stop the clock and freeze the round trip. */
+function settled(sentAtMs: number | null): {
+  sentAtMs: null
+  lastElapsedMs: number | null
+} {
+  return {
+    sentAtMs: null,
+    lastElapsedMs: sentAtMs === null ? null : Date.now() - sentAtMs,
+  }
+}
+
 export const useCommandStore = create<CommandState>((set) => ({
   pending: null,
   lastEvent: null,
+  sentAtMs: null,
+  lastElapsedMs: null,
   gotoTarget: null,
   homeMarker: null,
   clearGotoTarget: () => set({ gotoTarget: null }),
 
   send: async (name) => {
-    set({ pending: name, lastEvent: null })
+    set({ pending: name, lastEvent: null, sentAtMs: null, lastElapsedMs: null })
     // Landing: name the ground under the vehicle so the FC lands on the
     // terrain instead of a HOME plane (operator report: the aircraft held
     // altitude over lower ground at the end of a landing). Takeoff does the
@@ -86,52 +105,56 @@ export const useCommandStore = create<CommandState>((set) => ({
       name === 'land' && fix
         ? await groundAmslAt(fix.latitude_deg, fix.longitude_deg, fix.altitude.meters)
         : null
+    set({ sentAtMs: Date.now() })
     try {
       await invoke('send_command', { name, groundAmslM: ground })
     } catch (err) {
-      set({
+      set((s) => ({
         pending: null,
+        ...settled(s.sentAtMs),
         lastEvent: {
           command: name,
           kind: 'failed',
           result: null,
           message: String(err),
         },
-      })
+      }))
     }
   },
 
   sendSetMode: async (mainMode, subMode) => {
-    set({ pending: 'set_mode', lastEvent: null })
+    set({ pending: 'set_mode', lastEvent: null, sentAtMs: Date.now(), lastElapsedMs: null })
     try {
       await invoke('send_set_mode', { mainMode, subMode })
     } catch (err) {
-      set({
+      set((s) => ({
         pending: null,
+        ...settled(s.sentAtMs),
         lastEvent: {
           command: 'set_mode',
           kind: 'failed',
           result: null,
           message: String(err),
         },
-      })
+      }))
     }
   },
 
   sendArmDisarm: async (arm) => {
-    set({ pending: 'arm_disarm', lastEvent: null })
+    set({ pending: 'arm_disarm', lastEvent: null, sentAtMs: Date.now(), lastElapsedMs: null })
     try {
       await invoke('send_arm_disarm', { arm })
     } catch (err) {
-      set({
+      set((s) => ({
         pending: null,
+        ...settled(s.sentAtMs),
         lastEvent: {
           command: 'arm_disarm',
           kind: 'failed',
           result: null,
           message: String(err),
         },
-      })
+      }))
     }
   },
 
@@ -203,14 +226,78 @@ export const useCommandStore = create<CommandState>((set) => ({
         pendingHome = null
       }
     }
-    set((s) => ({
-      lastEvent: e,
-      pending: e.kind === 'sent' ? s.pending : null,
-    }))
+    // Every terminal event freezes the round trip for the status strip.
+    set((s) =>
+      e.kind === 'sent'
+        ? { lastEvent: e, pending: s.pending }
+        : { lastEvent: e, pending: null, ...settled(s.sentAtMs) },
+    )
   },
 
   reset: () => {
     pendingHome = null
-    set({ pending: null, lastEvent: null, gotoTarget: null, homeMarker: null })
+    set({
+      pending: null,
+      lastEvent: null,
+      sentAtMs: null,
+      lastElapsedMs: null,
+      gotoTarget: null,
+      homeMarker: null,
+    })
   },
 }))
+
+/** How often the in-flight elapsed time is refreshed (plan §7 U4). */
+const PROGRESS_TICK_MS = 200
+
+/** Where a command sits in its round trip (plan §7 U4 status strip). */
+export type CommandPhase = 'sending' | 'awaiting_ack' | 'done'
+
+export interface CommandProgress {
+  /** The command in flight, or the last one that finished; null before any. */
+  command: string | null
+  phase: CommandPhase | null
+  /** Milliseconds since the command left the UI — live while in flight. */
+  elapsedMs: number | null
+  /** The event the phase text is derived from. */
+  result: CommandEventPayload | null
+}
+
+/**
+ * Live view of the command round trip behind the status strip: "sent →
+ * awaiting ACK → result + elapsed" (plan §7 U4). While a command is pending
+ * the elapsed time ticks; once it ends the value frozen at the ack is shown,
+ * so the strip never drifts away from when the FC answered.
+ */
+export function useCommandProgress(): CommandProgress {
+  const pending = useCommandStore((s) => s.pending)
+  const sentAtMs = useCommandStore((s) => s.sentAtMs)
+  const lastEvent = useCommandStore((s) => s.lastEvent)
+  const lastElapsedMs = useCommandStore((s) => s.lastElapsedMs)
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    if (pending === null) return
+    setNow(Date.now())
+    const id = window.setInterval(() => setNow(Date.now()), PROGRESS_TICK_MS)
+    return () => window.clearInterval(id)
+  }, [pending, sentAtMs])
+
+  if (pending !== null) {
+    return {
+      command: pending,
+      phase: lastEvent?.kind === 'sent' ? 'awaiting_ack' : 'sending',
+      elapsedMs: sentAtMs === null ? null : now - sentAtMs,
+      result: lastEvent,
+    }
+  }
+  if (lastEvent === null) {
+    return { command: null, phase: null, elapsedMs: null, result: null }
+  }
+  return {
+    command: lastEvent.command,
+    phase: 'done',
+    elapsedMs: lastElapsedMs,
+    result: lastEvent,
+  }
+}
