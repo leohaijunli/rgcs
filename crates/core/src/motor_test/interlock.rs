@@ -53,6 +53,15 @@ impl Interlock {
         self.last_heartbeat = Some(now);
     }
 
+    /// Whether any heartbeat has been observed since the session was created.
+    ///
+    /// Lets the session distinguish "the first heartbeat has not arrived yet"
+    /// (a startup race, worth a grace window) from "the heartbeat went stale
+    /// mid-run" (an immediate stop).
+    pub fn has_heartbeat(&self) -> bool {
+        self.last_heartbeat.is_some()
+    }
+
     /// The link died without a goodbye: the view is immediately stale.
     pub fn link_lost(&mut self) {
         self.last_heartbeat = None;

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Radio } from 'lucide-react'
 import { useTeardownStore } from '../stores/teardown'
 import { useDataAge, useFieldAge } from '../hooks/useDataAge'
 import { useLinkStore } from '../stores/link'
@@ -51,6 +52,7 @@ export default function LinkPopover({
         title={t('link.connectionDetails')}
         className="flex h-8 items-center gap-1 rounded border border-line bg-canvas px-2.5 text-xs hover:bg-panel"
       >
+        <Radio size={13} className="text-muted" />
         <span className="text-muted">{t('link.fc')}</span>
         <span className={`h-1.5 w-1.5 rounded-full ${dotTone}`} />
         <span className="mono text-ink">{stateLabel}</span>

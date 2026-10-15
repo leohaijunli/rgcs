@@ -20,6 +20,7 @@ pub mod router;
 
 pub use connection::{
     ConnectionConfig, ConnectionEvent, ConnectionHandle, LinkErrorKind, LinkFailure, LinkState,
+    RawFrame,
 };
 pub use endpoint::{Endpoint, TransportKind};
 pub use error::MavlinkError;

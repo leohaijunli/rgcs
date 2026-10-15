@@ -127,6 +127,15 @@ export function startMockFeed(): number {
         velocity_m_s: Math.hypot(vn, ve),
         course_over_ground_deg: heading,
       },
+      extended_sys_state: {
+        landed_state: 'in_air',
+        vtol_state: 'undefined',
+      },
+      home: null,
+      estimator: null,
+      vibration: null,
+      rc_channels: null,
+      radio: null,
       field_ages: {
         heartbeat_at_ms: Date.now(),
         global_position_at_ms: Date.now(),
@@ -134,6 +143,12 @@ export function startMockFeed(): number {
         sys_status_at_ms: Date.now(),
         battery_at_ms: Date.now(),
         gps_at_ms: Date.now(),
+        extended_sys_state_at_ms: Date.now(),
+        home_at_ms: null,
+        estimator_at_ms: null,
+        vibration_at_ms: null,
+        rc_channels_at_ms: null,
+        radio_at_ms: null,
       },
     }
     useTelemetryStore.getState().applySnapshot(snap)

@@ -16,6 +16,7 @@ import { useTranslation } from 'react-i18next'
 import { AlertTriangle, Volume2, VolumeX } from 'lucide-react'
 import { beep } from '../audio/alarm'
 import { useHeartbeatAge } from '../hooks/useDataAge'
+import { useAlerts } from '../stores/alerts'
 import { useLinkStore } from '../stores/link'
 import { useTelemetryStore } from '../stores/telemetry'
 
@@ -33,6 +34,10 @@ export default function HeartbeatBanner() {
   const ageMs = useHeartbeatAge()
   const [soundOn, setSoundOn] = useState(true)
   const [restoredVisible, setRestoredVisible] = useState(false)
+  // U3: the Critical banner owns the very top of the screen; drop this banner
+  // below it so a link loss during a Critical alert is not hidden.
+  const criticalBanner = useAlerts((s) => s.banner)
+  const topCls = criticalBanner !== null ? 'top-16' : 'top-3'
 
   // Exactly `LinkStatus::lost`: the transport is up but the FC went silent. An
   // intentionally disconnected link is not a lost heartbeat — the link
@@ -63,7 +68,7 @@ export default function HeartbeatBanner() {
       <div
         data-testid="link-restored"
         role="status"
-        className="absolute left-1/2 top-3 z-30 -translate-x-1/2 whitespace-nowrap rounded border border-ok bg-panel/95 px-3 py-1.5 text-xs shadow-xl"
+        className={`absolute left-1/2 ${topCls} z-30 -translate-x-1/2 whitespace-nowrap rounded border border-ok bg-panel/95 px-3 py-1.5 text-xs shadow-xl`}
       >
         <span className="text-ok">●</span> <span className="text-ink">{t('link.restored')}</span>
       </div>
@@ -82,7 +87,7 @@ export default function HeartbeatBanner() {
       data-lost-ms={Number.isFinite(ageMs) ? Math.round(ageMs) : ''}
       role="alert"
       aria-live="assertive"
-      className="absolute left-1/2 top-3 z-30 flex -translate-x-1/2 items-center gap-3 whitespace-nowrap rounded border border-warn bg-panel/95 px-3 py-2 text-sm shadow-xl"
+      className={`absolute left-1/2 ${topCls} z-30 flex -translate-x-1/2 items-center gap-3 whitespace-nowrap rounded border border-warn bg-panel/95 px-3 py-2 text-sm shadow-xl`}
     >
       <AlertTriangle size={16} className="shrink-0 text-warn" />
       <span className="font-medium text-warn">{t('link.lost')}</span>

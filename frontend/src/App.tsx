@@ -6,8 +6,10 @@ import Hud from './components/Hud'
 import MockBanner from './components/MockBanner'
 import MapView from './components/MapView'
 import ErrorBanner from './components/ErrorBanner'
+import AlertLayer from './components/AlertLayer'
 import HeartbeatBanner from './components/HeartbeatBanner'
 import TeardownDialog from './components/dialogs/TeardownDialog'
+import PreflightPanel from './components/PreflightPanel'
 
 export default function App() {
   useTelemetryBridge()
@@ -21,12 +23,14 @@ export default function App() {
           <MockBanner />
           <Hud />
           <HeartbeatBanner />
+          <AlertLayer />
           <ErrorBanner />
         </main>
         <RightInspector />
       </div>
       <Dock />
       <TeardownDialog />
+      <PreflightPanel />
     </div>
   )
 }

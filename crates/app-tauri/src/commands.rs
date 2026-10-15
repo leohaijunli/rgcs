@@ -14,6 +14,11 @@ use maggcs_core::mavlink::message::MavMessage;
 use maggcs_core::mavlink::{ConnectionConfig, Endpoint};
 use maggcs_core::mission::service::MissionIds;
 use maggcs_core::mission::types::MissionItem;
+use maggcs_core::recorder::RecordEvent;
+use maggcs_core::safety::{
+    arm_gate_with_ack, evaluate, evaluate_force_arm, ArmGate, Checklist, ChecklistItemId,
+    ForceArmOutcome, ForceArmRequest, PlanState, PreflightRefusal, RefusalKind, SafetyConfig,
+};
 use maggcs_core::survey::{CloverleafPattern, PatternPlan, SurveyPattern};
 use maggcs_core::telemetry::hub::{TelemetryHub, DEFAULT_PUSH_HZ};
 use maggcs_core::telemetry::{TelemetrySnapshot, VehicleId};
@@ -137,6 +142,12 @@ pub async fn connect(
         old.hub.shutdown();
         old.connection.shutdown().await;
     }
+    // Supplementary telemetry (L6): ask the FC for explicit stream rates so
+    // landed state, EKF health, vibration and link quality reach the preflight
+    // checklist and the link alerts instead of relying on PX4 defaults.
+    if let Some(h) = state.connection() {
+        request_supplementary_streams(&h, target_system_id, target_component_id).await;
+    }
     state.rtk.detach();
     state.logs.detach();
 
@@ -149,10 +160,12 @@ pub async fn connect(
             state.attach_inspector(h);
         }
     }
-    // The motor-test window's mag/ESC tap rides the same link (A4 wiring).
-    if let Some(h) = state.connection() {
-        crate::actuator_service::attach_motor_telemetry(&app, h);
-    }
+    // The motor-test window's mag/ESC/servo tap rides its **own serial target
+    // link** (`actuator_connect_target`), not the main GCS link: the scope's
+    // "FC" curves and the mag readout must show the hardware under test, and
+    // never silently mirror whatever the main link happens to be connected to
+    // (a SITL sim or another FC). START gating still falls back to the main
+    // link heartbeat in `actuator_status`.
     // The parameters window's protocol task rides the same link (PM3).
     if let Some(h) = state.connection() {
         state.params.attach(&app, h);
@@ -174,6 +187,25 @@ pub async fn connect(
     if let Some(h) = state.connection() {
         let rtk_state = std::sync::Arc::clone(&state.rtk);
         rtk_state.attach_foreign(app.clone(), h);
+    }
+    // Walk-instrument runner (W1) rides the same MAVLink link/sensors as the
+    // drone; re-attach only while a window has registered its channel.
+    if state.instruments().has_window() {
+        if let Some(h) = state.connection() {
+            state.instruments().attach(h);
+        }
+    }
+    // Flight recorder (A4): a fresh session per link, so a swap closes the old
+    // tlog/event log and opens a new one. Errors are non-fatal (recording is
+    // best effort); they surface as a warning alert.
+    if let Some(h) = state.connection() {
+        if let Err(e) = state.recorder().start(&app, &h, state.alerts()) {
+            state.alerts().raise(maggcs_core::alerts::AlertInput::new(
+                maggcs_core::alerts::AlertSource::System,
+                maggcs_core::alerts::Severity::Warn,
+                format!("flight recorder unavailable: {e}"),
+            ));
+        }
     }
 
     Ok(ConnectResponse {
@@ -233,6 +265,37 @@ async fn resolve_target(handle: &ConnectionHandle, config: &ConnectionConfig) ->
     }
 }
 
+/// Ask the FC to stream the supplementary telemetry at useful rates (L6).
+///
+/// PX4 omits or slows several of these (`EXTENDED_SYS_STATE`, `VIBRATION`,
+/// `RADIO_STATUS`) by default, so the preflight checklist and the link-health
+/// alerts would otherwise read stale or absent data. Fire-and-forget on the
+/// link: `MAV_CMD_SET_MESSAGE_INTERVAL` is accepted while disarmed, and a
+/// message the FC cannot stream is simply never sent. Stream rates are
+/// volatile — a reboot reverts them — so nothing persistent is written.
+async fn request_supplementary_streams(
+    handle: &ConnectionHandle,
+    target_system: u8,
+    target_component: u8,
+) {
+    for req in maggcs_core::telemetry::SUPPLEMENTARY_STREAM_RATES {
+        let message = MavMessage::COMMAND_LONG(::mavlink::common::COMMAND_LONG_DATA {
+            param1: req.message_id as f32,
+            param2: req.interval_us as f32,
+            param3: 0.0,
+            param4: 0.0,
+            param5: 0.0,
+            param6: 0.0,
+            param7: 0.0,
+            command: MavCmd::MAV_CMD_SET_MESSAGE_INTERVAL,
+            target_system,
+            target_component,
+            confirmation: 0,
+        });
+        let _ = handle.send(message).await;
+    }
+}
+
 /// Stop the active connection and hub.
 ///
 /// Runs the link-scoped half of the teardown supervisor (A1): motor test →
@@ -254,6 +317,8 @@ pub async fn disconnect(app: AppHandle, state: State<'_, AppState>) -> Result<()
     // must not leave the old FC's messages listed). Trace configs stay until
     // the window closes (ADR-016); only observed fields and counters drop.
     state.inspector_reset_source();
+    // Walk-instrument runner: stop it with the link (the window may stay open).
+    state.instruments().detach();
     state.publish_link(LinkStatus::disconnected());
     let _ = app.emit("link", LinkStatus::disconnected());
     Ok(())
@@ -640,16 +705,147 @@ pub async fn send_set_mode(
 }
 
 /// Arm or disarm the vehicle (`MAV_CMD_COMPONENT_ARM_DISARM`, ADR-017).
-/// PX4 runs its own preflight checks for external GCS arming and denies
-/// with `TEMPORARILY_REJECTED` (+ statustext reason); the verdict arrives
-/// on the `"command"` event (`arm_disarm`).
+///
+/// Arming runs the L5 preflight gate: every checklist item must pass, `Warn`
+/// items need per-item confirmation (`force: None`), and `Fail`/`Unknown`
+/// items are refused unless the operator supplies a [`ForceArmRequest`] — the
+/// forced path, which only bypasses the **GCS** checklist. PX4's own prearm
+/// checks always apply (the GCS never sends the 21196 forced-arming code) and
+/// its verdict arrives on the `"command"` event (`arm_disarm`). Disarming is
+/// never gated. A forced arm is recorded into the flight log.
 #[tauri::command]
-pub async fn send_arm_disarm(arm: bool, state: State<'_, AppState>) -> Result<(), String> {
-    let service = state.command().ok_or_else(|| "not connected".to_string())?;
+pub async fn send_arm_disarm(
+    arm: bool,
+    force: Option<ForceArmRequest>,
+    plan_state: Option<PlanState>,
+    acked_warnings: Option<Vec<ChecklistItemId>>,
+    state: State<'_, AppState>,
+) -> Result<(), PreflightRefusal> {
+    if !arm {
+        return send_arm_command(false, &state).await;
+    }
+    let Some(snapshot) = state.hub().map(|h| h.snapshot()) else {
+        return Err(refusal(RefusalKind::NoLink, "no link — cannot arm"));
+    };
+    let checklist = evaluate(
+        &snapshot,
+        &app_plan_state(&state, plan_state),
+        &safety_config(&state),
+        epoch_ms(),
+    );
+    let Some(request) = force else {
+        // The operator may have acknowledged specific `Warn` items in the
+        // panel (U5); those count as Pass here. `Fail`/`Unknown` items and a
+        // stale link still refuse — an acknowledgement never talks past those.
+        return match arm_gate_with_ack(&checklist, &acked_warnings.unwrap_or_default()) {
+            ArmGate::Allowed => send_arm_command(true, &state).await,
+            ArmGate::RequiresAck { items } => Err(PreflightRefusal::new(
+                RefusalKind::RequiresAck,
+                &checklist,
+                &items,
+                "confirm the listed warnings before arming",
+            )),
+            ArmGate::Blocked { items } => Err(PreflightRefusal::new(
+                RefusalKind::Blocked,
+                &checklist,
+                &items,
+                "preflight blocks arming",
+            )),
+            ArmGate::NoLink => Err(refusal(RefusalKind::NoLink, "no link — cannot arm")),
+        };
+    };
+    match evaluate_force_arm(&snapshot, &checklist) {
+        ForceArmOutcome::Allowed => {
+            // Recorded before the command goes out so a crash right after the
+            // send still leaves the force in the log (A4: non-blocking).
+            let reason = force_arm_reason(&request);
+            state
+                .recorder()
+                .record_event(RecordEvent::ForceArm { on: true, reason });
+            send_arm_command(true, &state).await
+        }
+        ForceArmOutcome::NoLink => Err(refusal(
+            RefusalKind::NoLink,
+            "no link — a forced arm is not possible",
+        )),
+        ForceArmOutcome::AlreadyArmed => Err(refusal(
+            RefusalKind::AlreadyArmed,
+            "the vehicle is already armed",
+        )),
+        ForceArmOutcome::NotNeeded => Err(refusal(
+            RefusalKind::NotNeeded,
+            "the checklist is already clear — no force needed",
+        )),
+    }
+}
+
+/// The current evaluated preflight checklist (L5/U5), so the UI can render the
+/// panel and gate Takeoff client-side without re-implementing the rules.
+#[tauri::command]
+pub async fn preflight_checklist(
+    plan_state: Option<PlanState>,
+    state: State<'_, AppState>,
+) -> Result<Checklist, String> {
+    let snapshot = state
+        .hub()
+        .map(|h| h.snapshot())
+        .ok_or_else(|| "not connected".to_string())?;
+    Ok(evaluate(
+        &snapshot,
+        &app_plan_state(&state, plan_state),
+        &safety_config(&state),
+        epoch_ms(),
+    ))
+}
+
+/// Send the arm/disarm command itself, past the gate.
+async fn send_arm_command(arm: bool, state: &AppState) -> Result<(), PreflightRefusal> {
+    let service = state
+        .command()
+        .ok_or_else(|| refusal(RefusalKind::NoLink, "not connected"))?;
     service
         .send(MavCmd::MAV_CMD_COMPONENT_ARM_DISARM, arm_disarm_params(arm))
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| refusal(RefusalKind::Blocked, e.to_string()))
+}
+
+/// App-side plan facts: the frontend supplies the mission-sync state, the
+/// backend overrides the motor-test bit (it is authoritative there).
+fn app_plan_state(state: &AppState, from_ui: Option<PlanState>) -> PlanState {
+    let mut plan = from_ui.unwrap_or_default();
+    plan.motor_test_active = state.motor_test.running.lock().is_some();
+    plan
+}
+
+/// The thresholds the gate reads. A5 defaults for now; A6 persists them and
+/// L7/M2 feed alert and mag thresholds from the same source later.
+fn safety_config(_state: &AppState) -> SafetyConfig {
+    SafetyConfig::default()
+}
+
+/// `"Reason"` or `"Reason (note)"` for the flight log.
+fn force_arm_reason(request: &ForceArmRequest) -> Option<String> {
+    Some(match request.note.as_deref() {
+        Some(note) => format!("{:?} ({note})", request.reason),
+        None => format!("{:?}", request.reason),
+    })
+}
+
+/// A refusal with no item details.
+fn refusal(kind: RefusalKind, message: impl Into<String>) -> PreflightRefusal {
+    PreflightRefusal {
+        kind,
+        items: Vec::new(),
+        message: message.into(),
+    }
+}
+
+/// Epoch-ms now, matching `TelemetryFieldAges`.
+fn epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// Fly the vehicle to a spot clicked on the map (`MAV_CMD_DO_REPOSITION`).

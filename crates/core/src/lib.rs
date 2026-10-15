@@ -11,10 +11,12 @@
 pub mod alerts;
 pub mod calib;
 pub mod commands;
+pub mod config;
 pub mod devices;
 pub mod dsp;
 pub mod height;
 pub mod inspector;
+pub mod instruments;
 pub mod lifecycle;
 pub mod logs;
 pub mod mavlink;
@@ -22,7 +24,9 @@ pub mod mission;
 pub mod motor_test;
 pub mod params;
 pub mod plan;
+pub mod recorder;
 pub mod rtk;
+pub mod safety;
 pub mod signals;
 pub mod survey;
 pub mod telemetry;
@@ -35,6 +39,7 @@ pub use alerts::{
 pub use commands::{
     command_label, CommandError, CommandEvent, CommandResult, CommandService, CommandSession,
 };
+pub use config::{AppConfig, ConfigError, ModelOrientation, CONFIG_VERSION};
 pub use devices::{DeviceDatabase, DeviceEvent, DeviceManager, DeviceRole, SerialDeviceInfo};
 pub use lifecycle::{
     Lifecycle, LifecyclePolicy, ManagedService, ShutdownError, ShutdownReport, Stage, StopOutcome,
@@ -47,5 +52,14 @@ pub use mavlink::heartbeat::{HeartbeatMonitor, HeartbeatStatus};
 pub use mavlink::router::{MessageRoute, RoutedEvents};
 pub use mission::{MissionIds, MissionService, MissionServiceError, MissionServiceEvent};
 pub use plan::{FramePolicy, PlanError, PlannedMission, PlannedWaypoint};
+pub use recorder::{
+    pump_raw as pump_recorder_raw, read_events as read_recorded_events, LoggedEvent, RecordEvent,
+    Recorder, RecorderConfig, RecorderError, RecorderStats, SessionManifest,
+};
+pub use safety::{
+    arm_gate, arm_gate_with_ack, evaluate_force_arm, Checklist, ChecklistGroup, ChecklistItem,
+    ChecklistItemId, ChecklistStatus, ForceArmOutcome, ForceArmReason, ForceArmRequest, PlanState,
+    PreflightRefusal, RefusalKind, SafetyConfig, FORCE_ARM_KEYWORD,
+};
 pub use survey::{CloverleafPattern, PatternPlan, SurveyPattern};
 pub use telemetry::{GlobalPositionInt, TelemetrySnapshot};

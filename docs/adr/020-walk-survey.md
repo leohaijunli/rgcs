@@ -59,7 +59,7 @@ Reusable code already in `core`:
 
 | Role | Device | Link | Data on MAVLink | Notes |
 |---|---|---|---|---|
-| Magnetometer (per project) | RM3100 **or** Bartington UAS-Mag, 3-axis, DroneCAN node | DroneCAN → PX4 → MAVLink | `HIGHRES_IMU` mag fields (X/Y/Z, nT after conversion); secondary node `SCALED_IMU2/3`/`RAW_IMU2/3` if applicable | single sensor; client supplies the model per project; no vendor protocol in repo |
+| Magnetometer (per project) | RM3100 **or** Bartington UAS-Mag, 3-axis, DroneCAN node | DroneCAN → PX4 → MAVLink | **`HIGHRES_IMU`** mag fields (X/Y/Z, gauss → nT) as the primary/only source; sensor 1 | single sensor, **PX4-calibrated**, ≈**100 Hz**; client supplies the model per project; no vendor protocol in repo |
 | GNSS / RTK | Holybro H-RTK ZED-F9P (on PX4) | PX4 → MAVLink | `GPS_RAW_INT` (`fix_type` RTK float=5/fixed=6), `GLOBAL_POSITION_INT`, `GPS_STATUS`/`GPS2_RAW` | RTK in use; RTCM injection already handled by `core::rtk` (ADR-008) |
 | Time | PX4 | MAVLink | `SYSTEM_TIME`, `GPS_RAW_INT.time_usec` | host↔GPS↔FC clock alignment, reuse M8 |
 
@@ -120,13 +120,41 @@ CSV so the CSV is a view, not the source of truth (W2).
 
 ## Open items
 
-- Magnetometer sample rate and the exact PX4 message/instance used (raw vs
-  PX4-calibrated; `HIGHRES_IMU` vs `SCALED_IMU*`) — confirm against a real rig.
-- Whether the operator wants delivered `field_total` from the **raw** sensor or
-  the PX4-calibrated value (W5 will record both if needed).
+- **Resolved (operator, 2026-10-15)**: the magnetometer is read from
+  **`HIGHRES_IMU`** (already **PX4-calibrated**), sensor 1, at ≈**100 Hz**.
+  Delivered `field_total`, `mag_x/y/z` are therefore the calibrated values.
+  `RAW_IMU` remains a non-primary supported fallback in the decoder.
 - Final CSV column set / ordering and delimiter (W2). Whether an XYZ/other
   export is later required.
 - Confirm the ZED-F9P is the only GNSS source (no separate external logger).
+- Pole height (the walk profile uses a fixed rod height) — a project/operator
+  input, recorded in the manifest (W4/W6).
+
+## Addendum (2026-10-15): same sensors and data flow as the UAV
+
+Operator clarification: the walk survey uses the **same sensors and the same
+data flow as the drone — the only difference is that the rig is held in hand**
+instead of flying.
+
+- It is the **same airframe/payload**: the same PX4, the same DroneCAN
+  magnetometer, the same ZED-F9P RTK GNSS, the **same MAVLink message set and
+  rates**, and the same recording stack. There is **no walk-specific sensor
+  protocol, sensor configuration, or data pipeline**.
+- "PX4 as an instrument hub only" in the Decision above means *this very PX4*
+  is carried but **idle (not flying)**; it is not a different hub or a
+  parallel instrument bus.
+- What differs is purely **operational/session** behaviour, not the data path:
+  no arm/takeoff/flight commands, low-speed heading suppression, hand-carried
+  magnetic-cleanliness checks, and the walk navigation/QC/profiles.
+
+Consequences for the WPs:
+
+- **W1** is the *same* MAVLink instrument access the UAV path uses — a thin
+  adapter over `core::telemetry` + `core::signals`; no walk-specific decoding.
+- **W2** **extends the existing A4 recorder** (tlog + extracted mag/GNSS
+  samples + events + CSV) rather than introducing a new pipeline.
+- **W3** consumes the same MAVLink RTK position; the navigation math is
+  unchanged.
 
 ## Verification
 

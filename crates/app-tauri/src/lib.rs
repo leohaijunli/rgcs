@@ -8,13 +8,16 @@ mod actuator_service;
 mod alert_service;
 mod command_service;
 mod commands;
+mod config_service;
 mod console_service;
 mod inspector_service;
+mod instruments_service;
 mod lifecycle_service;
 mod logs_service;
 mod mission_service;
 mod motor_test_state;
 mod params_service;
+mod recorder_service;
 mod rtk_service;
 mod state;
 mod telemetry_pump;
@@ -46,6 +49,8 @@ pub fn run() {
             commands::get_snapshot,
             commands::enumerate_devices,
             commands::set_sitl_home,
+            config_service::config_load,
+            config_service::config_save,
             commands::install_udev_rules,
             commands::mission_upload,
             commands::mission_download,
@@ -82,6 +87,7 @@ pub fn run() {
             commands::flight_mode_table,
             commands::send_set_mode,
             commands::send_arm_disarm,
+            commands::preflight_checklist,
             commands::set_message_interval,
             actuator_service::actuator_open,
             actuator_service::actuator_close,
@@ -121,7 +127,12 @@ pub fn run() {
             inspector_service::inspector_replay,
             inspector_service::inspector_replay_status,
             inspector_service::inspector_use_live,
-            inspector_service::inspector_source
+            inspector_service::inspector_source,
+            instruments_service::instruments_connect,
+            instruments_service::instruments_disconnect,
+            instruments_service::instruments_status,
+            recorder_service::recorder_status,
+            recorder_service::recorder_log_event
         ])
         .setup(|app| {
             // One alert pump for the process: every transition the core

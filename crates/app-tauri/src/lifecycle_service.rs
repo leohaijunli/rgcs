@@ -231,6 +231,29 @@ impl ManagedService for MissionStage {
     }
 }
 
+/// Flush and close the flight recorder (A4). It sits after the services that
+/// feed it (mission/command, params, logs, RTK) so nothing is appended after
+/// the flush, and before the link so its tap still has the last frames.
+struct RecorderStage {
+    app: AppHandle,
+}
+
+impl ManagedService for RecorderStage {
+    fn name(&self) -> &'static str {
+        Stage::Recorder.as_str()
+    }
+
+    fn stop<'a>(
+        &'a self,
+        deadline: Duration,
+    ) -> Pin<Box<dyn Future<Output = StopOutcome> + Send + 'a>> {
+        Box::pin(async move {
+            let state = self.app.state::<AppState>();
+            state.recorder.stop(deadline).await
+        })
+    }
+}
+
 /// Close the primary connection. Taking the link also drops the mission and
 /// command services, whose tasks end when their last handle goes.
 struct LinkStage {
@@ -319,6 +342,10 @@ fn build(app: &AppHandle) -> Lifecycle {
     lifecycle.register(
         Stage::MissionAndCommand,
         Arc::new(MissionStage { app: app.clone() }),
+    );
+    lifecycle.register(
+        Stage::Recorder,
+        Arc::new(RecorderStage { app: app.clone() }),
     );
     lifecycle.register(Stage::Link, Arc::new(LinkStage { app: app.clone() }));
     lifecycle.register(Stage::Terrain, Arc::new(TerrainStage { app: app.clone() }));

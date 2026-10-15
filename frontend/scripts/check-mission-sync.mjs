@@ -28,7 +28,8 @@ const tauriStub = {
     build.onLoad({ filter: /.*/, namespace: 'tauri-stub' }, () => ({
       contents:
         'export const readTextFile=async()=>"";export const writeTextFile=async()=>{};' +
-        'export const open=async()=>null;export const save=async()=>null;export const invoke=async()=>{};',
+        'export const open=async()=>null;export const save=async()=>null;export const invoke=async()=>{};' +
+        'export const listen=async()=>()=>{};',
       loader: 'js',
     }))
   },

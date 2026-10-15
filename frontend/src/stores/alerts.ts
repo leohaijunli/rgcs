@@ -8,11 +8,15 @@
 // state *after* the change. This store only mirrors it.
 
 import { create } from 'zustand'
+import { useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import type { Alert } from '../generated-types/Alert'
 import type { AlertEvent } from '../generated-types/AlertEvent'
 import type { Severity } from '../generated-types/Severity'
 import type { AlertSource } from '../generated-types/AlertSource'
+import type { StatusText } from '../generated-types/StatusText'
+import { logEvent, type EventLevel } from './eventlog'
 
 /** Severity order for the badge (matches the Rust `Severity` derive order). */
 const SEVERITY_RANK: Record<Severity, number> = { info: 0, warn: 1, critical: 2 }
@@ -97,6 +101,65 @@ export const useAlerts = create<AlertsState>((set, get) => ({
 export async function loadAlerts(): Promise<void> {
   const alerts = await invoke<Alert[]>('alert_snapshot')
   useAlerts.getState().setAll(alerts)
+}
+
+function inTauri(): boolean {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+}
+
+/** Event-log level for one FC status severity (mirrors the desktop bridge). */
+function statusLevel(severity: StatusText['severity']): EventLevel {
+  switch (severity) {
+    case 'emergency':
+    case 'alert':
+    case 'critical':
+    case 'error':
+      return 'err'
+    case 'warning':
+      return 'warn'
+    default:
+      return 'info'
+  }
+}
+
+/**
+ * The alert center's one event stream (A3/U3), shared by every window: mount
+ * it from the alert layer and the alert model, the badge and the FC status
+ * console all follow, in the main window and in the Inspector / Actuator /
+ * Params windows alike. Subscribe per mount (not guarded): the transitions are
+ * idempotent, so a React StrictMode double-mount is harmless.
+ */
+export function useAlertStream(): void {
+  useEffect(() => {
+    if (!inTauri()) return
+    let disposed = false
+    const unlisteners: Array<() => void> = []
+    async function setup() {
+      const unAlert = await listen<AlertEvent>('alert', (e) => {
+        useAlerts.getState().apply(e.payload)
+      })
+      if (disposed) return unAlert()
+      unlisteners.push(unAlert)
+
+      // L1: every assembled STATUSTEXT is the FC's own log line. A rejected
+      // command's reason carries the command name.
+      const unText = await listen<StatusText>('statustext', (e) => {
+        const { command, text, severity } = e.payload
+        logEvent('fc', statusLevel(severity), command ? `${command} rejected: ${text}` : text)
+      })
+      if (disposed) return unText()
+      unlisteners.push(unText)
+
+      // Alerts raised before this window booted (the badge must survive a
+      // window reload).
+      await loadAlerts().catch(() => {})
+    }
+    void setup()
+    return () => {
+      disposed = true
+      unlisteners.forEach((u) => u())
+    }
+  }, [])
 }
 
 /**

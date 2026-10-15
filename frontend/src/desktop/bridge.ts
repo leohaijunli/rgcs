@@ -22,12 +22,9 @@ import type { TelemetrySnapshot } from '../generated-types/TelemetrySnapshot'
 import type { MissionItem } from '../generated-types/MissionItem'
 import type { TelemetryError } from '../generated-types/TelemetryError'
 import type { MissionEventPayload } from '../stores/mission'
-import type { AlertEvent } from '../generated-types/AlertEvent'
-import type { StatusText } from '../generated-types/StatusText'
 import i18n from '../i18n'
-import { loadAlerts, useAlerts } from '../stores/alerts'
 import { reportConnectError } from './connect'
-import { logEvent, type EventLevel } from '../stores/eventlog'
+import { logEvent } from '../stores/eventlog'
 import { syncSitlHome, usePrefsStore } from './prefs'
 import type { CommandEventPayload } from '../stores/command'
 import { useCommandStore } from '../stores/command'
@@ -37,21 +34,6 @@ import { useMissionStore } from '../stores/mission'
 import { useTelemetryStore } from '../stores/telemetry'
 import { startMockFeed } from '../telemetry/mock'
 import { startDeviceWatcher } from '../stores/devices'
-
-/** Event-log level for one FC status severity. */
-function statusLevel(severity: StatusText['severity']): EventLevel {
-  switch (severity) {
-    case 'emergency':
-    case 'alert':
-    case 'critical':
-    case 'error':
-      return 'err'
-    case 'warning':
-      return 'warn'
-    default:
-      return 'info'
-  }
-}
 
 function inTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -114,22 +96,9 @@ export function useTelemetryBridge() {
       if (disposed) return un3b()
       unlisteners.push(un3b)
 
-      // Alert center (A3): one `alert` stream for every window; the badge,
-      // banner and drawer all read the store it feeds.
-      const un3c = await listen<AlertEvent>('alert', (e) => {
-        useAlerts.getState().apply(e.payload)
-      })
-      if (disposed) return un3c()
-      unlisteners.push(un3c)
-
-      // FC status texts (L1): every assembled STATUSTEXT, chunked messages
-      // already joined. A rejected command's reason carries the command name.
-      const un3d = await listen<StatusText>('statustext', (e) => {
-        const { command, text, severity } = e.payload
-        logEvent('fc', statusLevel(severity), command ? `${command} rejected: ${text}` : text)
-      })
-      if (disposed) return un3d()
-      unlisteners.push(un3d)
+      // A3/U3: the alert center and the FC status console are wired by
+      // `useAlertStream()` in the shared alert layer, so the main window and
+      // the tool windows all get the same `alert` + `statustext` stream.
 
       const un4 = await listen<MissionEventPayload>('mission', (e) => {
         useMissionStore.getState().handleEvent(e.payload)
@@ -152,10 +121,6 @@ export function useTelemetryBridge() {
       const snap = await invoke<LinkStatus | null>('link_status')
       if (disposed) return
       if (snap) useLinkStore.getState().setLink(snap)
-
-      // Alerts raised before this webview booted (the badge must survive a
-      // window reload).
-      await loadAlerts().catch(() => {})
 
       if (!connectStarted) {
         connectStarted = true

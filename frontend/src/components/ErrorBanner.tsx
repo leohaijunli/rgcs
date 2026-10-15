@@ -1,8 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { AlertTriangle, ChevronDown, X } from 'lucide-react'
+import { ChevronDown, X } from 'lucide-react'
 import { useLinkStore } from '../stores/link'
-import { useAlerts } from '../stores/alerts'
 
 /** Time-of-day label for an error history entry. */
 function formatTime(atMs: number): string {
@@ -10,17 +9,12 @@ function formatTime(atMs: number): string {
 }
 
 /**
- * The banner stack: the newest unacknowledged Critical alert on top (plan §3
- * A3, U3), then the link error banner with history (issue #17).
- *
- * Critical alerts are latched in the backend, so a banner only disappears
- * when the operator acknowledges it — never because the volume of the next
- * message pushed it out of the way.
+ * The link-error banner with history (issue #17). The Critical alert banner
+ * that used to live here moved to the shared `AlertLayer` (U3) so every window
+ * shows it; this surface keeps the transport's own I/O errors.
  */
 export default function ErrorBanner() {
   const { t } = useTranslation()
-  const critical = useAlerts((s) => s.banner)
-  const ackAlert = useAlerts((s) => s.ack)
   const lastError = useLinkStore((s) => s.lastError)
   const errorHistory = useLinkStore((s) => s.errorHistory)
   const droppedFrames = useLinkStore((s) => s.droppedFrames)
@@ -28,38 +22,12 @@ export default function ErrorBanner() {
   const [expanded, setExpanded] = useState(false)
 
   const showLinkError = Boolean(lastError) || droppedFrames > 0
-  if (!critical && !showLinkError) return null
+  if (!showLinkError) return null
 
   const latest = errorHistory[0]
 
   return (
     <div className="absolute bottom-3 right-3 z-20 flex max-w-sm flex-col gap-2">
-      {critical && (
-        <div
-          data-testid="alert-banner"
-          role="alert"
-          className="rounded border border-error bg-panel/95 px-3 py-2 text-sm shadow-xl"
-        >
-          <div className="flex items-center gap-3">
-            <AlertTriangle size={14} className="shrink-0 text-error" />
-            <span className="flex-1 text-ink">{critical.text}</span>
-            {critical.count > 1 && (
-              <span className="mono text-[10px] text-muted">×{critical.count}</span>
-            )}
-            <button
-              data-testid="alert-banner-ack"
-              onClick={() => ackAlert(critical.id)}
-              className="touch-target flex h-7 items-center rounded border border-line px-2 text-xs text-ink hover:bg-canvas"
-            >
-              {t('alerts.ack')}
-            </button>
-          </div>
-          <div className="mt-1 text-[10px] text-muted">
-            {t(`alerts.source.${critical.source}`)} · {formatTime(critical.last_ts_ms)}
-          </div>
-        </div>
-      )}
-
       {showLinkError && (
         <div className="flex flex-col gap-2 rounded border border-line bg-panel/95 px-3 py-2 text-sm shadow-xl">
           <div className="flex items-center gap-3">

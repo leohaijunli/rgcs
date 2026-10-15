@@ -19,9 +19,11 @@ use parking_lot::Mutex;
 
 use crate::alert_service::AlertState;
 use crate::inspector_service::InspectorState;
+use crate::instruments_service::InstrumentsState;
 use crate::logs_service::LogsState;
 use crate::motor_test_state::MotorTestState;
 use crate::params_service::ParamsState;
+use crate::recorder_service::RecorderState;
 use crate::rtk_service::RtkState;
 use crate::terrain_server::TerrainServer;
 
@@ -83,6 +85,10 @@ pub struct AppState {
     inner: Mutex<AppInner>,
     /// Signal Inspector tap/catalog/batcher (survives link swaps, ADR-016).
     pub inspector: InspectorState,
+    /// Walk-instrument runner + window channel (W1, survives link swaps).
+    pub instruments: InstrumentsState,
+    /// Flight recorder for the primary link (A4): tlog + event log.
+    pub recorder: RecorderState,
     /// Shared magnetometer calibration (inspector + motor-test, one file).
     pub calibration: CalibrationStore,
     /// FC parameter protocol task + cache (Parameters window, PM3).

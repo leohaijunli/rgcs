@@ -532,6 +532,72 @@ mod tests {
         hub.shutdown();
     }
 
+    fn fc_message(message: MavMessage) -> ConnectionEvent {
+        ConnectionEvent::Message(Box::new(MessageEnvelope {
+            header: ::mavlink::MavHeader {
+                system_id: 1,
+                component_id: 1,
+                sequence: 0,
+            },
+            message,
+            received_at: std::time::Instant::now(),
+        }))
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn supplementary_telemetry_reaches_the_snapshot() {
+        // L6 end to end through the hub: the pump must fold the new frames into
+        // the published snapshot, and a message that never arrives stays `None`.
+        let (events_tx, events_rx) = broadcast::channel(16);
+        let hub = TelemetryHub::spawn(events_rx, 100, VehicleId::new(1, 1));
+        let mut snap_rx = hub.subscribe_snapshot();
+
+        events_tx
+            .send(fc_message(MavMessage::EXTENDED_SYS_STATE(
+                ::mavlink::common::EXTENDED_SYS_STATE_DATA {
+                    vtol_state: ::mavlink::common::MavVtolState::MAV_VTOL_STATE_UNDEFINED,
+                    landed_state: ::mavlink::common::MavLandedState::MAV_LANDED_STATE_ON_GROUND,
+                },
+            )))
+            .expect("send extended sys state");
+        events_tx
+            .send(fc_message(MavMessage::HOME_POSITION(
+                ::mavlink::common::HOME_POSITION_DATA {
+                    latitude: 486_490_000,
+                    longitude: -1_233_982_000,
+                    altitude: 583_250,
+                    ..Default::default()
+                },
+            )))
+            .expect("send home");
+
+        let (landed, home) = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let current = snap_rx.borrow_and_update().clone();
+                if let (Some(s), Some(h)) = (current.extended_sys_state, current.home) {
+                    return (s.landed_state, h);
+                }
+                if snap_rx.changed().await.is_err() {
+                    panic!("snapshot channel closed");
+                }
+            }
+        })
+        .await
+        .expect("snapshot timed out");
+
+        assert_eq!(
+            landed,
+            crate::telemetry::LandedState::OnGround,
+            "landed state must round-trip through the pump"
+        );
+        assert!((home.latitude_deg - 48.649).abs() < 1e-9);
+        assert!(
+            snap_rx.borrow().estimator.is_none(),
+            "a message that never arrived stays None, not a zeroed default"
+        );
+        hub.shutdown();
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn snapshot_latency_is_bounded() {
         // Issue #19: the pump is event-driven (no `try_recv` + `sleep` poll),

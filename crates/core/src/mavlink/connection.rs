@@ -212,6 +212,45 @@ fn is_recoverable_read_error(e: &::mavlink::error::MessageReadError) -> bool {
     matches!(e, ::mavlink::error::MessageReadError::Parse(_))
 }
 
+/// Capacity of the raw-frame tap channel (the recorder subscribes to it; A4).
+pub const RAW_EVENT_CAPACITY: usize = EVENT_CAPACITY;
+
+/// A received MAVLink frame in its exact on-wire form (plan §3 A4).
+///
+/// The flight recorder's tlog stores these bytes verbatim behind a timestamp
+/// prefix, so a replay is byte-identical to what the flight controller sent.
+/// Unlike [`ConnectionEvent::Message`], the tap is only fed while a subscriber
+/// is attached ([`ConnectionHandle::subscribe_raw`]), so the extra byte copy
+/// costs nothing for the normal telemetry path.
+#[derive(Debug, Clone)]
+pub struct RawFrame {
+    /// Frame header (system/component ids, sequence number).
+    pub header: MavHeader,
+    /// Exact MAVLink frame bytes (STX … checksum, signature included).
+    pub bytes: Vec<u8>,
+    /// Monotonic time the frame was received.
+    pub received_at: Instant,
+    /// Wall-clock time the frame was received, in microseconds since the Unix
+    /// epoch — the tlog timestamp (captured only while a subscriber is attached).
+    pub utc_us: u64,
+}
+
+/// Microseconds since the Unix epoch (`0` before the epoch).
+fn now_utc_us() -> u64 {
+    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(d) => d.as_micros().min(u64::MAX as u128) as u64,
+        Err(_) => 0,
+    }
+}
+
+/// The exact wire bytes of a raw frame, whichever MAVLink version carried it.
+fn raw_wire_bytes(frame: &::mavlink::MAVLinkMessageRaw) -> &[u8] {
+    match frame {
+        ::mavlink::MAVLinkMessageRaw::V1(m) => m.raw_bytes(),
+        ::mavlink::MAVLinkMessageRaw::V2(m) => m.raw_bytes(),
+    }
+}
+
 /// Events emitted by the connection worker.
 #[derive(Debug, Clone)]
 pub enum ConnectionEvent {
@@ -253,6 +292,7 @@ struct ConnectionInner {
 pub struct ConnectionHandle {
     inner: Arc<ConnectionInner>,
     events: broadcast::Sender<ConnectionEvent>,
+    raw: broadcast::Sender<RawFrame>,
 }
 
 impl ConnectionHandle {
@@ -265,6 +305,15 @@ impl ConnectionHandle {
     /// Subscribe to the event stream.
     pub fn subscribe(&self) -> broadcast::Receiver<ConnectionEvent> {
         self.events.subscribe()
+    }
+
+    /// Subscribe to the raw-frame tap (plan §3 A4).
+    ///
+    /// The tap carries each received frame's exact wire bytes, so the recorder
+    /// can write a lossless tlog. It is only populated while at least one
+    /// receiver is attached; the copy is skipped entirely otherwise.
+    pub fn subscribe_raw(&self) -> broadcast::Receiver<RawFrame> {
+        self.raw.subscribe()
     }
 
     /// Subscribe to the event stream filtered by a [`MessageRoute`] (issue #20).
@@ -358,6 +407,7 @@ pub async fn spawn_connection(
     MavlinkError,
 > {
     let (events_tx, events_rx) = broadcast::channel(EVENT_CAPACITY);
+    let (raw_tx, _raw_rx) = broadcast::channel(RAW_EVENT_CAPACITY);
     let (outbound_tx, outbound_rx) = mpsc::channel(OUTBOUND_CAPACITY);
     let (reconnect_tx, reconnect_rx) = watch::channel(0u64);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -372,11 +422,13 @@ pub async fn spawn_connection(
     let handle = ConnectionHandle {
         inner: inner.clone(),
         events: events_tx.clone(),
+        raw: raw_tx.clone(),
     };
 
     tokio::spawn(run_worker(
         inner,
         events_tx,
+        raw_tx,
         outbound_rx,
         reconnect_rx,
         shutdown_rx,
@@ -421,6 +473,7 @@ fn candidate_autopilot_node(env: &MessageEnvelope) -> Option<(u8, u8)> {
 async fn run_worker(
     inner: Arc<ConnectionInner>,
     events: broadcast::Sender<ConnectionEvent>,
+    raw: broadcast::Sender<RawFrame>,
     mut outbound_rx: mpsc::Receiver<OutboundFrame>,
     mut reconnect_rx: watch::Receiver<u64>,
     mut shutdown_rx: watch::Receiver<bool>,
@@ -484,9 +537,43 @@ async fn run_worker(
         'connected: loop {
             let reconnect = reconnect_rx.changed();
             tokio::select! {
-                res = conn.recv() => match res {
-                    Ok((header, message)) => {
+                res = conn.recv_raw() => match res {
+                    Ok(frame) => {
                         let now = Instant::now();
+                        let header = MavHeader {
+                            sequence: frame.sequence(),
+                            system_id: frame.system_id(),
+                            component_id: frame.component_id(),
+                        };
+                        // Raw tap (A4): only copy/emit while a recorder is
+                        // attached, so the telemetry path is unaffected.
+                        if raw.receiver_count() > 0 {
+                            let _ = raw.send(RawFrame {
+                                header,
+                                bytes: raw_wire_bytes(&frame).to_vec(),
+                                received_at: now,
+                                utc_us: now_utc_us(),
+                            });
+                        }
+                        // Decode ourselves (instead of `conn.recv`) so the exact
+                        // wire bytes are still in hand for the raw tap (A4).
+                        // The library has already validated the framing/CRC;
+                        // only a message the dialect cannot represent (e.g. PX4
+                        // v1.17's out-of-range enum) fails here.
+                        let message = match <MavMessage as ::mavlink::Message>::parse(
+                            frame.version(),
+                            frame.message_id(),
+                            frame.payload(),
+                        ) {
+                            Ok(message) => message,
+                            Err(e) => {
+                                skipped_frames = skipped_frames.saturating_add(1);
+                                if skipped_frames == 1 {
+                                    eprintln!("mavlink: skipping undecodable frame: {e}");
+                                }
+                                continue 'connected;
+                            }
+                        };
                         let env = MessageEnvelope { header, message, received_at: now };
 
                         // Auto-discovery: adopt the first autopilot heartbeat
@@ -722,6 +809,58 @@ mod tests {
         assert!(is_recoverable_read_error(&unknown));
         let io = MessageReadError::Io(std::io::Error::from(std::io::ErrorKind::BrokenPipe));
         assert!(!is_recoverable_read_error(&io));
+    }
+
+    #[tokio::test]
+    async fn the_raw_tap_carries_the_exact_wire_bytes() {
+        use tokio::net::UdpSocket;
+
+        // Reserve an ephemeral port, then hand it to the listener.
+        let probe = std::net::UdpSocket::bind("127.0.0.1:0").expect("probe port");
+        let port = probe.local_addr().expect("addr").port();
+        drop(probe);
+
+        let config = ConnectionConfig {
+            endpoint: Endpoint::UdpListener {
+                addr: format!("127.0.0.1:{port}").parse().expect("addr"),
+            },
+            ..Default::default()
+        };
+        let (handle, _events, first) = spawn_connection(config).await.expect("spawn");
+        first.await.expect("first result").expect("connected");
+
+        let mut raw = handle.subscribe_raw();
+        let msg = MavMessage::HEARTBEAT(::mavlink::common::HEARTBEAT_DATA {
+            custom_mode: 0,
+            mavtype: ::mavlink::common::MavType::MAV_TYPE_QUADROTOR,
+            autopilot: ::mavlink::common::MavAutopilot::MAV_AUTOPILOT_PX4,
+            base_mode: ::mavlink::common::MavModeFlag::empty(),
+            system_status: ::mavlink::common::MavState::MAV_STATE_ACTIVE,
+            mavlink_version: 3,
+        });
+        let header = MavHeader {
+            system_id: 1,
+            component_id: 1,
+            sequence: 7,
+        };
+        let mut wire = Vec::new();
+        ::mavlink::write_v2_msg(&mut wire, header, &msg).expect("serialize");
+
+        let client = UdpSocket::bind("127.0.0.1:0").await.expect("client");
+        client
+            .send_to(&wire, format!("127.0.0.1:{port}"))
+            .await
+            .expect("send");
+
+        let frame = tokio::time::timeout(Duration::from_secs(2), raw.recv())
+            .await
+            .expect("raw frame in time")
+            .expect("raw frame");
+        assert_eq!(frame.bytes, wire, "the tap must be byte-exact");
+        assert_eq!(frame.header.sequence, 7);
+        assert!(frame.utc_us > 0);
+
+        handle.shutdown().await;
     }
 
     #[test]

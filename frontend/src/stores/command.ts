@@ -5,9 +5,15 @@
 import { useEffect, useState } from 'react'
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
+import type { Checklist } from '../generated-types/Checklist'
+import type { ChecklistItem } from '../generated-types/ChecklistItem'
+import type { ForceArmRequest } from '../generated-types/ForceArmRequest'
+import type { PreflightRefusal } from '../generated-types/PreflightRefusal'
+import type { RefusalKind } from '../generated-types/RefusalKind'
 import { logEvent } from './eventlog'
 import { useTelemetryStore } from './telemetry'
 import { useTerrainStore } from './terrain'
+import { buildPlanState, fetchChecklist, gateStatus } from './preflight'
 
 /** Ground (AMSL) under a point, for the commands that must name a terrain
  * target: the mesh/DEM sample when terrain is loaded, else the vehicle's own
@@ -54,8 +60,13 @@ interface CommandState {
   send: (name: CommandName) => Promise<void>
   /** Switch the PX4 flight mode (MS3, ADR-017). */
   sendSetMode: (mainMode: number, subMode: number) => Promise<void>
-  /** Arm or disarm the vehicle (MS3, ADR-017). */
-  sendArmDisarm: (arm: boolean) => Promise<void>
+  /** Arm or disarm the vehicle (MS3, ADR-017). Arming passes an optional L5
+   * force request (blocked checklist) or the acknowledged `Warn` item ids
+   * (U5); the backend refuses a blocked arm without one. */
+  sendArmDisarm: (arm: boolean, force?: ForceArmRequest, ackedWarnings?: string[]) => Promise<void>
+  /** The last preflight refusal (L5), rendered by the PreflightPanel. */
+  preflight: PreflightRefusal | null
+  dismissPreflight: () => void
   /** Fly the vehicle to a map point (`MAV_CMD_DO_REPOSITION`). */
   sendGoto: (latDeg: number, lonDeg: number) => Promise<void>
   /** Set the vehicle's home to a map point (`MAV_CMD_DO_SET_HOME`). */
@@ -95,9 +106,42 @@ export const useCommandStore = create<CommandState>((set) => ({
   lastElapsedMs: null,
   gotoTarget: null,
   homeMarker: null,
+  preflight: null,
   clearGotoTarget: () => set({ gotoTarget: null }),
+  dismissPreflight: () => set({ preflight: null }),
 
   send: async (name) => {
+    // One-click Takeoff is preflight-gated client-side while disarmed: the
+    // backend enforces the gate on arm, so Takeoff refuses from the same
+    // evaluated checklist instead of racing ahead of it. Once the vehicle is
+    // armed (normally or via the forced arm), the operator's arm decision
+    // stands — the preflight gate does not re-block Takeoff with the same
+    // warnings, and PX4's own takeoff handling applies.
+    if (name === 'takeoff') {
+      const armed =
+        useTelemetryStore.getState().snapshot?.heartbeat?.base_mode.safety_armed === true
+      if (!armed) {
+        try {
+          const checklist = await fetchChecklist()
+          const status = gateStatus(checklist)
+          if (status !== 'allowed') {
+            set({
+              pending: null,
+              preflight: refusalFromChecklist(status, checklist),
+              lastEvent: {
+                command: 'takeoff',
+                kind: 'failed',
+                result: null,
+                message: refusalMessage(status),
+              },
+            })
+            return
+          }
+        } catch {
+          /* not connected: the send below fails with the real reason */
+        }
+      }
+    }
     set({ pending: name, lastEvent: null, sentAtMs: null, lastElapsedMs: null })
     // Landing: name the ground under the vehicle so the FC lands on the
     // terrain instead of a HOME plane (operator report: the aircraft held
@@ -143,19 +187,35 @@ export const useCommandStore = create<CommandState>((set) => ({
     }
   },
 
-  sendArmDisarm: async (arm) => {
-    set({ pending: 'arm_disarm', lastEvent: null, sentAtMs: Date.now(), lastElapsedMs: null })
+  sendArmDisarm: async (arm, force, ackedWarnings) => {
+    set({
+      pending: 'arm_disarm',
+      lastEvent: null,
+      sentAtMs: Date.now(),
+      lastElapsedMs: null,
+    })
     try {
-      await invoke('send_arm_disarm', { arm })
+      await invoke('send_arm_disarm', {
+        arm,
+        force: force ?? null,
+        planState: buildPlanState(),
+        ackedWarnings: ackedWarnings ?? [],
+      })
+      // Only a successful send clears a pending refusal: while the command is
+      // in flight the panel stays open on its "Working…" state instead of
+      // unmounting out from under the operator.
+      set({ preflight: null })
     } catch (err) {
+      const refusal = parseRefusal(err)
       set((s) => ({
         pending: null,
         ...settled(s.sentAtMs),
+        preflight: refusal ?? s.preflight,
         lastEvent: {
           command: 'arm_disarm',
           kind: 'failed',
           result: null,
-          message: String(err),
+          message: refusal ? refusal.message : String(err),
         },
       }))
     }
@@ -250,9 +310,51 @@ export const useCommandStore = create<CommandState>((set) => ({
       lastElapsedMs: null,
       gotoTarget: null,
       homeMarker: null,
+      preflight: null,
     })
   },
 }))
+
+/** Tauri rejects with the serialized `PreflightRefusal` struct (an object) or
+ * a plain string for other failures; accept either so the panel only opens on
+ * a genuine gate refusal. */
+function parseRefusal(err: unknown): PreflightRefusal | null {
+  const raw =
+    err && typeof err === 'object'
+      ? (err as Record<string, unknown>)
+      : typeof err === 'string' && /^\{/.test(err.trim())
+        ? (JSON.parse(err) as Record<string, unknown>)
+        : null
+  if (!raw || typeof raw.kind !== 'string' || typeof raw.message !== 'string') return null
+  if (!Array.isArray(raw.items)) return null
+  return {
+    kind: raw.kind as RefusalKind,
+    items: raw.items as ChecklistItem[],
+    message: raw.message,
+  }
+}
+
+/** Client-side refusal for the Takeoff gate (the backend gate covers arm). */
+function refusalFromChecklist(status: 'requires_ack' | 'blocked' | 'no_link', checklist: Checklist): PreflightRefusal {
+  const items =
+    status === 'requires_ack'
+      ? checklist.items.filter((i) => i.status === 'warn')
+      : status === 'blocked'
+        ? checklist.items.filter((i) => i.status === 'fail' || i.status === 'unknown')
+        : []
+  return { kind: status, items, message: refusalMessage(status) }
+}
+
+function refusalMessage(status: 'requires_ack' | 'blocked' | 'no_link'): string {
+  switch (status) {
+    case 'requires_ack':
+      return 'Confirm the listed warnings before takeoff'
+    case 'blocked':
+      return 'Preflight blocks takeoff'
+    case 'no_link':
+      return 'No link — cannot take off'
+  }
+}
 
 /** How often the in-flight elapsed time is refreshed (plan §7 U4). */
 const PROGRESS_TICK_MS = 200

@@ -18,6 +18,7 @@ import { readTextFile } from '@tauri-apps/plugin-fs'
 import type { ParamEntry } from '../generated-types/ParamEntry'
 import { isTauri } from '../inspector/mock'
 import SignalScope, { useScopeFeed } from './SignalScope'
+import { scopeStore } from './scopeStore'
 
 /** The parameter that gates motor tests on the FC (parameters plan PM9). */
 const MOT_TEST_EN = 'COM_MOT_TEST_EN'
@@ -198,6 +199,10 @@ export function ActuatorApp() {
   }, [estop])
 
   // Live status from the shell; session pushes arrive faster via events.
+  // The scope's FC/mag/ESC curves ride the serial target link only; when the
+  // target drops, drop the buffered samples so a stale non-zero trace never
+  // looks live (the manual Clear button drops the same store).
+  const prevTargetConnectedRef = useRef(false)
   useEffect(() => {
     if (!tauri) return
     const poll = async () => {
@@ -205,6 +210,10 @@ export function ActuatorApp() {
         const s = await invoke<ActuatorStatus>('actuator_status')
         setStatus(s)
         if (s.session === 'emergency') setEmergency(true)
+        if (prevTargetConnectedRef.current && !s.target_connected) {
+          scopeStore.clear()
+        }
+        prevTargetConnectedRef.current = s.target_connected
       } catch {
         /* window opening before the link is up: keep the last status */
       }

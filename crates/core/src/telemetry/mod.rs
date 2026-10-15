@@ -598,6 +598,306 @@ impl TryFrom<&MavMessage> for GpsRawInt {
     }
 }
 
+/// Landed state from `EXTENDED_SYS_STATE`, driving the preflight "on ground"
+/// check (L5) and the survey session's airborne detection (M1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum LandedState {
+    Unknown,
+    OnGround,
+    InAir,
+    Takeoff,
+    Landing,
+}
+
+impl From<::mavlink::common::MavLandedState> for LandedState {
+    fn from(s: ::mavlink::common::MavLandedState) -> Self {
+        use ::mavlink::common::MavLandedState as M;
+        match s {
+            M::MAV_LANDED_STATE_ON_GROUND => Self::OnGround,
+            M::MAV_LANDED_STATE_IN_AIR => Self::InAir,
+            M::MAV_LANDED_STATE_TAKEOFF => Self::Takeoff,
+            M::MAV_LANDED_STATE_LANDING => Self::Landing,
+            M::MAV_LANDED_STATE_UNDEFINED => Self::Unknown,
+        }
+    }
+}
+
+/// VTOL state from `EXTENDED_SYS_STATE` (a multirotor survey usually reports
+/// `undefined`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum VtolState {
+    Undefined,
+    TransitionToFw,
+    TransitionToMc,
+    Mc,
+    Fw,
+}
+
+impl From<::mavlink::common::MavVtolState> for VtolState {
+    fn from(s: ::mavlink::common::MavVtolState) -> Self {
+        use ::mavlink::common::MavVtolState as M;
+        match s {
+            M::MAV_VTOL_STATE_TRANSITION_TO_FW => Self::TransitionToFw,
+            M::MAV_VTOL_STATE_TRANSITION_TO_MC => Self::TransitionToMc,
+            M::MAV_VTOL_STATE_MC => Self::Mc,
+            M::MAV_VTOL_STATE_FW => Self::Fw,
+            M::MAV_VTOL_STATE_UNDEFINED => Self::Undefined,
+        }
+    }
+}
+
+/// Normalized `EXTENDED_SYS_STATE`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ExtendedSysState {
+    pub landed_state: LandedState,
+    pub vtol_state: VtolState,
+}
+
+impl TryFrom<&MavMessage> for ExtendedSysState {
+    type Error = TelemetryParseError;
+
+    fn try_from(msg: &MavMessage) -> Result<Self, Self::Error> {
+        match msg {
+            MavMessage::EXTENDED_SYS_STATE(m) => Ok(ExtendedSysState {
+                landed_state: LandedState::from(m.landed_state),
+                vtol_state: VtolState::from(m.vtol_state),
+            }),
+            _ => Err(TelemetryParseError::WrongMessageType {
+                expected: "EXTENDED_SYS_STATE",
+            }),
+        }
+    }
+}
+
+/// Normalized `HOME_POSITION`: the takeoff/home point the FC reports.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct HomePosition {
+    pub latitude_deg: f64,
+    pub longitude_deg: f64,
+    /// AMSL altitude (datum-tagged per ADR-006).
+    pub altitude: Height,
+}
+
+impl TryFrom<&MavMessage> for HomePosition {
+    type Error = TelemetryParseError;
+
+    fn try_from(msg: &MavMessage) -> Result<Self, Self::Error> {
+        match msg {
+            MavMessage::HOME_POSITION(m) => Ok(HomePosition {
+                latitude_deg: deg_scaled_to_deg(m.latitude),
+                longitude_deg: deg_scaled_to_deg(m.longitude),
+                altitude: Height::new(HeightDatum::AmslEgm96, mm_to_m(m.altitude)),
+            }),
+            _ => Err(TelemetryParseError::WrongMessageType {
+                expected: "HOME_POSITION",
+            }),
+        }
+    }
+}
+
+/// Decoded `ESTIMATOR_STATUS` validity flags, plus the raw bitmask for
+/// forward-compatibility with flags this build does not know.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct EstimatorStatusFlags {
+    pub raw: u16,
+    pub attitude: bool,
+    pub velocity_horiz: bool,
+    pub velocity_vert: bool,
+    pub pos_horiz_rel: bool,
+    pub pos_horiz_abs: bool,
+    pub pos_vert_abs: bool,
+    pub pos_vert_agl: bool,
+    pub const_pos_mode: bool,
+    pub pred_pos_horiz_rel: bool,
+    pub pred_pos_horiz_abs: bool,
+    pub gps_glitch: bool,
+    pub accel_error: bool,
+}
+
+impl EstimatorStatusFlags {
+    fn from_flags(flags: ::mavlink::common::EstimatorStatusFlags) -> Self {
+        use ::mavlink::common::EstimatorStatusFlags as F;
+        Self {
+            raw: flags.bits(),
+            attitude: flags.contains(F::ESTIMATOR_ATTITUDE),
+            velocity_horiz: flags.contains(F::ESTIMATOR_VELOCITY_HORIZ),
+            velocity_vert: flags.contains(F::ESTIMATOR_VELOCITY_VERT),
+            pos_horiz_rel: flags.contains(F::ESTIMATOR_POS_HORIZ_REL),
+            pos_horiz_abs: flags.contains(F::ESTIMATOR_POS_HORIZ_ABS),
+            pos_vert_abs: flags.contains(F::ESTIMATOR_POS_VERT_ABS),
+            pos_vert_agl: flags.contains(F::ESTIMATOR_POS_VERT_AGL),
+            const_pos_mode: flags.contains(F::ESTIMATOR_CONST_POS_MODE),
+            pred_pos_horiz_rel: flags.contains(F::ESTIMATOR_PRED_POS_HORIZ_REL),
+            pred_pos_horiz_abs: flags.contains(F::ESTIMATOR_PRED_POS_HORIZ_ABS),
+            gps_glitch: flags.contains(F::ESTIMATOR_GPS_GLITCH),
+            accel_error: flags.contains(F::ESTIMATOR_ACCEL_ERROR),
+        }
+    }
+}
+
+/// Normalized `ESTIMATOR_STATUS` (EKF health; drives the preflight "EKF ready"
+/// and the magnetic fault checks in M2).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct EstimatorStatus {
+    /// Horizontal position 1-σ accuracy relative to the EKF origin, meters.
+    pub pos_horiz_accuracy_m: f32,
+    /// Vertical position 1-σ accuracy relative to the EKF origin, meters.
+    pub pos_vert_accuracy_m: f32,
+    pub flags: EstimatorStatusFlags,
+}
+
+impl TryFrom<&MavMessage> for EstimatorStatus {
+    type Error = TelemetryParseError;
+
+    fn try_from(msg: &MavMessage) -> Result<Self, Self::Error> {
+        match msg {
+            MavMessage::ESTIMATOR_STATUS(m) => Ok(EstimatorStatus {
+                pos_horiz_accuracy_m: m.pos_horiz_accuracy,
+                pos_vert_accuracy_m: m.pos_vert_accuracy,
+                flags: EstimatorStatusFlags::from_flags(m.flags),
+            }),
+            _ => Err(TelemetryParseError::WrongMessageType {
+                expected: "ESTIMATOR_STATUS",
+            }),
+        }
+    }
+}
+
+/// Normalized `VIBRATION` (accelerometer vibration levels and clipping counts).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct Vibration {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub clipping_0: u32,
+    pub clipping_1: u32,
+    pub clipping_2: u32,
+}
+
+impl TryFrom<&MavMessage> for Vibration {
+    type Error = TelemetryParseError;
+
+    fn try_from(msg: &MavMessage) -> Result<Self, Self::Error> {
+        match msg {
+            MavMessage::VIBRATION(m) => Ok(Vibration {
+                x: m.vibration_x,
+                y: m.vibration_y,
+                z: m.vibration_z,
+                clipping_0: m.clipping_0,
+                clipping_1: m.clipping_1,
+                clipping_2: m.clipping_2,
+            }),
+            _ => Err(TelemetryParseError::WrongMessageType {
+                expected: "VIBRATION",
+            }),
+        }
+    }
+}
+
+/// `UINT8_MAX` is the MAVLink "unknown value" sentinel for RSSI/noise fields.
+const RSSI_UNKNOWN: u8 = u8::MAX;
+
+/// Normalized `RC_CHANNELS`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct RcChannels {
+    /// Number of valid entries in `channels` (the FC may send up to 18).
+    pub chancount: u8,
+    /// Raw channel values, truncated to `chancount`. Empty when no RC is
+    /// available, never padded with zeros.
+    pub channels: Vec<u16>,
+    /// RC link RSSI, `None` when the FC reports the unknown sentinel.
+    pub rssi: Option<u8>,
+}
+
+impl TryFrom<&MavMessage> for RcChannels {
+    type Error = TelemetryParseError;
+
+    fn try_from(msg: &MavMessage) -> Result<Self, Self::Error> {
+        match msg {
+            MavMessage::RC_CHANNELS(m) => {
+                let raw = [
+                    m.chan1_raw,
+                    m.chan2_raw,
+                    m.chan3_raw,
+                    m.chan4_raw,
+                    m.chan5_raw,
+                    m.chan6_raw,
+                    m.chan7_raw,
+                    m.chan8_raw,
+                    m.chan9_raw,
+                    m.chan10_raw,
+                    m.chan11_raw,
+                    m.chan12_raw,
+                    m.chan13_raw,
+                    m.chan14_raw,
+                    m.chan15_raw,
+                    m.chan16_raw,
+                    m.chan17_raw,
+                    m.chan18_raw,
+                ];
+                let count = usize::from(m.chancount).min(raw.len());
+                Ok(RcChannels {
+                    chancount: count as u8,
+                    channels: raw[..count].to_vec(),
+                    rssi: (m.rssi != RSSI_UNKNOWN).then_some(m.rssi),
+                })
+            }
+            _ => Err(TelemetryParseError::WrongMessageType {
+                expected: "RC_CHANNELS",
+            }),
+        }
+    }
+}
+
+/// Normalized `RADIO_STATUS` (telemetry link quality; feeds L7's link alerts).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct RadioStatus {
+    pub rxerrors: u16,
+    pub fixed: u16,
+    /// Local (sender) RSSI, `None` when unknown.
+    pub rssi: Option<u8>,
+    /// Remote RSSI, `None` when unknown.
+    pub remrssi: Option<u8>,
+    /// Remaining free transmit buffer space (0–100).
+    pub txbuf: u8,
+    /// Local background noise, `None` when unknown.
+    pub noise: Option<u8>,
+    /// Remote background noise, `None` when unknown.
+    pub remnoise: Option<u8>,
+}
+
+impl TryFrom<&MavMessage> for RadioStatus {
+    type Error = TelemetryParseError;
+
+    fn try_from(msg: &MavMessage) -> Result<Self, Self::Error> {
+        match msg {
+            MavMessage::RADIO_STATUS(m) => Ok(RadioStatus {
+                rxerrors: m.rxerrors,
+                fixed: m.fixed,
+                rssi: (m.rssi != RSSI_UNKNOWN).then_some(m.rssi),
+                remrssi: (m.remrssi != RSSI_UNKNOWN).then_some(m.remrssi),
+                txbuf: m.txbuf,
+                noise: (m.noise != RSSI_UNKNOWN).then_some(m.noise),
+                remnoise: (m.remnoise != RSSI_UNKNOWN).then_some(m.remnoise),
+            }),
+            _ => Err(TelemetryParseError::WrongMessageType {
+                expected: "RADIO_STATUS",
+            }),
+        }
+    }
+}
+
 /// One decoded telemetry update derived from an inbound MAVLink frame.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TelemetryUpdate {
@@ -607,6 +907,12 @@ pub enum TelemetryUpdate {
     SysStatus(SysStatus),
     Battery(BatteryStatus),
     Gps(GpsRawInt),
+    ExtendedSysState(ExtendedSysState),
+    HomePosition(HomePosition),
+    Estimator(EstimatorStatus),
+    Vibration(Vibration),
+    RcChannels(RcChannels),
+    Radio(RadioStatus),
 }
 
 impl TelemetryUpdate {
@@ -631,6 +937,24 @@ impl TelemetryUpdate {
             MavMessage::GPS_RAW_INT(_) => GpsRawInt::try_from(&env.message)
                 .ok()
                 .map(TelemetryUpdate::Gps),
+            MavMessage::EXTENDED_SYS_STATE(_) => ExtendedSysState::try_from(&env.message)
+                .ok()
+                .map(TelemetryUpdate::ExtendedSysState),
+            MavMessage::HOME_POSITION(_) => HomePosition::try_from(&env.message)
+                .ok()
+                .map(TelemetryUpdate::HomePosition),
+            MavMessage::ESTIMATOR_STATUS(_) => EstimatorStatus::try_from(&env.message)
+                .ok()
+                .map(TelemetryUpdate::Estimator),
+            MavMessage::VIBRATION(_) => Vibration::try_from(&env.message)
+                .ok()
+                .map(TelemetryUpdate::Vibration),
+            MavMessage::RC_CHANNELS(_) => RcChannels::try_from(&env.message)
+                .ok()
+                .map(TelemetryUpdate::RcChannels),
+            MavMessage::RADIO_STATUS(_) => RadioStatus::try_from(&env.message)
+                .ok()
+                .map(TelemetryUpdate::Radio),
             _ => None,
         }
     }
@@ -706,6 +1030,30 @@ impl TelemetryAggregator {
                 self.snapshot.field_ages.gps_at_ms = Some(now_ms);
                 self.snapshot.gps = Some(g);
             }
+            TelemetryUpdate::ExtendedSysState(s) => {
+                self.snapshot.field_ages.extended_sys_state_at_ms = Some(now_ms);
+                self.snapshot.extended_sys_state = Some(s);
+            }
+            TelemetryUpdate::HomePosition(h) => {
+                self.snapshot.field_ages.home_at_ms = Some(now_ms);
+                self.snapshot.home = Some(h);
+            }
+            TelemetryUpdate::Estimator(e) => {
+                self.snapshot.field_ages.estimator_at_ms = Some(now_ms);
+                self.snapshot.estimator = Some(e);
+            }
+            TelemetryUpdate::Vibration(v) => {
+                self.snapshot.field_ages.vibration_at_ms = Some(now_ms);
+                self.snapshot.vibration = Some(v);
+            }
+            TelemetryUpdate::RcChannels(rc) => {
+                self.snapshot.field_ages.rc_channels_at_ms = Some(now_ms);
+                self.snapshot.rc_channels = Some(rc);
+            }
+            TelemetryUpdate::Radio(r) => {
+                self.snapshot.field_ages.radio_at_ms = Some(now_ms);
+                self.snapshot.radio = Some(r);
+            }
         }
     }
 
@@ -728,6 +1076,12 @@ pub struct TelemetrySnapshot {
     pub sys_status: Option<SysStatus>,
     pub battery: Option<BatteryStatus>,
     pub gps: Option<GpsRawInt>,
+    pub extended_sys_state: Option<ExtendedSysState>,
+    pub home: Option<HomePosition>,
+    pub estimator: Option<EstimatorStatus>,
+    pub vibration: Option<Vibration>,
+    pub rc_channels: Option<RcChannels>,
+    pub radio: Option<RadioStatus>,
     /// Per-field freshness, so a field that stopped updating while others keep
     /// streaming can be greyed out (issues.md #16).
     pub field_ages: TelemetryFieldAges,
@@ -751,6 +1105,18 @@ pub struct TelemetryFieldAges {
     pub battery_at_ms: Option<u64>,
     #[ts(type = "number | null")]
     pub gps_at_ms: Option<u64>,
+    #[ts(type = "number | null")]
+    pub extended_sys_state_at_ms: Option<u64>,
+    #[ts(type = "number | null")]
+    pub home_at_ms: Option<u64>,
+    #[ts(type = "number | null")]
+    pub estimator_at_ms: Option<u64>,
+    #[ts(type = "number | null")]
+    pub vibration_at_ms: Option<u64>,
+    #[ts(type = "number | null")]
+    pub rc_channels_at_ms: Option<u64>,
+    #[ts(type = "number | null")]
+    pub radio_at_ms: Option<u64>,
 }
 
 impl TelemetrySnapshot {
@@ -765,6 +1131,66 @@ impl TelemetrySnapshot {
         self.last_heartbeat_at_ms.is_some()
     }
 }
+
+/// MAVLink ids of the supplementary telemetry messages (L6).
+mod message_id {
+    /// `HOME_POSITION`.
+    pub const HOME_POSITION: u32 = 242;
+    /// `EXTENDED_SYS_STATE`.
+    pub const EXTENDED_SYS_STATE: u32 = 245;
+    /// `ESTIMATOR_STATUS`.
+    pub const ESTIMATOR_STATUS: u32 = 230;
+    /// `VIBRATION`.
+    pub const VIBRATION: u32 = 241;
+    /// `RC_CHANNELS`.
+    pub const RC_CHANNELS: u32 = 65;
+    /// `RADIO_STATUS`.
+    pub const RADIO_STATUS: u32 = 109;
+}
+
+/// A stream-rate request to send after connecting (L6).
+///
+/// PX4 omits several of these messages (or streams them slowly) by default, so
+/// the GCS asks for an explicit rate. The rate request only changes the live
+/// stream; a reboot reverts it (nothing persistent is written).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StreamRateRequest {
+    pub message_id: u32,
+    /// Requested interval in microseconds (positive).
+    pub interval_us: i32,
+}
+
+/// Requested post-connect rates for the supplementary telemetry (L6).
+///
+/// `EXTENDED_SYS_STATE` (landed state) and `ESTIMATOR_STATUS` (EKF health) are
+/// the fastest because the preflight checklist reads them; `HOME_POSITION` and
+/// `RADIO_STATUS` change rarely.
+pub const SUPPLEMENTARY_STREAM_RATES: &[StreamRateRequest] = &[
+    StreamRateRequest {
+        message_id: message_id::EXTENDED_SYS_STATE,
+        interval_us: 500_000, // 2 Hz
+    },
+    StreamRateRequest {
+        message_id: message_id::ESTIMATOR_STATUS,
+        interval_us: 500_000, // 2 Hz
+    },
+    StreamRateRequest {
+        message_id: message_id::VIBRATION,
+        interval_us: 500_000, // 2 Hz
+    },
+    StreamRateRequest {
+        message_id: message_id::RC_CHANNELS,
+        interval_us: 200_000, // 5 Hz
+    },
+    StreamRateRequest {
+        message_id: message_id::HOME_POSITION,
+        interval_us: 1_000_000, // 1 Hz
+    },
+    StreamRateRequest {
+        message_id: message_id::RADIO_STATUS,
+        interval_us: 1_000_000, // 1 Hz
+    },
+];
 
 #[cfg(test)]
 mod tests {
@@ -1196,5 +1622,180 @@ mod tests {
             },
         ));
         assert!(TelemetryUpdate::try_from_envelope(&env).is_none());
+    }
+
+    #[test]
+    fn parse_extended_sys_state() {
+        use ::mavlink::common::{MavLandedState, MavVtolState};
+        let msg = MavMessage::EXTENDED_SYS_STATE(::mavlink::common::EXTENDED_SYS_STATE_DATA {
+            vtol_state: MavVtolState::MAV_VTOL_STATE_UNDEFINED,
+            landed_state: MavLandedState::MAV_LANDED_STATE_ON_GROUND,
+        });
+        let s = ExtendedSysState::try_from(&msg).expect("parse");
+        assert_eq!(s.landed_state, LandedState::OnGround);
+        assert_eq!(s.vtol_state, VtolState::Undefined);
+
+        let air = MavMessage::EXTENDED_SYS_STATE(::mavlink::common::EXTENDED_SYS_STATE_DATA {
+            vtol_state: MavVtolState::MAV_VTOL_STATE_MC,
+            landed_state: MavLandedState::MAV_LANDED_STATE_IN_AIR,
+        });
+        let s = ExtendedSysState::try_from(&air).expect("parse");
+        assert_eq!(s.landed_state, LandedState::InAir);
+        assert_eq!(s.vtol_state, VtolState::Mc);
+    }
+
+    #[test]
+    fn parse_home_position() {
+        let msg = MavMessage::HOME_POSITION(::mavlink::common::HOME_POSITION_DATA {
+            latitude: 486_490_000,
+            longitude: -1_233_982_000,
+            altitude: 583_250, // mm
+            ..Default::default()
+        });
+        let h = HomePosition::try_from(&msg).expect("parse");
+        assert!((h.latitude_deg - 48.649).abs() < 1e-9);
+        assert!((h.longitude_deg + 123.3982).abs() < 1e-9);
+        assert!((h.altitude.meters() - 583.25).abs() < 1e-9);
+        assert_eq!(h.altitude.datum(), HeightDatum::AmslEgm96);
+    }
+
+    #[test]
+    fn parse_estimator_status_flags() {
+        use ::mavlink::common::EstimatorStatusFlags as F;
+        let flags = F::ESTIMATOR_ATTITUDE | F::ESTIMATOR_POS_HORIZ_ABS | F::ESTIMATOR_GPS_GLITCH;
+        let msg = MavMessage::ESTIMATOR_STATUS(::mavlink::common::ESTIMATOR_STATUS_DATA {
+            time_usec: 0,
+            vel_ratio: 0.1,
+            pos_horiz_ratio: 0.2,
+            pos_vert_ratio: 0.3,
+            mag_ratio: 0.4,
+            hagl_ratio: 0.0,
+            tas_ratio: 0.0,
+            pos_horiz_accuracy: 0.85,
+            pos_vert_accuracy: 1.25,
+            flags,
+        });
+        let e = EstimatorStatus::try_from(&msg).expect("parse");
+        assert!((e.pos_horiz_accuracy_m - 0.85).abs() < 1e-6);
+        assert!((e.pos_vert_accuracy_m - 1.25).abs() < 1e-6);
+        assert!(e.flags.attitude);
+        assert!(e.flags.pos_horiz_abs);
+        assert!(e.flags.gps_glitch);
+        assert!(!e.flags.accel_error, "unset flags stay false");
+        assert_eq!(e.flags.raw, flags.bits());
+    }
+
+    #[test]
+    fn parse_vibration() {
+        let msg = MavMessage::VIBRATION(::mavlink::common::VIBRATION_DATA {
+            time_usec: 0,
+            vibration_x: 12.5,
+            vibration_y: 8.0,
+            vibration_z: 20.25,
+            clipping_0: 1,
+            clipping_1: 0,
+            clipping_2: 3,
+        });
+        let v = Vibration::try_from(&msg).expect("parse");
+        assert!((v.x - 12.5).abs() < 1e-6);
+        assert!((v.z - 20.25).abs() < 1e-6);
+        assert_eq!(v.clipping_0, 1);
+        assert_eq!(v.clipping_2, 3);
+    }
+
+    #[test]
+    fn parse_rc_channels_truncates_and_nulls_unknown_rssi() {
+        let data = ::mavlink::common::RC_CHANNELS_DATA {
+            chancount: 4,
+            chan1_raw: 1000,
+            chan2_raw: 1500,
+            chan3_raw: 2000,
+            chan4_raw: 999,
+            chan5_raw: 1234, // beyond chancount, must not leak in
+            rssi: u8::MAX,   // unknown sentinel
+            ..Default::default()
+        };
+        let msg = MavMessage::RC_CHANNELS(data);
+        let rc = RcChannels::try_from(&msg).expect("parse");
+        assert_eq!(rc.chancount, 4);
+        assert_eq!(rc.channels, vec![1000, 1500, 2000, 999]);
+        assert_eq!(rc.rssi, None, "0xFF rssi means unknown, not 255");
+
+        // No RC available: empty, never a zero-padded 18-slot vector.
+        let none = RcChannels::try_from(&MavMessage::RC_CHANNELS(
+            ::mavlink::common::RC_CHANNELS_DATA::default(),
+        ))
+        .expect("parse");
+        assert!(none.channels.is_empty());
+        assert_eq!(none.chancount, 0);
+    }
+
+    #[test]
+    fn parse_radio_status_maps_unknown_sentinels_to_none() {
+        let msg = MavMessage::RADIO_STATUS(::mavlink::common::RADIO_STATUS_DATA {
+            rxerrors: 3,
+            fixed: 1,
+            rssi: 200,
+            remrssi: u8::MAX,
+            txbuf: 100,
+            noise: 12,
+            remnoise: u8::MAX,
+        });
+        let r = RadioStatus::try_from(&msg).expect("parse");
+        assert_eq!(r.rssi, Some(200));
+        assert_eq!(r.remrssi, None);
+        assert_eq!(r.remnoise, None);
+        assert_eq!(r.noise, Some(12));
+        assert_eq!(r.txbuf, 100);
+        assert_eq!(r.rxerrors, 3);
+    }
+
+    #[test]
+    fn supplementary_fields_are_none_until_a_frame_arrives() {
+        // Acceptance (L6): a field with no frame is `None`, never a default of
+        // 0/false.
+        let snap = TelemetrySnapshot::new();
+        assert!(snap.home.is_none());
+        assert!(snap.extended_sys_state.is_none());
+        assert!(snap.estimator.is_none());
+        assert!(snap.vibration.is_none());
+        assert!(snap.rc_channels.is_none());
+        assert!(snap.radio.is_none());
+        assert!(snap.field_ages.home_at_ms.is_none());
+        assert!(snap.field_ages.radio_at_ms.is_none());
+
+        let mut agg = TelemetryAggregator::new();
+        let home = envelope(MavMessage::HOME_POSITION(
+            ::mavlink::common::HOME_POSITION_DATA::default(),
+        ));
+        agg.apply(
+            VehicleId::from_envelope(&home),
+            TelemetryUpdate::try_from_envelope(&home).unwrap(),
+            5_000,
+        );
+        let snap = agg.snapshot();
+        assert!(snap.home.is_some());
+        assert_eq!(snap.field_ages.home_at_ms, Some(5_000));
+        assert!(
+            snap.field_ages.estimator_at_ms.is_none(),
+            "a field that never arrived keeps a None age"
+        );
+    }
+
+    #[test]
+    fn supplementary_stream_rates_are_well_formed() {
+        assert!(
+            !SUPPLEMENTARY_STREAM_RATES.is_empty(),
+            "the connect sequence must request the supplementary streams"
+        );
+        for req in SUPPLEMENTARY_STREAM_RATES {
+            assert!(req.interval_us > 0, "every interval is a positive period");
+        }
+        // The table keys on unique message ids.
+        for (i, a) in SUPPLEMENTARY_STREAM_RATES.iter().enumerate() {
+            for b in &SUPPLEMENTARY_STREAM_RATES[i + 1..] {
+                assert_ne!(a.message_id, b.message_id, "duplicate message id");
+            }
+        }
     }
 }

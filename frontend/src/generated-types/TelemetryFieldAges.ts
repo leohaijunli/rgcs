@@ -5,4 +5,4 @@
  *
  * `None` means the field has not been seen since connecting.
  */
-export type TelemetryFieldAges = { heartbeat_at_ms: number | null, global_position_at_ms: number | null, attitude_at_ms: number | null, sys_status_at_ms: number | null, battery_at_ms: number | null, gps_at_ms: number | null, };
+export type TelemetryFieldAges = { heartbeat_at_ms: number | null, global_position_at_ms: number | null, attitude_at_ms: number | null, sys_status_at_ms: number | null, battery_at_ms: number | null, gps_at_ms: number | null, extended_sys_state_at_ms: number | null, home_at_ms: number | null, estimator_at_ms: number | null, vibration_at_ms: number | null, rc_channels_at_ms: number | null, radio_at_ms: number | null, };

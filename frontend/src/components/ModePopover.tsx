@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Compass } from 'lucide-react'
 import { invoke } from '@tauri-apps/api/core'
 import type { ModeAvailability } from '../generated-types/ModeAvailability'
 import { Button, HoldButton, HOLD_MS } from '../design-system/components'
@@ -176,6 +177,7 @@ export default function ModePopover() {
         title={t('modePopover.title')}
         className="flex h-8 items-center gap-1 rounded border border-line bg-canvas px-2.5 text-xs hover:bg-panel"
       >
+        <Compass size={13} className="text-muted" />
         <span className="text-muted">{t('link.mode')}</span>
         <span className="mono text-ink">{currentLabel ?? '—'}</span>
         <span className="text-[9px] text-muted">▾</span>

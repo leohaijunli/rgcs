@@ -1,11 +1,24 @@
-import { ChevronDown, FileDown, Gauge, LineChart, List, Settings, SlidersHorizontal } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import {
+  BatteryMedium,
+  ChevronDown,
+  FileDown,
+  Gauge,
+  LineChart,
+  List,
+  Satellite,
+  Settings,
+  ShieldCheck,
+  ShieldOff,
+  SlidersHorizontal,
+} from 'lucide-react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { invoke } from '@tauri-apps/api/core'
 import { useTelemetryStore } from '../stores/telemetry'
 import { useLinkStore } from '../stores/link'
 import { useAlerts } from '../stores/alerts'
 import { FIELD_STALE_MS, useHeartbeatAge } from '../hooks/useDataAge'
+import { useIsNarrow } from '../hooks/useIsNarrow'
 import type { Severity } from '../generated-types/Severity'
 import { IconButton, StatusDot, Tabs } from '../design-system/components'
 import { useUiStore, type View } from '../stores/ui'
@@ -17,9 +30,15 @@ import RtkDrawer from './RtkDrawer'
 import ModePopover from './ModePopover'
 import FlightMenu from './FlightMenu'
 import SafetyCommands from './SafetyCommands'
-import EventLogDrawer from './EventLogDrawer'
+import AlertCenter from './AlertCenter'
 
 const VIEWS: View[] = ['planning', 'flight']
+
+/** U2: one control height for every TopBar control. The old bar mixed a 44px
+ * Tools button with 32px pills and buttons; the design scale's `md` row is the
+ * single source (§7.1 "fix the 44 vs 32 mismatch"), and §7.4's floor for the
+ * normal (non-field) mode is 32px. */
+const CONTROL = 'h-8'
 
 /** Badge colour per severity — tokens only, and the number carries the
  * meaning as well as the colour (design principle: never colour alone). */
@@ -46,29 +65,149 @@ function Pill({
   label,
   value,
   tone,
+  icon,
+  testId,
   onClick,
   title,
 }: {
   label: string
   value?: string
   tone: 'ok' | 'warn' | 'err' | 'off'
+  icon?: ReactNode
+  testId?: string
   onClick?: () => void
   title?: string
 }) {
-  const cls = `flex h-8 items-center gap-2 rounded border border-line bg-canvas px-2.5 text-xs ${onClick ? 'cursor-pointer hover:bg-panel' : ''}`
+  const cls = `flex ${CONTROL} items-center gap-1.5 rounded border border-line bg-canvas px-2.5 text-xs ${onClick ? 'cursor-pointer hover:bg-panel' : ''}`
   const inner = (
     <>
+      {icon !== undefined && <span className="text-muted">{icon}</span>}
       <span className="text-muted">{label}</span>
       <StatusDot tone={pillTone(tone)} />
       {value && <span className="mono text-ink">{value}</span>}
     </>
   )
   return onClick ? (
-    <button onClick={onClick} title={title} className={cls}>
+    <button data-testid={testId} onClick={onClick} title={title} className={cls}>
       {inner}
     </button>
   ) : (
-    <div className={cls}>{inner}</div>
+    <div data-testid={testId} className={cls}>
+      {inner}
+    </div>
+  )
+}
+
+/** Thin rule between the three TopBar groups (§7.2.1 status / health / tools). */
+function GroupDivider() {
+  return <span aria-hidden="true" className={`${CONTROL} w-px bg-line`} />
+}
+
+interface HealthProps {
+  gps: { fix_type: string; satellites_visible: number } | null
+  rtkTone: 'ok' | 'warn' | 'err'
+  batteryText: string | undefined
+  batteryTone: 'ok' | 'warn' | 'err' | 'off'
+  onOpenRtk: () => void
+}
+
+/** Health group: the vehicle's own health readouts. Wide screens show them
+ * inline; at ≤1366 they fold into one "More" popover so the status group and
+ * the safety pair always keep their room (U2). The *conditions* stay visible
+ * regardless — battery and GNSS degradation also raise alerts (L7). */
+function HealthGroup({ gps, rtkTone, batteryText, batteryTone, onOpenRtk }: HealthProps) {
+  const { t } = useTranslation()
+  const narrow = useIsNarrow()
+  const fix = gps ? `${t(`hud.fix.${fixKey(gps.fix_type)}`)} ${gps.satellites_visible}sv` : undefined
+  const rtk = (
+    <Pill
+      testId="rtk-pill"
+      label={t('link.rtk')}
+      value={fix ?? '—'}
+      tone={rtkTone}
+      icon={<Satellite size={13} />}
+      onClick={onOpenRtk}
+      title={t('rtk.title')}
+    />
+  )
+  const batt = (
+    <Pill
+      testId="batt-pill"
+      label={t('link.batt')}
+      value={batteryText}
+      tone={batteryTone}
+      icon={<BatteryMedium size={13} />}
+    />
+  )
+  if (!narrow) {
+    return (
+      <div data-testid="topbar-health" className="flex items-center gap-2">
+        {rtk}
+        {batt}
+      </div>
+    )
+  }
+  return (
+    <div data-testid="topbar-health" className="relative flex items-center">
+      <MorePopover title={t('topbar.more')} testId="topbar-more">
+        {rtk}
+        {batt}
+      </MorePopover>
+    </div>
+  )
+}
+
+/** The "More" overflow surface (U2 narrow layout). */
+function MorePopover({
+  title,
+  testId,
+  children,
+}: {
+  title: string
+  testId: string
+  children: ReactNode
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: PointerEvent) => {
+      // N8: a pointerdown that repaints the trigger detaches `e.target`; a
+      // detached node is never inside the popover, so ignore it instead of
+      // closing on the very interaction that opened it.
+      const target = e.target as Node
+      if (!target.isConnected) return
+      if (!ref.current?.contains(target)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false)
+    window.addEventListener('pointerdown', onDown)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('pointerdown', onDown)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        data-testid={testId}
+        onClick={() => setOpen((o) => !o)}
+        aria-label={title}
+        title={title}
+        className={`flex ${CONTROL} items-center gap-1 rounded border border-line bg-canvas px-2.5 text-xs text-muted hover:bg-panel hover:text-ink`}
+      >
+        {title}
+        <ChevronDown size={12} />
+      </button>
+      {open && (
+        <div
+          data-testid={`${testId}-menu`}
+          className="absolute right-0 top-full z-50 mt-1 flex w-max flex-col gap-1 rounded border border-line bg-panel p-1.5 shadow-2xl"
+        >
+          {children}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -125,7 +264,9 @@ export default function TopBar() {
   const batteryPct = sys?.battery_remaining_percent
   const batteryTone: 'ok' | 'warn' | 'err' | 'off' =
     batteryPct == null ? 'off' : batteryPct < 15 ? 'err' : batteryPct < 30 ? 'warn' : 'ok'
-  const batteryText = sys ? `${(sys.battery_voltage_mv / 1000).toFixed(1)}V ${sys.battery_remaining_percent}%` : undefined
+  const batteryText = sys
+    ? `${(sys.battery_voltage_mv / 1000).toFixed(1)}V ${sys.battery_remaining_percent}%`
+    : undefined
   // L3: mode / armed / RTK / battery are heartbeat readouts. Once the FC is
   // silent they are history, and a live-looking "ARMED · RTK FIXED" is the
   // dangerous failure mode — so the group dims and carries the age of its
@@ -155,41 +296,48 @@ export default function TopBar() {
             {staleText}
           </span>
         )}
-        <div
-          data-testid="link-stale"
-          data-stale={stale ? 'true' : 'false'}
-          className={`flex items-center gap-2 ${stale ? 'opacity-45' : ''}`}
-        >
-          <div
-            role="status"
-            className={`flex h-8 items-center gap-1.5 rounded border px-2.5 text-xs font-medium ${
-              armed
-                ? 'border-ok bg-ok text-ok-ink'
-                : 'border-line bg-canvas text-muted'
-            }`}
-          >
-            <span className={`h-1.5 w-1.5 rounded-full ${armed ? 'bg-ok-ink' : 'bg-muted'}`} />
-            {armed ? t('link.armed') : t('link.disarmed')}
-          </div>
-          <FlightMenu />
-          <ModePopover />
-          <Pill
-            label={t('link.rtk')}
-            value={gps ? `${t(`hud.fix.${fixKey(rtk ?? 'NO_GPS')}`)} ${gps.satellites_visible}sv` : '—'}
-            tone={rtkTone}
-            onClick={() => setRtkDrawerOpen(true)}
-            title={t('rtk.title')}
-          />
-          <Pill label={t('link.batt')} value={batteryText} tone={batteryTone} />
-        </div>
-        {/* L2: the safety pair sits outside the stale group — dimming RTL is
-         * not the same as losing the link, and the buttons stay reachable
-         * while another command is in flight (A7 arbitrates). */}
-        <SafetyCommands />
-        <LinkPopover onOpenSettings={openConnection} />
 
-        {/* Tools ▾ groups the window launchers (motor-test plan §2.2-10) so
-         * the TopBar stays pills + two icons. */}
+        {/* Status group (U2): armed / mode / link. Never folds — the whole
+         * point of the group is that its three answers are always on screen. */}
+        <div data-testid="topbar-status" className="flex items-center gap-2">
+          <div
+            data-testid="link-stale"
+            data-stale={stale ? 'true' : 'false'}
+            className={`flex items-center gap-2 ${stale ? 'opacity-45' : ''}`}
+          >
+            <div
+              role="status"
+              className={`flex ${CONTROL} items-center gap-1.5 rounded border px-2.5 text-xs font-medium ${
+                armed ? 'border-ok bg-ok text-ok-ink' : 'border-line bg-canvas text-muted'
+              }`}
+            >
+              {armed ? <ShieldCheck size={13} /> : <ShieldOff size={13} />}
+              {armed ? t('link.armed') : t('link.disarmed')}
+            </div>
+            <FlightMenu />
+            <ModePopover />
+          </div>
+          <LinkPopover onOpenSettings={openConnection} />
+        </div>
+
+        <GroupDivider />
+
+        {/* L2 safety pair: never folds, never dims (an RTL is exactly when the
+         * link is suspect). Placed with the status group so a narrow bar still
+         * shows status + RTL/Hold before anything else. */}
+        <SafetyCommands />
+
+        <HealthGroup
+          gps={gps}
+          rtkTone={rtkTone}
+          batteryText={batteryText}
+          batteryTone={batteryTone}
+          onOpenRtk={() => setRtkDrawerOpen(true)}
+        />
+
+        <GroupDivider />
+
+        {/* Tools group (U2). */}
         <ToolsPopover
           onInspector={openInspector}
           onMotorTest={openMotorTest}
@@ -202,6 +350,7 @@ export default function TopBar() {
           <IconButton
             title={alertCount > 0 ? t('alerts.open') : t('eventLog.title')}
             active={false}
+            size={32}
             data-testid="alert-open"
             onClick={() => setLogDrawerOpen(true)}
           >
@@ -220,12 +369,17 @@ export default function TopBar() {
             </span>
           )}
         </span>
-        <IconButton title={t('settings.menu')} onClick={() => setSettingsOpen(true)}>
+        <IconButton
+          title={t('settings.menu')}
+          size={32}
+          data-testid="settings-open"
+          onClick={() => setSettingsOpen(true)}
+        >
           <Settings size={16} />
         </IconButton>
       </div>
       <RtkDrawer open={rtkDrawerOpen} onClose={() => setRtkDrawerOpen(false)} />
-      <EventLogDrawer open={logDrawerOpen} onClose={() => setLogDrawerOpen(false)} />
+      <AlertCenter open={logDrawerOpen} onClose={() => setLogDrawerOpen(false)} />
       <SettingsDialog
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
@@ -271,7 +425,9 @@ function ToolsPopover({
   useEffect(() => {
     if (!open) return
     const onDown = (e: PointerEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false)
+      const target = e.target as Node
+      if (!target.isConnected) return
+      if (!ref.current?.contains(target)) setOpen(false)
     }
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false)
     window.addEventListener('pointerdown', onDown)
@@ -285,15 +441,16 @@ function ToolsPopover({
   return (
     <div className="relative" ref={ref}>
       <button
+        data-testid="tools-open"
         onClick={() => setOpen((o) => !o)}
         aria-label={t('tools.popover')}
         title={t('tools.popover')}
-        className={`flex h-11 items-center gap-1.5 rounded border border-line px-2.5 ${
+        className={`flex ${CONTROL} items-center gap-1.5 rounded border border-line px-2.5 ${
           open ? 'bg-panel text-ink' : 'bg-canvas text-muted hover:text-ink'
         }`}
       >
         <Gauge size={16} />
-        <span className="hidden text-xs xl:inline">{t('tools.popover')}</span>
+        <span className="hidden text-xs 2xl:inline">{t('tools.popover')}</span>
         <ChevronDown size={12} />
       </button>
       {open && (

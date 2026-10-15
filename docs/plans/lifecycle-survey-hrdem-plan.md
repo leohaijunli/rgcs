@@ -6,7 +6,7 @@
 
 - 新增 **A11 + U15**:主地图可分离为独立窗口(默认仍内嵌;弹出后主窗口切换为无地图布局;地图窗口崩溃不影响 RTL/Hold 与告警)。
 - 新增 **§5A 项目与测量类型(PJ1–PJ5)**:Project → Survey → Session 三层模型;测量类型以 `SurveyProfile` 注册,UAV 磁测与步行磁测是两种 profile。**M1 状态机按此拆分为"通用状态机 + 平台 driver"**,不先做 UAV 专用版再重构。
-- 新增 **§5B 步行磁测(W0–W8)** 与 **U16**(步行引导界面)。步行测量**携带 PX4 但不飞行**(PX4 作仪器中枢:DroneCAN 磁力仪 + RTK GNSS → MAVLink);仪器数据**全部走 MAVLink**,GCS 不接串口/不解析厂商帧。GCS 的职责是导航引导、MAVLink 采集、记录、QC,日变改正(M7/M8)复用;步行会话**不含 Arm/RTL/飞行命令**(见 ADR-020)。
+- 新增 **§5B 步行磁测(W0–W8)** 与 **U16**(步行引导界面)。步行测量**与 UAV 磁测共用同一套传感器与数据流**——同一 PX4、同一 DroneCAN 磁力仪、同一 ZED-F9P RTK、同一 MAVLink 消息集与记录栈,**唯一区别是手持而非飞行**;该 PX4 在步行会话中**不飞行**(仅作仪器中枢:DroneCAN 磁力仪 + RTK GNSS → MAVLink),GCS 不接串口/不解析厂商帧。仪器数据**全部走 MAVLink**,差异仅在会话行为(无 Arm/飞行命令、低速不输出航向、手持磁洁净检查),不在数据通路。GCS 的职责是导航引导、MAVLink 采集、记录、QC,日变改正(M7/M8)复用;步行会话**不含 Arm/RTL/飞行命令**(见 ADR-020)。
 - 新增 §9 待核实与待确认项(步行仪器型号与协议是最大的未知项)。
 
 ## v2 相对 v1 的变化
@@ -82,7 +82,7 @@
 | **A1** ◆ P0 | **生命周期监督器**:core 新增 `lifecycle`。`trait ManagedService { fn name(); async fn stop(&self, deadline: Duration) -> StopOutcome }`;`Lifecycle::shutdown(reason, policy)` 按固定顺序停止(电机测试 → RTK 注入 → 日志下载 → 参数 → 任务/命令服务 → 记录器 flush → 链路 → 地形服务),每项带截止时间并汇总结果;`policy` 含"已解锁/飞行中是否拒绝"。`disconnect`、`shutdown_app`、主窗口 `CloseRequested` 全部走它。 | 新 `core/src/lifecycle/`;`app-tauri/{lib,commands,state}.rs` | 假服务单测:顺序正确、超时不阻塞其余、已解锁时返回 `Refused{reason}`;集成测:电机测试运行中退出,先收到 Stop 再退出 | M | — |
 | **A2** P1 | **服务归属链路**:rtk/logs/params/motor_test 句柄并入 `ActiveLink`,链路析构即停止;SITL 副链路上提到通用层(O4);删除手动 `detach()`。 | `state.rs`、各 `*_service.rs` | 断开后无残留任务(任务计数/句柄 drop 测试);现有集成测试不回退 | M | A1 |
 | **A3** P0 | **AlertCenter**:core 新增 `alerts`。`Alert{id, severity(Info/Warn/Critical), source, text, first_ts, last_ts, count, latched, acked}`;去重/节流/锁存/确认;来源:STATUSTEXT、链路、电池、GPS/RTK、mag 告警、命令失败、DEM、VIC 数据。Tauri 侧统一 `alert` 事件;前端一个 store;`ErrorBanner`、事件日志抽屉、TopBar 角标都是它的视图。 | 新 `core/src/alerts/`;`app-tauri`;`frontend/src/stores/` | 单测:去重计数、Critical 锁存到 ack、迟滞;前端三处视图一致 | M | — |
-| **A4** ◆ P1 | **飞行记录器**:core 新增 `recorder`。tlog(带时间戳原始 MAVLink 帧,格式对齐 QGC:每帧前置 8 字节微秒时间戳 *verify*)+ 事件日志 JSONL(告警、命令、模式、航线开始/结束、任务同步、强制解锁)+ `session.json`。专用写线程 + 有界通道,**绝不阻塞 hub**;满则丢最旧并计数告警;停止时 flush+fsync。 | 新 `core/src/recorder/` | 回放 tlog 与源帧逐字节一致;写盘卡顿时 hub 延迟不增加;异常退出后文件可解析到最后一次 flush | L | A1 |
+| **A4** ◆ P1 | **飞行记录器(已完成 2026-10-15,ADR-021)**:core 新增 `recorder`;并给 `mavlink::connection` 加**原始帧旁路(方案 B,引用计数门控,不录制时零开销)**。tlog(带时间戳原始 MAVLink 帧,格式对齐 QGC:每帧前置 8 字节**小端**微秒时间戳,见 ADR-021)+ 事件日志 JSONL(告警、命令、模式、航线开始/结束、任务同步、强制解锁)+ `session.json`。专用写线程 + 有界通道,**绝不阻塞 hub**;满则丢最旧并计数告警;停止时 flush+fsync。命令/模式/任务/航线事件源随各自 WP(M1/W4/L5)接入。 | 新 `core/src/recorder/` | 回放 tlog 与源帧逐字节一致;写盘卡顿时 hub 延迟不增加;异常退出后文件可解析到最后一次 flush | L | A1 |
 | **A5** ◆ P1 | **安全/飞行前引擎**:core 新增 `safety`。纯函数 `evaluate(&TelemetrySnapshot, &PlanState, &SafetyConfig) -> Checklist`,每项 `{id, group, status(Pass/Warn/Fail/Unknown), detail, fix_hint}`;阈值集中在 `SafetyConfig`;无 IO,可无头复用。 | 新 `core/src/safety/` | 表驱动单测覆盖每项四种状态;`Unknown`(缺数据/过期)不得等于 Pass | M | L6 |
 | **A6** P1 | **Rust 侧配置存储**:`app_config_dir` 下版本化 JSON(端点、autoConnect、告警阈值、磁校准路径、DEM 目录、drape 参数、VIC 数据源设置、UI 现场模式)。前端经命令读写;首次启动迁移 localStorage;`SafetyConfig` 从此读取。 | `desktop/prefs.ts`、新 `app-tauri/config_service.rs`、core `config` | 迁移测试;损坏文件回退默认并发 Warn,不崩溃 | M | — |
 | **A7** ◆ P1 | **命令优先通道**:`CommandService` 增加 `Priority::{Normal, Emergency}`。Emergency(RTL/Land/Disarm)可顶替在途 Normal 命令,被顶替者上报 `Superseded`;Emergency 不被顶替;仍保持同一时刻最多一条在途命令。 | `core/src/commands/{mod,service}.rs`、`command_service.rs` | 假飞控:在途 `goto` 时发 RTL → RTL 立即发出并得到 ACK,`goto` 收到 `Superseded`;丢 ACK 重传不乱序 | M | — |
@@ -172,6 +172,8 @@
 
 ### 与 UAV 磁测的本质差异
 
+**步行磁测与 UAV 磁测使用同一套硬件与数据流**(同一 PX4、同一 DroneCAN 磁力仪、同一 ZED-F9P RTK、同一 MAVLink 消息与记录栈),**唯一区别是手持而非飞行**;下表的差异都是会话/运行层面的,不是数据通路层面的。步行会话中该 PX4 **不飞行**,只作仪器中枢。
+
 | 方面 | UAV 磁测(现有) | 步行磁测 |
 |---|---|---|
 | 平台与控制 | PX4 + MAVLink,GCS 可发命令 | **PX4 只是仪器中枢,不飞行**;GCS 不发飞行命令,只做导航引导、采集、记录、QC |
@@ -208,8 +210,8 @@ S1 `PatternLine`(survey/tie/cal)、M7/M8 日变管线、A3 告警、A4 记录器
 | ID | 内容 | 触及文件 | 验收 | 规模 | 依赖 |
 |---|---|---|---|---|---|
 | **W0** ◆ P0 | **调研与决策(ADR-020,已完成 2026-10-15)**:操作员确认——步行**携带 PX4,仅作仪器中枢,不飞行**;**仪器数据全部走 MAVLink**;磁力仪为 **DroneCAN 节点**(RM3100 或 Bartington UAS-Mag,按项目二选一,**单传感器,非梯度**);GNSS 为 **Holybro H-RTK ZED-F9P**(接在 PX4 上,**用 RTK**);以连续步行为主;主记录在 PX4 SD/ULog,GCS 消费实时磁+位置;交付 **CSV**(字段表见 ADR-020)。GCS 只做导航引导、采集、记录、QC、日变与归档;**不接串口、不解析厂商帧、不配置 DroneCAN 节点、不发飞行命令**。 | `docs/adr/020-walk-survey.md` | 接口/消息表与交付 CSV 字段表写入 ADR;**原 §5B"无飞控/无 MAVLink、GCS 解析仪器帧"假设作废** | S–M | 操作员 |
-| **W1** ◆ P1 | **MAVLink 仪器接入层**:core `instruments`:`trait InstrumentSource`;从**现有** `core::telemetry`(`GPS_RAW_INT`/`GLOBAL_POSITION_INT`)与 `core::signals`(磁消息 → nT)提取类型化磁/GNSS 样本;**不写 NMEA 解析、不写串口/TCP/蓝牙传输**;流速率与时效监控(复用 A3/L3);时间戳 = GNSS/PX4 时间 + 主机单调时钟(游走/跳变检测)。**含 MAVLink 合成数据模拟器**(磁 + GPS 消息),CI 不依赖硬件。 | `core/src/instruments/`(薄适配);`app-tauri` 适配 | 模拟器 MAVLink 流端到端提取正确;磁流中断/速率偏离/GPS 降级有告警;时间跳变被检出 | M | W0, A3 |
-| **W2** ◆ P1 | **步行记录器**:扩展 A4:除 tlog(原始 MAVLink 帧)外,把提取的**磁样本与 GNSS 样本**带时间戳落盘 + 事件 JSONL(航线开始/结束、marker、暂停、质量事件)+ `session.json`;沿用"专用写线程 + 有界通道 + 不阻塞采集";导出 **CSV**(字段表见 ADR-020:UTC、纬经高/AMSL、F、X/Y/Z、fix/HDOP/卫星、line_id、quality)。 | `core/src/recorder/` | 回放原始文件与采集样本一致;写盘卡顿时采集不丢帧;异常退出后可解析到最后一次 flush | M | A4, W1 |
+| **W1** ◆ P1 | **MAVLink 仪器接入层**(与 UAV 磁测**共用同一套传感器与数据流**,不新增步行专用采集通路):core `instruments`:`trait InstrumentSource`;从**现有** `core::telemetry`(`GPS_RAW_INT`/`GLOBAL_POSITION_INT`)与 `core::signals`(磁消息 → nT)提取类型化磁/GNSS 样本;**不写 NMEA 解析、不写串口/TCP/蓝牙传输**;流速率与时效监控(复用 A3/L3);时间戳 = GNSS/PX4 时间 + 主机单调时钟(游走/跳变检测)。**含 MAVLink 合成数据模拟器**(磁 + GPS 消息),CI 不依赖硬件。 | `core/src/instruments/`(薄适配);`app-tauri` 适配 | 模拟器 MAVLink 流端到端提取正确;磁流中断/速率偏离/GPS 降级有告警;时间跳变被检出 | M | W0, A3 |
+| **W2** ◆ P1 | **步行记录器**(**扩展现有 A4 记录器**,不新建独立管线):除 tlog(原始 MAVLink 帧)外,把提取的**磁样本与 GNSS 样本**带时间戳落盘 + 事件 JSONL(航线开始/结束、marker、暂停、质量事件)+ `session.json`;沿用"专用写线程 + 有界通道 + 不阻塞采集";导出 **CSV**(字段表见 ADR-020:UTC、纬经高/AMSL、F、X/Y/Z、fix/HDOP/卫星、line_id、quality)。 | `core/src/recorder/` | 回放原始文件与采集样本一致;写盘卡顿时采集不丢帧;异常退出后可解析到最后一次 flush | M | A4, W1 |
 | **W3** P1 | **步行导航引导**(core 计算):横向偏差、沿线进度、到下一点距离、航线方向、建议速度带;偏离/超速/过慢告警;**输入为 MAVLink(RTK)GNSS 位置**(带质量与时效)。**低速时不输出航向**(不用磁罗盘,不用磁力仪读数);位置过期标 `Stale` 并停止引导,不显示为有效。小范围内用局部切平面计算。 | 新 `core/src/walk_nav/` | 合成轨迹(含噪声/漂移/暂停):横向偏差与解析值差 < 1 mm;低速不输出航向;位置过期置 `Stale` | M | W1, PJ2 |
 | **W4** ◆ P1 | **步行测量 driver**(接入 PJ2/M1 状态机):`Planned → Ready → AtStart → Walking(line k) → Paused → LineDone → Complete/Aborted`;航线起止触发可选:手动按钮、进入起点缓冲区 + 速度阈值自动、marker;暂停/续测/重测;**站点式**:到点后平均 N 秒、样本数不足不得通过;事件写入记录器。 | 新 `core/src/survey_session/walk.rs` | 表驱动事件序列测试:重复触发、中途暂停、GNSS 丢失、重测、站点样本不足 | L | PJ2, W2, W3 |
 | **W5** ◆ P1 | **步行 QC**(M3 的步行版):采样间距分布、速度带、GNSS 质量(fix/HDOP/浮点占比)、位置间隙(插值段显式标记,不外推)、磁数据中断、尖峰/噪声、**经 VIC 改正后残差**(M8)、tie 线交叉点残差;每条航线 `LineQc{pass, flags}`,不合格进补测清单。**所有阈值可配,不内置未经确认的数值**(沿用 M8 原则)。只观测与告警。 | 新 `core/src/qc/walk.rs` | 合成数据:注入间距超限/位置缺口/尖峰/日变,有检出率与误报率数值 | L | W4, M8 |
@@ -351,14 +353,14 @@ S1 `PatternLine`(survey/tie/cal)、M7/M8 日变管线、A3 告警、A4 记录器
 3. CGG2013 格网的可获得性与格式(H7,issues N2)。
 4. VIC 经 NRCan FDSN 服务的实际可用通道(`LFF`/`LFX…` 与位置码)、秒级总场的真实采样率、近实时延迟、是否需要登记邮箱(M7)。
 5. VIC 是否在 INTERMAGNET 提供秒级数据(回退路径)。
-6. tlog 格式是否与 QGC 完全一致(A4)。
+6. ~~tlog 格式是否与 QGC 完全一致(A4)。~~ **已解决(A4/ADR-021)**:QGC 文档为"8 字节自 Unix 纪元起微秒的 `uint64_t`(`memcpy`,主机字节序)+ 原始 MAVLink 包(含起始符)";目标平台均小端,写端取小端 u64,读端按自定界重新分帧以兼容 QGC 文件。大端主机需另复核。
 7. PX4 v1.17 的日志与速度限制参数名(M2、M5)。
 8. 解锁被拒时 STATUSTEXT 原因是否稳定随后到达(L1)。
 9. 主窗口先关而子窗口仍开时的进程行为(L4);子窗口是否显示链路/飞行告警(U3)。
 10. 规划编辑是否已有撤销/重做、窗口位置是否已记忆(U8、U11)。
 11. 地图与规划共享的前端 store 范围(任务、选中、图层、相机、drape 结果),决定 A11 的工作量(U15)。
 12. Tauri 多 webview/窗口在目标平台(Windows/macOS/Linux)上的行为:Cesium 在独立窗口的 WebGL 初始化、窗口回落、context lost 恢复(U15、A8)。
-13. ~~步行磁力仪与 GNSS 的实际型号、接口、输出格式与采样率(W0)。~~ **大部分已定(W0/ADR-020)**:DroneCAN 磁力仪(RM3100 或 Bartington UAS-Mag,单传感器)+ ZED-F9P RTK,数据全部走 MAVLink(PX4 仅作仪器中枢)。**仍待实机确认**:磁力仪采样率、具体 PX4 消息/实例(`HIGHRES_IMU` vs `SCALED_IMU*`;原始 vs PX4 校准值)。
+13. ~~步行磁力仪与 GNSS 的实际型号、接口、输出格式与采样率(W0)。~~ **已确认(W0/ADR-020)**:DroneCAN 磁力仪(RM3100 或 Bartington UAS-Mag,单传感器)+ ZED-F9P RTK,数据全部走 MAVLink(PX4 仅作仪器中枢);磁数据取 **`HIGHRES_IMU`(PX4 已校准)** sensor 1,**≈100 Hz**。**仍待实机确认**:具体节点型号与杆高(杆高为项目/操作员输入)。
 
 **风险**
 
@@ -366,7 +368,7 @@ S1 `PatternLine`(survey/tie/cal)、M7/M8 日变管线、A3 告警、A4 记录器
 - 日变空间相关性:VIC 在维多利亚以北约 16 km,测区距离越大改正越不可靠;M8 记录距离并告警。
 - 1 m 数据下,基准链、水平基准和机体离地高度的误差可能超过 DEM 自身误差;M9 与 H7 的目的就是让它们可见,不得用放宽阈值来"通过"验收。
 - HRDEM 项目采集年代可能较旧,与现场植被/地表不一致:靠 M4 留痕与 H6 提示。
-- **步行仪器细节待实机确认**:协议已定为 DroneCAN/MAVLink(ADR-020),但采样率与具体消息/实例需实机核对;W1 先用 MAVLink 合成流跑通管线、记录与 QC,细节适配留到拿到实机数据之后。
+- **步行仪器细节**:协议已定为 DroneCAN/MAVLink(ADR-020);磁数据取 **`HIGHRES_IMU`(PX4 已校准)**、**≈100 Hz**(已确认)。W1 先用 MAVLink 合成流跑通管线、记录与 QC;仅剩具体节点型号与杆高待实机/项目输入。
 - **步行 GNSS 质量**:树冠下浮点/丢星会让位置误差大于测线间距;W5 必须把这类段落显式标记,不得静默通过。
 - **操作员磁污染**:身上铁磁物会直接污染数据,W6 的磁洁净检查只能发现明显问题,不能替代操作规程。
 - **地图分离的状态漂移**:两个 webview 若各持一份状态会漂移;A11 未完成前不得上线 U15。
@@ -380,7 +382,7 @@ S1 `PatternLine`(survey/tie/cal)、M7/M8 日变管线、A3 告警、A4 记录器
 4. 日变扰动门限(弦长与变化率)的取值来源(合同/规范)。
 5. 现场使用的设备类型(笔记本 / 平板 / 触屏)与是否戴手套(决定 U12 的默认现场模式与尺寸)。
 6. 是否使用多显示器(决定 U15 的优先级;单屏/平板场景下建议保持内嵌默认)。
-7. ~~步行磁测采集方式~~ **已确认(W0)**:以连续步行为主(站点式仍留 W4);**非梯度**(单传感器);仍待定:杆高与采样率范围。
+7. ~~步行磁测采集方式~~ **已确认(W0)**:以连续步行为主(站点式仍留 W4);**非梯度**(单传感器);磁采样率 **≈100 Hz(`HIGHRES_IMU`)**;仍待定:杆高。
 8. ~~步行仪器由 GCS 直接记录,还是仪器自带记录~~ **已确认(W0)**:两者并用——PX4 SD/ULog 为全速率主记录,GCS 消费 MAVLink 实时磁+位置并另存。
 9. ~~步行测量的交付格式~~ **已部分确认(W0)**:交付 **CSV**(字段表见 ADR-020);坐标系为 WGS84,高度含椭球高与 AMSL;是否需其他格式与基准字段仍待定(影响 PJ1 项目坐标系字段)。
 10. 同一项目内是否会对同一测区先后做 UAV 与步行测量并比较(决定 PJ5 的优先级)。

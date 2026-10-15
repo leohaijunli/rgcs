@@ -156,8 +156,22 @@ impl<S: RpmSource> MotorTestSession<S> {
             return Vec::new();
         }
         if let Err(reason) = self.interlock.check(now) {
-            self.stop(reason);
-            return self.release_frames();
+            // A fresh session holds for the first heartbeat: PX4 streams
+            // HEARTBEAT at 1 Hz, so a session started before the first
+            // heartbeat reaches it would otherwise stop on its very first tick
+            // (the reported "bounces straight back to idle"). Hold for the
+            // heartbeat timeout; if no heartbeat arrives within it the link is
+            // dead and the session stops. An *armed* first heartbeat still
+            // stops immediately, and the FC-side ACTUATOR_TEST deny is the
+            // backstop while the armed state is unknown.
+            let started = self.started_at.unwrap_or(now);
+            let waiting_for_first = reason == StopReason::HeartbeatStale
+                && !self.interlock.has_heartbeat()
+                && now.duration_since(started) <= self.interlock.limits().heartbeat_timeout;
+            if !waiting_for_first {
+                self.stop(reason);
+                return self.release_frames();
+            }
         }
         let started = self.started_at.unwrap_or(now);
         let dt = now.duration_since(started).as_secs_f64();
@@ -431,5 +445,59 @@ mod tests {
         // 0.1 s tick at 10 /s slew budget → 1.0 per second → ≤ 1.0… with a
         // 0-tick first step the slew allows the full first step from 0.
         assert!(!frames.is_empty());
+    }
+
+    #[test]
+    fn fresh_session_holds_for_the_first_heartbeat() {
+        // The reported "bounces straight back to idle": Start clicked before
+        // the FC's first heartbeat reaches the session — the interlock had no
+        // `armed` state and failed on the very first tick. A fresh session
+        // must hold for the first heartbeat within the timeout instead.
+        let mut s = session(&[0.4]);
+        let now = Instant::now();
+        s.start(now);
+        // First tick, no heartbeat yet: still sending, not stopped.
+        let frames = s.tick(now);
+        assert!(
+            !frames.is_empty(),
+            "keeps sending while awaiting the first heartbeat"
+        );
+        assert_eq!(s.state(), SessionState::ManualRunning);
+
+        // Still no heartbeat: the grace window holds.
+        let mid = now + std::time::Duration::from_millis(500);
+        let frames = s.tick(mid);
+        assert!(!frames.is_empty());
+        assert_eq!(s.state(), SessionState::ManualRunning);
+
+        // The first heartbeat arrives, not armed: normal interlock resumes.
+        s.interlock_mut().observe_heartbeat(false, mid);
+        let frames = s.tick(mid + std::time::Duration::from_millis(100));
+        assert!(!frames.is_empty());
+        assert_eq!(s.state(), SessionState::ManualRunning);
+
+        // No heartbeat at all within the grace window: the session stops.
+        let mut s2 = session(&[0.4]);
+        s2.start(now);
+        let _ = s2.tick(now);
+        let frames = s2.tick(now + std::time::Duration::from_secs(3));
+        assert_eq!(s2.state(), SessionState::Idle);
+        assert_eq!(s2.take_stop_reason(), Some(StopReason::HeartbeatStale));
+        assert_eq!(frames.len(), 1, "release frame");
+    }
+
+    #[test]
+    fn an_armed_first_heartbeat_stops_immediately() {
+        // The grace window must not cover an armed vehicle: the first
+        // heartbeat says armed → release and stop on the next tick.
+        let mut s = session(&[0.4]);
+        let now = Instant::now();
+        s.start(now);
+        let _ = s.tick(now);
+        s.interlock_mut().observe_heartbeat(true, now);
+        let frames = s.tick(now + std::time::Duration::from_millis(100));
+        assert_eq!(s.state(), SessionState::Idle);
+        assert_eq!(s.take_stop_reason(), Some(StopReason::Armed));
+        assert_eq!(frames.len(), 1, "release frame");
     }
 }

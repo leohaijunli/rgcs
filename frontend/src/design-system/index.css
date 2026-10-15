@@ -204,6 +204,45 @@ body {
   min-height: 44px;
 }
 
+/* Critical-alert full-screen flash (plan §7 U3): a short burst of red, not a
+   persistent tint — the latched banner is the persistent part. Honours the OS
+   reduced-motion preference (no flash at all). */
+@keyframes mg-alert-flash {
+  0% {
+    opacity: 0;
+  }
+  12% {
+    opacity: 0.55;
+  }
+  24% {
+    opacity: 0.08;
+  }
+  38% {
+    opacity: 0.45;
+  }
+  52% {
+    opacity: 0.06;
+  }
+  66% {
+    opacity: 0.32;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.mg-alert-flash {
+  background: var(--mg-error);
+  animation: mg-alert-flash 1s ease-out forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mg-alert-flash {
+    animation: none;
+    opacity: 0;
+  }
+}
+
 :focus-visible {
   outline: 2px solid var(--mg-accent);
   outline-offset: 2px;

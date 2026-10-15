@@ -25,6 +25,7 @@ import {
 import { useCommandProgress, useCommandStore } from '../stores/command'
 import { useLinkStore } from '../stores/link'
 import { useTelemetryStore } from '../stores/telemetry'
+import { usePreflightUi } from '../stores/preflight'
 import ConfirmContextBar from './ConfirmContextBar'
 
 /** Terminal ack results the menu surfaces in the status strip. */
@@ -70,6 +71,7 @@ export default function FlightMenu() {
   const send = useCommandStore((s) => s.send)
   const sendArmDisarm = useCommandStore((s) => s.sendArmDisarm)
   const dismissResult = useCommandStore((s) => s.dismissResult)
+  const openPreflight = usePreflightUi((s) => s.openPanel)
   const progress = useCommandProgress()
 
   // Close on outside click / Esc.
@@ -130,8 +132,17 @@ export default function FlightMenu() {
     label: string
     hint: string
     danger?: boolean
+    /** A menu action, not a flight command: a plain click fires it (U5). */
+    link?: boolean
     action: () => void
   }> = [
+    {
+      key: 'preflight',
+      label: t('preflight.title'),
+      hint: t('preflight.openHint'),
+      link: true,
+      action: () => openPreflight(),
+    },
     {
       key: 'takeoff',
       label: t('plan.takeoff'),
@@ -180,19 +191,31 @@ export default function FlightMenu() {
         <div className="absolute right-0 top-full z-50 mt-1 w-64 rounded border border-line bg-panel p-2 shadow-2xl">
           <ConfirmContextBar />
           <div className="mt-2 flex flex-col gap-1">
-            {entries.map((entry) => (
-              <HoldButton
-                key={entry.key}
-                data-testid={`flight-cmd-${entry.key}`}
-                variant={entry.danger ? 'danger' : 'default'}
-                disabled={busy}
-                hint={entry.hint}
-                onConfirm={entry.action}
-                className="w-full"
-              >
-                {entry.label}
-              </HoldButton>
-            ))}
+            {entries.map((entry) =>
+              entry.link ? (
+                <button
+                  key={entry.key}
+                  data-testid={`flight-cmd-${entry.key}`}
+                  onClick={entry.action}
+                  title={entry.hint}
+                  className="flex h-9 w-full items-center rounded border border-line bg-canvas px-2 text-xs text-ink hover:bg-panel"
+                >
+                  {entry.label}
+                </button>
+              ) : (
+                <HoldButton
+                  key={entry.key}
+                  data-testid={`flight-cmd-${entry.key}`}
+                  variant={entry.danger ? 'danger' : 'default'}
+                  disabled={busy}
+                  hint={entry.hint}
+                  onConfirm={entry.action}
+                  className="w-full"
+                >
+                  {entry.label}
+                </HoldButton>
+              ),
+            )}
           </div>
           <div className="mt-1.5 text-[10px] text-muted">
             {t('plan.cmd.holdNote', { s: HOLD_MS / 1000 })}
