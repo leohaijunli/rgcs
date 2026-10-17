@@ -63,6 +63,10 @@ pub enum MotorTestCommand {
     /// Latest-value-wins manual update (UI throttles to ~30 Hz).
     SetValues(Vec<f32>),
     Stop,
+    /// Stop and acknowledge after the release frames have been written.
+    StopAndWait {
+        reply: tokio::sync::oneshot::Sender<bool>,
+    },
     Emergency,
     ResetEmergency,
 }
@@ -124,6 +128,16 @@ impl MotorTestService {
     ) -> Result<(), mpsc::error::TrySendError<MotorTestCommand>> {
         self.cmd_tx.try_send(cmd)
     }
+
+    /// Stop and wait until the release pass has been sent on the link.
+    pub async fn stop_and_wait(&self) -> Result<bool, String> {
+        let (reply, ack) = tokio::sync::oneshot::channel();
+        self.cmd_tx
+            .send(MotorTestCommand::StopAndWait { reply })
+            .await
+            .map_err(|error| error.to_string())?;
+        ack.await.map_err(|error| error.to_string())
+    }
 }
 
 /// The shell loop. The session is the pure core; this only moves frames.
@@ -135,7 +149,13 @@ async fn run(
     output_tx: tokio::sync::watch::Sender<Vec<f32>>,
     tick: std::time::Duration,
 ) {
-    let mut events_rx = handle.subscribe_route(MessageRoute::messages(WATCHED_MESSAGES));
+    // A shared MAVLink bus can carry multiple vehicles. Only the aircraft
+    // addressed by ACTUATOR_TEST may supply this session's armed state or
+    // acknowledgements; a separate armed SITL must not trip the bench target.
+    let mut events_rx = handle.subscribe_route(MessageRoute::messages(WATCHED_MESSAGES).from(
+        session.interlock().limits().target_sys,
+        session.interlock().limits().target_comp,
+    ));
     let mut ticker = tokio::time::interval(ticker_period(tick));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut last_state = session.state();
@@ -143,6 +163,7 @@ async fn run(
     loop {
         let mut outgoing: Vec<MavMessage> = Vec::new();
         let mut stop_event: Option<StopReason> = None;
+        let mut stop_reply = None;
 
         tokio::select! {
             cmd = cmd_rx.recv() => {
@@ -157,6 +178,11 @@ async fn run(
                     }
                     MotorTestCommand::SetValues(values) => session.set_any_values(values),
                     MotorTestCommand::Stop => session.stop(StopReason::Command),
+                    MotorTestCommand::StopAndWait { reply } => {
+                        let was_sending = session.state().is_sending();
+                        session.stop(StopReason::Command);
+                        stop_reply = Some((reply, was_sending));
+                    }
                     MotorTestCommand::Emergency => session.emergency_stop(),
                     MotorTestCommand::ResetEmergency => session.reset_emergency(),
                 }
@@ -199,10 +225,15 @@ async fn run(
             stop_event = Some(reason);
         }
 
+        let mut send_succeeded = true;
         for frame in outgoing {
-            if handle.send(frame).await.is_err() {
-                return; // link gone: PX4's 3 s timeout is the backstop
+            if handle.send_confirmed(frame).await.is_err() {
+                send_succeeded = false;
+                break;
             }
+        }
+        if !send_succeeded {
+            return; // link gone: PX4's 3 s timeout is the backstop
         }
 
         // Publish the latest values that went onto the wire (the window's
@@ -223,6 +254,9 @@ async fn run(
             if evt_tx.send(MotorTestEvent::Stopped(reason)).await.is_err() {
                 return;
             }
+        }
+        if let Some((reply, was_sending)) = stop_reply {
+            let _ = reply.send(was_sending);
         }
     }
 }

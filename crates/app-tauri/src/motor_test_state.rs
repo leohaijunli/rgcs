@@ -33,19 +33,152 @@ pub struct RunningMotorTest {
 pub struct MotorTestTarget {
     pub handle: ConnectionHandle,
     pub endpoint: String,
+    /// Expected MAVLink system ID of this target; this is routing only and
+    /// does not change the vehicle's configured identity.
+    pub target_system_id: u8,
     /// `COM_MOT_TEST_EN` read from the PX4 (`None` = not read yet / unknown).
     /// PX4 denies `ACTUATOR_TEST` while this parameter is not 1.
     pub com_mot_test_en: std::sync::Arc<std::sync::Mutex<Option<f32>>>,
 }
 
-/// The secondary link: a PX4 SITL whose `SERVO_OUTPUT_RAW` feeds the
-/// realtime-forward slot (revised D3).
-pub struct SitlLink {
-    pub handle: ConnectionHandle,
-    /// Tap task: normalizes the SITL's main outputs 1–4 into the slot.
-    pub tap: tauri::async_runtime::JoinHandle<()>,
+/// Owns a motor-test auxiliary link and its link-scoped tasks. Stop is
+/// idempotent; the caller must complete any active motor-test release before
+/// invoking it.
+pub struct AuxiliaryLinkRuntime {
+    handle: Option<ConnectionHandle>,
+    tasks: Vec<tauri::async_runtime::JoinHandle<()>>,
+}
+
+impl AuxiliaryLinkRuntime {
+    /// Construct an owner for the connection and its observer/tap task.
+    pub fn new(
+        handle: ConnectionHandle,
+        tasks: impl IntoIterator<Item = tauri::async_runtime::JoinHandle<()>>,
+    ) -> Self {
+        Self {
+            handle: Some(handle),
+            tasks: tasks.into_iter().collect(),
+        }
+    }
+
+    /// Register another link-scoped observer before publishing the runtime.
+    pub fn add_task(&mut self, task: tauri::async_runtime::JoinHandle<()>) {
+        self.tasks.push(task);
+    }
+
+    /// Register multiple tasks belonging to the same link.
+    pub fn add_tasks(
+        &mut self,
+        tasks: impl IntoIterator<Item = tauri::async_runtime::JoinHandle<()>>,
+    ) {
+        self.tasks.extend(tasks);
+    }
+
+    /// Take tasks for a window-only detach while keeping the link connected.
+    pub fn take_tasks(&mut self) -> Vec<tauri::async_runtime::JoinHandle<()>> {
+        std::mem::take(&mut self.tasks)
+    }
+
+    /// Stop observers and then the connection. Repeated calls are harmless
+    /// and never hold a state lock across an await.
+    pub async fn stop(&mut self) {
+        stop_auxiliary_tasks(self.take_tasks()).await;
+        if let Some(handle) = self.handle.take() {
+            handle.shutdown().await;
+        }
+    }
+}
+
+impl Drop for AuxiliaryLinkRuntime {
+    fn drop(&mut self) {
+        for task in self.tasks.drain(..) {
+            task.abort();
+        }
+        if let Some(handle) = self.handle.take() {
+            tauri::async_runtime::spawn(async move {
+                handle.shutdown().await;
+            });
+        }
+    }
+}
+
+/// Abort and join link-scoped observer tasks after releasing state locks.
+pub async fn stop_auxiliary_tasks(tasks: Vec<tauri::async_runtime::JoinHandle<()>>) {
+    for task in tasks {
+        task.abort();
+        let _ = task.await;
+    }
+}
+
+/// The motor test target link plus its telemetry observer runtime.
+pub struct TargetLinkRuntime {
+    pub target: MotorTestTarget,
+    pub runtime: AuxiliaryLinkRuntime,
+}
+
+/// The SITL source link plus its SERVO_OUTPUT_RAW forwarder runtime.
+pub struct SitlLinkRuntime {
     pub slot: ForwardSlot,
     pub endpoint: String,
+    pub runtime: AuxiliaryLinkRuntime,
+}
+
+impl TargetLinkRuntime {
+    /// Stop observers and the link owned by this target.
+    pub async fn stop(mut self) {
+        self.runtime.stop().await;
+    }
+}
+
+impl SitlLinkRuntime {
+    /// Stop the actuator tap and the link owned by this SITL source.
+    pub async fn stop(mut self) {
+        self.runtime.stop().await;
+    }
+}
+
+#[cfg(test)]
+mod auxiliary_runtime_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn auxiliary_runtime_stop_is_idempotent() {
+        let port = std::net::UdpSocket::bind("127.0.0.1:0")
+            .expect("bind ephemeral UDP port")
+            .local_addr()
+            .expect("socket address");
+        let config = maggcs_core::mavlink::ConnectionConfig {
+            endpoint: maggcs_core::mavlink::Endpoint::UdpListener { addr: port },
+            ..Default::default()
+        };
+        let (handle, _events, first) = maggcs_core::mavlink::connection::spawn_connection(config)
+            .await
+            .expect("spawn auxiliary link");
+        first
+            .await
+            .expect("first connection result")
+            .expect("link bound");
+        let dropped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let task_dropped = dropped.clone();
+        let task = tauri::async_runtime::spawn(async move {
+            struct DropFlag(std::sync::Arc<std::sync::atomic::AtomicBool>);
+            impl Drop for DropFlag {
+                fn drop(&mut self) {
+                    self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+            let _flag = DropFlag(task_dropped);
+            std::future::pending::<()>().await;
+        });
+        tokio::task::yield_now().await;
+        let mut runtime = AuxiliaryLinkRuntime::new(handle.clone(), [task]);
+
+        runtime.stop().await;
+        runtime.stop().await;
+        assert!(runtime.handle.is_none());
+        assert!(runtime.tasks.is_empty());
+        assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+    }
 }
 
 /// Live mag/ESC telemetry for the motor-test window (A4 wiring): the tap
@@ -69,12 +202,10 @@ pub struct MotorTestState {
     pub running: PLMutex<Option<RunningMotorTest>>,
     pub last_state: PLMutex<Option<SessionState>>,
     /// The real-PX4 (serial) link the motor test sends to.
-    pub target: PLMutex<Option<MotorTestTarget>>,
-    pub sitl: PLMutex<Option<SitlLink>>,
+    pub target: PLMutex<Option<TargetLinkRuntime>>,
+    pub sitl: PLMutex<Option<SitlLinkRuntime>>,
     /// Telemetry tap (mag/ESC) — `None` until a link attaches.
     pub telemetry: PLMutex<Option<MotorTelemetry>>,
-    /// Abort handle for the telemetry tap task.
-    pub telemetry_tap: PLMutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     /// Producer → flusher queue for the window's signal scope (SITL servo,
     /// target-FC servo/mag/ESC, sent commands).
     pub scope: ScopeBus,
@@ -97,7 +228,7 @@ impl MotorTestState {
 /// Conservative default envelope per declared prop load (plan §2.2-2: the
 /// load sets the output cap and confirmation strength). Numbers are starting
 /// points — M0 bench data will tighten them.
-pub fn limits_for_load(load: &str) -> SafetyLimits {
+pub fn limits_for_load(load: &str, target_system_id: u8) -> SafetyLimits {
     let (max_value, max_slew_per_s) = match load {
         // No props: safest — full range, brisk ramp.
         "none" => (1.0, 8.0),
@@ -110,7 +241,7 @@ pub fn limits_for_load(load: &str) -> SafetyLimits {
         max_value,
         max_slew_per_s,
         heartbeat_timeout: Duration::from_millis(1500),
-        target_sys: 1,
+        target_sys: target_system_id,
         target_comp: 1,
     }
 }

@@ -92,6 +92,7 @@ interface ActuatorStatus {
   /** The motor test's own target link (real PX4, serial). */
   target_connected: boolean
   target_endpoint: string | null
+  target_system_id: number | null
   /** COM_MOT_TEST_EN read from the target PX4 (null = unknown). */
   com_mot_test_en: number | null
   /** Normalized SITL servo outputs 1–4 (the forward INPUT). */
@@ -115,6 +116,7 @@ const IDLE: ActuatorStatus = {
   sitl_feed_age_s: null,
   target_connected: false,
   target_endpoint: null,
+  target_system_id: null,
   com_mot_test_en: null,
   input_values: [],
   output_values: [],
@@ -153,6 +155,8 @@ export function ActuatorApp() {
   // The motor test's own target link: the real PX4 over serial (the main
   // GCS keeps its own link, e.g. UDP SITL).
   const [targetEndpoint, setTargetEndpoint] = useState('serial:/dev/ttyACM0:115200')
+  const [targetSystemId, setTargetSystemId] = useState(1)
+  const [targetConnectError, setTargetConnectError] = useState<string | null>(null)
   // Why the last session stopped (armed / heartbeat_stale / acks_denied / …).
   const [stopReason, setStopReason] = useState<string | null>(null)
   // Confirmation state.
@@ -209,6 +213,9 @@ export function ActuatorApp() {
       try {
         const s = await invoke<ActuatorStatus>('actuator_status')
         setStatus(s)
+        if (s.target_connected && s.target_system_id !== null) {
+          setTargetSystemId(s.target_system_id)
+        }
         if (s.session === 'emergency') setEmergency(true)
         if (prevTargetConnectedRef.current && !s.target_connected) {
           scopeStore.clear()
@@ -899,6 +906,32 @@ export function ActuatorApp() {
             aria-label="Target PX4 serial endpoint"
             spellCheck={false}
           />
+          <label className="motor-row" style={{ marginTop: 6 }}>
+            <span className="motor-label" style={{ width: 92 }}>System ID</span>
+            <input
+              className="phrase-input"
+              style={{ flex: 1, margin: 0 }}
+              type="number"
+              min={1}
+              max={255}
+              step={1}
+              value={targetSystemId}
+              onChange={(e) => {
+                setTargetSystemId(Number(e.target.value))
+                setTargetConnectError(null)
+              }}
+              aria-label="Target MAVLink system ID"
+              disabled={status.target_connected}
+            />
+          </label>
+          <div className="estop-note" style={{ marginTop: 4 }}>
+            Routing only — this does not change the vehicle's configured ID.
+          </div>
+          {targetConnectError && (
+            <div className="estop-note" role="alert" style={{ color: 'var(--mg-error)' }}>
+              {targetConnectError}
+            </div>
+          )}
           {status.target_connected ? (
             <button
               className="mode-btn"
@@ -911,7 +944,16 @@ export function ActuatorApp() {
             <button
               className="mode-btn"
               style={{ width: '100%', marginTop: 6 }}
-              onClick={() => tauri && void invoke('actuator_connect_target', { endpoint: targetEndpoint }).catch(() => {})}
+              onClick={() => {
+                setTargetConnectError(null)
+                void invoke('actuator_connect_target', {
+                  endpoint: targetEndpoint,
+                  targetSystemId,
+                }).catch((error: unknown) => {
+                  setTargetConnectError(String(error))
+                })
+              }}
+              disabled={!Number.isInteger(targetSystemId) || targetSystemId < 1 || targetSystemId > 255}
             >
               Connect PX4 (serial)
             </button>
@@ -923,8 +965,14 @@ export function ActuatorApp() {
             </span>
           </div>
           <div className="row">
-            <span className="text-muted">FC heartbeat</span>
-            <span className="mono">{status.fc_alive ? 'alive' : 'lost'}</span>
+            <span className="text-muted">Primary GCS link</span>
+            <span className="mono">{status.fc_alive ? 'heartbeat alive' : 'heartbeat lost'}</span>
+          </div>
+          <div className="row">
+            <span className="text-muted">Target system ID</span>
+            <span className="mono">
+              {status.target_connected ? status.target_system_id : 'primary link default (1)'}
+            </span>
           </div>
           <div className="row">
             <span className="text-muted">FC mode</span>

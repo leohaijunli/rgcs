@@ -25,8 +25,14 @@ use maggcs_core::motor_test::service::{MotorTestCommand, MotorTestEvent, MotorTe
 use maggcs_core::motor_test::source::ForwardSlot;
 use maggcs_core::motor_test::{SessionState, DEFAULT_TICK_HZ};
 
+/// Maximum time to observe the release pass before closing an actuator link.
+const MOTOR_TEST_STOP_TIMEOUT: Duration = Duration::from_secs(2);
+const DEFAULT_MOTOR_TEST_TARGET_SYSTEM_ID: u8 = 1;
+
 use crate::motor_test_state::limits_for_load;
-use crate::motor_test_state::MotorTestTarget;
+use crate::motor_test_state::{
+    AuxiliaryLinkRuntime, MotorTestTarget, SitlLinkRuntime, TargetLinkRuntime,
+};
 use crate::state::AppState;
 
 /// Status snapshot for the window's header and right panel (polled ~1 Hz by
@@ -56,6 +62,7 @@ pub struct ActuatorStatus {
     /// The motor test's own target link (real PX4, serial): connected + endpoint.
     pub target_connected: bool,
     pub target_endpoint: Option<String>,
+    pub target_system_id: Option<u8>,
     /// `COM_MOT_TEST_EN` read from the target PX4 (`None` = unknown): PX4
     /// denies ACTUATOR_TEST while this is not 1.
     pub com_mot_test_en: Option<f32>,
@@ -81,15 +88,40 @@ pub fn actuator_open(app: AppHandle) -> Result<(), String> {
         .build()
         .map_err(|e| e.to_string())?;
     start_scope_flusher(&app);
+    let state = app.state::<AppState>();
+    let target_handle = state.motor_test.target.lock().as_ref().map(|runtime| {
+        (
+            runtime.target.handle.clone(),
+            runtime.target.target_system_id,
+        )
+    });
+    if let Some((handle, target_system_id)) = target_handle {
+        attach_motor_telemetry(&app, handle, target_system_id);
+    }
     // Closing the window must stop the motors (plan §8.3).
     let app_for_cleanup = app.clone();
     win.on_window_event(move |event| {
         if let WindowEvent::Destroyed = event {
-            let state = app_for_cleanup.state::<AppState>();
-            stop_running_session(&state);
-            state.motor_test.running.lock().take();
-            detach_motor_telemetry(&state);
-            stop_scope_flusher(&state);
+            let app = app_for_cleanup.clone();
+            tauri::async_runtime::spawn(async move {
+                let state = app.state::<AppState>();
+                let _ops = state.ops().lock().await;
+                if let Err(error) = stop_active_session(&state).await {
+                    let _ = app.emit("actuator_stop_warning", error);
+                    return;
+                }
+                state.motor_test.running.lock().take();
+                let sitl = state.motor_test.sitl.lock().take();
+                if let Some(sitl) = sitl {
+                    sitl.stop().await;
+                }
+                detach_motor_telemetry(&state).await;
+                let target = state.motor_test.target.lock().take();
+                if let Some(target) = target {
+                    target.stop().await;
+                }
+                stop_scope_flusher(&state);
+            });
         }
     });
     Ok(())
@@ -97,10 +129,12 @@ pub fn actuator_open(app: AppHandle) -> Result<(), String> {
 
 /// Close the motor-test window and run the stop path.
 #[tauri::command]
-pub fn actuator_close(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    stop_running_session(&state);
+pub async fn actuator_close(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let _ops = state.ops().lock().await;
+    stop_active_session(&state).await?;
     state.motor_test.running.lock().take();
-    detach_motor_telemetry(&state);
+    detach_motor_telemetry(&state).await;
+    stop_auxiliary_links(&state).await;
     stop_scope_flusher(&state);
     if let Some(win) = app.get_webview_window("actuator") {
         let _ = win.close();
@@ -136,7 +170,9 @@ pub async fn actuator_start_manual(
             .map_err(|e| e.to_string());
     }
     let handle = fc_link(&state).ok_or("no link — connect the serial PX4 first")?;
-    let (svc, evt_rx, output_rx) = MotorTestService::spawn(handle, limits_for_load(&load));
+    let target_system_id = motor_test_target_system_id(&state);
+    let (svc, evt_rx, output_rx) =
+        MotorTestService::spawn(handle, limits_for_load(&load, target_system_id));
     let forwarder = tauri::async_runtime::spawn(forward_events(app.clone(), evt_rx));
     *state.motor_test.running.lock() = Some(crate::motor_test_state::RunningMotorTest {
         svc: svc.clone(),
@@ -166,7 +202,9 @@ pub async fn actuator_start_preset(
         return Ok(());
     }
     let handle = fc_link(&state).ok_or("no link — connect the serial PX4 first")?;
-    let (svc, evt_rx, output_rx) = MotorTestService::spawn(handle, limits_for_load("none"));
+    let target_system_id = motor_test_target_system_id(&state);
+    let (svc, evt_rx, output_rx) =
+        MotorTestService::spawn(handle, limits_for_load("none", target_system_id));
     let forwarder = tauri::async_runtime::spawn(forward_events(app.clone(), evt_rx));
     *state.motor_test.running.lock() = Some(crate::motor_test_state::RunningMotorTest {
         svc: svc.clone(),
@@ -265,51 +303,94 @@ pub async fn actuator_connect_sitl(
         ))
         .await;
 
+    let _ops = state.ops().lock().await;
+    let existing_sitl = state.motor_test.sitl.lock().is_some();
+    let old_sitl = stop_before_auxiliary_close(
+        async {
+            if existing_sitl {
+                stop_active_session(&state).await?;
+            }
+            Ok(())
+        },
+        async {
+            let old_sitl = state.motor_test.sitl.lock().take();
+            if let Some(old) = old_sitl {
+                old.stop().await;
+            }
+            Ok::<(), String>(())
+        },
+    )
+    .await;
+    if let Err(error) = old_sitl {
+        handle.shutdown().await;
+        return Err(error);
+    }
     let slot: ForwardSlot = std::sync::Arc::new(std::sync::Mutex::new(
         maggcs_core::motor_test::source::ForwardState::new(4),
     ));
     let bus = state.motor_test.scope.clone();
     let tap = tauri::async_runtime::spawn(run_sitl_tap(handle.clone(), slot.clone(), bus));
-    let old = state
-        .motor_test
-        .sitl
-        .lock()
-        .replace(crate::motor_test_state::SitlLink {
-            handle,
-            tap,
-            slot,
-            endpoint,
-        });
-    if let Some(old) = old {
-        old.tap.abort();
-        old.handle.shutdown().await;
-    }
+    *state.motor_test.sitl.lock() = Some(SitlLinkRuntime {
+        slot,
+        endpoint,
+        runtime: AuxiliaryLinkRuntime::new(handle, [tap]),
+    });
     Ok(())
 }
 
 /// Drop the SITL source link.
 #[tauri::command]
 pub async fn actuator_disconnect_sitl(state: State<'_, AppState>) -> Result<(), String> {
-    // Take the entry out before awaiting: never hold the lock across the
-    // link shutdown (Send).
-    let old = state.motor_test.sitl.lock().take();
-    if let Some(old) = old {
-        old.tap.abort();
-        old.handle.shutdown().await;
-    }
-    Ok(())
+    let _ops = state.ops().lock().await;
+    let existing_sitl = state.motor_test.sitl.lock().is_some();
+    stop_before_auxiliary_close(
+        async {
+            if existing_sitl {
+                stop_active_session(&state).await?;
+            }
+            Ok(())
+        },
+        async {
+            // Take the entry before awaiting; never hold its state lock across
+            // link shutdown.
+            let old = state.motor_test.sitl.lock().take();
+            if let Some(old) = old {
+                old.stop().await;
+            }
+            Ok::<(), String>(())
+        },
+    )
+    .await
 }
 
 /// The link the motor test sends to: its dedicated serial target (the real
 /// PX4) when one is connected, else the app's primary link (backward
 /// compatible with the old single-link setup).
+fn validate_target_system_id(target_system_id: u8) -> Result<u8, String> {
+    if target_system_id == 0 {
+        Err("target system ID must be between 1 and 255".into())
+    } else {
+        Ok(target_system_id)
+    }
+}
+
+fn motor_test_target_system_id(state: &AppState) -> u8 {
+    state
+        .motor_test
+        .target
+        .lock()
+        .as_ref()
+        .map(|runtime| runtime.target.target_system_id)
+        .unwrap_or(DEFAULT_MOTOR_TEST_TARGET_SYSTEM_ID)
+}
+
 fn fc_link(state: &AppState) -> Option<maggcs_core::mavlink::ConnectionHandle> {
     state
         .motor_test
         .target
         .lock()
         .as_ref()
-        .map(|t| t.handle.clone())
+        .map(|runtime| runtime.target.handle.clone())
         .or_else(|| state.connection())
 }
 
@@ -322,14 +403,18 @@ pub async fn actuator_connect_target(
     app: AppHandle,
     state: State<'_, AppState>,
     endpoint: String,
+    target_system_id: u8,
 ) -> Result<(), String> {
+    let target_system_id = validate_target_system_id(target_system_id)?;
+    let _ops = state.ops().lock().await;
     let config = maggcs_core::mavlink::ConnectionConfig {
         endpoint: maggcs_core::mavlink::Endpoint::try_from(endpoint.as_str())
             .map_err(|e| e.to_string())?,
         system_id: 250,
         component_id: 250,
-        target_system_id: 1,
+        target_system_id,
         target_component_id: 1,
+        auto_discover_target: false,
         heartbeat_timeout: Duration::from_secs(30),
         ..Default::default()
     };
@@ -346,36 +431,74 @@ pub async fn actuator_connect_target(
             return Err("timed out waiting for the PX4 link".into());
         }
     }
+    // A session retains the old target handle. Release it before replacing
+    // that target; on timeout preserve the old target and close the new link.
+    if let Err(error) = stop_before_auxiliary_close(
+        async {
+            stop_active_session(&state).await?;
+            Ok(())
+        },
+        async {
+            detach_motor_telemetry(&state).await;
+            state.motor_test.running.lock().take();
+            let old = state.motor_test.target.lock().take();
+            if let Some(old) = old {
+                old.stop().await;
+            }
+            Ok::<(), String>(())
+        },
+    )
+    .await
+    {
+        handle.shutdown().await;
+        return Err(error);
+    }
     // The mag/ESC alarm reads HIGHRES_IMU / ESC_STATUS from the target FC.
-    attach_motor_telemetry(&app, handle.clone());
+    // Stream-rate requests and the parameter read are link-scoped tasks;
+    // publish their owner before starting any observers.
+    let com_mot_test_en = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let telemetry_handle = handle.clone();
+    *state.motor_test.target.lock() = Some(TargetLinkRuntime {
+        target: MotorTestTarget {
+            handle,
+            endpoint,
+            target_system_id,
+            com_mot_test_en: com_mot_test_en.clone(),
+        },
+        runtime: AuxiliaryLinkRuntime::new(telemetry_handle.clone(), []),
+    });
     // The scope needs these at useful rates; the FC defaults are low or
     // absent (ESC_STATUS only streams when asked). Stream rates only —
     // nothing persistent is written and a reboot reverts them.
-    for (msg_id, hz) in TARGET_STREAMS {
-        request_message_interval(&handle, msg_id, hz).await;
-    }
-    // Read COM_MOT_TEST_EN from the PX4 (PX4 denies ACTUATOR_TEST while it is
-    // not 1). The read is spawned so a quiet FC never stalls the connect;
-    // the value lands in the shared slot as soon as the PARAM_VALUE arrives.
-    let com_mot_test_en = std::sync::Arc::new(std::sync::Mutex::new(None));
-    {
-        let slot = com_mot_test_en.clone();
-        let h = handle.clone();
+    let stream_requests = {
+        let handle = telemetry_handle.clone();
         tauri::async_runtime::spawn(async move {
-            if let Some(v) = read_param(&h, "COM_MOT_TEST_EN").await {
-                if let Ok(mut guard) = slot.lock() {
-                    *guard = Some(v);
-                }
+            for (msg_id, hz) in TARGET_STREAMS {
+                request_message_interval(&handle, target_system_id, msg_id, hz).await;
             }
-        });
+        })
+    };
+    if let Some(target) = state.motor_test.target.lock().as_mut() {
+        target.runtime.add_task(stream_requests);
+    } else {
+        stream_requests.abort();
     }
-    let old = state.motor_test.target.lock().replace(MotorTestTarget {
-        handle,
-        endpoint,
-        com_mot_test_en,
+    attach_motor_telemetry(&app, telemetry_handle.clone(), target_system_id);
+    // Read COM_MOT_TEST_EN from the PX4 (PX4 denies ACTUATOR_TEST while it is
+    // not 1). The read is spawned so a quiet FC never stalls the connect.
+    let slot = com_mot_test_en;
+    let h = telemetry_handle;
+    let task = tauri::async_runtime::spawn(async move {
+        if let Some(v) = read_param(&h, target_system_id, "COM_MOT_TEST_EN").await {
+            if let Ok(mut guard) = slot.lock() {
+                *guard = Some(v);
+            }
+        }
     });
-    if let Some(old) = old {
-        old.handle.shutdown().await;
+    if let Some(target) = state.motor_test.target.lock().as_mut() {
+        target.runtime.add_task(task);
+    } else {
+        task.abort();
     }
     Ok(())
 }
@@ -386,7 +509,12 @@ const TARGET_STREAMS: [(u32, f64); 3] = [(36, 20.0), (105, 50.0), (291, 10.0)];
 
 /// Fire-and-forget `MAV_CMD_SET_MESSAGE_INTERVAL` (PX4 accepts it while
 /// disarmed; a FC that lacks the stream simply never sends it).
-async fn request_message_interval(handle: &ConnectionHandle, msg_id: u32, hz: f64) {
+async fn request_message_interval(
+    handle: &ConnectionHandle,
+    target_system_id: u8,
+    msg_id: u32,
+    hz: f64,
+) {
     let _ = handle
         .send(MavMessage::COMMAND_LONG(
             ::mavlink::common::COMMAND_LONG_DATA {
@@ -398,7 +526,7 @@ async fn request_message_interval(handle: &ConnectionHandle, msg_id: u32, hz: f6
                 param6: 0.0,
                 param7: 0.0,
                 command: ::mavlink::common::MavCmd::MAV_CMD_SET_MESSAGE_INTERVAL,
-                target_system: 1,
+                target_system: target_system_id,
                 target_component: 1,
                 confirmation: 0,
             },
@@ -410,13 +538,23 @@ async fn request_message_interval(handle: &ConnectionHandle, msg_id: u32, hz: f6
 /// any) is stopped first so no frames are left addressed to a dead link.
 #[tauri::command]
 pub async fn actuator_disconnect_target(state: State<'_, AppState>) -> Result<(), String> {
-    let _ = send_session(&state, MotorTestCommand::Stop).await;
-    let old = state.motor_test.target.lock().take();
-    if let Some(old) = old {
-        old.handle.shutdown().await;
-    }
-    detach_motor_telemetry(&state);
-    Ok(())
+    let _ops = state.ops().lock().await;
+    stop_before_auxiliary_close(
+        async {
+            stop_active_session(&state).await?;
+            Ok(())
+        },
+        async {
+            detach_motor_telemetry(&state).await;
+            state.motor_test.running.lock().take();
+            let old = state.motor_test.target.lock().take();
+            if let Some(old) = old {
+                old.stop().await;
+            }
+            Ok::<(), String>(())
+        },
+    )
+    .await
 }
 
 /// Start realtime forwarding: the live SITL actuator outputs (already
@@ -444,7 +582,9 @@ pub async fn actuator_start_forward(
         return Ok(());
     }
     let handle = fc_link(&state).ok_or("no link — connect the serial PX4 first")?;
-    let (svc, evt_rx, output_rx) = MotorTestService::spawn(handle, limits_for_load("none"));
+    let target_system_id = motor_test_target_system_id(&state);
+    let (svc, evt_rx, output_rx) =
+        MotorTestService::spawn(handle, limits_for_load("none", target_system_id));
     let forwarder = tauri::async_runtime::spawn(forward_events(app.clone(), evt_rx));
     *state.motor_test.running.lock() = Some(crate::motor_test_state::RunningMotorTest {
         svc: svc.clone(),
@@ -517,11 +657,12 @@ fn service_of(state: &AppState) -> Option<MotorTestService> {
 /// Request one parameter by name from the FC and wait for its `PARAM_VALUE`
 /// (PX4 answers `PARAM_REQUEST_READ` with `param_index = -1` by name). Returns
 /// `None` on timeout / a closed link; the caller treats that as "unknown".
-async fn read_param(handle: &ConnectionHandle, name: &str) -> Option<f32> {
-    // Subscribe before sending: broadcast receivers only see future frames.
-    let mut events = handle.subscribe_route(MessageRoute::messages(&[22]));
+async fn read_param(handle: &ConnectionHandle, target_system_id: u8, name: &str) -> Option<f32> {
+    // Subscribe before sending and accept only the configured FC's reply.
+    let mut events =
+        handle.subscribe_route(MessageRoute::messages(&[22]).from(target_system_id, 1));
     let req = MavMessage::PARAM_REQUEST_READ(::mavlink::common::PARAM_REQUEST_READ_DATA {
-        target_system: 1,
+        target_system: target_system_id,
         target_component: 1,
         param_id: maggcs_core::params::codec::encode_param_id(name).into(),
         param_index: -1, // -1 = by name
@@ -558,13 +699,43 @@ async fn send_session(state: &AppState, cmd: MotorTestCommand) -> Result<(), Str
     }
 }
 
-/// Best-effort stop of the stored session (window close, app exit). The
-/// buffered channel takes the command without blocking the UI thread.
-fn stop_running_session(state: &AppState) {
-    let guard = state.motor_test.running.lock();
-    if let Some(running) = guard.as_ref() {
-        let _ = running.svc.try_send(MotorTestCommand::Stop);
+/// Stop the auxiliary owners outside any state lock; their tasks are
+/// cancelled/joined before their connection workers are shut down.
+pub(crate) async fn stop_auxiliary_links(state: &AppState) {
+    detach_motor_telemetry(state).await;
+    let sitl = state.motor_test.sitl.lock().take();
+    if let Some(sitl) = sitl {
+        sitl.stop().await;
     }
+    let target = state.motor_test.target.lock().take();
+    if let Some(target) = target {
+        target.stop().await;
+    }
+}
+
+/// Run an auxiliary-link mutation only after the active motor-test stop path
+/// has completed successfully. The second future is not polled on stop failure.
+async fn stop_before_auxiliary_close<T, Stop, Close>(stop: Stop, close: Close) -> Result<T, String>
+where
+    Stop: std::future::Future<Output = Result<(), String>>,
+    Close: std::future::Future<Output = Result<T, String>>,
+{
+    stop.await?;
+    close.await
+}
+
+async fn stop_active_session(state: &AppState) -> Result<(), String> {
+    let Some(service) = service_of(state) else {
+        return Ok(());
+    };
+    let stopped_sending = tokio::time::timeout(MOTOR_TEST_STOP_TIMEOUT, service.stop_and_wait())
+        .await
+        .map_err(|_| "timed out waiting for motor-test release; link kept open".to_string())?
+        .map_err(|error| format!("motor-test release failed; link kept open: {error}"))?;
+    if stopped_sending {
+        state.motor_test.note_state(SessionState::Idle);
+    }
+    Ok(())
 }
 
 /// Push session events to the window, remember the state for the status
@@ -616,12 +787,21 @@ impl AppState {
         // Armed/mode gates the START button, so it must come from the link
         // that actually receives the commands: the serial target PX4 when one
         // is connected, else the app's primary link.
+        let target_system_id = self
+            .motor_test
+            .target
+            .lock()
+            .as_ref()
+            .map(|runtime| runtime.target.target_system_id);
         let target_hb = self
             .motor_test
             .telemetry
             .lock()
             .as_ref()
-            .and_then(|t| t.hb.clone());
+            .and_then(|t| t.hb.clone())
+            .filter(|heartbeat| {
+                target_system_id.is_none_or(|system_id| heartbeat.system_id == system_id)
+            });
         let (armed, custom_mode, autopilot_px4, mode_label) = match target_hb {
             Some(hb) => (
                 hb.base_mode.safety_armed,
@@ -630,13 +810,13 @@ impl AppState {
                 hb.mode_label,
             ),
             None => match self.hub().and_then(|h| h.snapshot().heartbeat) {
-                Some(hb) => (
+                Some(hb) if target_system_id.is_none() => (
                     hb.base_mode.safety_armed,
                     hb.custom_mode,
                     hb.autopilot == maggcs_core::telemetry::Autopilot::Px4,
                     hb.mode_label,
                 ),
-                None => (false, 0, false, String::new()),
+                _ => (false, 0, false, String::new()),
             },
         };
         let session = match self.motor_test.session() {
@@ -673,7 +853,7 @@ impl AppState {
             .sitl
             .lock()
             .as_ref()
-            .and_then(|l| l.slot.lock().ok().map(|st| st.values.clone()))
+            .and_then(|link| link.slot.lock().ok().map(|st| st.values.clone()))
             .unwrap_or_default();
         // The OUTPUT: the values the session sent to the FC as ACTUATOR_TEST.
         let output_values = self
@@ -683,15 +863,16 @@ impl AppState {
             .as_ref()
             .map(|r| (*r.output.borrow()).clone())
             .unwrap_or_default();
-        let (target_connected, target_endpoint, com_mot_test_en) = {
+        let (target_connected, target_endpoint, target_system_id, com_mot_test_en) = {
             let guard = self.motor_test.target.lock();
             match guard.as_ref() {
-                Some(t) => (
+                Some(runtime) => (
                     true,
-                    Some(t.endpoint.clone()),
-                    t.com_mot_test_en.lock().ok().and_then(|g| *g),
+                    Some(runtime.target.endpoint.clone()),
+                    Some(runtime.target.target_system_id),
+                    runtime.target.com_mot_test_en.lock().ok().and_then(|g| *g),
                 ),
-                None => (false, None, None),
+                None => (false, None, None, None),
             }
         };
         ActuatorStatus {
@@ -712,6 +893,7 @@ impl AppState {
             sitl_feed_age_s,
             target_connected,
             target_endpoint,
+            target_system_id,
             input_values,
             output_values,
             com_mot_test_en,
@@ -723,7 +905,10 @@ impl AppState {
 /// `HIGHRES_IMU` (105, the mag field), `ESC_STATUS` (291, ESC current/RPM) and
 /// `SERVO_OUTPUT_RAW` (36, the servo curves) at useful rates. A bare serial
 /// link streams only the default set otherwise, so the curves would stay flat.
-fn request_motor_test_streams(handle: &maggcs_core::mavlink::ConnectionHandle) {
+fn request_motor_test_streams(
+    handle: &maggcs_core::mavlink::ConnectionHandle,
+    target_system_id: u8,
+) -> tauri::async_runtime::JoinHandle<()> {
     let h = handle.clone();
     tauri::async_runtime::spawn(async move {
         for (msg_id, interval_us) in [
@@ -742,14 +927,14 @@ fn request_motor_test_streams(handle: &maggcs_core::mavlink::ConnectionHandle) {
                         param6: 0.0,
                         param7: 0.0,
                         command: ::mavlink::common::MavCmd::MAV_CMD_SET_MESSAGE_INTERVAL,
-                        target_system: 1,
+                        target_system: target_system_id,
                         target_component: 1,
                         confirmation: 0,
                     },
                 ))
                 .await;
         }
-    });
+    })
 }
 
 /// Attach the mag/ESC telemetry tap to a link (A4 wiring): subscribes to
@@ -757,18 +942,19 @@ fn request_motor_test_streams(handle: &maggcs_core::mavlink::ConnectionHandle) {
 /// calibration, drives the alarm state machine, and emits
 /// `actuator_telemetry` events for the window's curves. Called from
 /// `connect` after the link comes up.
-pub fn attach_motor_telemetry(app: &AppHandle, handle: maggcs_core::mavlink::ConnectionHandle) {
+pub fn attach_motor_telemetry(
+    app: &AppHandle,
+    handle: maggcs_core::mavlink::ConnectionHandle,
+    target_system_id: u8,
+) {
     // Ask the FC to stream the messages the motor-test window plots: the mag
     // (HIGRES_IMU), the ESC telemetry (ESC_STATUS) and the servo outputs.
     // PX4 accepts MAV_CMD_SET_MESSAGE_INTERVAL while disarmed; fire-and-forget
     // (a busy FC just misses this attach — the next one retries).
-    request_motor_test_streams(&handle);
+    let stream_task = request_motor_test_streams(&handle, target_system_id);
     let state = app.state::<AppState>();
-    // (Re)attach stops a previous tap and resets the alarm clock; the loaded
-    // calibration survives (it is a file, not link state).
-    if let Some(old) = state.motor_test.telemetry_tap.lock().take() {
-        old.abort();
-    }
+    // (Re)attach resets the alarm clock; the loaded calibration survives
+    // (it is a file, not link state). The target runtime owns the task.
     *state.motor_test.telemetry.lock() = Some(crate::motor_test_state::MotorTelemetry {
         esc: maggcs_core::signals::derived::EscAggregator::new(8),
         alarm: maggcs_core::motor_test::MagAlarm::new(Default::default()),
@@ -779,8 +965,17 @@ pub fn attach_motor_telemetry(app: &AppHandle, handle: maggcs_core::mavlink::Con
         hb: None,
     });
     let tap_app = app.clone();
-    let task = tauri::async_runtime::spawn(run_motor_telemetry_tap(tap_app, handle));
-    *state.motor_test.telemetry_tap.lock() = Some(task);
+    let telemetry_task =
+        tauri::async_runtime::spawn(run_motor_telemetry_tap(tap_app, handle, target_system_id));
+    {
+        let mut target = state.motor_test.target.lock();
+        if let Some(target) = target.as_mut() {
+            target.runtime.add_tasks([stream_task, telemetry_task]);
+        } else {
+            stream_task.abort();
+            telemetry_task.abort();
+        }
+    }
 }
 
 /// The telemetry tap: `HIGHRES_IMU` (105) → calibrated `mag_total` → alarm;
@@ -788,9 +983,15 @@ pub fn attach_motor_telemetry(app: &AppHandle, handle: maggcs_core::mavlink::Con
 /// target-FC servo trace. Emits `actuator_telemetry` (aggregated snapshot)
 /// at ~10 Hz for the alarm/status readout, and pushes every sample (not a
 /// snapshot) to the scope bus.
-async fn run_motor_telemetry_tap(app: AppHandle, handle: maggcs_core::mavlink::ConnectionHandle) {
-    // HEARTBEAT (armed/mode gating), HIGHRES_IMU (mag), ESC_STATUS (curves).
-    let mut events = handle.subscribe_route(MessageRoute::messages(&[0, 36, 105, 291]));
+async fn run_motor_telemetry_tap(
+    app: AppHandle,
+    handle: maggcs_core::mavlink::ConnectionHandle,
+    target_system_id: u8,
+) {
+    // Only telemetry from the configured target may gate motor-test safety
+    // or feed the target's plots and alarm.
+    let mut events = handle
+        .subscribe_route(MessageRoute::messages(&[0, 36, 105, 291]).from(target_system_id, 1));
     let mut last_emit = tokio::time::Instant::now();
     let Some(bus) = app
         .try_state::<AppState>()
@@ -930,10 +1131,15 @@ pub fn actuator_acknowledge_alarm(state: State<'_, AppState>) -> Result<(), Stri
 }
 
 /// Detach the telemetry tap (window close / link teardown).
-pub fn detach_motor_telemetry(state: &AppState) {
-    if let Some(old) = state.motor_test.telemetry_tap.lock().take() {
-        old.abort();
-    }
+pub async fn detach_motor_telemetry(state: &AppState) {
+    let tasks = state
+        .motor_test
+        .target
+        .lock()
+        .as_mut()
+        .map(|target| target.runtime.take_tasks())
+        .unwrap_or_default();
+    crate::motor_test_state::stop_auxiliary_tasks(tasks).await;
     *state.motor_test.telemetry.lock() = None;
 }
 
@@ -969,16 +1175,17 @@ fn start_scope_flusher(app: &AppHandle) {
                 last_stream_req = tokio::time::Instant::now();
                 // Clone the target handle first: the `State` guard is not Send
                 // and must not live across the awaited sends below.
-                let target = app.try_state::<AppState>().and_then(|s| {
-                    s.motor_test
-                        .target
-                        .lock()
-                        .as_ref()
-                        .map(|t| t.handle.clone())
+                let target = app.try_state::<AppState>().and_then(|state| {
+                    state.motor_test.target.lock().as_ref().map(|runtime| {
+                        (
+                            runtime.target.handle.clone(),
+                            runtime.target.target_system_id,
+                        )
+                    })
                 });
-                if let Some(target) = target {
+                if let Some((target, target_system_id)) = target {
                     for (msg_id, hz) in TARGET_STREAMS {
-                        request_message_interval(&target, msg_id, hz).await;
+                        request_message_interval(&target, target_system_id, msg_id, hz).await;
                     }
                 }
             }
@@ -1012,5 +1219,178 @@ fn start_scope_flusher(app: &AppHandle) {
 fn stop_scope_flusher(state: &AppState) {
     if let Some(task) = state.motor_test.scope_flusher.lock().take() {
         task.abort();
+    }
+}
+
+#[cfg(test)]
+mod auxiliary_link_lifecycle_tests {
+    use super::{stop_before_auxiliary_close, validate_target_system_id};
+
+    #[test]
+    fn target_system_id_must_not_be_broadcast() {
+        assert_eq!(
+            validate_target_system_id(0),
+            Err("target system ID must be between 1 and 255".to_string())
+        );
+        assert_eq!(validate_target_system_id(1), Ok(1));
+        assert_eq!(validate_target_system_id(255), Ok(255));
+    }
+    use maggcs_core::mavlink::connection::{spawn_connection, ConnectionConfig, ConnectionHandle};
+    use maggcs_core::mavlink::endpoint::Endpoint;
+    use maggcs_core::mavlink::{MavHeader, MavMessage};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    type Peer = Box<dyn ::mavlink::AsyncMavConnection<::mavlink::common::MavMessage> + Sync + Send>;
+
+    async fn loopback_link() -> (ConnectionHandle, Peer) {
+        let probe = std::net::UdpSocket::bind("127.0.0.1:0").expect("reserve UDP port");
+        let port = probe.local_addr().expect("port address").port();
+        drop(probe);
+        let config = ConnectionConfig {
+            endpoint: Endpoint::UdpListener {
+                addr: format!("127.0.0.1:{port}")
+                    .parse()
+                    .expect("listener address"),
+            },
+            ..Default::default()
+        };
+        let (handle, _events, first) = spawn_connection(config).await.expect("spawn link");
+        timeout(Duration::from_secs(2), first)
+            .await
+            .expect("listener startup timed out")
+            .expect("first result channel")
+            .expect("listener bind");
+        let mut peer = ::mavlink::connect_async::<::mavlink::common::MavMessage>(&format!(
+            "udpout:127.0.0.1:{port}"
+        ))
+        .await
+        .expect("connect fake FC");
+        peer.set_protocol_version(::mavlink::MavlinkVersion::V2);
+        let heartbeat = MavMessage::HEARTBEAT(::mavlink::common::HEARTBEAT_DATA {
+            custom_mode: 0,
+            mavtype: ::mavlink::common::MavType::MAV_TYPE_QUADROTOR,
+            autopilot: ::mavlink::common::MavAutopilot::MAV_AUTOPILOT_PX4,
+            base_mode: ::mavlink::common::MavModeFlag::empty(),
+            system_status: ::mavlink::common::MavState::MAV_STATE_ACTIVE,
+            mavlink_version: 3,
+        });
+        peer.send(
+            &MavHeader {
+                system_id: 1,
+                component_id: 1,
+                sequence: 0,
+            },
+            &heartbeat,
+        )
+        .await
+        .expect("fake FC heartbeat");
+        (handle, peer)
+    }
+
+    fn probe_message() -> MavMessage {
+        MavMessage::HEARTBEAT(::mavlink::common::HEARTBEAT_DATA {
+            custom_mode: 0,
+            mavtype: ::mavlink::common::MavType::MAV_TYPE_GCS,
+            autopilot: ::mavlink::common::MavAutopilot::MAV_AUTOPILOT_GENERIC,
+            base_mode: ::mavlink::common::MavModeFlag::empty(),
+            system_status: ::mavlink::common::MavState::MAV_STATE_ACTIVE,
+            mavlink_version: 3,
+        })
+    }
+
+    #[tokio::test]
+    async fn stop_failure_preserves_the_auxiliary_link() {
+        let close_ran = Arc::new(AtomicBool::new(false));
+        let close_flag = close_ran.clone();
+        let result = stop_before_auxiliary_close(
+            async { Err::<(), _>("release confirmation failed".to_string()) },
+            async move {
+                close_flag.store(true, Ordering::SeqCst);
+                Ok::<_, String>(())
+            },
+        )
+        .await;
+
+        assert_eq!(result, Err("release confirmation failed".to_string()));
+        assert!(
+            !close_ran.load(Ordering::SeqCst),
+            "failed release must leave the old auxiliary link open"
+        );
+
+        let (old_link, fake_fc) = loopback_link().await;
+        let old_for_close = old_link.clone();
+        let result = stop_before_auxiliary_close(
+            async { Err::<(), _>("release confirmation failed".to_string()) },
+            async move {
+                old_for_close.shutdown().await;
+                Ok::<_, String>(())
+            },
+        )
+        .await;
+        assert!(result.is_err());
+        timeout(
+            Duration::from_secs(2),
+            old_link.send_confirmed(probe_message()),
+        )
+        .await
+        .expect("old link write confirmation timed out")
+        .expect("failed stop must leave old link writable");
+        timeout(Duration::from_secs(2), fake_fc.recv())
+            .await
+            .expect("fake FC did not receive frame")
+            .expect("fake FC receive failed");
+        old_link.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn auxiliary_link_close_runs_after_release_confirmation() {
+        let released = Arc::new(AtomicBool::new(false));
+        let stop_flag = released.clone();
+        let close_flag = released.clone();
+        let result = stop_before_auxiliary_close(
+            async move {
+                stop_flag.store(true, Ordering::SeqCst);
+                Ok::<_, String>(())
+            },
+            async move {
+                assert!(
+                    close_flag.load(Ordering::SeqCst),
+                    "the stop future must finish before closing the link"
+                );
+                Ok::<_, String>(())
+            },
+        )
+        .await;
+
+        assert_eq!(result, Ok(()));
+
+        let (old_link, _fake_fc) = loopback_link().await;
+        let link_to_close = old_link.clone();
+        let result = stop_before_auxiliary_close(async { Ok::<(), String>(()) }, async move {
+            link_to_close.shutdown().await;
+            Ok::<_, String>(())
+        })
+        .await;
+        assert_eq!(result, Ok(()));
+
+        let probe_until = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            match timeout(
+                Duration::from_millis(250),
+                old_link.send_confirmed(probe_message()),
+            )
+            .await
+            {
+                Ok(Err(_)) => break,
+                Ok(Ok(())) if tokio::time::Instant::now() < probe_until => {
+                    tokio::task::yield_now().await;
+                }
+                Ok(Ok(())) => panic!("closed auxiliary link continued accepting writes"),
+                Err(_) => panic!("closed auxiliary link write confirmation hung"),
+            }
+        }
     }
 }

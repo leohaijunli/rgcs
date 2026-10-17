@@ -37,33 +37,36 @@ fn heartbeat(armed: bool) -> MavMessage {
     })
 }
 
-const FC_HEADER: MavHeader = MavHeader {
-    system_id: 1,
-    component_id: 1,
-    sequence: 0,
-};
+fn fc_header(system_id: u8) -> MavHeader {
+    MavHeader {
+        system_id,
+        component_id: 1,
+        sequence: 0,
+    }
+}
 
-fn config_for_port(port: u16) -> ConnectionConfig {
+fn config_for_port(port: u16, target_system_id: u8) -> ConnectionConfig {
     ConnectionConfig {
         endpoint: Endpoint::UdpListener {
             addr: format!("127.0.0.1:{port}").parse().unwrap(),
         },
         system_id: 250,
         component_id: 250,
-        target_system_id: 1,
+        target_system_id,
         target_component_id: 1,
+        auto_discover_target: false,
         heartbeat_timeout: Duration::from_secs(30),
         reconnect_delay: Duration::from_millis(50),
         ..Default::default()
     }
 }
 
-fn limits() -> SafetyLimits {
+fn limits(target_system_id: u8) -> SafetyLimits {
     SafetyLimits {
         max_value: 1.0,
         max_slew_per_s: 10.0,
         heartbeat_timeout: Duration::from_millis(500),
-        target_sys: 1,
+        target_sys: target_system_id,
         target_comp: 1,
     }
 }
@@ -78,9 +81,13 @@ struct Harness {
 }
 
 async fn harness() -> Harness {
+    harness_for_system_id(1).await
+}
+
+async fn harness_for_system_id(target_system_id: u8) -> Harness {
     loop {
         let port = free_udp_port();
-        let config = config_for_port(port);
+        let config = config_for_port(port, target_system_id);
         let (handle, mut rx, first_result) = match spawn_connection(config.clone()).await {
             Ok(v) => v,
             Err(_) => continue,
@@ -106,7 +113,7 @@ async fn harness() -> Harness {
             }
         };
         peer.set_protocol_version(mavlink::MavlinkVersion::V2);
-        peer.send(&FC_HEADER, &heartbeat(false))
+        peer.send(&fc_header(target_system_id), &heartbeat(false))
             .await
             .expect("peer heartbeat");
 
@@ -128,7 +135,7 @@ async fn harness() -> Harness {
             continue;
         }
 
-        let (svc, evt, _output) = MotorTestService::spawn(handle.clone(), limits());
+        let (svc, evt, _output) = MotorTestService::spawn(handle.clone(), limits(target_system_id));
         return Harness {
             handle,
             svc,
@@ -192,6 +199,202 @@ async fn wait_event(
 }
 
 #[tokio::test]
+async fn stop_and_wait_confirms_release_frames_before_returning() {
+    let Harness {
+        handle,
+        svc,
+        mut evt,
+        peer,
+    } = harness().await;
+    let peer = std::sync::Arc::new(tokio::sync::Mutex::new(peer));
+    let heartbeat_task = {
+        let peer = peer.clone();
+        tokio::spawn(async move {
+            loop {
+                let guard = peer.lock().await;
+                let _ = guard.send(&fc_header(1), &heartbeat(false)).await;
+                drop(guard);
+                tokio::time::sleep(Duration::from_millis(150)).await;
+            }
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    svc.send(MotorTestCommand::StartManual)
+        .await
+        .expect("start");
+    wait_event(&mut evt, Duration::from_secs(2), |event| {
+        *event == MotorTestEvent::StateChanged(SessionState::ManualRunning)
+    })
+    .await;
+    let _ = next_actuator_frame(&peer, Duration::from_secs(2))
+        .await
+        .expect("test frame was sent");
+
+    let sent_at = tokio::time::Instant::now();
+    let was_sending = timeout(Duration::from_secs(2), svc.stop_and_wait())
+        .await
+        .expect("stop confirmation is bounded")
+        .expect("release pass sent");
+    assert!(
+        was_sending,
+        "worker must report that it stopped an active session"
+    );
+
+    let mut releases = 0;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    while releases < 4 && tokio::time::Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let frame = {
+            let guard = peer.lock().await;
+            recv_frame(&guard, remaining).await
+        };
+        let Some((_, MavMessage::COMMAND_LONG(command))) = frame else {
+            continue;
+        };
+        if command.command == ::mavlink::common::MavCmd::MAV_CMD_ACTUATOR_TEST
+            && command.param2 <= 0.0
+        {
+            releases += 1;
+        }
+    }
+    assert_eq!(releases, 4, "one release frame for each motor");
+    assert!(sent_at.elapsed() < Duration::from_secs(2));
+
+    heartbeat_task.abort();
+    handle.shutdown().await;
+}
+
+#[tokio::test]
+async fn stop_and_wait_does_not_confirm_after_transport_shutdown() {
+    let Harness {
+        handle,
+        svc,
+        mut evt,
+        peer,
+    } = harness().await;
+    let peer = std::sync::Arc::new(tokio::sync::Mutex::new(peer));
+    let heartbeat_task = {
+        let peer = peer.clone();
+        tokio::spawn(async move {
+            loop {
+                let guard = peer.lock().await;
+                let _ = guard.send(&fc_header(1), &heartbeat(false)).await;
+                drop(guard);
+                tokio::time::sleep(Duration::from_millis(150)).await;
+            }
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    svc.send(MotorTestCommand::StartManual)
+        .await
+        .expect("start");
+    wait_event(&mut evt, Duration::from_secs(2), |event| {
+        *event == MotorTestEvent::StateChanged(SessionState::ManualRunning)
+    })
+    .await;
+    let _ = next_actuator_frame(&peer, Duration::from_secs(2))
+        .await
+        .expect("test frame was sent");
+
+    // Close the connection worker while the session is actively sending.
+    // Probe until the outbound receiver has exited, then make sure the worker
+    // cannot mistake a failed release send for a successful stop.
+    handle.shutdown().await;
+    let probe_deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    let mut transport_closed = false;
+    while tokio::time::Instant::now() < probe_deadline {
+        match timeout(
+            Duration::from_millis(500),
+            handle.send_confirmed(heartbeat(false)),
+        )
+        .await
+        {
+            Ok(Err(_)) => {
+                transport_closed = true;
+                break;
+            }
+            Ok(Ok(())) => tokio::task::yield_now().await,
+            Err(_) => panic!("transport write confirmation hung after shutdown"),
+        }
+    }
+    assert!(transport_closed, "connection worker did not stop in time");
+
+    let stop_result = timeout(Duration::from_secs(2), svc.stop_and_wait())
+        .await
+        .expect("stop failure report is bounded");
+    assert!(
+        stop_result.is_err(),
+        "failed release transport must never be reported as a successful stop"
+    );
+
+    heartbeat_task.abort();
+}
+
+#[tokio::test]
+async fn configured_non_default_system_id_routes_commands_and_ignores_other_armed_vehicle() {
+    const TARGET_SYSTEM_ID: u8 = 42;
+    let Harness {
+        handle,
+        svc,
+        mut evt,
+        peer,
+    } = harness_for_system_id(TARGET_SYSTEM_ID).await;
+    let peer = std::sync::Arc::new(tokio::sync::Mutex::new(peer));
+    let target_armed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let heartbeat_task = {
+        let peer = peer.clone();
+        let target_armed = target_armed.clone();
+        tokio::spawn(async move {
+            loop {
+                let guard = peer.lock().await;
+                let _ = guard
+                    .send(
+                        &fc_header(TARGET_SYSTEM_ID),
+                        &heartbeat(target_armed.load(std::sync::atomic::Ordering::Relaxed)),
+                    )
+                    .await;
+                // Another armed vehicle on a shared MAVLink bus must not
+                // affect this session's target-system interlock.
+                let _ = guard.send(&fc_header(1), &heartbeat(true)).await;
+                drop(guard);
+                tokio::time::sleep(Duration::from_millis(150)).await;
+            }
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(400)).await;
+
+    svc.send(MotorTestCommand::StartManual)
+        .await
+        .expect("start");
+    wait_event(&mut evt, Duration::from_secs(2), |event| {
+        *event == MotorTestEvent::StateChanged(SessionState::ManualRunning)
+    })
+    .await;
+    let frame = next_actuator_frame(&peer, Duration::from_secs(2))
+        .await
+        .expect("test frame was not sent to the configured target");
+    assert_eq!(frame.target_system, TARGET_SYSTEM_ID);
+
+    tokio::time::sleep(Duration::from_millis(450)).await;
+    assert!(
+        !matches!(evt.try_recv(), Ok(MotorTestEvent::Stopped(_))),
+        "armed heartbeat from another system must not stop this target's session"
+    );
+
+    target_armed.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        wait_event(&mut evt, Duration::from_secs(2), |event| {
+            matches!(event, MotorTestEvent::Stopped(_))
+        })
+        .await,
+        MotorTestEvent::Stopped(StopReason::Armed)
+    );
+
+    heartbeat_task.abort();
+    handle.shutdown().await;
+}
+
+#[tokio::test]
 async fn arming_mid_test_stops_within_a_tick_and_releases() {
     let Harness {
         handle,
@@ -211,7 +414,7 @@ async fn arming_mid_test_stops_within_a_tick_and_releases() {
             loop {
                 let is_armed = armed.load(std::sync::atomic::Ordering::Relaxed);
                 let p = peer.lock().await;
-                let _ = p.send(&FC_HEADER, &heartbeat(is_armed)).await;
+                let _ = p.send(&fc_header(1), &heartbeat(is_armed)).await;
                 drop(p);
                 tokio::time::sleep(Duration::from_millis(150)).await;
             }

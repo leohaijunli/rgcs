@@ -247,7 +247,11 @@ the right.
 ## Motor / mag interference test (Tools ▸)
 
 Separate window, always-on-top while sending, Esc = emergency stop
-(latched until Reset).
+(latched until Reset). The serial target card accepts a MAVLink system ID
+(1–255, default 1) so this test can route to a specific vehicle when the
+serial bus carries multiple systems. This is an expected/routing ID only: it
+does not write or change the vehicle's own system-ID parameter; component ID
+remains the PX4 autopilot default (1).
 
 - **Safety gate** (risk-scaled, operator-declared prop load): no props /
   flat plate — unlock toggle → Start; full props — unlock → type
@@ -257,7 +261,9 @@ Separate window, always-on-top while sending, Esc = emergency stop
   self-stopping); Realtime forward — the FC's motors follow a PX4 SITL's
   live actuator outputs (`SERVO_OUTPUT_RAW` 1–4 → motors 1–4, latest-value
   slot, stale feed auto-stops).
-- **Sending**: `MAV_CMD_ACTUATOR_TEST` at 10 Hz, FC-side timeout 0.3 s per
+- **Sending**: `MAV_CMD_ACTUATOR_TEST` at 10 Hz addressed to the configured
+  target system ID; only that system's heartbeat/ACK and target telemetry are
+  used for the safety gate and plots. FC-side timeout 0.3 s per
   command (PX4 caps at 3 s), output cap + slew limit per declared load,
   disarmed-only interlock (armed or stale heartbeat → immediate release),
   ACK denial stops the test. PX4 needs `COM_MOT_TEST_EN=1`.

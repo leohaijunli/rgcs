@@ -272,10 +272,11 @@ pub enum ConnectionEvent {
 }
 
 /// Outbound frame queued to the worker.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct OutboundFrame {
     header: MavHeader,
     message: MavMessage,
+    sent: Option<oneshot::Sender<Result<(), String>>>,
 }
 
 /// Internal shared state of a connection.
@@ -368,12 +369,41 @@ impl ConnectionHandle {
         header: MavHeader,
         message: MavMessage,
     ) -> Result<(), MavlinkError> {
-        let frame = OutboundFrame { header, message };
+        let frame = OutboundFrame {
+            header,
+            message,
+            sent: None,
+        };
         self.inner
             .outbound
             .send(frame)
             .await
             .map_err(|_| MavlinkError::ChannelClosed)
+    }
+
+    /// Send a message and wait until the underlying transport's write call
+    /// succeeds. Unlike [`Self::send`], this does not merely acknowledge queueing.
+    pub async fn send_confirmed(&self, message: MavMessage) -> Result<(), MavlinkError> {
+        let config = &self.inner.config;
+        let (sent, confirmation) = oneshot::channel();
+        self.inner
+            .outbound
+            .send(OutboundFrame {
+                header: MavHeader {
+                    system_id: config.system_id,
+                    component_id: config.component_id,
+                    sequence: 0,
+                },
+                message,
+                sent: Some(sent),
+            })
+            .await
+            .map_err(|_| MavlinkError::ChannelClosed)?;
+        match confirmation.await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => Err(MavlinkError::Protocol(error)),
+            Err(error) => Err(MavlinkError::WorkerGone(error.to_string())),
+        }
     }
 
     /// Ask the worker to drop the link and reconnect.
@@ -646,11 +676,17 @@ async fn run_worker(
                         frame.header.sequence = seq;
                         seq = seq.wrapping_add(1);
                         if let Err(e) = conn.send(&frame.header, &frame.message).await {
-
+                            let message = e.to_string();
+                            if let Some(sent) = frame.sent {
+                                let _ = sent.send(Err(message.clone()));
+                            }
                             let _ = events.send(ConnectionEvent::LinkError(LinkFailure::from(
-                                &MavlinkError::Protocol(e.to_string()),
+                                &MavlinkError::Protocol(message),
                             )));
                             break 'connected;
+                        }
+                        if let Some(sent) = frame.sent {
+                            let _ = sent.send(Ok(()));
                         }
                     }
                     None => return,
