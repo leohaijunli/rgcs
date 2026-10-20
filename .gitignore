@@ -1,0 +1,14 @@
+target/
+*.swp
+.idea/
+.vscode/
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.rar
+*.laz
+dem/
+*.tif
+# Committed HRDEM test fixture (ADR-018). See testdata/hrdem/ATTRIBUTION.md.
+!testdata/hrdem/*.tif
+terrain-drape-fixes-v2.patch

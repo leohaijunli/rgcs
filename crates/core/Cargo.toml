@@ -1,0 +1,30 @@
+[package]
+name = "maggcs-core"
+description = "Core library for MagGCS ground control station: MAVLink, telemetry, mission, terrain, survey, RTK, devices"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+mavlink.workspace = true
+serialport.workspace = true
+ts-rs.workspace = true
+tiff.workspace = true
+# Enables futures/alloc so mavlink's "tokio-1" feature compiles (Cargo feature unification).
+futures = { version = "0.3", features = ["alloc"] }
+num-traits = "0.2"
+# Calibration-parameter parsing (calib/mag.rs) — production code, not only tests.
+serde_json = "1"
+# Canonical spec hashing for the drape result (ADR-022: the same hash enters
+# the upload read-back, the preflight check, the monitor baseline and the
+# archive).
+sha2.workspace = true
+# Advisory file lock for the project directory (ADR-019: one process per
+# project; the OS releases the lock on process death, so no stale locks).
+fs2 = "0.4"
+
+[dev-dependencies]

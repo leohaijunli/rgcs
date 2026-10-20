@@ -1,0 +1,633 @@
+/* Motor-test window: reuses the design tokens via the shared stylesheet. */
+@import '../design-system/index.css';
+
+/* Native controls follow the OS theme unless told otherwise (white selects
+ * with grey text on the dark UI otherwise). Mirrors inspector.css. */
+html {
+  color-scheme: dark;
+}
+
+html[data-theme='light'] {
+  color-scheme: light;
+}
+
+option {
+  background: var(--mg-bg);
+  color: var(--mg-ink);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--mg-bg);
+  color: var(--mg-ink);
+  font-family: var(--mg-font-sans);
+}
+
+/* Four-region frame (plan §6): header / left control / mid curves / right
+ * status. The playback-bar row (48px) returns with Profile mode (A6). */
+.actuator-grid {
+  display: grid;
+  grid-template-columns: 260px 1fr 220px;
+  grid-template-rows: 44px 1fr;
+  height: 100%;
+}
+
+.actuator-header {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--mg-border);
+  background: var(--mg-bg-raised);
+}
+
+.actuator-left {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  padding: 10px;
+  border-right: 1px solid var(--mg-border);
+}
+
+.actuator-mid {
+  position: relative;
+  min-width: 0;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Compact horizontal state strip; the rest of the column is reserved for
+ * the camera preview and realtime curves. */
+.state-strip {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 6px 12px;
+  border: 1px solid var(--mg-border);
+  border-radius: 6px;
+  background: var(--mg-bg-raised);
+}
+
+.state-word {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.reserved-area {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--mg-border);
+  border-radius: 6px;
+  text-align: center;
+}
+
+.actuator-right {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  padding: 10px;
+  border-left: 1px solid var(--mg-border);
+  font-size: 12px;
+}
+
+/* The emergency stop: big, red, always one click — starting is hard,
+ * stopping must be easy (safety asymmetry). */
+.estop-btn {
+  margin-left: auto;
+  height: 34px;
+  padding: 0 18px;
+  border: 1px solid var(--mg-error);
+  border-radius: 6px;
+  background: var(--mg-error);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.estop-btn.latched {
+  outline: 2px solid var(--mg-warn);
+}
+
+.section-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--mg-muted);
+}
+
+.card {
+  border: 1px solid var(--mg-border);
+  border-radius: 6px;
+  padding: 8px;
+  background: var(--mg-bg-raised);
+}
+
+.card h3 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.mono {
+  font-family: var(--mg-font-mono, monospace);
+}
+
+.text-muted {
+  color: var(--mg-muted);
+}
+
+.text-ok {
+  color: var(--mg-ok);
+}
+
+.text-error {
+  color: var(--mg-error);
+}
+
+/* The loud "test unlocked" banner: visible from anywhere in the window. */
+.unlock-banner {
+  flex: 1;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--mg-warn);
+}
+
+.mode-btn {
+  flex: 1;
+  padding: 6px 0;
+  border: 1px solid var(--mg-border);
+  border-radius: 5px;
+  background: var(--mg-bg);
+  color: var(--mg-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.mode-btn.active {
+  background: var(--mg-accent);
+  color: var(--mg-accent-ink);
+  border-color: var(--mg-accent);
+}
+
+.btn-row {
+  display: flex;
+  gap: 6px;
+}
+
+.start-btn {
+  width: 100%;
+  padding: 10px 0;
+  border: 1px solid var(--mg-accent);
+  border-radius: 6px;
+  background: var(--mg-accent);
+  color: var(--mg-accent-ink);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.start-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.estop-note {
+  font-size: 11px;
+  color: var(--mg-muted);
+}
+
+/* Per-motor slider rows. */
+.motor-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+
+.motor-label {
+  width: 24px;
+  color: var(--mg-muted);
+}
+
+.motor-row input[type='range'] {
+  flex: 1;
+  accent-color: var(--mg-accent);
+}
+
+.motor-value {
+  width: 38px;
+  text-align: right;
+  color: var(--mg-ink);
+}
+
+/* Typed confirmation for full props. */
+.phrase-input {
+  width: 100%;
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--mg-border);
+  border-radius: 5px;
+  background: var(--mg-bg);
+  color: var(--mg-ink);
+  font-family: var(--mg-font-mono, monospace);
+  font-size: 12px;
+}
+
+.phrase-input:focus {
+  outline: 1px solid var(--mg-accent);
+}
+
+/* Hold-to-start fill. */
+.start-btn.stop {
+  background: var(--mg-warn);
+  border-color: var(--mg-warn);
+  color: var(--mg-canvas, #000);
+}
+
+.hold-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: var(--mg-warn);
+  opacity: 0.45;
+  border-radius: 5px;
+  pointer-events: none;
+}
+
+/* Mag alarm: the whole window flashes red at ~2 Hz while the alarm is
+ * latched (plan §9.1), synced with the audio beeps. */
+@keyframes mag-alarm-flash {
+  0%,
+  49% {
+    box-shadow: inset 0 0 0 4px var(--mg-error);
+    background-color: color-mix(in srgb, var(--mg-error) 12%, var(--mg-bg));
+  }
+  50%,
+  100% {
+    box-shadow: none;
+    background-color: var(--mg-bg);
+  }
+}
+
+.mag-alarm-flash {
+  animation: mag-alarm-flash 0.5s steps(1, end) infinite;
+}
+
+.mag-alarm-active {
+  border-color: var(--mg-error) !important;
+}
+
+/* PM9: COM_MOT_TEST_EN disabled banner. */
+.mot-en-gate {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--mg-warn);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--mg-warn) 14%, transparent);
+  font-size: 12px;
+  color: var(--mg-ink);
+}
+
+/* Input/output motor bars (forward mode: SITL → PX4). */
+.controls-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  align-items: start;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Source panels + safety span the full width under the load/source row. */
+.controls-grid > .card:nth-child(n + 3) {
+  grid-column: 1 / -1;
+}
+
+.motor-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.motor-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.bar-track {
+  flex: 1;
+  height: 10px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--mg-border) 55%, transparent);
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+  border-radius: 5px;
+  transition: width 120ms linear;
+}
+
+.bar-fill.input {
+  background: var(--mg-warn);
+}
+
+.bar-fill.output {
+  background: var(--mg-ok);
+}
+
+/* COM_MOT_TEST_EN indicator light: green = enabled, red = disabled/unknown
+ * on a connected target, grey = no target. */
+.mot-en-light {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.light {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  border: 1px solid rgba(0, 0, 0, 0.35);
+}
+
+.light.on {
+  background: var(--mg-ok);
+  box-shadow: 0 0 6px var(--mg-ok);
+}
+
+.light.off {
+  background: var(--mg-error);
+  box-shadow: 0 0 6px var(--mg-error);
+}
+
+.light.dim {
+  background: var(--mg-muted);
+  opacity: 0.5;
+}
+
+/* ---- Scope tab (signal list left, stacked plots right) ------------------ */
+
+.view-tabs {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+.view-tab {
+  flex: none;
+  padding: 3px 12px;
+}
+
+.stop-tab {
+  background: var(--mg-error);
+  border-color: var(--mg-error);
+  color: #fff;
+  font-weight: 700;
+}
+
+.scope-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr);
+  border: 1px solid var(--mg-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.signal-list {
+  overflow-y: auto;
+  padding: 8px;
+  border-right: 1px solid var(--mg-border);
+  background: var(--mg-bg-raised);
+  font-size: 12px;
+}
+
+.signal-list-title {
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+
+.signal-group {
+  margin-bottom: 6px;
+}
+
+.signal-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  cursor: pointer;
+  user-select: none;
+}
+
+.group-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.signal-group-head .msg {
+  color: var(--mg-muted);
+  font-size: 11px;
+}
+
+.caret {
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--mg-muted);
+}
+
+.caret-closed {
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid var(--mg-muted);
+  border-right: 0;
+}
+
+.signal-hint {
+  padding: 0 0 4px 22px;
+  color: var(--mg-muted);
+  font-size: 11px;
+  font-style: italic;
+}
+
+.signal-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0 2px 18px;
+  cursor: pointer;
+}
+
+.signal-row.dim {
+  opacity: 0.55;
+}
+
+.signal-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.signal-value {
+  min-width: 64px;
+  text-align: right;
+  color: var(--mg-muted);
+  font-size: 11px;
+}
+
+.state-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--mg-muted);
+  flex: none;
+}
+
+.state-dot.none {
+  background: transparent;
+  border: 1px solid var(--mg-muted);
+}
+
+.state-dot.live {
+  background: var(--mg-ok);
+}
+
+.state-dot.zero {
+  background: var(--mg-warn);
+}
+
+.state-dot.stale {
+  background: var(--mg-error);
+}
+
+.scope-plots {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.scope-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--mg-border);
+  background: var(--mg-bg-raised);
+}
+
+.scope-btn {
+  flex: none;
+  padding: 2px 10px;
+}
+
+.scope-select {
+  background: var(--mg-bg);
+  color: var(--mg-ink);
+  border: 1px solid var(--mg-border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 12px;
+}
+
+.scope-legend-note {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--mg-muted);
+  font-size: 11px;
+}
+
+.run-swatch {
+  width: 14px;
+  height: 10px;
+  background: var(--mg-warn);
+  opacity: 0.35;
+}
+
+.scope-panes {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.scope-pane {
+  flex: 1 1 0;
+  min-height: 130px;
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--mg-border);
+}
+
+.scope-pane:last-child {
+  border-bottom: 0;
+}
+
+.scope-pane-title {
+  padding: 3px 8px 0;
+  color: var(--mg-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.scope-pane-plot {
+  flex: 1;
+  min-height: 0;
+  padding: 0 4px;
+}
+
+.scope-pane-plot .u-legend {
+  font-size: 11px;
+  color: var(--mg-ink);
+}
+
+.scope-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--mg-muted);
+  font-size: 12px;
+}

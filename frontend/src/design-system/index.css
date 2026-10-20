@@ -1,0 +1,275 @@
+@import "tailwindcss";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/jetbrains-mono";
+
+/* ============================================================
+   MagGCS design tokens (ADR-010).
+   Components MUST reference tokens only; no hardcoded colors
+   (enforced by `npm run check:colors`).
+   Dark tech is the default; `[data-theme="light"]` overrides.
+   ============================================================ */
+
+:root {
+  /* palette */
+  --mg-bg: #0b1220;
+  --mg-bg-raised: #111b2e;
+  --mg-bg-glass: rgba(17, 27, 46, 0.72);
+  --mg-border: #22314d;
+  --mg-ink: #dbe4f5;
+  --mg-muted: #8aa0c4;
+  --mg-accent: #22d3ee;
+  --mg-accent-ink: #04242e;
+  --mg-ok: #22c55e;
+  --mg-ok-ink: #04210f;
+  --mg-warn: #eab308;
+  --mg-error: #ef4444;
+  --mg-mag: #c084fc;
+
+  /* instrument cluster */
+  --mg-sky: #1d5f9e;
+  --mg-ground: #7a4a21;
+  --mg-instrument: #0e1830;
+  --mg-tape-track: rgba(34, 211, 238, 0.55);
+
+  /* offline grid imagery */
+  --mg-grid-bg: #0d1a2e;
+  --mg-grid-line: #1e3a5f;
+  --mg-grid-glow: #22d3ee;
+
+  /* glass panels */
+  --mg-glass-blur: 12px;
+  --mg-glass-sat: 160%;
+
+  /* layout metrics */
+  --mg-topbar-h: 48px;
+  --mg-panel-w: 288px;
+  --mg-bottombar-h: 200px;
+
+  /* spacing */
+  --mg-space-1: 4px;
+  --mg-space-2: 8px;
+  --mg-space-3: 12px;
+  --mg-space-4: 16px;
+  --mg-space-6: 24px;
+
+  /* typography */
+  --mg-font-sans: "Inter Variable", system-ui, sans-serif;
+  --mg-font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+  --mg-text-xs: 11px;
+  --mg-text-sm: 12px;
+  --mg-text-base: 14px;
+  --mg-text-lg: 18px;
+
+  /* Signal-trace palette (ADR-010: colours come from tokens, never literals).
+     The Inspector assigns one per signal by hashing its key; distinct enough
+     on both themes and reserved for traces only. */
+  --mg-trace-1: #4ea1ff;
+  --mg-trace-2: #3ddc84;
+  --mg-trace-3: #ffb454;
+  --mg-trace-4: #ff6b6b;
+  --mg-trace-5: #c792ea;
+  --mg-trace-6: #22d3ee;
+  --mg-trace-7: #f472b6;
+  --mg-trace-8: #a3e635;
+  /* Pinned dual-cursor measurement line. */
+  --mg-trace-measure: #ffb454;
+  /* Derived total-magnetic-intensity curve: pure red reads on both themes. */
+  --mg-trace-total-mag: #ff0000;
+
+  /* Recorded-track AGL ramp (low → high above ground) plus the below-ground
+     marker. A fixed scientific ramp: same across themes. */
+  --mg-trail-lo: #4cc9f0;
+  --mg-trail-mid: #4ade80;
+  --mg-trail-hi: #facc15;
+  --mg-trail-top: #ef4444;
+  --mg-trail-below: #d946ef;
+}
+
+/* High-contrast light theme for outdoor field use. */
+[data-theme="light"] {
+  --mg-bg: #eef2f8;
+  --mg-bg-raised: #ffffff;
+  --mg-bg-glass: rgba(255, 255, 255, 0.9);
+  --mg-border: #c3cfe1;
+  --mg-ink: #12203a;
+  --mg-muted: #5a6f92;
+  --mg-accent: #0e7490;
+  --mg-accent-ink: #ffffff;
+  --mg-ok: #15803d;
+  --mg-ok-ink: #ffffff;
+  --mg-warn: #a16207;
+  --mg-error: #b91c1c;
+  --mg-mag: #7c3aed;
+
+  /* instrument cluster */
+  --mg-sky: #7fc4ff;
+  --mg-ground: #c98d4b;
+  --mg-instrument: #ffffff;
+  --mg-tape-track: rgba(14, 118, 148, 0.55);
+}
+
+/* Night-red theme (UI5): preserves dark adaptation for night flights —
+   everything shifts to a red/black palette; state colours stay apart by
+   brightness (ok orange-red < warn amber < error bright red). */
+[data-theme="night-red"] {
+  --mg-bg: #0b0505;
+  --mg-bg-raised: #150909;
+  --mg-bg-glass: rgba(21, 9, 9, 0.75);
+  --mg-border: #42191a;
+  --mg-ink: #ffb9ad;
+  --mg-muted: #b4675e;
+  --mg-accent: #ff6652;
+  --mg-accent-ink: #240806;
+  --mg-ok: #d96a4e;
+  --mg-ok-ink: #240a05;
+  --mg-warn: #d99548;
+  --mg-error: #ff3d33;
+  --mg-mag: #ff8fb0;
+
+  /* instrument cluster */
+  --mg-sky: #7a2f28;
+  --mg-ground: #4a1f1a;
+  --mg-instrument: #120707;
+  --mg-tape-track: rgba(255, 102, 82, 0.5);
+
+  /* offline graticule */
+  --mg-grid-bg: #140707;
+  --mg-grid-line: #4a1f1c;
+  --mg-grid-glow: #ff6652;
+
+  /* trace palette: red family, separated by lightness */
+  --mg-trace-1: #ff6655;
+  --mg-trace-2: #ff8f66;
+  --mg-trace-3: #ffb454;
+  --mg-trace-4: #ff4444;
+  --mg-trace-5: #e57373;
+  --mg-trace-6: #ff9a8a;
+  --mg-trace-7: #ff6b8a;
+  --mg-trace-8: #d4a373;
+  --mg-trace-measure: #ffcc80;
+  /* total-field curve: white — pure red would vanish into the palette */
+  --mg-trace-total-mag: #ffffff;
+}
+
+/* Tailwind theme mapping — single source of truth for utilities. */
+@theme {
+  --color-canvas: var(--mg-bg);
+  --color-panel: var(--mg-bg-raised);
+  --color-line: var(--mg-border);
+  --color-ink: var(--mg-ink);
+  --color-muted: var(--mg-muted);
+  --color-accent: var(--mg-accent);
+  --color-accent-ink: var(--mg-accent-ink);
+  --color-ok: var(--mg-ok);
+  --color-ok-ink: var(--mg-ok-ink);
+  --color-warn: var(--mg-warn);
+  --color-error: var(--mg-error);
+  --color-mag: var(--mg-mag);
+  --font-sans: var(--mg-font-sans);
+  --font-mono: var(--mg-font-mono);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--mg-font-sans);
+  font-size: var(--mg-text-base);
+  color: var(--mg-ink);
+  background: var(--mg-bg);
+}
+
+.mono {
+  font-family: var(--mg-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.glass {
+  background: var(--mg-bg-glass);
+  backdrop-filter: blur(var(--mg-glass-blur)) saturate(var(--mg-glass-sat));
+}
+
+.panel {
+  background: var(--mg-bg-raised);
+  border: 1px solid var(--mg-border);
+}
+
+.touch-target {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+/* Critical-alert full-screen flash (plan §7 U3): a short burst of red, not a
+   persistent tint — the latched banner is the persistent part. Honours the OS
+   reduced-motion preference (no flash at all). */
+@keyframes mg-alert-flash {
+  0% {
+    opacity: 0;
+  }
+  12% {
+    opacity: 0.55;
+  }
+  24% {
+    opacity: 0.08;
+  }
+  38% {
+    opacity: 0.45;
+  }
+  52% {
+    opacity: 0.06;
+  }
+  66% {
+    opacity: 0.32;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.mg-alert-flash {
+  background: var(--mg-error);
+  animation: mg-alert-flash 1s ease-out forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mg-alert-flash {
+    animation: none;
+    opacity: 0;
+  }
+}
+
+/* Plan blocker navigation (U17b): flash the field a blocker chip points at,
+   so the operator sees where to fix it. Honours reduced motion. */
+@keyframes mg-plan-field-flash {
+  0% {
+    box-shadow: 0 0 0 0 var(--mg-error);
+  }
+  20% {
+    box-shadow: 0 0 0 2px var(--mg-error);
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+.plan-field-flash {
+  border-radius: 4px;
+  animation: mg-plan-field-flash 1.8s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .plan-field-flash {
+    animation: none;
+    box-shadow: 0 0 0 2px var(--mg-error);
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--mg-accent);
+  outline-offset: 2px;
+}

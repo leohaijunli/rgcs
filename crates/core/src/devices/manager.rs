@@ -1,0 +1,268 @@
+//! Device enumeration and hotplug watching (Phase 0, task 3).
+//!
+//! Enumeration uses `serialport::available_ports` and maps the result into
+//! [`SerialDeviceInfo`]. The watcher polls at a fixed interval and diffs the
+//! port set, which is platform-neutral; a udev-event-driven watcher can
+//! replace it on Linux later without changing the event surface.
+
+use std::time::Duration;
+
+use tokio::sync::broadcast;
+
+use super::database::DeviceDatabase;
+use super::device::{DeviceId, PortTransport, SerialDeviceInfo};
+use super::error::DeviceError;
+
+/// Default polling interval for the hotplug watcher.
+pub const DEFAULT_WATCH_INTERVAL: Duration = Duration::from_millis(500);
+
+/// Hotplug events emitted by the watcher.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeviceEvent {
+    Added(SerialDeviceInfo),
+    Removed(SerialDeviceInfo),
+}
+
+/// Event bus capacity for hotplug events.
+pub const EVENT_CAPACITY: usize = 128;
+
+/// Whether `port_name` is the kind of port an operator plugs a FC/RTK device
+/// into (issues.md #41): `/dev/ttyACM*` / `/dev/ttyUSB*` on Unix, `COM*` on
+/// Windows. ttyS*/PCI/Bluetooth ports are noise for this application.
+pub fn is_operator_port(port_name: &str) -> bool {
+    if let Some(index) = port_name.strip_prefix("COM") {
+        // Windows COM ports: "COM" + at least one digit.
+        if !index.is_empty() && index.chars().all(|c| c.is_ascii_digit()) {
+            return true;
+        }
+    }
+    port_name.starts_with("/dev/ttyACM") || port_name.starts_with("/dev/ttyUSB")
+}
+
+/// Manages serial device enumeration and hotplug watching.
+#[derive(Debug, Clone)]
+pub struct DeviceManager {
+    database: DeviceDatabase,
+    watch_interval: Duration,
+}
+
+/// Handle returned by [`DeviceManager::spawn_watcher`].
+#[derive(Clone)]
+pub struct DeviceManagerHandle {
+    events: broadcast::Sender<DeviceEvent>,
+}
+
+impl DeviceManager {
+    /// New manager over a device database.
+    pub fn new(database: DeviceDatabase) -> Self {
+        Self {
+            database,
+            watch_interval: DEFAULT_WATCH_INTERVAL,
+        }
+    }
+
+    /// Set the watcher polling interval.
+    pub fn with_watch_interval(mut self, interval: Duration) -> Self {
+        self.watch_interval = interval;
+        self
+    }
+
+    /// Database used for role suggestions.
+    pub fn database(&self) -> &DeviceDatabase {
+        &self.database
+    }
+
+    /// Enumerate currently attached serial ports with identity metadata.
+    ///
+    /// Filtered to the ports an operator can actually plug a FC/RTK device
+    /// into (issues.md #41): `/dev/ttyACM*` and `/dev/ttyUSB*` on Linux,
+    /// `COM*` on Windows. Everything else (ttyS*, PCI, Bluetooth…) is noise.
+    pub fn enumerate(&self) -> Result<Vec<SerialDeviceInfo>, DeviceError> {
+        let ports = serialport::available_ports()?;
+        Ok(ports
+            .into_iter()
+            .filter(|p| is_operator_port(&p.port_name))
+            .map(|p| {
+                let (transport, device_id, serial_number, manufacturer, product) = match p.port_type
+                {
+                    serialport::SerialPortType::UsbPort(info) => (
+                        PortTransport::Usb,
+                        Some(DeviceId {
+                            vendor_id: info.vid,
+                            product_id: info.pid,
+                        }),
+                        info.serial_number,
+                        info.manufacturer,
+                        info.product,
+                    ),
+                    serialport::SerialPortType::PciPort => {
+                        (PortTransport::Pci, None, None, None, None)
+                    }
+                    serialport::SerialPortType::BluetoothPort => {
+                        (PortTransport::Bluetooth, None, None, None, None)
+                    }
+                    serialport::SerialPortType::Unknown => {
+                        (PortTransport::Unknown, None, None, None, None)
+                    }
+                };
+                SerialDeviceInfo {
+                    port_name: p.port_name,
+                    transport,
+                    device_id,
+                    serial_number,
+                    manufacturer,
+                    product,
+                }
+            })
+            .collect())
+    }
+
+    /// Spawn the hotplug watcher task.
+    ///
+    /// Returns a handle; subscribe to receive [`DeviceEvent`]s. The caller
+    /// reconciles the initial state by calling [`DeviceManager::enumerate`]
+    /// before subscribing. A failure to enumerate at startup or during polling
+    /// is non-fatal: the watcher keeps running and adopts the next successful
+    /// enumeration as its baseline (issues.md #31).
+    pub fn spawn_watcher(self) -> DeviceManagerHandle {
+        let (events_tx, _) = broadcast::channel(EVENT_CAPACITY);
+        let interval = self.watch_interval;
+        // Seed the baseline when possible; otherwise start unprimed and adopt
+        // the first successful enumeration without emitting a spurious "added"
+        // burst for devices that were already attached.
+        let (mut previous, mut primed) = match self.enumerate() {
+            Ok(ports) => (ports, true),
+            Err(_) => (Vec::new(), false),
+        };
+
+        let tx = events_tx.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(interval);
+            loop {
+                tick.tick().await;
+                let current = match self.enumerate() {
+                    Ok(c) => c,
+                    // A transient enumeration failure must not stop the watcher.
+                    Err(_) => continue,
+                };
+                for event in hotplug_events(&previous, &current, primed).unwrap_or_default() {
+                    let _ = tx.send(event);
+                }
+                previous = current;
+                primed = true;
+            }
+        });
+
+        DeviceManagerHandle { events: events_tx }
+    }
+}
+
+/// Hotplug events between two enumerations.
+///
+/// Returns `None` while the watcher is unprimed (before the first successful
+/// enumeration): there is no meaningful baseline to diff against yet.
+fn hotplug_events(
+    previous: &[SerialDeviceInfo],
+    current: &[SerialDeviceInfo],
+    primed: bool,
+) -> Option<Vec<DeviceEvent>> {
+    if !primed {
+        return None;
+    }
+    let mut events = Vec::new();
+    for dev in current.diff(previous, |a, b| a == b) {
+        events.push(DeviceEvent::Added(dev));
+    }
+    for dev in previous.diff(current, |a, b| a == b) {
+        events.push(DeviceEvent::Removed(dev));
+    }
+    Some(events)
+}
+
+impl DeviceManagerHandle {
+    /// Subscribe to hotplug events.
+    pub fn subscribe(&self) -> broadcast::Receiver<DeviceEvent> {
+        self.events.subscribe()
+    }
+}
+
+/// Set-difference helper that preserves equality semantics.
+trait Diff<T> {
+    fn diff<F>(&self, other: &[T], eq: F) -> Vec<T>
+    where
+        F: Fn(&T, &T) -> bool;
+}
+
+impl<T: Clone> Diff<T> for [T] {
+    fn diff<F>(&self, other: &[T], eq: F) -> Vec<T>
+    where
+        F: Fn(&T, &T) -> bool,
+    {
+        self.iter()
+            .filter(|a| !other.iter().any(|b| eq(a, b)))
+            .cloned()
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::devices::device::PortTransport;
+
+    fn dev(name: &str) -> SerialDeviceInfo {
+        SerialDeviceInfo {
+            port_name: name.to_string(),
+            transport: PortTransport::Usb,
+            device_id: None,
+            serial_number: None,
+            manufacturer: None,
+            product: None,
+        }
+    }
+
+    #[test]
+    fn diff_reports_added_and_removed() {
+        let before = vec![1, 2, 3];
+        let after = vec![2, 3, 4];
+        assert_eq!(after.diff(&before, |a, b| a == b), vec![4]);
+        assert_eq!(before.diff(&after, |a, b| a == b), vec![1]);
+    }
+
+    #[test]
+    fn hotplug_events_are_empty_while_unprimed() {
+        // The first successful enumeration only establishes the baseline.
+        let current = vec![dev("/dev/ttyUSB0")];
+        assert_eq!(hotplug_events(&[], &current, false), None);
+    }
+
+    #[test]
+    fn operator_port_filter_matches_pluggable_ports_only() {
+        // Linux: USB CDC (FC over USB) and USB-serial adapters pass.
+        assert!(is_operator_port("/dev/ttyACM0"));
+        assert!(is_operator_port("/dev/ttyACM3"));
+        assert!(is_operator_port("/dev/ttyUSB0"));
+        assert!(is_operator_port("/dev/ttyUSB12"));
+        // Everything else is noise (issue #41).
+        assert!(!is_operator_port("/dev/ttyS0"));
+        assert!(!is_operator_port("/dev/ttyS31"));
+        assert!(!is_operator_port("/dev/pts/3"));
+        assert!(!is_operator_port("/dev/cu.usbmodem123"));
+        // Windows: COM ports with a numeric index.
+        assert!(is_operator_port("COM3"));
+        assert!(!is_operator_port("COM"));
+        assert!(!is_operator_port("COMX"));
+        // Windows builds run on Unix paths too — the COM check is prefix-safe
+        // on Unix (a Linux file named COM3 is not a thing).
+    }
+
+    #[test]
+    fn hotplug_events_report_add_and_remove() {
+        let before = vec![dev("/dev/ttyUSB0"), dev("/dev/ttyACM0")];
+        let after = vec![dev("/dev/ttyACM0"), dev("/dev/ttyUSB1")];
+        let events = hotplug_events(&before, &after, true).expect("primed");
+        assert!(events.contains(&DeviceEvent::Added(dev("/dev/ttyUSB1"))));
+        assert!(events.contains(&DeviceEvent::Removed(dev("/dev/ttyUSB0"))));
+        assert_eq!(events.len(), 2);
+    }
+}

@@ -1,0 +1,182 @@
+name: ci
+
+on:
+  # Release builds only: pushing a `v*` tag runs the checks and produces the
+  # Windows and Ubuntu installers. The SITL heartbeat integration job is
+  # cancelled.
+  push:
+    tags: ["v*"]
+
+jobs:
+  rust-check:
+    name: Rust check / test / lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Tauri system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libudev-dev
+      # `tauri::generate_context!` requires frontendDist to exist, and it is
+      # gitignored; build the frontend first so cargo clippy/test can compile
+      # maggcs-app.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --all-targets
+      # ADR-002: committed ts-rs bindings must match regeneration.
+      - name: Check ts-rs bindings are in sync
+        run: |
+          if ! git diff --exit-code -- crates/core/bindings; then
+            echo "::error::Generated ts-rs bindings are stale. Run 'cargo test -p maggcs-core', then commit crates/core/bindings."
+            exit 1
+          fi
+
+  deny:
+    name: Dependency & license check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # ADR-007: CI must check dependency licenses (config in deny.toml).
+      # Pinned so the deny.toml schema matches what was validated locally.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+      - run: cargo deny check
+
+  frontend:
+    name: Frontend typecheck / build / lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: Audit production dependencies
+        # Runtime deps only: devDependencies (vite plugins) are build tools and
+        # carry advisories that do not ship to users.
+        run: npm audit --omit=dev --audit-level=high
+      - run: npm run typecheck
+      - run: bash scripts/check-colors.sh
+      - run: npm run check:contrast
+      # 0.6: every t('...') key must exist, so the UI never shows raw keys.
+      - run: npm run check:i18n
+      # Pure-module guards: .plan interop, upload/download state machine,
+      # coordinate entry, the AGL ground reference and the flight-progress
+      # maths.
+      - run: npm run check:planfile
+      - run: npm run check:mission-sync
+      - run: npm run check:undo
+      - run: npm run check:survey-prep
+      - run: npm run check:surface
+      - run: npm run check:plan-steps
+      - run: npm run check:coords
+      - run: npm run check:agl
+      - run: npm run check:progress
+      - run: npm run check:polygon
+      - run: npm run check:drape-error
+      - run: npm run check:plan-profile
+      - run: npm run build
+
+  windows-build:
+    name: Build Windows installer (NSIS/MSI)
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+      - name: Bundle Windows installer
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: crates/app-tauri
+          args: ''
+          # The workflow only runs on a version tag, so always publish a
+          # release draft with the installer as an asset.
+          tagName: ${{ github.ref_name }}
+          releaseName: ${{ format('MagGCS {0}', github.ref_name) }}
+          releaseBody: 'Windows installer (NSIS/MSI). See assets to download.'
+          releaseDraft: true
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: maggcs-windows
+          path: target/release/bundle/**
+          # A build that silently produced no installer is useless.
+          if-no-files-found: error
+
+  ubuntu-build:
+    name: Build Ubuntu installer (AppImage/deb)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Tauri system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libudev-dev
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+      - name: Bundle Ubuntu installer
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: crates/app-tauri
+          args: ''
+          # The workflow only runs on a version tag: publish into the same
+          # draft release the Windows job created (tauri-action appends to an
+          # existing release for the tag).
+          tagName: ${{ github.ref_name }}
+          releaseName: ${{ format('MagGCS {0}', github.ref_name) }}
+          releaseBody: 'Ubuntu installer (AppImage/deb). See assets to download.'
+          releaseDraft: true
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: maggcs-ubuntu
+          path: target/release/bundle/**
+          # A build that silently produced no installer is useless.
+          if-no-files-found: error

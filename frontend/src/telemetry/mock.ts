@@ -1,0 +1,159 @@
+// Browser-dev mock telemetry: keeps the UI alive when running in a plain
+// browser (no Tauri runtime, no MAVLink link). The real desktop shell
+// receives live data via Tauri events (see desktop/bridge.ts).
+
+import type { TelemetrySnapshot } from '../generated-types/TelemetrySnapshot'
+import { useTelemetryStore } from '../stores/telemetry'
+import { useMissionStore } from '../stores/mission'
+import { usePrefsStore, type LatLon } from '../desktop/prefs'
+
+/** Tick period of the mock feed, in seconds. */
+const TICK_S = 0.25
+const M_PER_DEG_LAT = 111_320
+
+/**
+ * Position on the mock's flight path at tick `t`, around the operator's
+ * initial-position setting (Settings -> Vehicle); the feed follows the setting
+ * live, so editing it moves the simulated aircraft.
+ */
+function pathAt(t: number, origin: LatLon) {
+  return {
+    lat: origin.lat + 0.004 * Math.sin(t / 40),
+    lon: origin.lon + 0.006 * Math.cos(t / 50),
+    alt: 100 + 8 * Math.sin(t / 60),
+  }
+}
+
+/** Start a sine-wave flight loop; returns the interval id. */
+export function startMockFeed(): number {
+  useTelemetryStore.getState().setMock(true)
+  let t = 0
+  // Mission playback: every `MISSION_STEP_TICKS` the mock reports the next
+  // waypoint as current (exactly the MISSION_CURRENT event a real FC sends),
+  // so the flight-state colouring, the progress card and the map halo are all
+  // exercise-able in the browser. Only runs when the local plan is non-empty.
+  const MISSION_STEP_TICKS = Math.round(4 / TICK_S)
+  const id = window.setInterval(() => {
+    t += 1
+    if (t % MISSION_STEP_TICKS === 0) {
+      const { waypoints, currentSeq } = useMissionStore.getState()
+      if (waypoints.length === 0) return
+      const next = currentSeq == null ? 0 : (currentSeq + 1) % waypoints.length
+      useMissionStore.getState().handleEvent({
+        op: 'mission',
+        kind: 'current_changed',
+        seq: next,
+        sent: 0,
+        total: 0,
+      })
+    }
+    const origin = usePrefsStore.getState().initialPosition
+    const { lat, lon, alt } = pathAt(t, origin)
+
+    // NED velocity derived from the path itself. The map dead-reckons the
+    // marker and draws the forward projection from this, so a velocity that
+    // disagrees with the trajectory would make the marker lag and jump.
+    const ahead = pathAt(t + 1, origin)
+    const mPerDegLon = M_PER_DEG_LAT * Math.cos((lat * Math.PI) / 180)
+    const vn = ((ahead.lat - lat) * M_PER_DEG_LAT) / TICK_S
+    const ve = ((ahead.lon - lon) * mPerDegLon) / TICK_S
+    const vd = -(ahead.alt - alt) / TICK_S
+    const heading = (Math.atan2(ve, vn) * (180 / Math.PI) + 360) % 360
+
+    const snap: TelemetrySnapshot = {
+      last_heartbeat_at_ms: Date.now(),
+      heartbeat: {
+        system_id: 1,
+        component_id: 1,
+        vehicle_type: 'quadrotor',
+        autopilot: 'px4',
+        // Mock label; the real decode lives in core::telemetry::px4_mode.
+        mode_label: 'Auto·Loiter',
+        base_mode: {
+          custom_mode_enabled: true,
+          test_enabled: false,
+          auto_enabled: true,
+          guided_enabled: true,
+          stabilize_enabled: false,
+          hil_enabled: false,
+          manual_input_enabled: false,
+          safety_armed: true,
+        },
+        // PX4 packs main mode in bits 16-23, sub mode in 24-31:
+        // AUTO + LOITER, so the mode pill reads "Auto·Loiter".
+        custom_mode: (4 << 16) | (3 << 24),
+        flight_state: 'active',
+        mavlink_version: 3,
+      },
+      global_position: {
+        time_boot_ms: t * 1000,
+        latitude_deg: lat,
+        longitude_deg: lon,
+        altitude: { datum: 'AMSL_EGM96', meters: alt },
+        relative_alt_m: alt - 80,
+        velocity: { x_m_s: vn, y_m_s: ve, z_m_s: vd },
+        heading_deg: heading,
+      },
+      attitude: {
+        time_boot_ms: t * 1000,
+        roll_deg: Math.sin(t / 20) * 5,
+        pitch_deg: Math.cos(t / 25) * 3,
+        yaw_deg: heading,
+        roll_speed_deg_s: 0,
+        pitch_speed_deg_s: 0,
+        yaw_speed_deg_s: 0,
+      },
+      sys_status: {
+        sensors: { present: 0, enabled: 0, health: 0 },
+        battery_voltage_mv: 16700,
+        battery_current_ma: 2200,
+        battery_remaining_percent: 88,
+      },
+      battery: {
+        battery_id: 0,
+        voltage_cells_mv: [4100, 4090, 4080, 4070],
+        current_ma: 2200,
+        remaining_percent: 88,
+        temperature_deg_c: 32,
+      },
+      gps: {
+        fix_type: 'RTK_FIXED',
+        satellites_visible: 20,
+        latitude_deg: lat,
+        longitude_deg: lon,
+        altitude: { datum: 'AMSL_EGM96', meters: alt },
+        hdop: 0.7,
+        vdop: 1.1,
+        velocity_m_s: Math.hypot(vn, ve),
+        course_over_ground_deg: heading,
+      },
+      extended_sys_state: {
+        landed_state: 'in_air',
+        vtol_state: 'undefined',
+      },
+      home: null,
+      estimator: null,
+      vibration: null,
+      distance_sensor: null,
+      rc_channels: null,
+      radio: null,
+      field_ages: {
+        heartbeat_at_ms: Date.now(),
+        global_position_at_ms: Date.now(),
+        attitude_at_ms: Date.now(),
+        sys_status_at_ms: Date.now(),
+        battery_at_ms: Date.now(),
+        gps_at_ms: Date.now(),
+        extended_sys_state_at_ms: Date.now(),
+        home_at_ms: null,
+        estimator_at_ms: null,
+        vibration_at_ms: null,
+        rc_channels_at_ms: null,
+        radio_at_ms: null,
+        distance_sensor_at_ms: null,
+      },
+    }
+    useTelemetryStore.getState().applySnapshot(snap)
+  }, 250)
+  return id
+}

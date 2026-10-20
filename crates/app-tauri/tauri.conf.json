@@ -1,0 +1,42 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "MagGCS",
+  "version": "0.1.0",
+  "identifier": "io.maggcs.desktop",
+  "build": {
+    "frontendDist": "../../frontend/dist",
+    "beforeBuildCommand": "",
+    "beforeDevCommand": ""
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "MagGCS",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 1024,
+        "minHeight": 700,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.google.com; font-src 'self' data:; worker-src 'self' blob:; child-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost https://tile.openstreetmap.org https://*.tile.openstreetmap.org https://server.arcgisonline.com https://*.google.com https://tile.opentopomap.org http://127.0.0.1:18823"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "deb",
+      "rpm",
+      "appimage",
+      "nsis",
+      "msi"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ]
+  }
+}

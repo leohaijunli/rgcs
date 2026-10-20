@@ -1,0 +1,18 @@
+# CGVD2013 geoid undulation fixture (BC south-west).
+#
+# N(lat, lon) = -15 + 5·(lat−48.5) − 8·(lon+123.6) metres — a smooth ramp
+# covering 48.5..48.8 N, -123.6..-123.3 E (Sidney/Haro Strait). Values are
+# stand-ins in the published CGG2013 range (~−13..−17 m) until the real BC
+# extraction is committed (issue N2); the .mggeoid loader path is identical.
+DATUM CGVD2013
+LAT0 48.5
+LON0 -123.6
+DLAT 0.1
+DLON 0.1
+NLAT 4
+NLON 4
+VALUES
+-15.0 -15.8 -16.6 -17.4
+-14.5 -15.3 -16.1 -16.9
+-14.0 -14.8 -15.6 -16.4
+-13.5 -14.3 -15.1 -15.9

@@ -1,0 +1,15 @@
+{
+  "version": "2f7f831b871cce6f",
+  "raster_crs": "EPSG:4326",
+  "resolution_m": 1.0,
+  "bounds": {
+    "north": 48.66259476310911,
+    "south": 48.64990725729513,
+    "east": -123.39998285447533,
+    "west": -123.42499139289951
+  },
+  "vertical_datum": "orthometric_cgvd2013",
+  "source_file": "bc_092b063_4_2_2_xyes_8_utm10_20231125_20231126.laz",
+  "source_points": 72982306,
+  "has_dsm": true
+}
