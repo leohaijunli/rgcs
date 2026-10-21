@@ -7,6 +7,8 @@ import { createRoot } from 'react-dom/client'
 import { Crosshair, Layers, Radio } from 'lucide-react'
 import {
   Button,
+  CommandStatusStrip,
+  HoldButton,
   IconButton,
   Panel,
   Popover,
@@ -14,6 +16,7 @@ import {
   PopoverToggle,
   StatusDot,
   Tabs,
+  TaskProgress,
   type Tone,
 } from '../design-system/components'
 import '../design-system/index.css'
@@ -192,6 +195,31 @@ function Gallery() {
           active={tab}
           onChange={setTab}
         />
+      </Section>
+
+      <Section title="HoldButton / ConfirmBar (U4)">
+        <div className="flex items-center gap-3">
+          <HoldButton hint="Takeoff" holdMs={1000} onConfirm={() => {}}>
+            Takeoff
+          </HoldButton>
+          <span className="text-xs" style={{ color: 'var(--mg-muted)' }}>
+            hold 1 s with a progress ring
+          </span>
+        </div>
+      </Section>
+
+      <Section title="TaskProgress (U13)">
+        <div className="w-72 space-y-3">
+          <TaskProgress label="Uploading mission" sent={12} total={30} startedAtMs={Date.now() - 4200} />
+          <TaskProgress label="Building 3D tileset" indeterminate startedAtMs={Date.now() - 61_000} onCancel={() => {}} />
+          <TaskProgress label="Failed stage" indeterminate danger startedAtMs={Date.now() - 900} />
+        </div>
+      </Section>
+
+      <Section title="CommandStatusStrip (A7/U4)">
+        <div className="w-96">
+          <CommandStatusStrip command="RTL" phase="sent" elapsedMs={1200} tone="accent" />
+        </div>
       </Section>
 
       <Section title="StatusDot">

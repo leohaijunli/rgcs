@@ -61,6 +61,12 @@
 - **实现(前端)**:新纯函数 `mission/drapeApply.ts::applyCompiled`(编译产物按块替换 pattern block;块内 pinned 高度按位置容差恢复;`21/85` 降落项按位置键贴地;块外一律原样;返回重锚定的线表);`stores/mission.ts` 合并 `runDrapePreview`/`runTerrainDrape` 为单管线 `runDrapeOnce(apply)`(指纹、600 ms 防抖、A3 告警、unchanged 不置 dirty 语义保持);手动编辑(lastPattern 清空)→ fail-closed 报"regenerate the pattern",不再静默保留旧高度;DrapeBlock/SyncStep provenance(`dem:<folder>`、dem_ref.hash)改读新 `DrapeState`;删除 `meshDrape.ts`、`DrapeState.report`(DrapeReport)/`meshDrape` 字段与 `MESH_*` 文案。
 - **验证**:`cargo test -p maggcs-core` 全绿(drape.rs 测试随模块删除,699 lib + 集成);`cargo test -p maggcs-app` 76 通过(新增 `drape_apply_tests` 3 条:H 链转换数值断言 ±0.02、链外 fail-closed、命令项透传);`drape_pipeline.rs`(solve→compile 真实文件 I/O)3 条通过;clippy `-D warnings`(core+app)、fmt、`git diff --check`;前端 `tsc`、production build、14 个 check 脚本 + `check:agl`(27 条,重定向到 `applyCompiled`)全绿;ts-rs 绑定重生成,删除 `DrapeReport/DrapeOptions.ts`。**行为变更**:terrain 模式不再有 mesh 兜底;手动编辑不重 drape;块外手动航点不参与 drape(AGL 行显示 unknown)。ADR-005 addendum、ADR-022 已更新。实机复验归 DR6 走查单。
 
+#### U13 + U14 执行记录 (2026-10-21)
+
+- **U13(长任务统一反馈)**:设计系统新 `TaskProgress`(确定/不确定条 + sent/total + 实时 elapsed + 可选取消);**Sync 步**的任务进度从纯文本行升级为该组件(上传/下载/清除,含 elapsed)——**mission 操作无取消按钮是协议约束**(半截任务留在 FC 不安全),断开即中止,Sync 门禁标记不一致;**3D DEM 构建/下载**接 `terrain3d_cancel`(run_stage 改为轮询取消标志,能从命令线程杀掉 dem-prep 子进程并返回中性 "cancelled";原来 `wait_with_output` 阻塞不可杀),MapToolbar 显示 stage/行/elapsed/取消;raw-LiDAR 处理不再隐形(`building3d` 带 startedAtMs 供 elapsed)。`util/units.ts` 集中格式化(米/速度/字节/坐标/elapsed,SurveyPrepCard 本地 formatBytes 迁移)。
+- **U14(设计系统整理,轻量)**:gallery 补 HoldButton/ConfirmBar、TaskProgress(三态)、CommandStatusStrip 四节;字号审计——`text-[9px]` 仅 6 处且全是装饰性 ▾ 符号,`text-[10px]` 集中在 WaypointsStep/MapToolbar(field-mode CSS 已将这些类提升至 12 px 底线);首次使用向导已由 PJ3 强制启动页承担(计划允许)。
+- 验证:app 86;clippy `-D warnings`;`tsc`/build/i18n(718 keys)全绿;gallery.html 可视核对(构建通过)。
+
 #### U12 执行记录 (2026-10-21)
 
 - **现场模式**:`Settings ▸ Appearance` 开关(`ui store fieldMode`,localStorage 持久化,`main.tsx` 首帧前应用——无 44↔32 px 闪烁);应用为 `html.field-mode` 类,**与 night-red 等 palette 组合**。CSS 落地:交互元素(button/select/input/textarea)min 44×44 px、基础字号 14 px(rem 类随动,`text-[10px]/[11px]` px 类提升至 12 px 底线)、动画时长压至 0.01 ms(减少动画)、`:focus-visible` 全局可见焦点环。
