@@ -74,7 +74,7 @@ Headless/主界面也要用副链路，需要把 SITL 连接提升到 AppState �
 `config.json`,TopBar 常驻 pill + 状态冗余;安全告警(Critical 锁存)是否也
 静音需操作员确认——默认建议仅静音 Warn 及以下,Critical 仍横幅但无声。
 
-### O7 [P2][frontend/inspector] Signal Inspector 重联后整段曲线闪动 + 数据稳定等待 2 s
+### O7 [已解决 2026-10-21 代码,待实机复验] [frontend/inspector] Signal Inspector 重联后整段曲线闪动 + 数据稳定等待 2 s
 现象(操作员 2026-10-20):Inspector 打开趋势数据时,重联飞控几乎必现一整段
 曲线闪动。初步排查(代码阅读,待实测确认)三个叠加原因:
 1. 重联使 Rust tap 重建(`attach_inspector`/`inspector_reset_source`),
@@ -91,6 +91,14 @@ Headless/主界面也要用副链路，需要把 SITL 连接提升到 AppState �
 `Date.now()+2s` 之前的帧(状态栏显示 "settling…");同时门闸结束后再
 `inspector_set_traces`,让 mapper 基线与 fs EMA 在门闸内收敛,消除混排。
 
+
+**实现(2026-10-21,操作员方案)**:检测到 tap 重建(`messages` 计数回落)→ 清空采样环
+→ 启动 **2 s settling 门闸**(`SETTLE_MS`,状态栏显示 "settling…")→ 门闸期间
+`onMessage` 直接丢弃帧 → 到期后才开始读入。这样突发回填(原因 1)与新旧时间戳
+基线混排(原因 2)都落在门闸内,滤波 EMA(原因 3)也在门闸内收敛。代价:每次重联
+丢 ≤2 s 数据(重联期间不在测量段)。**实机复验场景**:开滤波 → 重联飞控 → 应看到
+短暂 "settling…" 后曲线从稳定数据开始,无晃动段;若极低截止频率滤波仍有短爬坡,
+调大 `SETTLE_MS`(单常量)。
 ### O8 [已解决 2026-10-21] [frontend/harness] Playwright 检查壳自 PJ3 起失效;修复后暴露两类预存在问题
 2026-10-20 修复:①强制启动页(PJ3)把所有 Playwright 检查挡在启动面——各检查
 脚本现经 `window.__mgProject` 注入一次性项目跳过;②headless SwiftShader 下
