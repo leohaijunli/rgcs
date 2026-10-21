@@ -37,6 +37,19 @@ interface Fix {
   lidar: number | null
 }
 
+/** ~`target` nice steps (1/2/5×10^k) across [min, max] — finer y ticks. */
+function niceSplits(min: number, max: number, target: number): number[] {
+  const span = max - min
+  if (!(span > 0) || !Number.isFinite(span)) return [min, max]
+  const raw = span / target
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)))
+  const norm = raw / mag
+  const step = (norm >= 5 ? 5 : norm >= 2 ? 2 : 1) * mag
+  const out: number[] = []
+  for (let v = Math.ceil(min / step) * step; v <= max + 1e-9; v += step) out.push(Number(v.toFixed(6)))
+  return out
+}
+
 function haversineM(
   a: { lat: number; lon: number },
   b: { lat: number; lon: number },
@@ -60,6 +73,7 @@ export default function LiveAltitudeProfile() {
   const dsmRef = useRef<(number | null)[]>([])
   const plannedRef = useRef<(number | null)[]>([])
   const plannedSpecRef = useRef<string>('')
+  const hostCleanup = useRef<(() => void) | null>(null)
   const sampledToRef = useRef(0)
   const lastFixAtRef = useRef(0)
   /** The live follow window. `scales.x.range` is a closure created ONCE with
@@ -249,9 +263,20 @@ export default function LiveAltitudeProfile() {
             height: PLOT_HEIGHT,
             legend: { show: true, live: false },
             scales: { x: { time: false, range: () => xRangeRef.current } },
+            // Drag a box to zoom the y axis (x stays on the follow window);
+            // double-click resets. Wheel zooms y around the cursor (below).
+            cursor: { drag: { x: false, y: true, uni: 20 } },
             axes: [
               { stroke: stroke('--mg-muted'), label: 'm', grid: { stroke: stroke('--mg-border') } },
-              { stroke: stroke('--mg-muted'), label: 'm AMSL', grid: { stroke: stroke('--mg-border') } },
+              {
+                stroke: stroke('--mg-muted'),
+                label: 'm AMSL',
+                grid: { stroke: stroke('--mg-border') },
+                // Finer y ticks: ~10 nice steps instead of uPlot's sparse
+                // default (operator request).
+                splits: (_self, _axisIdx, min, max) =>
+                  niceSplits(min as number, max as number, 10),
+              },
             ],
             series: [
               {},
@@ -271,6 +296,31 @@ export default function LiveAltitudeProfile() {
           plotRef.current = new uPlot(opts, data, host)
           if (import.meta.env?.DEV) {
             ;(window as unknown as { __mgProfile?: unknown }).__mgProfile = plotRef
+          }
+          // Wheel: zoom the y axis around the cursor (1.15× per notch).
+          const onWheel = (e: WheelEvent) => {
+            const plot = plotRef.current
+            if (!plot) return
+            e.preventDefault()
+            const rect = host.getBoundingClientRect()
+            const frac = 1 - (e.clientY - rect.top) / rect.height
+            const { min, max } = plot.scales.y
+            if (min == null || max == null || !Number.isFinite(min) || !Number.isFinite(max)) return
+            const span = Math.max(1, (max - min) * (e.deltaY > 0 ? 1.15 : 1 / 1.15))
+            const anchor = min + frac * (max - min)
+            const lo = anchor - frac * span
+            const hi = anchor + (1 - frac) * span
+            plot.setScale('y', { min: lo, max: hi })
+          }
+          const onDblClick = () => {
+            // Nulls restore the scale to auto (data-driven) — the reset.
+            plotRef.current?.setScale('y', { min: null as unknown as number, max: null as unknown as number })
+          }
+          host.addEventListener('wheel', onWheel, { passive: false })
+          host.addEventListener('dblclick', onDblClick)
+          hostCleanup.current = () => {
+            host.removeEventListener('wheel', onWheel)
+            host.removeEventListener('dblclick', onDblClick)
           }
         } else {
           plotRef.current.setData(data)
@@ -293,6 +343,7 @@ export default function LiveAltitudeProfile() {
     window.addEventListener('resize', onResize)
     return () => {
       window.removeEventListener('resize', onResize)
+      hostCleanup.current?.()
       plotRef.current?.destroy()
       plotRef.current = null
     }

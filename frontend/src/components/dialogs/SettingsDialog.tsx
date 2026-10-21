@@ -55,6 +55,8 @@ export default function SettingsDialog({
 }) {
   const { t } = useTranslation()
   const theme = useUiStore((s) => s.theme)
+  const fieldMode = useUiStore((s) => s.fieldMode)
+  const setFieldMode = useUiStore((s) => s.setFieldMode)
   const setTheme = useUiStore((s) => s.setTheme)
   const link = useLinkStore((s) => s.link)
 
@@ -101,7 +103,7 @@ export default function SettingsDialog({
                 <VehicleTab />
               </Tabs.Content>
               <Tabs.Content value="appearance">
-                <AppearanceTab theme={theme} setTheme={setTheme} />
+                <AppearanceTab theme={theme} setTheme={setTheme} fieldMode={fieldMode} setFieldMode={setFieldMode} />
               </Tabs.Content>
               <Tabs.Content value="devices">
                 <DevicesTab />
@@ -559,9 +561,13 @@ const THEME_OPTIONS: readonly ThemePref[] = ['dark', 'light', 'system', 'night-r
 function AppearanceTab({
   theme,
   setTheme,
+  fieldMode,
+  setFieldMode,
 }: {
   theme: ThemePref
   setTheme: (t: ThemePref) => void
+  fieldMode: boolean
+  setFieldMode: (on: boolean) => void
 }) {
   const { t } = useTranslation()
   return (
@@ -580,6 +586,18 @@ function AppearanceTab({
           </button>
         ))}
       </div>
+      <div className="mt-3 mb-2 text-xs text-muted">{t('settings.fieldMode')}</div>
+      <label
+        data-testid="field-mode-toggle"
+        className="flex cursor-pointer items-center gap-2 rounded border border-line bg-canvas px-3 py-2 text-xs text-ink"
+      >
+        <input
+          type="checkbox"
+          checked={fieldMode}
+          onChange={(e) => setFieldMode(e.target.checked)}
+        />
+        <span>{t('settings.fieldModeHint')}</span>
+      </label>
     </div>
   )
 }

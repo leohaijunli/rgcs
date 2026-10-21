@@ -89,6 +89,10 @@ function fmtClock(sec: number): string {
   return `${m}:${s.toFixed(1).padStart(4, '0')}`
 }
 
+/** O7 settling window: how long ingestion stays gated after a link rebuild
+ * (the tap's timestamp mapper re-baselines and the filter EMA relearns). */
+const SETTLE_MS = 2_000
+
 /** Per-trace ring capacity (~5 min at 200 Hz); older samples are overwritten. */
 const RING_CAP = 65536
 
@@ -325,6 +329,13 @@ export function InspectorApp() {
   const [follow, setFollow] = useState(true)
   const [status, setStatus] = useState<InspectorStatus | null>(null)
   const [rate, setRate] = useState(0)
+  /** O7: after a link rebuild (tap restart), the first packets carry an
+   * unstable rx−fc baseline and the filter EMA relearns — ingesting them
+   * draws a mixed-baseline, shaking segment. A stats reset clears the rings
+   * AND starts this gate: frames are dropped until it expires, so ingestion
+   * resumes on stabilized data (operator: wait ~2 s, then read). */
+  const settlingUntilRef = useRef(0)
+  const [settling, setSettling] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   /** Plot currently highlighted as a drag-and-drop target (P7). */
   const [dropPlot, setDropPlot] = useState<string | null>(null)
@@ -631,6 +642,9 @@ export function InspectorApp() {
     let disposed = false
     const channel = new Channel<FramePayload>()
     const onMessage = (frame: FramePayload) => {
+      // O7 settling gate: the burst right after a reconnect is exactly the
+      // data the gate exists for — drop it instead of drawing the shake.
+      if (Date.now() < settlingUntilRef.current) return
       for (const tf of frame.traces) {
         let ring = buffers.current.get(tf.trace_id)
         if (!ring) {
@@ -723,7 +737,12 @@ export function InspectorApp() {
           if (s.messages < lastMsgs) {
             buffers.current.clear()
             spectra.current.clear()
+            settlingUntilRef.current = Date.now() + SETTLE_MS
+            setSettling(true)
             markDirty()
+          } else if (settlingUntilRef.current !== 0 && Date.now() >= settlingUntilRef.current) {
+            settlingUntilRef.current = 0
+            setSettling(false)
           }
           if (lastT > 0 && s.messages >= lastMsgs) {
             const dt = (now - lastT) / 1000
@@ -1275,7 +1294,12 @@ export function InspectorApp() {
                 <>
                   {status.connected ? <span style={{ color: 'var(--mg-ok)' }}>● link</span> : <span style={{ color: 'var(--mg-warn)' }}>● no link</span>}
                   {' · '}
-                  {status.tap_running ? `${rate.toFixed(0)} msg/s` : '—'} · dropped {status.dropped}
+                  {status.tap_running
+                    ? settling
+                      ? 'settling…'
+                      : `${rate.toFixed(0)} msg/s`
+                    : '—'}{' '}
+                  · dropped {status.dropped}
                 </>
               )}
             </>

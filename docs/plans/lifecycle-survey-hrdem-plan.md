@@ -25,9 +25,9 @@
 
 | 状态 | 工作包 | 依据/缺口 |
 |---|---|---|
-| 已实现 | A1–A4、A6–A10、L1–L10、U1、U2–U5、U8、U9、U11、U17、PJ1–PJ4、H0–H4、H6–H8、DR1–DR7、DR9(事后评估版) | 逐项证据见下方执行记录(2026-10-15 → 2026-10-18)。要点:H1 live 验收与 H0 夹具 ±2 px 逐像元一致;H2 强制 §D 空变换;H3 DSM-max 保峰实测锁定;H7 真实 CGG2013 格网 + 两段式控制点互校(**PX4 实机 <0.5 m 现场验收仍待**);A2 主链断开联合回归全绿;L5 强制解锁三处记录时间戳一致;L9 goto 距离/地形守卫;L10 场景测试集(core 757);A8 WebGL context lost 隔离与 Restart;U17a–d Plan 步骤就绪/阻塞/批量编辑/同步相位;PJ1–PJ3 项目模型、profile 注册表与强制启动页;DR1–DR7 全链(spec/solver/compile/preview/监控/记录导出)+ DR9 雷达偏置稳健估计。**DR8 已取消(操作员,不做方位角扫描)**;U7 中仅 HUD 的 AGL 读数由 DR6b 提供,其余 U7 内容仍 ⏸。 |
+| 已实现 | A1–A4、A6–A10、L1–L10、U1、U2–U5、U8、U9、U11、U12、U17、PJ1–PJ4、H0–H4、H6–H8、DR1–DR7、DR9(事后评估版) | 逐项证据见下方执行记录(2026-10-15 → 2026-10-18)。要点:H1 live 验收与 H0 夹具 ±2 px 逐像元一致;H2 强制 §D 空变换;H3 DSM-max 保峰实测锁定;H7 真实 CGG2013 格网 + 两段式控制点互校(**PX4 实机 <0.5 m 现场验收仍待**);A2 主链断开联合回归全绿;L5 强制解锁三处记录时间戳一致;L9 goto 距离/地形守卫;L10 场景测试集(core 757);A8 WebGL context lost 隔离与 Restart;U17a–d Plan 步骤就绪/阻塞/批量编辑/同步相位;PJ1–PJ3 项目模型、profile 注册表与强制启动页;DR1–DR7 全链(spec/solver/compile/preview/监控/记录导出)+ DR9 雷达偏置稳健估计。**DR8 已取消(操作员,不做方位角扫描)**;U7 中仅 HUD 的 AGL 读数由 DR6b 提供,其余 U7 内容仍 ⏸。 |
 | 部分实现 | A5、PJ3(数据侧) | A5 清单引擎 + Drape 组 + PJ2 模板已就位。**A9 与 U5 收尾均已完成(2026-10-20,见执行记录)**:solve→compile 为唯一航点来源(`meshDrape.ts`/`terrain_drape` 已删);每个 Fail 项有修复入口,不可行区段逐项确认落地。PJ3 界面完成,但测量/会话**数据**要等 M4(⏸)才写入 project store。 |
-| 未实现/未验收 | A11、U12–U16、H5 | A11 跨窗口单一事实源(U15 前置,未完成前 U15 不得上线);U12 现场模式、U13 长任务、U14 设计系统整理、U15 地图分离、U16 图层管理;H5 惰性分块。**H10/H11 暂缓(操作员 2026-10-21,issues O9/O10)**。 |
+| 未实现/未验收 | A11、U13–U16、H5 | A11 跨窗口单一事实源(U15 前置,未完成前 U15 不得上线);U13 长任务、U14 设计系统整理、U15 地图分离、U16 图层管理;H5 惰性分块。**H10/H11 暂缓(操作员 2026-10-21,issues O9/O10)**。 |
 | 明确推迟 | ⏸ 项 | 按「范围与状态」与规则 10 执行,不得因上述审查而擅自解冻。 |
 
 **实机/现场待验收清单**(代码与自动化测试已完成,需真机):
@@ -49,7 +49,7 @@
 6. ~~A9 收尾~~(已实施 2026-10-20,见 A9 执行记录)。
 7. ~~U5 收尾~~(已实施 2026-10-20,见 U5 执行记录)。
 8. ~~L8~~(已实施 2026-10-20,见 L8 执行记录)。
-9. 再推进 P2/P4:~~A10~~、~~PJ4~~、~~H6~~、~~U11~~(均已实施)、U12–U14;~~H10~~、~~H11~~(操作员 2026-10-21 暂缓,记 issues O9/O10,解冻条件见各条);**A11 完成后才可启动 U15/U16**;⏸ 项必须等待明确解冻。
+9. 再推进 P2/P4:~~A10~~、~~PJ4~~、~~H6~~、~~U11~~、~~U12~~(均已实施)、U13–U14;~~H10~~、~~H11~~(操作员 2026-10-21 暂缓,记 issues O9/O10,解冻条件见各条);**A11 完成后才可启动 U15/U16**;⏸ 项必须等待明确解冻。
 
 ### 验证基线 (2026-10-15)
 
@@ -60,6 +60,14 @@
 - **实现(后端 `terrain_service.rs`)**:`drape_preview` 在 `spawn_blocking` 内 `solve → compile`,新增 `waypoints`(compiled NAV 项经真实 H7 链转 `AMSL_EGM96`,共享 `vertical_chain_offset`,`VERTICAL_DATUM_CHAIN_ERROR` fail-closed)与 `landing_amsl_m`(降落点采样 DEM 表面、同链转换;`DrapeLineInput` 同 `[lon,lat]` 约定);速度项(178)与 datum 原样透传(z 是命令参数);`DrapeResult.compiled` 保持 DEM datum——监控基线与锚定 fix 同帧。
 - **实现(前端)**:新纯函数 `mission/drapeApply.ts::applyCompiled`(编译产物按块替换 pattern block;块内 pinned 高度按位置容差恢复;`21/85` 降落项按位置键贴地;块外一律原样;返回重锚定的线表);`stores/mission.ts` 合并 `runDrapePreview`/`runTerrainDrape` 为单管线 `runDrapeOnce(apply)`(指纹、600 ms 防抖、A3 告警、unchanged 不置 dirty 语义保持);手动编辑(lastPattern 清空)→ fail-closed 报"regenerate the pattern",不再静默保留旧高度;DrapeBlock/SyncStep provenance(`dem:<folder>`、dem_ref.hash)改读新 `DrapeState`;删除 `meshDrape.ts`、`DrapeState.report`(DrapeReport)/`meshDrape` 字段与 `MESH_*` 文案。
 - **验证**:`cargo test -p maggcs-core` 全绿(drape.rs 测试随模块删除,699 lib + 集成);`cargo test -p maggcs-app` 76 通过(新增 `drape_apply_tests` 3 条:H 链转换数值断言 ±0.02、链外 fail-closed、命令项透传);`drape_pipeline.rs`(solve→compile 真实文件 I/O)3 条通过;clippy `-D warnings`(core+app)、fmt、`git diff --check`;前端 `tsc`、production build、14 个 check 脚本 + `check:agl`(27 条,重定向到 `applyCompiled`)全绿;ts-rs 绑定重生成,删除 `DrapeReport/DrapeOptions.ts`。**行为变更**:terrain 模式不再有 mesh 兜底;手动编辑不重 drape;块外手动航点不参与 drape(AGL 行显示 unknown)。ADR-005 addendum、ADR-022 已更新。实机复验归 DR6 走查单。
+
+#### U12 执行记录 (2026-10-21)
+
+- **现场模式**:`Settings ▸ Appearance` 开关(`ui store fieldMode`,localStorage 持久化,`main.tsx` 首帧前应用——无 44↔32 px 闪烁);应用为 `html.field-mode` 类,**与 night-red 等 palette 组合**。CSS 落地:交互元素(button/select/input/textarea)min 44×44 px、基础字号 14 px(rem 类随动,`text-[10px]/[11px]` px 类提升至 12 px 底线)、动画时长压至 0.01 ms(减少动画)、`:focus-visible` 全局可见焦点环。
+- **`?` 快捷键表**:新 `ShortcutsDialog`(Shift+/ 开、Esc 关,文本输入时不触发);仅列既有快捷键(W/P 地图工具、Ctrl+Z/Ctrl+Shift+Z、Esc),**不为危险命令设单键快捷键**(计划原文),表内注明。
+- **验收脚本** `check-field-mode.mjs`(npm run check:field-mode,**6 条全绿**):Settings UI 打开开关 → html.field-mode 应用;**shell 全部可见交互元素 ≥44 px(0 offender)**;`?`/Esc 开关快捷键表;Tab 遍历可达。截图 `shots-u12/field-mode.png`。键盘全流程"连接→查看清单→发 RTL"留手动(HoldButton 按住语义无键盘等价,RTL 仍走分级确认)。
+- 顺带:`isTextEntry` 提取为 `util/keys.ts`(undo/redo 与快捷键表共用);高度剖面补滚轮 Y 缩放/框选缩放/双击复位/细纵轴刻度(见上条记录)。
+- 验证:`tsc`、build、check:i18n(718 keys)、check:field-mode 6/6 绿。
 
 #### 高度曲线不滚动修复 (2026-10-21,操作员二次报告:"50 s 后不更新")
 

@@ -24,6 +24,15 @@ export default {
     sending: 'sending',
   },
 
+  shortcuts: {
+    title: 'Keyboard shortcuts',
+    note: 'No dangerous command carries a single-key shortcut — flight commands always go through their graded confirmations.',
+    addWaypoint: 'Map tool: add waypoint',
+    polygon: 'Map tool: survey polygon',
+    undoRedo: 'Plan undo / redo',
+    close: 'Close dialog / popover',
+    thisSheet: 'This shortcut sheet',
+  },
   drawer: { profile: {
     title: 'Altitude profile',
     open: 'Open altitude profile',
@@ -772,6 +781,9 @@ export default {
   settings: {
     menu: 'Settings',
     theme: 'Theme',
+    fieldMode: 'Field mode',
+    fieldModeHint:
+      'Touch targets ≥ 44 px, 14 px base text, fewer animations — for gloves and daylight. Composes with night-red.',
     language: 'Language',
     disconnect: 'Disconnect',
     shutdown: 'Shut down',

@@ -15,6 +15,8 @@ import ProfileDrawer from './components/ProfileDrawer'
 import ErrorBanner from './components/ErrorBanner'
 import AlertLayer from './components/AlertLayer'
 import HeartbeatBanner from './components/HeartbeatBanner'
+import { isTextEntry } from './util/keys'
+import ShortcutsDialog, { useShortcutsSheet } from './components/dialogs/ShortcutsDialog'
 import AutoConnectDialog from './components/dialogs/AutoConnectDialog'
 import TargetChangeDialog from './components/dialogs/TargetChangeDialog'
 import TeardownDialog from './components/dialogs/TeardownDialog'
@@ -22,13 +24,6 @@ import PreflightPanel from './components/PreflightPanel'
 
 /** True when the event target is a text field where the browser's own undo
  * should win (Ctrl+Z inside an input must not revert the whole plan). */
-function isTextEntry(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false
-  if (target.isContentEditable) return true
-  const tag = target.tagName
-  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
-}
-
 /** U8: global plan undo/redo. Ctrl/Cmd+Z undoes, Ctrl/Cmd+Shift+Z (or Ctrl+Y)
  * redoes. Text fields keep their native behaviour. */
 function usePlanHistoryShortcuts(): void {
@@ -54,6 +49,9 @@ function usePlanHistoryShortcuts(): void {
 export default function App() {
   useTelemetryBridge()
   usePlanHistoryShortcuts()
+  // U12: `?` opens the keyboard shortcut sheet (Esc closes; no dangerous
+  // command carries a single-key shortcut).
+  const { open: shortcutsOpen, setOpen: setShortcutsOpen } = useShortcutsSheet()
   // The forced start page (operator decision 2026-10-18): with no project
   // open the app shows project selection only — recent projects listed for
   // one click, plus the folder picker and the create wizard. The browser
@@ -89,6 +87,7 @@ export default function App() {
             <HeartbeatBanner />
             <AutoConnectDialog />
             <TargetChangeDialog />
+            <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
             <AlertLayer />
             <ErrorBanner />
           </div>
