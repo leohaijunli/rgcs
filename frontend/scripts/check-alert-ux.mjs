@@ -23,7 +23,7 @@ const check = (ok, label) => {
   if (!ok) failed += 1
 }
 
-const browser = await chromium.launch({ headless: true })
+const browser = await chromium.launch({ headless: true, args: ['--disable-gpu', '--disable-dev-shm-usage'] })
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
 // The flash is skipped under reduced-motion; pin the normal preference so the
 // test exercises the moving path (a separate assertion covers reduced-motion).
@@ -94,7 +94,12 @@ await page.addInitScript(() => {
   window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} }
 })
 
-await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 })
+await page.goto(`${url}` + (url.includes('?') ? '&' : '?') + 'nomap', { waitUntil: 'networkidle', timeout: 60000 })
+await page.evaluate(() => {
+  // The forced start page (PJ3) gates the shell behind Tauri; the mock opens
+  // a throwaway project so the surfaces under test render.
+  window.__mgProject?.setState({ project: { version: 1, name: 'Mock', crs: 'EPSG:4326', datum: 'cgvd2013', areas: [], settings: null } })
+})
 await page.waitForTimeout(4000)
 await mkdir(shotsDir, { recursive: true })
 

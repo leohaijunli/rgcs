@@ -65,6 +65,11 @@ interface UiState {
   /** U17b: the plan field to reveal after clicking a blocker chip. `nonce`
    * forces the reveal effect to re-run when the same field is clicked twice. */
   planFocus: { field: string; nonce: number } | null
+  /** U5: a preflight repair entry asks for the settings dialog (the dialog
+   * state lives in TopBar; this request crosses the tree). */
+  settingsRequest: 'connection' | 'vehicle' | 'appearance' | 'devices' | 'about' | null
+  openSettings: (tab: 'connection' | 'vehicle' | 'appearance' | 'devices' | 'about') => void
+  clearSettingsRequest: () => void
   /** Survey-area rectangle size (metres, U8). Shared by the Area step and the
    * 3D-mesh / prepare actions so they target the same AOI. */
   surveySize: { width: number; height: number }
@@ -126,6 +131,9 @@ export const useUiStore = create<UiState>((set) => ({
   showGrid: true,
   showCoverage: true,
   planFocus: null,
+  settingsRequest: null,
+  openSettings: (tab) => set({ settingsRequest: tab }),
+  clearSettingsRequest: () => set({ settingsRequest: null }),
   surveySize: { width: 100, height: 100 },
   surveyHeading: 0,
   setView: (view) =>

@@ -62,6 +62,11 @@ export default function App() {
     project === null &&
     (isTauri() || new URLSearchParams(window.location.search).has('start'))
 
+  // Headless-harness escape (`?nomap`): the Cesium WebGL renderer crashes the
+  // page under SwiftShader on some runners (A8 artifact), and every UI surface
+  // except the map itself is testable without it. Production is unaffected.
+  const noMap = new URLSearchParams(window.location.search).has('nomap')
+
   if (showStart) {
     return <StartPage />
   }
@@ -72,9 +77,11 @@ export default function App() {
       <div className="flex min-h-0 flex-1">
         <main className="relative flex min-w-0 flex-1 flex-col">
           <div className="relative min-h-0 flex-1">
-            <MapErrorBoundary>
-              <MapView />
-            </MapErrorBoundary>
+            {noMap ? null : (
+              <MapErrorBoundary>
+                <MapView />
+              </MapErrorBoundary>
+            )}
             <MockBanner />
             <Hud />
             <HeartbeatBanner />

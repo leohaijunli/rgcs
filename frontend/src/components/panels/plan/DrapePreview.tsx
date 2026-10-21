@@ -117,7 +117,9 @@ export default function DrapePreview() {
       </div>
       <div ref={hostRef} className="min-h-[140px]" />
 
-      {/* Out-of-band spans: highlighted, each with the deficit and the binder. */}
+      {/* Out-of-band spans: highlighted, each with the deficit and the binder.
+       * U5: the operator can accept them here or from the preflight panel —
+       * one store flag, invalidated by any new solve. */}
       {(preview.result.infeasible ?? []).length > 0 && (
         <div className="space-y-1" data-testid="infeasible-spans">
           {preview.result.infeasible.map((sp, i) => (
@@ -131,6 +133,7 @@ export default function DrapePreview() {
               })}
             </div>
           ))}
+          <InfeasibleAcceptRow />
         </div>
       )}
 
@@ -177,5 +180,28 @@ export default function DrapePreview() {
         <div className="text-[11px] text-warn">{t('plan.pattern.drapePreview.noDtm')}</div>
       )}
     </div>
+  )
+}
+
+/** The infeasible-acceptance row (U5): accepting records the `spec_hash`, and
+ * the preflight checklist then passes `infeasible_confirmed` for this solve. */
+function InfeasibleAcceptRow() {
+  const { t } = useTranslation()
+  const preview = useMissionStore((s) => s.drapePreview)
+  const acceptedFor = useMissionStore((s) => s.infeasibleAcceptedFor)
+  const accept = useMissionStore((s) => s.acceptInfeasible)
+  if (!preview) return null
+  const accepted = acceptedFor === preview.result.spec_hash
+  return (
+    <button
+      data-testid="drape-accept-infeasible"
+      onClick={() => accept(preview.result.spec_hash)}
+      disabled={accepted}
+      className="touch-target w-full rounded border border-line bg-canvas px-2 py-1 text-[11px] text-accent hover:bg-panel disabled:opacity-50"
+    >
+      {accepted
+        ? t('preflight.infeasibleAccepted')
+        : t('preflight.acceptInfeasible', { count: preview.result.infeasible.length })}
+    </button>
   )
 }

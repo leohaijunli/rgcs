@@ -67,6 +67,43 @@ Live 曲线目前为 总场(Δmag) + ESC 电流/RPM。plan §6.2 的另外两组
 SITL 副链路（`actuator_connect_sitl`）挂在 MotorTestState 上；若未来
 Headless/主界面也要用副链路，需要把 SITL 连接提升到 AppState 通用层。
 
+### O6 [P2][frontend] 测试模式:一键静默告警与闪屏
+操作员需求(2026-10-20):增加一个**测试模式**按键;该模式下不闪屏、不报警
+(抑制告警声音/横幅闪烁/夜航闪灯等视觉与声音效果),用于桌面联调与演示。
+设计要点:走 A3 AlertCenter 的统一静音入口(而非各视图散落开关),持久化到
+`config.json`,TopBar 常驻 pill + 状态冗余;安全告警(Critical 锁存)是否也
+静音需操作员确认——默认建议仅静音 Warn 及以下,Critical 仍横幅但无声。
+
+### O7 [P2][frontend/inspector] Signal Inspector 重联后整段曲线闪动 + 数据稳定等待 2 s
+现象(操作员 2026-10-20):Inspector 打开趋势数据时,重联飞控几乎必现一整段
+曲线闪动。初步排查(代码阅读,待实测确认)三个叠加原因:
+1. 重联使 Rust tap 重建(`attach_inspector`/`inspector_reset_source`),
+   `inspector_status.messages` 归零 → 前端 poll 检测到 `messages < lastMsgs`
+   即 `buffers.current.clear()` 清空全部采样环(`InspectorApp.tsx` ~L718)——
+   曲线先整体消失,随后 `set_message_interval` 重连请求的高速率突发把曲线
+   密集回填,每个 rAF 重绘一次,视觉即"整段闪动"。
+2. tap 重建 = 新 `TimestampMapper`(signals/tap.rs)基线:重连建立期首包
+   `rx − fc` 偏移偏大,新样本 x 轴相对旧环整体平移;旧样本仍持旧基线,
+   同一环内两种基线混排(乱序 x),uPlot 绘制异常。
+3. trace 重注册使滤波管线重启(fs EMA 重新学习),filtered 曲线跳变。
+修复方向(操作员已点名第 3 项):**链接重建后等待 ~2 s(数据稳定)再开始
+读入**——在 poll 检测到 stats reset 时清环后进入 "settling" 门闸,丢弃
+`Date.now()+2s` 之前的帧(状态栏显示 "settling…");同时门闸结束后再
+`inspector_set_traces`,让 mapper 基线与 fs EMA 在门闸内收敛,消除混排。
+
+### O8 [P2][frontend/harness] Playwright 检查壳自 PJ3 起失效;修复后暴露两类预存在问题
+2026-10-20 修复:①强制启动页(PJ3)把所有 Playwright 检查挡在启动面——各检查
+脚本现经 `window.__mgProject` 注入一次性项目跳过;②headless SwiftShader 下
+Cesium 渲染崩溃页面(A8 已记录的渲染器 artifact)——新增 `?nomap` URL 开关
+(App 不挂 MapView,生产不受影响),8 个检查脚本默认带 `?nomap` 运行;
+`check-heartbeat` 的 2 条 map-stale 断言在 nomap 下 SKIP(归实机/真 GPU 验证);
+`check-teardown` 的 `3 · Waypoints` 选择器是 U17a 前的旧格式(已改 hasText);
+`check-safety` 的 `Flight` 标签在 U1 已更名 `Fly`(已改);`check-teardown`
+clean-quit 的 confirm 断言与 guard 异步存在竞态(已加 waitUntil)。
+**仍失败(预存在,非本次改动):`check-topbar` 2 条**——1280 宽下 settings 按钮
+24×32 低于 32px 目标下限且"fully inside"断言失败(U2 的"低优先级折叠进 More"
+与直量 settings 按钮的断言冲突,需要么按钮常驻、要么断言改为量 More 菜单内)。
+
 ## 待核实项（先验证再决定是否开 issue）
 
 - `mavlink` crate 0.17 的 UDP 监听是否设置 `SO_REUSEADDR`；`udpin` 的回复地址行为（抓包确认）。

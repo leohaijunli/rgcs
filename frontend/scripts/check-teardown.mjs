@@ -36,7 +36,7 @@ async function waitUntil(fn, timeoutMs, stepMs = 250) {
   }
 }
 
-const browser = await chromium.launch({ headless: true })
+const browser = await chromium.launch({ headless: true, args: ['--disable-gpu', '--disable-dev-shm-usage'] })
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
 const pageErrors = []
 page.on('pageerror', (e) => pageErrors.push(String(e)))
@@ -157,7 +157,12 @@ await page.addInitScript(() => {
   window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} }
 })
 
-await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 })
+await page.goto(`${url}` + (url.includes('?') ? '&' : '?') + 'nomap', { waitUntil: 'networkidle', timeout: 60000 })
+await page.evaluate(() => {
+  // The forced start page (PJ3) gates the shell behind Tauri; the mock opens
+  // a throwaway project so the surfaces under test render.
+  window.__mgProject?.setState({ project: { version: 1, name: 'Mock', crs: 'EPSG:4326', datum: 'cgvd2013', areas: [], settings: null } })
+})
 await page.waitForTimeout(4000)
 await mkdir(shotsDir, { recursive: true })
 
@@ -230,7 +235,10 @@ if ((await page.locator('[data-testid="settings-shutdown"]').count()) === 0) {
 await page.locator('[data-testid="settings-shutdown"]').click()
 await dialog.waitFor({ timeout: 5000 })
 check((await page.locator('[data-testid="teardown-keyword"]').count()) === 0, 'a clean quit asks for no keyword')
-check(!(await confirm.isDisabled()), 'a clean quit can be confirmed')
+check(
+  await waitUntil(async () => !(await confirm.isDisabled()), 5000),
+  'a clean quit can be confirmed',
+)
 await page.screenshot({ path: join(shotsDir, 'teardown-quit.png') })
 await confirm.click()
 await page.waitForTimeout(500)
@@ -266,7 +274,7 @@ await page.evaluate(() =>
 await page.keyboard.press('Escape')
 await page.waitForTimeout(300)
 await page.getByRole('button', { name: 'Plan' }).click()
-await page.getByRole('button', { name: '3 · Waypoints' }).click()
+await page.locator('button', { hasText: 'Waypoints' }).first().click()
 const coordInput = page.getByLabel('Add by coordinates')
 await coordInput.fill('49.2831, -123.1207')
 await coordInput.press('Enter')

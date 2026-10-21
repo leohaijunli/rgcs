@@ -268,6 +268,16 @@ export default function TopBar() {
     setSettingsOpen(true)
   }
 
+  // U5: a preflight repair entry asked for the settings surface directly.
+  const settingsRequest = useUiStore((s) => s.settingsRequest)
+  useEffect(() => {
+    if (settingsRequest) {
+      setSettingsTab(settingsRequest)
+      setSettingsOpen(true)
+      useUiStore.getState().clearSettingsRequest()
+    }
+  }, [settingsRequest])
+
   const openInspector = () => {
     if (isTauri()) {
       void invoke('inspector_open')

@@ -3,4 +3,4 @@
 /**
  * Which area of the preflight a checklist item belongs to (U5 groups by it).
  */
-export type ChecklistGroup = "link" | "navigation" | "power" | "system" | "mission";
+export type ChecklistGroup = "link" | "navigation" | "power" | "system" | "mission" | "terrain";

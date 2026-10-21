@@ -33,7 +33,7 @@ async function waitUntil(fn, timeoutMs, stepMs = 100) {
   }
 }
 
-const browser = await chromium.launch({ headless: true })
+const browser = await chromium.launch({ headless: true, args: ['--disable-gpu', '--disable-dev-shm-usage'] })
 const pageErrors = []
 
 async function boot(width, height) {
@@ -138,7 +138,12 @@ async function boot(width, height) {
     }
     window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} }
   })
-  await p.goto(url, { waitUntil: 'networkidle', timeout: 60000 })
+  await p.goto(`${url}` + (url.includes('?') ? '&' : '?') + 'nomap', { waitUntil: 'networkidle', timeout: 60000 })
+  // The forced start page (PJ3) gates the shell behind Tauri; the mock opens
+  // a throwaway project so the surfaces under test render.
+  await p.evaluate(() => {
+    window.__mgProject?.setState({ project: { version: 1, name: 'Mock', crs: 'EPSG:4326', datum: 'cgvd2013', areas: [], settings: null } })
+  })
   await p.evaluate(() => {
     window.__mockTelemetry(Date.now())
     window.__mockLink({ link_state: 'connected', endpoint: 'udpin:0.0.0.0:14550', fc_alive: true })

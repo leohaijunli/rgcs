@@ -161,6 +161,11 @@ interface MissionState {
    * profile chart and the Drape checklist facts. */
   drapePreview: DrapePreview | null
   runDrapePreview: () => Promise<void>
+  /** U5/DR4: the `spec_hash` whose out-of-band spans the operator has seen
+   * and accepted (the checklist then passes `infeasible_confirmed`). Any new
+   * solve (different hash) invalidates it by comparison. */
+  infeasibleAcceptedFor: string | null
+  acceptInfeasible: (specHash: string) => void
   setSurveyAglM: (aglM: number) => void
   updatePosition: (seq: number, latDeg: number, lonDeg: number) => void
   updateAltitude: (seq: number, amslM: number) => void
@@ -293,6 +298,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
   surveyAglM: 40,
   drapeSpec: DEFAULT_DRAPE_SPEC,
   drapePreview: null,
+  infeasibleAcceptedFor: null,
   busy: false,
   lastEvent: null,
   syncState: 'idle',
@@ -349,6 +355,8 @@ export const useMissionStore = create<MissionState>((set, get) => ({
   runDrapePreview: async () => {
     await runDrapeOnce(false)
   },
+
+  acceptInfeasible: (specHash) => set({ infeasibleAcceptedFor: specHash }),
 
   updatePosition: (seq, latDeg, lonDeg) =>
     set((s) => ({
@@ -517,6 +525,8 @@ export const useMissionStore = create<MissionState>((set, get) => ({
         dirty: true,
         fcMatches: null,
         drape: null,
+        drapeError: null,
+        infeasibleAcceptedFor: null,
         planCleared: false,
       }
     }),
@@ -817,6 +827,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       verifying: false,
       drape: null,
       drapeError: null,
+      infeasibleAcceptedFor: null,
       planBase: null,
       blocks: [],
       home: null,

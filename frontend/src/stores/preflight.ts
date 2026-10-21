@@ -42,8 +42,11 @@ export function buildPlanState(): PlanState {
   }
 }
 
-/** Map the solver preview onto the checklist facts (DR4). */
+/** Map the solver preview onto the checklist facts (DR4). The out-of-band
+ * spans pass only when the operator accepted *this* solve (U5): a new solve
+ * (different `spec_hash`) invalidates the acceptance by comparison. */
 function drapeFacts(preview: DrapePreview): DrapeCheckFacts {
+  const m = useMissionStore.getState()
   const ageYears = preview.acquisition
     ? (Date.now() - Date.parse(preview.acquisition)) / (365.25 * 24 * 3600 * 1000)
     : null
@@ -53,7 +56,7 @@ function drapeFacts(preview: DrapePreview): DrapeCheckFacts {
     has_dtm: preview.has_dtm,
     dem_age_ok: ageYears != null && limit != null ? ageYears <= limit : null,
     infeasible_count: preview.result.infeasible.length,
-    infeasible_confirmed: false,
+    infeasible_confirmed: m.infeasibleAcceptedFor === preview.result.spec_hash,
     waypoint_count: preview.result.compiled.length,
     waypoint_limit: 65_535,
     max_climb_needed_mps: preview.result.stats.max_climb_needed_mps,

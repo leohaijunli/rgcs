@@ -133,7 +133,15 @@ export default {
       stopMotorTest: 'Stop motor test',
       setHome: 'Set home',
       openInspector: 'Check sensor diagnostics',
+      openConnection: 'Open connection settings',
+      prepareSurvey: 'Prepare the survey area',
+      openDrapeParams: 'Open drape parameters',
     },
+    acceptInfeasible:
+      'I have reviewed the {{count}} out-of-band span(s) — accept this plan',
+    infeasibleAccepted: 'Out-of-band spans accepted for this plan',
+    infeasibleSpan:
+      '{{line}}: s {{from}}–{{to}} m — {{reason}}, up to {{deficit}} m out of band',
   },
   eventLog: {
     title: 'Event log',

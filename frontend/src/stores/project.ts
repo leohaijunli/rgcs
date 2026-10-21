@@ -170,3 +170,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   recent: readRecent,
 }))
+
+// Dev-only handle for the browser harness: the forced start page (PJ3) gates
+// the shell behind a Tauri-only surface, so the Playwright checks inject a
+// throwaway project through this handle (same pattern as `__mgMission`).
+if (import.meta.env?.DEV && typeof window !== 'undefined') {
+  ;(window as unknown as { __mgProject?: unknown }).__mgProject = useProjectStore
+}

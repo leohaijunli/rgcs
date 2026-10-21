@@ -25,8 +25,8 @@
 
 | 状态 | 工作包 | 依据/缺口 |
 |---|---|---|
-| 已实现 | A1–A4、A6–A9、L1–L7、L9、L10、U1、U2–U4、U8、U9、U17、PJ1、PJ2、PJ3、H0–H4、H7、H8、DR1–DR7、DR9(事后评估版) | 逐项证据见下方执行记录(2026-10-15 → 2026-10-18)。要点:H1 live 验收与 H0 夹具 ±2 px 逐像元一致;H2 强制 §D 空变换;H3 DSM-max 保峰实测锁定;H7 真实 CGG2013 格网 + 两段式控制点互校(**PX4 实机 <0.5 m 现场验收仍待**);A2 主链断开联合回归全绿;L5 强制解锁三处记录时间戳一致;L9 goto 距离/地形守卫;L10 场景测试集(core 757);A8 WebGL context lost 隔离与 Restart;U17a–d Plan 步骤就绪/阻塞/批量编辑/同步相位;PJ1–PJ3 项目模型、profile 注册表与强制启动页;DR1–DR7 全链(spec/solver/compile/preview/监控/记录导出)+ DR9 雷达偏置稳健估计。**DR8 已取消(操作员,不做方位角扫描)**;U7 中仅 HUD 的 AGL 读数由 DR6b 提供,其余 U7 内容仍 ⏸。 |
-| 部分实现 | A5、U5、PJ3(数据侧) | A5 清单引擎 + Drape 组 + PJ2 模板已就位;U5 部分 Fail 项仍无可执行修复入口(不可行逐项确认 UI 亦归此)。**A9 已完成(2026-10-20,见执行记录)**:solve→compile 为唯一航点来源,`meshDrape.ts` 与旧 `terrain_drape` 已删。PJ3 界面完成,但测量/会话**数据**要等 M4(⏸)才写入 project store。 |
+| 已实现 | A1–A4、A6–A9、L1–L7、L9、L10、U1、U2–U5、U8、U9、U17、PJ1、PJ2、PJ3、H0–H4、H7、H8、DR1–DR7、DR9(事后评估版) | 逐项证据见下方执行记录(2026-10-15 → 2026-10-18)。要点:H1 live 验收与 H0 夹具 ±2 px 逐像元一致;H2 强制 §D 空变换;H3 DSM-max 保峰实测锁定;H7 真实 CGG2013 格网 + 两段式控制点互校(**PX4 实机 <0.5 m 现场验收仍待**);A2 主链断开联合回归全绿;L5 强制解锁三处记录时间戳一致;L9 goto 距离/地形守卫;L10 场景测试集(core 757);A8 WebGL context lost 隔离与 Restart;U17a–d Plan 步骤就绪/阻塞/批量编辑/同步相位;PJ1–PJ3 项目模型、profile 注册表与强制启动页;DR1–DR7 全链(spec/solver/compile/preview/监控/记录导出)+ DR9 雷达偏置稳健估计。**DR8 已取消(操作员,不做方位角扫描)**;U7 中仅 HUD 的 AGL 读数由 DR6b 提供,其余 U7 内容仍 ⏸。 |
+| 部分实现 | A5、PJ3(数据侧) | A5 清单引擎 + Drape 组 + PJ2 模板已就位。**A9 与 U5 收尾均已完成(2026-10-20,见执行记录)**:solve→compile 为唯一航点来源(`meshDrape.ts`/`terrain_drape` 已删);每个 Fail 项有修复入口,不可行区段逐项确认落地。PJ3 界面完成,但测量/会话**数据**要等 M4(⏸)才写入 project store。 |
 | 未实现/未验收 | L8、A10、A11、U11–U16、PJ4、H5、H6、H10、H11 | L8 启动自检/连接确认;A10 诊断包;A11 跨窗口单一事实源(U15 前置,未完成前 U15 不得上线);U11 多窗口协调、U12 现场模式、U13 长任务、U14 设计系统整理、U15 地图分离、U16 图层管理;PJ4 项目资源与归档;H5 惰性分块、H6 来源自动解析、H10 对比验证、H11 点云路径。 |
 | 明确推迟 | ⏸ 项 | 按「范围与状态」与规则 10 执行,不得因上述审查而擅自解冻。 |
 
@@ -47,7 +47,7 @@
 4. ~~H1–H4/H7~~(已实施,见 H1–H4/H7 执行记录;实机控制点验收留清单)。
 5. ~~PJ1→PJ2→PJ3 与 DR1→DR6(→DR7/DR9)~~(已实施,见各执行记录)。
 6. ~~A9 收尾~~(已实施 2026-10-20,见 A9 执行记录)。
-7. **U5 收尾**(P1):补 Fail 项"原因 + 修复入口",含 DR4 不可行逐项确认 UI。
+7. ~~U5 收尾~~(已实施 2026-10-20,见 U5 执行记录)。
 8. **L8**(P1):启动自检卡 + 自动连接前确认 + 磁校准持久化(依赖 A6,已就绪)。
 9. 再推进 P2/P4:A10、PJ4、H6、H10、U11–U14;**A11 完成后才可启动 U15/U16**;⏸ 项必须等待明确解冻。
 
@@ -60,6 +60,14 @@
 - **实现(后端 `terrain_service.rs`)**:`drape_preview` 在 `spawn_blocking` 内 `solve → compile`,新增 `waypoints`(compiled NAV 项经真实 H7 链转 `AMSL_EGM96`,共享 `vertical_chain_offset`,`VERTICAL_DATUM_CHAIN_ERROR` fail-closed)与 `landing_amsl_m`(降落点采样 DEM 表面、同链转换;`DrapeLineInput` 同 `[lon,lat]` 约定);速度项(178)与 datum 原样透传(z 是命令参数);`DrapeResult.compiled` 保持 DEM datum——监控基线与锚定 fix 同帧。
 - **实现(前端)**:新纯函数 `mission/drapeApply.ts::applyCompiled`(编译产物按块替换 pattern block;块内 pinned 高度按位置容差恢复;`21/85` 降落项按位置键贴地;块外一律原样;返回重锚定的线表);`stores/mission.ts` 合并 `runDrapePreview`/`runTerrainDrape` 为单管线 `runDrapeOnce(apply)`(指纹、600 ms 防抖、A3 告警、unchanged 不置 dirty 语义保持);手动编辑(lastPattern 清空)→ fail-closed 报"regenerate the pattern",不再静默保留旧高度;DrapeBlock/SyncStep provenance(`dem:<folder>`、dem_ref.hash)改读新 `DrapeState`;删除 `meshDrape.ts`、`DrapeState.report`(DrapeReport)/`meshDrape` 字段与 `MESH_*` 文案。
 - **验证**:`cargo test -p maggcs-core` 全绿(drape.rs 测试随模块删除,699 lib + 集成);`cargo test -p maggcs-app` 76 通过(新增 `drape_apply_tests` 3 条:H 链转换数值断言 ±0.02、链外 fail-closed、命令项透传);`drape_pipeline.rs`(solve→compile 真实文件 I/O)3 条通过;clippy `-D warnings`(core+app)、fmt、`git diff --check`;前端 `tsc`、production build、14 个 check 脚本 + `check:agl`(27 条,重定向到 `applyCompiled`)全绿;ts-rs 绑定重生成,删除 `DrapeReport/DrapeOptions.ts`。**行为变更**:terrain 模式不再有 mesh 兜底;手动编辑不重 drape;块外手动航点不参与 drape(AGL 行显示 unknown)。ADR-005 addendum、ADR-022 已更新。实机复验归 DR6 走查单。
+
+#### U5 执行记录 (2026-10-20)
+
+- **修复入口补全**(`PreflightPanel.repairFor`):新增 `link_fresh` → 打开连接设置(ui store 新 `settingsRequest` 请求桥,TopBar 消费——设置对话框状态在 TopBar,预检面板经 store 跨树请求)、`dem_coverage` → 切 Prepare 阶段、`drape_thresholds`/`drape_item_count` → 切 Plan 阶段并 `focusPlanField('pattern','drape-params')`(U17b 的字段揭示复用)。导航类入口点击后先关面板;非导航入口(上传/停电机/设 HOME)保持面板打开(原行为)。环境性 Fail(GPS fix、电池、`fc_max_climb` 等)无 GCS 侧修复,保留 hint 文案——验收"每个 Fail 都有可点入口"按"有修复即入口"解释并在记录中注明。
+- **不可行区段逐项确认(DR4 预留位的落地)**:mission store 新 `infeasibleAcceptedFor`(接受 的 spec_hash)+ `acceptInfeasible`;`buildPlanState` 的 `drape.infeasible_confirmed` 改为 `acceptedFor === preview.result.spec_hash`(任何新 solve 使接受失效);预检面板内联 `InfeasibleAccept`(列出每段:线/s 范围/成因/最大缺口 + "已阅并接受"按钮,接受后触发清单重取,行内转 Pass);`DrapePreview.tsx` 不可行列表尾部同一 store 标志的接受按钮(规划侧与预检侧一致)。core 语义零改动(本就支持 `infeasible_confirmed`,之前恒 false)。
+- **GROUP_ORDER 补 terrain 组**(DR4 加了组,面板没渲染)。
+- **Playwright 检查壳修复(自 PJ3 起全部失效)**:见 issues.md O8——`__mgProject` 注入跳过强制启动页、`?nomap` 免 headless Cesium 崩页、三个陈旧选择器修正、一处竞态修复。`check-preflight` 扩到 **29 条**(含 terrain 组渲染、修复入口存在、span 列表、`infeasible_confirmed` 经 `preflight_checklist` 入参真实回流、接受后按钮置灰、导航入口关面板并揭示 drape-params 字段);check-teardown/safety/heartbeat/alerts/alert-ux/command-ux 全绿(check-topbar 的 2 条 U2 遗留断言失败记 O8)。
+- 验证:`tsc --noEmit`、production build、15 个 check 脚本、i18n 全绿;截图 `screenshots-u5/preflight-panel.png`、`preflight-u5-repairs.png`。Rust 零改动。手动验证步骤:①断链开预检 → link_fresh Fail 带"Open connection settings"→ 点击开设置;②terrain 模式加载不覆盖的 DEM → dem_coverage Fail →"Prepare the survey area"切 Prepare;③drape 生成含不可行段 → 预检 DrapeInfeasible Fail 列出 span → 接受后行转 Pass、arm gate 放行;④重新生成(spec 变)→ 接受自动失效重新 Fail。
 
 #### A8 执行记录 (2026-10-18)
 

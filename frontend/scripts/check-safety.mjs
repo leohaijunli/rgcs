@@ -46,7 +46,7 @@ async function waitUntil(fn, timeoutMs, stepMs = 100) {
   }
 }
 
-const browser = await chromium.launch({ headless: true })
+const browser = await chromium.launch({ headless: true, args: ['--disable-gpu', '--disable-dev-shm-usage'] })
 page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
 const pageErrors = []
 page.on('pageerror', (e) => pageErrors.push(String(e)))
@@ -180,7 +180,12 @@ await page.addInitScript(() => {
   window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} }
 })
 
-await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 })
+await page.goto(`${url}` + (url.includes('?') ? '&' : '?') + 'nomap', { waitUntil: 'networkidle', timeout: 60000 })
+await page.evaluate(() => {
+  // The forced start page (PJ3) gates the shell behind Tauri; the mock opens
+  // a throwaway project so the surfaces under test render.
+  window.__mgProject?.setState({ project: { version: 1, name: 'Mock', crs: 'EPSG:4326', datum: 'cgvd2013', areas: [], settings: null } })
+})
 await page.evaluate(() => {
   window.__mockFeedStart()
   window.__mockLink({ link_state: 'connected', endpoint: 'udpin:0.0.0.0:14550', fc_alive: true })
@@ -222,7 +227,7 @@ await page.getByRole('button', { name: 'Plan', exact: true }).click()
 await waitUntil(async () => (await rtl.count()) === 1, 5000)
 check((await rtl.count()) === 1, 'the pair survives the switch to the Plan stage')
 await page.screenshot({ path: join(shotsDir, 'safety-plan.png') })
-await page.getByRole('button', { name: 'Flight', exact: true }).click()
+await page.getByRole('button', { name: 'Fly', exact: true }).click()
 await page.waitForTimeout(300)
 
 // --- 2. a stray click cannot RTL --------------------------------------------
@@ -254,7 +259,7 @@ await page.evaluate(() =>
   window.__mockCommandEvent({ command: 'rtl', kind: 'completed', result: 'accepted' }),
 )
 await waitUntil(async () => (await status.innerText()).includes('Accepted'), 5000)
-await page.getByRole('button', { name: 'Flight', exact: true }).click()
+await page.getByRole('button', { name: 'Fly', exact: true }).click()
 await page.waitForTimeout(300)
 
 // --- 4. an in-flight command does not take the pair away --------------------

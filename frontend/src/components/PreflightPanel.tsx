@@ -19,6 +19,7 @@ import { useTranslation } from 'react-i18next'
 import type { Checklist } from '../generated-types/Checklist'
 import type { ChecklistItem } from '../generated-types/ChecklistItem'
 import type { ChecklistGroup } from '../generated-types/ChecklistGroup'
+import { useUiStore } from '../stores/ui'
 import type { ForceArmReason } from '../generated-types/ForceArmReason'
 import { invoke } from '@tauri-apps/api/core'
 import { useCommandStore } from '../stores/command'
@@ -37,35 +38,114 @@ const REASONS: Array<{ id: ForceArmReason; label: string }> = [
   { id: 'time_pressure', label: 'Time pressure' },
 ]
 
-/** Groups in display order; only groups with items render. Terrain/magnetic/
- * diurnal arrive with the M2/W6 profiles. */
-const GROUP_ORDER: ChecklistGroup[] = ['link', 'navigation', 'power', 'system', 'mission']
+/** Groups in display order; only groups with items render. Magnetic/diurnal
+ * arrive with the M2/M7 profiles. */
+const GROUP_ORDER: ChecklistGroup[] = ['link', 'navigation', 'power', 'system', 'mission', 'terrain']
+
+/** Where a repair entry sends the operator, closing the panel first. */
+function navigateFor(
+  view: 'prepare' | 'plan',
+  step?: 'area' | 'pattern',
+  field?: string,
+): void {
+  const ui = useUiStore.getState()
+  ui.setView(view)
+  if (step) ui.focusPlanField(step, field ?? step)
+}
 
 /** A repair entry for a failed item: a real action where one exists, else just
- * the hint text. The M2 items (mag calibration / DEM area / VIC source) bring
- * their own entries later. */
+ * the hint text. Environmental Fails (GPS fix, battery) have no GCS-side
+ * repair — the hint is the entry point. */
 function repairFor(
   item: ChecklistItem,
   t: (key: string, opts?: Record<string, unknown>) => string,
+  after: () => void,
+  close: () => void,
 ): { label: string; action: (() => void) | null } | null {
+  const go = (fn: () => void) => () => {
+    after()
+    // Entries that navigate away must not leave the dialog covering the view.
+    close()
+    fn()
+  }
   switch (item.id) {
+    case 'link_fresh':
+      return {
+        label: t('preflight.fix.openConnection'),
+        action: go(() => useUiStore.getState().openSettings('connection')),
+      }
     case 'mission_ready':
-      return { label: t('preflight.fix.uploadMission'), action: () => void useMissionStore.getState().upload() }
+      return { label: t('preflight.fix.uploadMission'), action: go(() => void useMissionStore.getState().upload()) }
     case 'motor_test_idle':
-      return { label: t('preflight.fix.stopMotorTest'), action: () => void invoke('actuator_stop') }
+      return { label: t('preflight.fix.stopMotorTest'), action: go(() => void invoke('actuator_stop')) }
     case 'sensor_health':
-      return { label: t('preflight.fix.openInspector'), action: () => void invoke('inspector_open') }
+      return { label: t('preflight.fix.openInspector'), action: go(() => void invoke('inspector_open')) }
     case 'home_position': {
       const fix = useTelemetryStore.getState().snapshot?.global_position
       if (!fix) return null
       return {
         label: t('preflight.fix.setHome'),
-        action: () => void useCommandStore.getState().sendSetHome(fix.latitude_deg, fix.longitude_deg),
+        action: go(() => void useCommandStore.getState().sendSetHome(fix.latitude_deg, fix.longitude_deg)),
       }
     }
+    case 'dem_coverage':
+      return {
+        label: t('preflight.fix.prepareSurvey'),
+        action: go(() => navigateFor('prepare', 'area')),
+      }
+    case 'drape_thresholds':
+    case 'drape_item_count':
+      return {
+        label: t('preflight.fix.openDrapeParams'),
+        action: go(() => navigateFor('plan', 'pattern', 'drape-params')),
+      }
     default:
       return null
   }
+}
+
+/**
+ * The out-of-band span acceptance (U5/DR4): the solver's infeasible spans are
+ * real terrain constraints the checklist cannot wave away — the operator must
+ * look at them (line, extent, cause, worst deficit) and accept *this* solve.
+ * A new solve invalidates the acceptance by `spec_hash` comparison.
+ */
+function InfeasibleAccept({ onAccepted }: { onAccepted: () => void }) {
+  const { t } = useTranslation()
+  const preview = useMissionStore((s) => s.drapePreview)
+  const acceptedFor = useMissionStore((s) => s.infeasibleAcceptedFor)
+  const accept = useMissionStore((s) => s.acceptInfeasible)
+  const spans = preview?.result.infeasible ?? []
+  if (spans.length === 0) return null
+  const accepted = acceptedFor === preview?.result.spec_hash
+  return (
+    <div className="mt-1 space-y-1">
+      {spans.map((sp, i) => (
+        <div key={i} className="text-muted">
+          {t('preflight.infeasibleSpan', {
+            line: sp.line_id,
+            from: Math.round(sp.s_start),
+            to: Math.round(sp.s_end),
+            reason: t(`plan.pattern.drapePreview.reason.${sp.reason}`),
+            deficit: sp.max_deficit_m.toFixed(1),
+          })}
+        </div>
+      ))}
+      <button
+        data-testid="preflight-accept-infeasible"
+        onClick={() => {
+          if (preview) accept(preview.result.spec_hash)
+          onAccepted()
+        }}
+        disabled={accepted}
+        className="touch-target rounded border border-line bg-canvas px-1.5 py-0.5 text-[11px] text-accent hover:bg-panel disabled:opacity-50"
+      >
+        {accepted
+          ? t('preflight.infeasibleAccepted')
+          : t('preflight.acceptInfeasible', { count: spans.length })}
+      </button>
+    </div>
+  )
 }
 
 export default function PreflightPanel() {
@@ -83,6 +163,9 @@ export default function PreflightPanel() {
   const [ackd, setAckd] = useState<ReadonlySet<string>>(new Set())
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  /** Bumped when a repair entry changes state the checklist reads (the
+   * out-of-band acceptance): re-fetch so the row updates in place. */
+  const [refresh, setRefresh] = useState(0)
 
   const open = refusal !== null || uiOpen
   const close = () => {
@@ -118,7 +201,7 @@ export default function PreflightPanel() {
     return () => {
       cancelled = true
     }
-  }, [open])
+  }, [open, refresh])
 
   const items = checklist?.items ?? refusal?.items ?? []
   const status = checklist ? gateStatus(checklist) : refusal ? refusal.kind : null
@@ -205,7 +288,12 @@ export default function PreflightPanel() {
                           <span aria-hidden className={statusDot(item.status)} />
                           <div className="min-w-0 flex-1">
                             <div className="text-ink">{item.detail}</div>
-                            {item.status !== 'pass' && renderRepair(item, t)}
+                            {item.id === 'drape_infeasible' && item.status !== 'pass' && (
+                              <InfeasibleAccept onAccepted={() => setRefresh((n) => n + 1)} />
+                            )}
+                            {item.id !== 'drape_infeasible' &&
+                              item.status !== 'pass' &&
+                              renderRepair(item, t, () => setRefresh((n) => n + 1), close)}
                           </div>
                           {isAck && item.status === 'warn' && (
                             <input
@@ -338,9 +426,11 @@ function statusDot(status: Checklist['items'][number]['status']): string {
 function renderRepair(
   item: ChecklistItem,
   t: (key: string, opts?: Record<string, unknown>) => string,
+  after: () => void,
+  close: () => void,
 ): ReactNode {
   if (item.fix_hint == null) return null
-  const entry = repairFor(item, t)
+  const entry = repairFor(item, t, after, close)
   if (entry) {
     return (
       <button

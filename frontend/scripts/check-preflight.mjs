@@ -43,7 +43,7 @@ async function waitUntil(fn, timeoutMs, stepMs = 100) {
   }
 }
 
-const browser = await chromium.launch({ headless: true })
+const browser = await chromium.launch({ headless: true, args: ['--disable-gpu', '--disable-dev-shm-usage'] })
 page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
 const pageErrors = []
 page.on('pageerror', (e) => {
@@ -153,12 +153,16 @@ await page.addInitScript(() => {
       item('mission_ready', 'mission', 'pass', 'Mission uploaded and verified'),
       item('flight_mode_ready', 'system', 'pass', 'Flight controller ready (Hold)'),
       item('motor_test_idle', 'system', 'pass', 'Motor test not running'),
+      item('dem_coverage', 'terrain', 'fail', 'The DEM does not cover the whole route', 'Prepare the survey area'),
+      item('drape_thresholds', 'terrain', 'fail', 'No DSM clearance entered', 'Enter the minimum DSM clearance'),
+      item('drape_infeasible', 'terrain', 'fail', '2 out-of-band span(s)', 'Review the spans'),
     ],
   }
   const warnOnly = {
     items: blocked.items.map((i) => {
       if (i.id === 'gps_fix') return { ...i, status: 'warn', detail: '2D fix only', fix_hint: 'Wait for a 3D fix' }
       if (i.id === 'landed_on_ground') return { ...i, status: 'pass', detail: 'On ground' }
+      if (i.group === 'terrain') return { ...i, status: 'pass', detail: i.detail.replace('does not cover', 'covers') }
       return i
     }),
   }
@@ -204,6 +208,7 @@ await page.addInitScript(() => {
       if (cmd === 'link_status' || cmd === 'connect' || cmd === 'link_error') return null
       if (cmd === 'flight_mode_table') return []
       if (cmd === 'preflight_checklist') {
+        window.__mockCommands.push({ cmd, ...(args ?? {}) })
         return window.__mockChecklist === 'warn' ? warnOnly : window.__mockChecklist === 'clean' ? { items: [] } : blocked
       }
       if (cmd === 'send_arm_disarm') {
@@ -235,7 +240,12 @@ await page.addInitScript(() => {
   window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} }
 })
 
-await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 })
+await page.goto(`${url}` + (url.includes('?') ? '&' : '?') + 'nomap', { waitUntil: 'networkidle', timeout: 60000 })
+await page.evaluate(() => {
+  // The forced start page (PJ3) gates the shell behind Tauri; the mock opens
+  // a throwaway project so the surfaces under test render.
+  window.__mgProject?.setState({ project: { version: 1, name: 'Mock', crs: 'EPSG:4326', datum: 'cgvd2013', areas: [], settings: null } })
+})
 await page.evaluate(() => {
   window.__mockFeedStart()
   window.__mockLink({ link_state: 'connected', endpoint: 'udpin:0.0.0.0:14550', fc_alive: true })
@@ -256,7 +266,7 @@ check(
   'the readiness badge renders',
 )
 const readyText = await page.locator('[data-testid="preflight-ready"]').innerText()
-check(/9\/10/.test(readyText), `the badge counts the passing items (got "${readyText}")`)
+check(/9\/13/.test(readyText), `the badge counts the passing items (got "${readyText}")`)
 check(
   (await page.locator('[data-testid="preflight-dialog"]').getByText('Land and disarm first').count()) === 1,
   'the failed item carries its fix hint',
@@ -361,6 +371,82 @@ check(
   await waitUntil(async () => (await armCalls()).length === 3, 5000),
   'the confirmed warn arm is sent (no force payload)',
 )
+
+// --- 6. U5 repair entries + the out-of-band acceptance ---------------------
+// A verified plan + a solver preview with infeasible spans: the acceptance
+// must flow into the next checklist evaluation as `infeasible_confirmed`.
+await page.evaluate(() => {
+  window.__mockSetChecklist('blocked')
+  window.__mgMission.setState({
+    altitudeMode: 'terrain',
+    waypoints: [{
+      position: { latitude_deg: 48.5, longitude_deg: -123.4 },
+      altitude: { datum: 'AMSL_EGM96', meters: 100 },
+      command: 16, params: [0, 0, 0, 0], autocontinue: true, locked: false,
+    }],
+    fcMatches: true,
+    dirty: false,
+    syncState: 'idle',
+    drapePreview: {
+      result: {
+        spec_hash: 'a'.repeat(64),
+        infeasible: [
+          { line_id: 'S1', s_start: 10, s_end: 30, reason: 'climb_rate', max_deficit_m: 4.2 },
+          { line_id: 'S1', s_start: 90, s_end: 110, reason: 'clearance', max_deficit_m: 1.5 },
+        ],
+        lines: [], compiled: [], crossings: [],
+        stats: { agl_mean_m: 40, agl_std_m: 0.5, agl_min_m: 39, agl_max_m: 41, min_clearance_m: 5.2, max_grade: 0.6, max_climb_needed_mps: 1.2, compile_deviation_max_m: 0.4 },
+        waypoints: [],
+        dem_ref: { item_id: null, project_name: null, acquisition: null, hash: 'x', datum: 'OrthometricCgvd2013' },
+        version: 1,
+      },
+      waypoints: [], landing_amsl_m: [],
+      has_dtm: true, acquisition: null, resolution_m: 1, covers_route: true, dem_age_ok: true,
+    },
+  })
+})
+await page.locator('[data-testid="flight-menu"]').click()
+await page.locator('[data-testid="flight-cmd-preflight"]').click()
+check(await waitUntil(async () => (await dialog.count()) === 1, 5000), 'the panel re-opens for the repair-entry checks')
+const fixDem = await page.locator('[data-testid="preflight-fix-dem_coverage"]').count()
+const fixThresh = await page.locator('[data-testid="preflight-fix-drape_thresholds"]').count()
+const terrainGroup = await page.locator('[data-testid="preflight-dialog"]').getByText('Terrain').count()
+check(fixDem === 1 && fixThresh === 1, 'the terrain Fails carry repair entries')
+check(terrainGroup >= 1, 'the terrain group renders')
+const spansShown = await page.locator('[data-testid="preflight-dialog"]').getByText(/s 10–30 m/).count()
+check(spansShown >= 1, 'the out-of-band spans are listed for review')
+await page.locator('[data-testid="preflight-accept-infeasible"]').click()
+await waitUntil(async () => {
+  const calls = await page.evaluate(() =>
+    window.__mockCommands.filter((c) => c.cmd === 'preflight_checklist'),
+  )
+  const last = calls[calls.length - 1]
+  return last?.planState?.drape?.infeasible_confirmed === true
+}, 5000)
+check(true, 'the acceptance flows into the next evaluation as infeasible_confirmed')
+check(
+  (await page.locator('[data-testid="preflight-accept-infeasible"]').getAttribute('disabled')) !== null,
+  'the accept entry is spent for this solve',
+)
+await page.locator('[data-testid="preflight-cancel"]').click()
+// A navigation entry closes the panel and opens the drape parameters.
+await page.locator('[data-testid="flight-menu"]').click()
+await page.locator('[data-testid="flight-cmd-preflight"]').click()
+await waitUntil(async () => (await dialog.count()) === 1, 5000)
+await page.locator('[data-testid="preflight-fix-drape_thresholds"]').click()
+check(await waitUntil(async () => (await dialog.count()) === 0, 5000), 'the drape-parameter entry closes the panel')
+check(
+  await waitUntil(
+    async () =>
+      (await page.evaluate(() => {
+        const card = document.querySelector('[data-plan-field="drape-params"]')
+        return !!card && card.getBoundingClientRect().height > 0
+      })),
+    5000,
+  ),
+  'the drape parameters are revealed on the Pattern step',
+)
+await page.screenshot({ path: join(shotsDir, 'preflight-u5-repairs.png') })
 
 await browser.close()
 if (pageErrors.length > 0) {

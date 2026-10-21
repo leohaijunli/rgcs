@@ -137,6 +137,11 @@ const snapPixels = () =>
 
 try {
   await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 })
+await page.evaluate(() => {
+  // The forced start page (PJ3) gates the shell behind Tauri; the mock opens
+  // a throwaway project so the surfaces under test render.
+  window.__mgProject?.setState({ project: { version: 1, name: 'Mock', crs: 'EPSG:4326', datum: 'cgvd2013', areas: [], settings: null } })
+})
   await page.waitForTimeout(4000)
   await mkdir(shotsDir, { recursive: true })
 
