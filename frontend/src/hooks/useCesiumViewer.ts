@@ -94,12 +94,14 @@ export interface CesiumViewerHandle {
   focusWaypoint(seq: number): void
   /** Frame the whole mission (post-Generate overview). */
   fitMission(): void
-  /** Add/remove the terrain hillshade overlay (plan A). */
+  /** Add/remove the terrain hillshade overlay (plan A); `alpha` is the
+   * operator's U16 opacity (defaults to the historical 0.55). */
   setTerrainOverlay(
     overlay: {
       url: string | null
       bounds: { north: number; south: number; east: number; west: number }
     } | null,
+    alpha?: number,
   ): void
   /** U9b: outline the prepared DEM footprint, or clear it with `null`. */
   setSurveyCoverage(
@@ -620,10 +622,11 @@ export function useCesiumViewer(
         url: string | null
         bounds: { north: number; south: number; east: number; west: number }
       } | null,
+      alpha?: number,
     ) => {
       const viewer = viewerRef.current
       if (!viewer) return
-      sceneSetTerrainOverlay(viewer, overlay)
+      sceneSetTerrainOverlay(viewer, overlay, alpha)
     },
     [],
   )

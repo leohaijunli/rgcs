@@ -137,6 +137,9 @@ const overlayGeneration = new WeakMap<Cesium.Viewer, number>()
 export function setTerrainOverlay(
   viewer: Cesium.Viewer,
   overlay: { url: string | null; bounds: { north: number; south: number; east: number; west: number } } | null,
+  /** U16: the hillshade's transparency (clamped by the caller); defaults to
+   * the historical 0.55 so existing callers keep their look. */
+  alpha: number = OVERLAY_ALPHA,
 ): void {
   const layers = viewer.imageryLayers
   // Remove any previous overlay (layers above index 1 are ours).
@@ -159,7 +162,7 @@ export function setTerrainOverlay(
       // The load raced a newer call or a clear: that call owns the stack now.
       if (overlayGeneration.get(viewer) !== generation || viewer.isDestroyed()) return
       const layer = layers.addImageryProvider(provider, 2)
-      layer.alpha = OVERLAY_ALPHA
+      layer.alpha = Number.isFinite(alpha) ? alpha : OVERLAY_ALPHA
     },
     () => {
       /* a broken PNG is not fatal: the imagery stays */

@@ -263,7 +263,11 @@ export default {
     popover: 'Layers',
     baseMap: 'Base map',
     terrain: 'Terrain',
-    overlays: 'Overlays',
+    mission: 'Mission & survey',
+    vehicle: 'Vehicle & track',
+    opacity: 'Opacity',
+    reset: 'Reset layers to default',
+    vehicleAlwaysOn: 'Vehicle position and alerts are always shown.',
   },
   panels: {
     status: 'Status',

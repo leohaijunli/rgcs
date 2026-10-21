@@ -118,11 +118,13 @@ export default function MapView() {
   useEffect(() => {
     setImageryStyle(imageryStyle)
   }, [imageryStyle, setImageryStyle])
-  // Terrain hillshade overlay (plan A): react to the store's overlay.
+  // Terrain hillshade overlay (plan A): react to the store's overlay and the
+  // operator's U16 opacity (re-applied when either changes).
   const terrainOverlay = useTerrainStore((st) => st.overlay)
+  const hillshadeOpacity = useUiStore((s) => s.hillshadeOpacity)
   useEffect(() => {
-    setTerrainOverlay(terrainOverlay)
-  }, [terrainOverlay, setTerrainOverlay])
+    setTerrainOverlay(terrainOverlay, hillshadeOpacity)
+  }, [terrainOverlay, hillshadeOpacity, setTerrainOverlay])
   // U9b: outline the prepared DEM footprint (Layers toggle gates it).
   const coverage = useTerrainStore((st) => st.coverage)
   const showCoverage = useUiStore((s) => s.showCoverage)

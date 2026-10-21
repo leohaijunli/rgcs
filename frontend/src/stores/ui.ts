@@ -65,6 +65,13 @@ interface UiState {
   showGrid: boolean
   /** U9b: outline the prepared DEM footprint on the map. */
   showCoverage: boolean
+  /** U16: transparency of the hillshade overlay (clamped 0.2–1; the offline
+   * grid stays readable underneath). */
+  hillshadeOpacity: number
+  setHillshadeOpacity: (v: number) => void
+  /** U16: restore every layer preference to its default — imagery style,
+   * toggles and opacity. Data sources and the mission are untouched. */
+  resetLayers: () => void
   /** U17b: the plan field to reveal after clicking a blocker chip. `nonce`
    * forces the reveal effect to re-run when the same field is clicked twice. */
   planFocus: { field: string; nonce: number } | null
@@ -116,6 +123,78 @@ function narrowScreen(): boolean {
 
 const initialTheme: Theme = typeof localStorage !== 'undefined' ? readThemePref() : 'dark'
 
+// ---------------------------------------------------------------------------
+// U16 layer preferences: persisted in `localStorage` so a restart keeps the
+// operator's view. Deliberately a *view* store — data sources and the mission
+// are never touched by these (the safety-critical vehicle marker and alerts
+// are not toggleable at all).
+// ---------------------------------------------------------------------------
+
+const LAYERS_KEY = 'maggcs.layers'
+const OPACITY_MIN = 0.2
+const OPACITY_MAX = 1
+
+interface LayerPrefs {
+  showHeights: boolean
+  trailByAgl: boolean
+  imageryStyle: ImageryStyle
+  showGrid: boolean
+  showCoverage: boolean
+  hillshadeOpacity: number
+}
+
+const DEFAULT_LAYERS: LayerPrefs = {
+  showHeights: true,
+  trailByAgl: true,
+  imageryStyle: 'google-satellite',
+  showGrid: true,
+  showCoverage: true,
+  hillshadeOpacity: 0.65,
+}
+
+/** Clamp the overlay opacity into the readable range (U16 acceptance: the
+ * range is limited — a fully transparent hillshade is indistinguishable from
+ * "broken", a fully opaque one hides the base map). */
+export function clampOpacity(v: number): number {
+  if (!Number.isFinite(v)) return DEFAULT_LAYERS.hillshadeOpacity
+  return Math.min(OPACITY_MAX, Math.max(OPACITY_MIN, v))
+}
+
+function readLayerPrefs(): LayerPrefs {
+  try {
+    const raw = localStorage.getItem(LAYERS_KEY)
+    if (!raw) return { ...DEFAULT_LAYERS }
+    const parsed = JSON.parse(raw) as Partial<LayerPrefs>
+    return {
+      ...DEFAULT_LAYERS,
+      ...parsed,
+      hillshadeOpacity: clampOpacity(parsed.hillshadeOpacity ?? DEFAULT_LAYERS.hillshadeOpacity),
+    }
+  } catch {
+    return { ...DEFAULT_LAYERS }
+  }
+}
+
+function saveLayerPrefs(p: LayerPrefs): void {
+  try {
+    localStorage.setItem(LAYERS_KEY, JSON.stringify(p))
+  } catch {
+    /* private mode */
+  }
+}
+
+/** The current layer slice of the store (for persistence). */
+function layerSnapshot(s: UiState): LayerPrefs {
+  return {
+    showHeights: s.showHeights,
+    trailByAgl: s.trailByAgl,
+    imageryStyle: s.imageryStyle,
+    showGrid: s.showGrid,
+    showCoverage: s.showCoverage,
+    hillshadeOpacity: s.hillshadeOpacity,
+  }
+}
+
 export const useUiStore = create<UiState>((set, get) => ({
   view: 'fly',
   theme: initialTheme,
@@ -132,11 +211,11 @@ export const useUiStore = create<UiState>((set, get) => ({
   mapCenter: null,
   fitRequest: 0,
   mapTool: 'select',
-  showHeights: true,
-  trailByAgl: true,
-  imageryStyle: 'google-satellite',
-  showGrid: true,
-  showCoverage: true,
+  // U16: the layer preferences persist in `localStorage` (a restarted app
+  // keeps the operator's view); the two migrated toggles also ride the
+  // shared state (A11) so a detached map agrees with the main window.
+  ...readLayerPrefs(),
+  hillshadeOpacity: readLayerPrefs().hillshadeOpacity,
   planFocus: null,
   settingsRequest: null,
   openSettings: (tab) => set({ settingsRequest: tab }),
@@ -175,22 +254,62 @@ export const useUiStore = create<UiState>((set, get) => ({
   setMapCenter: (mapCenter) => set({ mapCenter }),
   requestFit: () => set((s) => ({ fitRequest: s.fitRequest + 1 })),
   setMapTool: (mapTool) => set({ mapTool }),
-  toggleHeights: () => set((s) => ({ showHeights: !s.showHeights })),
-  toggleTrailByAgl: () => set((s) => ({ trailByAgl: !s.trailByAgl })),
-  setImageryStyle: (imageryStyle) => set({ imageryStyle }),
+  toggleHeights: () =>
+    set((s) => {
+      const next = { showHeights: !s.showHeights }
+      saveLayerPrefs({ ...layerSnapshot(s), ...next })
+      return next
+    }),
+  toggleTrailByAgl: () =>
+    set((s) => {
+      const next = { trailByAgl: !s.trailByAgl }
+      saveLayerPrefs({ ...layerSnapshot(s), ...next })
+      return next
+    }),
+  setImageryStyle: (imageryStyle) =>
+    set((s) => {
+      saveLayerPrefs({ ...layerSnapshot(s), imageryStyle })
+      return { imageryStyle }
+    }),
   // A11 phase 1: the layer toggles are shared state — the local field is the
   // projection, the write goes through the versioned core store so a second
   // webview (the detached map, U15) sees the same truth.
   toggleGrid: () => {
-    set((s) => ({ showGrid: !s.showGrid }))
+    set((s) => {
+      const next = { showGrid: !s.showGrid }
+      saveLayerPrefs({ ...layerSnapshot(s), ...next })
+      return next
+    })
     void writeShared('layers.grid', get().showGrid)
   },
   toggleCoverage: () => {
-    set((s) => ({ showCoverage: !s.showCoverage }))
+    set((s) => {
+      const next = { showCoverage: !s.showCoverage }
+      saveLayerPrefs({ ...layerSnapshot(s), ...next })
+      return next
+    })
     void writeShared('layers.coverage', get().showCoverage)
+  },
+  setHillshadeOpacity: (v) =>
+    set((s) => {
+      const hillshadeOpacity = clampOpacity(v)
+      saveLayerPrefs({ ...layerSnapshot(s), hillshadeOpacity })
+      return { hillshadeOpacity }
+    }),
+  resetLayers: () => {
+    set(() => ({ ...DEFAULT_LAYERS }))
+    saveLayerPrefs({ ...DEFAULT_LAYERS })
+    void writeShared('layers.grid', DEFAULT_LAYERS.showGrid)
+    void writeShared('layers.coverage', DEFAULT_LAYERS.showCoverage)
   },
   setSurveySize: (surveySize) => set({ surveySize }),
   setSurveyHeading: (surveyHeading) => set({ surveyHeading }),
 }))
 
 applyThemePref(initialTheme)
+
+
+// Dev-only handle for the Playwright checks (same pattern as `__mgMission`).
+if (import.meta.env?.DEV && typeof window !== 'undefined') {
+  ;(window as unknown as { __mgUi?: unknown }).__mgUi = useUiStore
+}

@@ -56,7 +56,11 @@ export default function MapToolbar({ onGoHome, onNorth }: Props) {
   const toggleTrailByAgl = useUiStore((s) => s.toggleTrailByAgl)
   const showCoverage = useUiStore((s) => s.showCoverage)
   const toggleCoverage = useUiStore((s) => s.toggleCoverage)
+  const hillshadeOpacity = useUiStore((s) => s.hillshadeOpacity)
+  const setHillshadeOpacity = useUiStore((s) => s.setHillshadeOpacity)
+  const resetLayers = useUiStore((s) => s.resetLayers)
   const hasCoverage = useTerrainStore((s) => s.coverage != null)
+  const overlay = useTerrainStore((s) => s.overlay)
   const [popover, setPopover] = useState<'layers' | 'view' | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
 
@@ -144,7 +148,11 @@ export default function MapToolbar({ onGoHome, onNorth }: Props) {
       </IconButton>
 
       {popover === 'layers' && (
-        <Popover className="left-full top-0 ml-1.5 w-52">
+        // U16: grouped by what the layer *is* (base map / terrain / mission /
+        // vehicle), each row carrying its own state — an unloaded or failed
+        // layer never reads "on". Vehicle position and alerts are NOT
+        // toggleable: a safety readout must not be silently hidden.
+        <Popover className="left-full top-0 ml-1.5 w-56">
           <PopoverSection label={t('layers.baseMap')} first />
           <div className="flex rounded border border-line bg-canvas p-0.5">
             {(['google-satellite', 'google-hybrid'] as const).map((style) => (
@@ -165,14 +173,40 @@ export default function MapToolbar({ onGoHome, onNorth }: Props) {
 
           <PopoverSection label={t('layers.terrain')} />
           <TerrainToggle />
+          {overlay && (
+            <label className="flex items-center gap-2 px-1 text-[10px] text-muted" data-testid="hillshade-opacity">
+              <span className="shrink-0">{t('layers.opacity')}</span>
+              <input
+                type="range"
+                min={0.2}
+                max={1}
+                step={0.05}
+                value={hillshadeOpacity}
+                onChange={(e) => setHillshadeOpacity(Number(e.target.value))}
+                className="h-1 flex-1"
+              />
+              <span className="mono w-8 text-right">{Math.round(hillshadeOpacity * 100)}%</span>
+            </label>
+          )}
           <Terrain3DToggle />
 
-          <PopoverSection label={t('layers.overlays')} />
+          <PopoverSection label={t('layers.mission')} />
           {hasCoverage && (
             <PopoverToggle label={t('map.coverage')} on={showCoverage} onLabel={t('layers.on')} offLabel={t('layers.off')} onToggle={toggleCoverage} />
           )}
           <PopoverToggle label={t('map.heights')} on={showHeights} onLabel={t('layers.on')} offLabel={t('layers.off')} onToggle={toggleHeights} />
+          <div className="px-1 text-[10px] text-muted">{t('layers.vehicleAlwaysOn')}</div>
+
+          <PopoverSection label={t('layers.vehicle')} />
           <PopoverToggle label={t('map.trailByAgl')} on={trailByAgl} onLabel={t('layers.on')} offLabel={t('layers.off')} onToggle={toggleTrailByAgl} />
+
+          <button
+            data-testid="layers-reset"
+            onClick={resetLayers}
+            className="mt-1 w-full rounded border border-line bg-canvas px-2 py-1 text-[11px] text-muted hover:bg-panel hover:text-ink"
+          >
+            {t('layers.reset')}
+          </button>
         </Popover>
       )}
       {popover === 'view' && (
