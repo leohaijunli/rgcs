@@ -24,6 +24,8 @@ use maggcs_core::motor_test::scope::{self, ScopeBus};
 use maggcs_core::motor_test::service::{MotorTestCommand, MotorTestEvent, MotorTestService};
 use maggcs_core::motor_test::source::ForwardSlot;
 use maggcs_core::motor_test::{SessionState, DEFAULT_TICK_HZ};
+use maggcs_core::params::codec::{decode_param_id, encode_param_id, IntEncoding};
+use maggcs_core::params::model::{ParamType, ParamValue};
 
 /// Maximum time to observe the release pass before closing an actuator link.
 const MOTOR_TEST_STOP_TIMEOUT: Duration = Duration::from_secs(2);
@@ -66,6 +68,10 @@ pub struct ActuatorStatus {
     /// `COM_MOT_TEST_EN` read from the target PX4 (`None` = unknown): PX4
     /// denies ACTUATOR_TEST while this is not 1.
     pub com_mot_test_en: Option<f32>,
+    /// `SDLOG_MODE` read from the target PX4 (`None` = unknown): 0 = disabled,
+    /// 1 = always, 2 = log when armed. The motor-test window's on-board log
+    /// toggle reads and writes this.
+    pub sdlog_mode: Option<f32>,
     /// Normalized SITL servo outputs 1–4 (the forward INPUT), latest sample.
     pub input_values: Vec<f32>,
     /// Values actually sent to the FC as ACTUATOR_TEST (the OUTPUT), 0 when idle.
@@ -464,6 +470,7 @@ pub async fn actuator_connect_target(
     // Stream-rate requests and the parameter read are link-scoped tasks;
     // publish their owner before starting any observers.
     let com_mot_test_en = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let sdlog_mode = std::sync::Arc::new(std::sync::Mutex::new(None));
     let telemetry_handle = handle.clone();
     *state.motor_test.target.lock() = Some(TargetLinkRuntime {
         target: MotorTestTarget {
@@ -471,6 +478,7 @@ pub async fn actuator_connect_target(
             endpoint,
             target_system_id,
             com_mot_test_en: com_mot_test_en.clone(),
+            sdlog_mode: sdlog_mode.clone(),
         },
         runtime: AuxiliaryLinkRuntime::new(telemetry_handle.clone(), []),
     });
@@ -494,7 +502,7 @@ pub async fn actuator_connect_target(
     // Read COM_MOT_TEST_EN from the PX4 (PX4 denies ACTUATOR_TEST while it is
     // not 1). The read is spawned so a quiet FC never stalls the connect.
     let slot = com_mot_test_en;
-    let h = telemetry_handle;
+    let h = telemetry_handle.clone();
     let task = tauri::async_runtime::spawn(async move {
         if let Some(v) = read_param(&h, target_system_id, "COM_MOT_TEST_EN").await {
             if let Ok(mut guard) = slot.lock() {
@@ -507,6 +515,24 @@ pub async fn actuator_connect_target(
     } else {
         task.abort();
     }
+    // Read SDLOG_MODE (0=disabled, 1=always, 2=armed-only) so the on-board
+    // log toggle starts from the FC's actual setting, not a guess.
+    let slot = sdlog_mode;
+    let h = telemetry_handle.clone();
+    let task = tauri::async_runtime::spawn(async move {
+        if let Some(v) = read_param(&h, target_system_id, "SDLOG_MODE").await {
+            if let Ok(mut guard) = slot.lock() {
+                *guard = Some(v);
+            }
+        }
+    });
+    if let Some(target) = state.motor_test.target.lock().as_mut() {
+        target.runtime.add_task(task);
+    } else {
+        task.abort();
+    }
+    // Rebuild the SD-log runtime on the new target handle (feature 2).
+    respawn_actuator_logs(app.clone(), &state);
     Ok(())
 }
 
@@ -699,6 +725,451 @@ async fn read_param(handle: &ConnectionHandle, target_system_id: u8, name: &str)
     .unwrap_or(None)
 }
 
+/// Write one `INT32` parameter to the FC with `PARAM_SET` (byte-concat PX4
+/// encoding) and wait for the FC's `PARAM_VALUE` echo. Returns the echoed
+/// value, or `None` on timeout / a closed link.
+///
+/// `MAV_PARAM_TYPE_INT32` carries the PX4 `SDLOG_MODE` (0/1/2) and the
+/// parameter cache uses the same byte-concat codec, so the written bits round
+/// trip exactly.
+async fn write_param(
+    handle: &ConnectionHandle,
+    target_system_id: u8,
+    name: &str,
+    value: i64,
+) -> Option<f32> {
+    // Subscribe before sending and accept only the configured FC's reply.
+    let mut events =
+        handle.subscribe_route(MessageRoute::messages(&[22]).from(target_system_id, 1));
+    let wire = maggcs_core::params::codec::encode(ParamValue::Int(value), IntEncoding::ByteConcat);
+    let msg = MavMessage::PARAM_SET(::mavlink::common::PARAM_SET_DATA {
+        target_system: target_system_id,
+        target_component: 1,
+        param_id: encode_param_id(name).into(),
+        param_value: wire,
+        param_type: ParamType::I32.to_mav(),
+    });
+    if handle.send(msg).await.is_err() {
+        return None;
+    }
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            match events.recv().await {
+                Ok(ConnectionEvent::Message(env)) => {
+                    if let MavMessage::PARAM_VALUE(p) = &env.message {
+                        if decode_param_id(&p.param_id) == name {
+                            return Some(p.param_value);
+                        }
+                    }
+                }
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    })
+    .await
+    .unwrap_or(None)
+}
+
+/// Toggle or set the FC's on-board SD-card log mode over the motor test's
+/// serial target link (`SDLOG_MODE`: 0 = disabled, 1 = always, 2 = when
+/// armed). Writes the parameter, confirms the FC's echo, and refreshes the
+/// cached value the status poll reads.
+///
+/// `mode` is one of `"disabled"`, `"always"`, `"armed"`. A motor-test bench
+/// runs disarmed, so `"armed"` would not log — `"always"` is the useful
+/// choice there.
+#[tauri::command]
+pub async fn actuator_set_sdlog_mode(
+    state: State<'_, AppState>,
+    mode: String,
+) -> Result<f32, String> {
+    let value = match mode.as_str() {
+        "disabled" => 0i64,
+        "always" => 1i64,
+        "armed" => 2i64,
+        other => {
+            return Err(format!(
+                "unknown SDLOG_MODE: {other} (use disabled|always|armed)"
+            ))
+        }
+    };
+    let target = state
+        .motor_test
+        .target
+        .lock()
+        .as_ref()
+        .map(|runtime| {
+            (
+                runtime.target.handle.clone(),
+                runtime.target.target_system_id,
+                runtime.target.sdlog_mode.clone(),
+            )
+        })
+        .ok_or_else(|| "no serial PX4 target — connect it first".to_string())?;
+    let (handle, target_system_id, slot) = target;
+    let echoed = write_param(&handle, target_system_id, "SDLOG_MODE", value)
+        .await
+        .ok_or_else(|| "no reply to the SDLOG_MODE write (timeout or link down)".to_string())?;
+    if let Ok(mut guard) = slot.lock() {
+        *guard = Some(echoed);
+    }
+    Ok(echoed)
+}
+
+/// Rebuild the SD-log runtime for the current serial target PX4. Idempotent:
+/// a previous runtime is stopped and its last list/error kept for the UI.
+fn respawn_actuator_logs(app: AppHandle, state: &AppState) {
+    let Some(target) = state.motor_test.target.lock().as_ref().map(|runtime| {
+        (
+            runtime.target.handle.clone(),
+            runtime.target.target_system_id,
+            1,
+        )
+    }) else {
+        return;
+    };
+    let (handle, target_system_id, target_component_id) = target;
+    let mut logs = state.motor_test.logs.lock();
+    if let Some(old) = logs.runtime.take() {
+        // Abort in the background; the current handle is gone (or replaced).
+        drop(old);
+    }
+    let last_list = logs.last_list.clone();
+    let last_error = logs.last_error.clone();
+    let task_app = app.clone();
+    let (cmd_tx, mut cmd_rx) =
+        tokio::sync::mpsc::channel::<crate::motor_test_state::ActuatorLogCommand>(4);
+    let mut route = handle.subscribe_log_messages();
+    let task = tauri::async_runtime::spawn(async move {
+        use maggcs_core::logs::protocol::{LogEvent, LogProtocol};
+        let mut protocol = LogProtocol::new(target_system_id, target_component_id);
+        let mut save_paths: std::collections::HashMap<u16, String> =
+            std::collections::HashMap::new();
+        let mut tick = tokio::time::interval(std::time::Duration::from_millis(200));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let emit_failed = |error: &str| {
+            *last_error.lock().expect("logs err lock") = Some(error.to_string());
+            let _ = task_app.emit(
+                "actuator_logs",
+                &actuator_logs_payload_failed(error.to_string()),
+            );
+        };
+        loop {
+            tokio::select! {
+                cmd = cmd_rx.recv() => {
+                    let Some(cmd) = cmd else { return };
+                    let frames = match cmd {
+                        crate::motor_test_state::ActuatorLogCommand::List => protocol.begin_list(),
+                        crate::motor_test_state::ActuatorLogCommand::Download { id, size, save_path } => {
+                            save_paths.insert(id, save_path);
+                            protocol.begin_download(id, size)
+                        }
+                        crate::motor_test_state::ActuatorLogCommand::Cancel => protocol.cancel(),
+                    };
+                    for f in frames {
+                        if handle.send(f).await.is_err() { return; }
+                    }
+                }
+                msg = route.recv() => {
+                    let Some(m) = msg_ok(msg) else { return };
+                    let (events, frames) = match protocol.handle(&m.message) {
+                        Ok(v) => v,
+                        Err(e) => { emit_failed(&e.to_string()); continue; }
+                    };
+                    for f in frames {
+                        if handle.send(f).await.is_err() { return; }
+                    }
+                    for e in events {
+                        match e {
+                            LogEvent::List { entries } => {
+                                *last_list.lock().expect("logs list lock") = Some(entries.clone());
+                                let _ = app.emit("actuator_logs", &ActuatorLogsEvent::List { entries });
+                            }
+                            LogEvent::Progress { id, fetched, total } => {
+                                let _ = app.emit("actuator_logs", &ActuatorLogsEvent::Progress { id, fetched, total });
+                            }
+                            LogEvent::Downloaded { id, bytes } => {
+                                let path = save_paths.get(&id).cloned()
+                                    .unwrap_or_else(|| format!("log{id}.ulg"));
+                                let payload = match std::fs::write(&path, &bytes) {
+                                    Ok(()) => ActuatorLogsEvent::Downloaded { id, path },
+                                    Err(e) => ActuatorLogsEvent::Failed { message: format!("write {}: {e}", path) },
+                                };
+                                let _ = app.emit("actuator_logs", &payload);
+                            }
+                        }
+                    }
+                }
+                _ = tick.tick() => {
+                    match protocol.tick(std::time::Instant::now()) {
+                        Ok(frames) => {
+                            for f in frames {
+                                if handle.send(f).await.is_err() { return; }
+                            }
+                        }
+                        Err(e) => { let _ = protocol.cancel(); emit_failed(&e.to_string()); }
+                    }
+                }
+            }
+        }
+    });
+    logs.runtime = Some(crate::motor_test_state::ActuatorLogsRuntime {
+        commands: Some(cmd_tx),
+        task: Some(task),
+    });
+}
+
+/// Stop the SD-log runtime for the serial target (link teardown / window
+/// close). Keeps the last list/error for a re-open.
+pub(crate) async fn stop_actuator_logs(state: &AppState) {
+    let old = { state.motor_test.logs.lock().runtime.take() };
+    if let Some(old) = old {
+        old.stop(std::time::Duration::from_secs(2)).await;
+    }
+}
+
+/// Serializable SD-log events for the motor-test window (`actuator_logs`).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+enum ActuatorLogsEvent {
+    #[serde(rename_all = "snake_case")]
+    List {
+        entries: Vec<maggcs_core::logs::LogEntryInfo>,
+    },
+    #[serde(rename_all = "snake_case")]
+    Progress { id: u16, fetched: u32, total: u32 },
+    #[serde(rename_all = "snake_case")]
+    Downloaded { id: u16, path: String },
+    #[serde(rename_all = "snake_case")]
+    Failed { message: String },
+}
+
+fn actuator_logs_payload_failed(message: String) -> ActuatorLogsEvent {
+    ActuatorLogsEvent::Failed { message }
+}
+
+fn msg_ok(
+    msg: Result<ConnectionEvent, tokio::sync::broadcast::error::RecvError>,
+) -> Option<maggcs_core::mavlink::MessageEnvelope> {
+    match msg {
+        Ok(ConnectionEvent::Message(env)) => Some(*env),
+        Ok(_) => None,
+        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => None,
+        Err(_) => None,
+    }
+}
+
+fn actuator_logs_sender(
+    state: &AppState,
+) -> Option<tokio::sync::mpsc::Sender<crate::motor_test_state::ActuatorLogCommand>> {
+    state
+        .motor_test
+        .logs
+        .lock()
+        .runtime
+        .as_ref()
+        .and_then(crate::motor_test_state::ActuatorLogsRuntime::sender)
+}
+
+/// Request the serial target PX4's SD log list (feature 2). The runtime is
+/// (re)spawned on the current target handle if it is not running.
+#[tauri::command]
+pub async fn actuator_logs_request_list(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    if actuator_logs_sender(&state).is_none() {
+        respawn_actuator_logs(app.clone(), &state);
+    }
+    let tx = actuator_logs_sender(&state)
+        .ok_or_else(|| "no serial PX4 target — connect it first".to_string())?;
+    tx.send(crate::motor_test_state::ActuatorLogCommand::List)
+        .await
+        .map_err(|_| "log service stopped".to_string())
+}
+
+/// Download one SD log from the serial target PX4 into a save-dialog path
+/// (feature 2). A cancelled save dialog returns Ok without starting.
+#[tauri::command]
+pub async fn actuator_logs_download(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: u16,
+    size: u32,
+) -> Result<(), String> {
+    use tauri_plugin_dialog::DialogExt;
+    let path = app
+        .dialog()
+        .file()
+        .add_filter("ULog", &["ulg"])
+        .set_file_name(format!("log{id}.ulg"))
+        .blocking_save_file()
+        .and_then(|p| p.into_path().ok());
+    let Some(path) = path else { return Ok(()) };
+    if actuator_logs_sender(&state).is_none() {
+        respawn_actuator_logs(app.clone(), &state);
+    }
+    let tx = actuator_logs_sender(&state)
+        .ok_or_else(|| "no serial PX4 target — connect it first".to_string())?;
+    tx.send(crate::motor_test_state::ActuatorLogCommand::Download {
+        id,
+        size,
+        save_path: path.display().to_string(),
+    })
+    .await
+    .map_err(|_| "log service stopped".to_string())
+}
+
+/// Cancel any running SD-log list/download on the serial target.
+#[tauri::command]
+pub async fn actuator_logs_cancel(state: State<'_, AppState>) -> Result<(), String> {
+    let tx = actuator_logs_sender(&state).ok_or_else(|| "no serial PX4 target".to_string())?;
+    tx.send(crate::motor_test_state::ActuatorLogCommand::Cancel)
+        .await
+        .map_err(|_| "log service stopped".to_string())
+}
+
+/// Latest SD-log list + error for the motor-test window.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ActuatorLogsStatus {
+    pub entries: Vec<maggcs_core::logs::LogEntryInfo>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub fn actuator_logs_status(state: State<'_, AppState>) -> ActuatorLogsStatus {
+    let logs = state.motor_test.logs.lock();
+    let entries = logs
+        .last_list
+        .lock()
+        .expect("logs list lock")
+        .clone()
+        .unwrap_or_default();
+    let error = logs.last_error.lock().expect("logs err lock").clone();
+    ActuatorLogsStatus { entries, error }
+}
+
+/// Start recording every message received on the serial target PX4 into a
+/// fresh `session-<utc>.tlog` (feature 3). Idempotent: a running session is
+/// left untouched.
+#[tauri::command]
+pub async fn actuator_recorder_start(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    // Lock the target first (consistent with the other target-scoped paths),
+    // clone the handle, then lock the recorder only to check-and-set.
+    let Some(target) = state.motor_test.target.lock().as_ref().map(|runtime| {
+        (
+            runtime.target.handle.clone(),
+            runtime.target.endpoint.clone(),
+            runtime.target.target_system_id,
+            1,
+        )
+    }) else {
+        return Err("no serial PX4 target — connect it first".to_string());
+    };
+    let (handle, endpoint, target_system_id, target_component_id) = target;
+    if state.motor_test.recorder.lock().is_some() {
+        return Ok(());
+    }
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("cannot resolve app data dir: {e}"))?
+        .join(maggcs_core::recorder::RECORDINGS_DIR)
+        .join(format!(
+            "motor-test-{}",
+            maggcs_core::recorder::now_utc_us()
+        ));
+    let session_endpoint = endpoint.clone();
+    let config = maggcs_core::recorder::RecorderConfig {
+        endpoint,
+        target_system_id,
+        target_component_id,
+        gcs_system_id: 250,
+        gcs_component_id: 250,
+        ..maggcs_core::recorder::RecorderConfig::new(&dir)
+    };
+    let recorder = maggcs_core::recorder::Recorder::spawn(config).map_err(|e| e.to_string())?;
+    recorder.record_event(maggcs_core::recorder::RecordEvent::SessionOpened {
+        endpoint: session_endpoint,
+        system_id: target_system_id,
+        component_id: target_component_id,
+    });
+    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+    tauri::async_runtime::spawn(maggcs_core::recorder::pump_raw(
+        recorder.clone(),
+        handle.subscribe_raw(),
+        stop_rx,
+    ));
+    *state.motor_test.recorder.lock() = Some(crate::motor_test_state::ActuatorRecorder {
+        recorder,
+        stop: stop_tx,
+    });
+    Ok(())
+}
+
+/// Stop the serial-target message recorder, flushing and joining its writer.
+#[tauri::command]
+pub async fn actuator_recorder_stop(state: State<'_, AppState>) -> Result<(), String> {
+    let running = state.motor_test.recorder.lock().take();
+    let Some(running) = running else {
+        return Ok(());
+    };
+    let _ = running.stop.send(true);
+    let recorder = running.recorder;
+    tauri::async_runtime::spawn(async move {
+        let _ = recorder.flush(std::time::Duration::from_secs(3)).await;
+    });
+    Ok(())
+}
+
+/// The serial-target message recorder status.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ActuatorRecorderStatus {
+    pub running: bool,
+    pub dir: Option<String>,
+    pub frames: u64,
+}
+
+#[tauri::command]
+pub fn actuator_recorder_status(state: State<'_, AppState>) -> ActuatorRecorderStatus {
+    let running = state.motor_test.recorder.lock();
+    match running.as_ref() {
+        Some(r) => {
+            let dir = r.recorder.dir().display().to_string();
+            let stats = r.recorder.stats();
+            ActuatorRecorderStatus {
+                running: true,
+                dir: Some(dir),
+                frames: stats.frames,
+            }
+        }
+        None => ActuatorRecorderStatus {
+            running: false,
+            dir: None,
+            frames: 0,
+        },
+    }
+}
+
+/// Stop the serial-target recorder (link teardown / window close).
+pub(crate) async fn stop_actuator_recorder(state: &AppState) {
+    let running = state.motor_test.recorder.lock().take();
+    if let Some(running) = running {
+        let _ = running.stop.send(true);
+        let recorder = running.recorder;
+        tauri::async_runtime::spawn(async move {
+            let _ = recorder.flush(std::time::Duration::from_secs(3)).await;
+        });
+    }
+}
+
 /// Send one command to the stored session; `Err` = no session / dead link.
 async fn send_session(state: &AppState, cmd: MotorTestCommand) -> Result<(), String> {
     match service_of(state) {
@@ -711,6 +1182,10 @@ async fn send_session(state: &AppState, cmd: MotorTestCommand) -> Result<(), Str
 /// cancelled/joined before their connection workers are shut down.
 pub(crate) async fn stop_auxiliary_links(state: &AppState) {
     detach_motor_telemetry(state).await;
+    // Feature 2/3: stop the serial-target SD-log runtime and message recorder
+    // (both are link-scoped). The last list/error survive for a re-open.
+    stop_actuator_logs(state).await;
+    stop_actuator_recorder(state).await;
     let sitl = state.motor_test.sitl.lock().take();
     if let Some(sitl) = sitl {
         sitl.stop().await;
@@ -871,7 +1346,7 @@ impl AppState {
             .as_ref()
             .map(|r| (*r.output.borrow()).clone())
             .unwrap_or_default();
-        let (target_connected, target_endpoint, target_system_id, com_mot_test_en) = {
+        let (target_connected, target_endpoint, target_system_id, com_mot_test_en, sdlog_mode) = {
             let guard = self.motor_test.target.lock();
             match guard.as_ref() {
                 Some(runtime) => (
@@ -879,8 +1354,9 @@ impl AppState {
                     Some(runtime.target.endpoint.clone()),
                     Some(runtime.target.target_system_id),
                     runtime.target.com_mot_test_en.lock().ok().and_then(|g| *g),
+                    runtime.target.sdlog_mode.lock().ok().and_then(|g| *g),
                 ),
-                None => (false, None, None, None),
+                None => (false, None, None, None, None),
             }
         };
         ActuatorStatus {
@@ -905,6 +1381,7 @@ impl AppState {
             input_values,
             output_values,
             com_mot_test_en,
+            sdlog_mode,
         }
     }
 }

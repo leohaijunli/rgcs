@@ -631,3 +631,37 @@ body,
   color: var(--mg-muted);
   font-size: 12px;
 }
+
+/* On-board log card: SD log list + download progress (features 1–3). */
+.log-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.log-list li {
+  align-items: center;
+}
+
+.log-list .mode-btn {
+  font-size: 11px;
+  padding: 2px 8px;
+}
+
+.log-progress {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--mg-line, rgba(128, 128, 128, 0.25));
+  overflow: hidden;
+}
+
+.log-progress > span {
+  display: block;
+  height: 100%;
+  background: var(--mg-accent, #4c9e5f);
+}

@@ -39,6 +39,10 @@ pub struct MotorTestTarget {
     /// `COM_MOT_TEST_EN` read from the PX4 (`None` = not read yet / unknown).
     /// PX4 denies `ACTUATOR_TEST` while this parameter is not 1.
     pub com_mot_test_en: std::sync::Arc<std::sync::Mutex<Option<f32>>>,
+    /// `SDLOG_MODE` read from the PX4 (`None` = not read yet / unknown):
+    /// 0 = disabled, 1 = always, 2 = log when armed. The motor-test window's
+    /// on-board log toggle reads and writes it over the serial link.
+    pub sdlog_mode: std::sync::Arc<std::sync::Mutex<Option<f32>>>,
 }
 
 /// Owns a motor-test auxiliary link and its link-scoped tasks. Stop is
@@ -269,6 +273,75 @@ pub struct MotorTestState {
     pub scope: ScopeBus,
     /// Abort handle for the scope flusher (runs while the window is open).
     pub scope_flusher: PLMutex<Option<tauri::async_runtime::JoinHandle<()>>>,
+    /// SD-log list/download state for the serial target PX4 (feature 2); the
+    /// protocol runtime is link-scoped and rebuilt with the target.
+    pub logs: PLMutex<ActuatorLogs>,
+    /// Received-message recorder (tlog) for the serial target PX4 (feature 3).
+    pub recorder: PLMutex<Option<ActuatorRecorder>>,
+}
+
+/// The serial target's SD-log download runtime (feature 2): runs a core
+/// `LogProtocol` on the target handlestant, forwarding events to the window.
+pub struct ActuatorLogs {
+    pub runtime: Option<ActuatorLogsRuntime>,
+    pub last_list: std::sync::Arc<std::sync::Mutex<Option<Vec<maggcs_core::logs::LogEntryInfo>>>>,
+    pub last_error: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+}
+
+impl Default for ActuatorLogs {
+    fn default() -> Self {
+        Self {
+            runtime: None,
+            last_list: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            last_error: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        }
+    }
+}
+
+/// A running SD-log protocol on the serial target link.
+pub struct ActuatorLogsRuntime {
+    pub(crate) commands: Option<tokio::sync::mpsc::Sender<ActuatorLogCommand>>,
+    pub(crate) task: Option<tauri::async_runtime::JoinHandle<()>>,
+}
+
+impl ActuatorLogsRuntime {
+    pub(crate) fn sender(&self) -> Option<tokio::sync::mpsc::Sender<ActuatorLogCommand>> {
+        self.commands.clone()
+    }
+
+    /// Close the command channel and wait for the protocol task to exit.
+    pub async fn stop(mut self, deadline: std::time::Duration) {
+        self.commands.take();
+        if let Some(mut task) = self.task.take() {
+            let _ = tokio::time::timeout(deadline, &mut task).await;
+        }
+    }
+}
+
+impl Drop for ActuatorLogsRuntime {
+    fn drop(&mut self) {
+        if let Some(task) = &self.task {
+            task.abort();
+        }
+    }
+}
+
+pub(crate) enum ActuatorLogCommand {
+    List,
+    Download {
+        id: u16,
+        size: u32,
+        save_path: String,
+    },
+    Cancel,
+}
+
+/// The recorder of messages received on the serial target link (feature 3):
+/// a core `Recorder` whose raw-frame tap captures every inbound frame to a
+/// `session-<utc>.tlog`.
+pub struct ActuatorRecorder {
+    pub recorder: std::sync::Arc<maggcs_core::recorder::Recorder>,
+    pub stop: tokio::sync::watch::Sender<bool>,
 }
 
 impl MotorTestState {

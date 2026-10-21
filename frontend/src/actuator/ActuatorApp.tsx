@@ -95,6 +95,9 @@ interface ActuatorStatus {
   target_system_id: number | null
   /** COM_MOT_TEST_EN read from the target PX4 (null = unknown). */
   com_mot_test_en: number | null
+  /** SDLOG_MODE read from the target PX4 (null = unknown): 0=disabled,
+   * 1=always, 2=armed-only. The on-board log toggle reads/writes it. */
+  sdlog_mode: number | null
   /** Normalized SITL servo outputs 1–4 (the forward INPUT). */
   input_values: number[]
   /** Values sent to the FC as ACTUATOR_TEST (the OUTPUT), 0 when idle. */
@@ -118,6 +121,7 @@ const IDLE: ActuatorStatus = {
   target_endpoint: null,
   target_system_id: null,
   com_mot_test_en: null,
+  sdlog_mode: null,
   input_values: [],
   output_values: [],
 }
@@ -175,6 +179,19 @@ export function ActuatorApp() {
   // Shared mag calibration (same file as the Signal Inspector): when loaded,
   // the alarm's total field and the inspector's mag traces are A·(m−b).
   const [calLoaded, setCalLoaded] = useState(false)
+  // On-board SD-card log (feature 1): read/write SDLOG_MODE over the serial
+  // target link.
+  const [sdlogBusy, setSdlogBusy] = useState(false)
+  const [sdlogError, setSdlogError] = useState<string | null>(null)
+  // SD-log list + download (feature 2): `actuator_logs` events.
+  const [logEntries, setLogEntries] = useState<Array<{ id: number; time_utc: number; size: number }>>([])
+  const [logDownloads, setLogDownloads] = useState<Map<number, { fetched: number; total: number; path?: string }>>(new Map())
+  const [logsBusy, setLogsBusy] = useState(false)
+  const [logsError, setLogsError] = useState<string | null>(null)
+  // Received-message recorder (feature 3): the serial-target tlog toggle.
+  const [recording, setRecording] = useState(false)
+  const [recorderDir, setRecorderDir] = useState<string | null>(null)
+  const [recorderFrames, setRecorderFrames] = useState(0)
   const audioCtxRef = useRef<AudioContext | null>(null)
   const beepTimer = useRef<number | undefined>(undefined)
 
@@ -392,6 +409,156 @@ export function ActuatorApp() {
       },
     }).catch(() => {})
   }, [tauri, alarmEnabled, alarmThreshold])
+
+  // Feature 2: SD-log list/download over the serial target — subscribe to the
+  // `actuator_logs` events and seed from `actuator_logs_status`.
+  useEffect(() => {
+    if (!tauri) return
+    let disposed = false
+    let un: (() => void) | undefined
+    void (async () => {
+      try {
+        un = await listen<{
+          kind: 'list' | 'progress' | 'downloaded' | 'failed'
+          entries?: Array<{ id: number; time_utc: number; size: number }>
+          id?: number
+          fetched?: number
+          total?: number
+          path?: string
+          message?: string
+        }>('actuator_logs', (e) => {
+          if (disposed) return
+          const p = e.payload
+          if (p.kind === 'list') {
+            setLogEntries(p.entries ?? [])
+            setLogDownloads(new Map())
+            setLogsBusy(false)
+            setLogsError(null)
+          } else if (p.kind === 'progress') {
+            const id = p.id ?? 0
+            setLogDownloads((prev) => {
+              const next = new Map(prev)
+              next.set(id, { fetched: p.fetched ?? 0, total: p.total ?? 0 })
+              return next
+            })
+          } else if (p.kind === 'downloaded') {
+            const id = p.id ?? 0
+            setLogDownloads((prev) => {
+              const next = new Map(prev)
+              const cur = next.get(id)
+              if (cur) next.set(id, { ...cur, path: p.path })
+              return next
+            })
+            setLogsBusy(false)
+          } else if (p.kind === 'failed') {
+            setLogsBusy(false)
+            setLogsError(p.message ?? 'failed')
+          }
+        })
+      } catch {
+        /* events unavailable */
+      }
+    })()
+    void invoke<{
+      entries: Array<{ id: number; time_utc: number; size: number }>
+      error: string | null
+    }>('actuator_logs_status')
+      .then((s) => {
+        if (disposed) return
+        setLogEntries(s.entries ?? [])
+        setLogsError(s.error)
+      })
+      .catch(() => {})
+    return () => {
+      disposed = true
+      un?.()
+    }
+  }, [tauri])
+
+  // Feature 3: the serial-target message-recorder toggle — poll its status.
+  useEffect(() => {
+    if (!tauri) return
+    const poll = async () => {
+      try {
+        const s = await invoke<{
+          running: boolean
+          dir: string | null
+          frames: number
+        }>('actuator_recorder_status')
+        setRecording(s.running)
+        setRecorderDir(s.dir)
+        setRecorderFrames(s.frames)
+      } catch {
+        /* not connected */
+      }
+    }
+    void poll()
+    const id = setInterval(poll, 1000)
+    return () => clearInterval(id)
+  }, [tauri])
+
+  const setSdlogMode = async (mode: 'disabled' | 'always' | 'armed') => {
+    if (!tauri) return
+    setSdlogBusy(true)
+    setSdlogError(null)
+    try {
+      const echoed = await invoke<number>('actuator_set_sdlog_mode', { mode })
+      setStatus((s) => ({ ...s, sdlog_mode: echoed }))
+    } catch (e) {
+      setSdlogError(String(e))
+    } finally {
+      setSdlogBusy(false)
+    }
+  }
+
+  const requestLogs = async () => {
+    if (!tauri) return
+    setLogsBusy(true)
+    setLogsError(null)
+    try {
+      await invoke('actuator_logs_request_list')
+    } catch (e) {
+      setLogsBusy(false)
+      setLogsError(String(e))
+    }
+  }
+
+  const downloadLog = async (id: number, size: number) => {
+    if (!tauri) return
+    setLogsBusy(true)
+    setLogsError(null)
+    try {
+      await invoke('actuator_logs_download', { id, size })
+    } catch (e) {
+      setLogsBusy(false)
+      setLogsError(String(e))
+    }
+  }
+
+  const cancelLogs = async () => {
+    if (!tauri) return
+    try {
+      await invoke('actuator_logs_cancel')
+    } catch {
+      /* not connected */
+    }
+    setLogsBusy(false)
+  }
+
+  const toggleRecorder = async () => {
+    if (!tauri) return
+    try {
+      if (recording) {
+        await invoke('actuator_recorder_stop')
+        setRecording(false)
+      } else {
+        await invoke('actuator_recorder_start')
+        setRecording(true)
+      }
+    } catch (e) {
+      setLogsError(String(e))
+    }
+  }
 
   const pushValues = useCallback(
     (next: number[]) => {
@@ -1038,6 +1205,137 @@ export function ActuatorApp() {
             Every ACTUATOR_TEST goes out over this serial link to the real PX4
             (the main GCS keeps its own link — e.g. UDP SITL).
           </div>
+        </div>
+        {/* On-board SD-card log (features 1–3): set SDLOG_MODE over the serial
+         * target, list/download the FC's SD logs, and toggle a tlog recorder
+         * of every message received on the serial target link. */}
+        <div className="card">
+          <h3>On-board log</h3>
+          <div className="row">
+            <span className="text-muted">SDLOG_MODE</span>
+            <span className="mono">
+              {!status.target_connected
+                ? 'no target'
+                : status.sdlog_mode === 0
+                  ? 'disabled'
+                  : status.sdlog_mode === 1
+                    ? 'always'
+                    : status.sdlog_mode === 2
+                      ? 'armed only'
+                      : status.sdlog_mode == null
+                        ? 'unknown'
+                        : String(status.sdlog_mode)}
+            </span>
+          </div>
+          <div className="btn-row" style={{ marginTop: 4 }}>
+            {(['disabled', 'always', 'armed'] as const).map((m) => (
+              <button
+                key={m}
+                className={`mode-btn ${
+                  status.sdlog_mode === (m === 'disabled' ? 0 : m === 'always' ? 1 : 2)
+                    ? 'active'
+                    : ''
+                }`}
+                disabled={!status.target_connected || sdlogBusy}
+                onClick={() => void setSdlogMode(m)}
+                title={`Write SDLOG_MODE=${m === 'disabled' ? 0 : m === 'always' ? 1 : 2}`}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+          {sdlogError && (
+            <div className="estop-note" role="alert" style={{ color: 'var(--mg-error)' }}>
+              {sdlogError}
+            </div>
+          )}
+          <div className="estop-note" style={{ marginTop: 4 }}>
+            1 = always (a bench runs disarmed, so 'armed only' would not log).
+          </div>
+
+          <div className="row" style={{ marginTop: 8 }}>
+            <span className="text-muted">SD logs</span>
+            <span className="mono">{logEntries.length}</span>
+          </div>
+          <div className="btn-row" style={{ marginTop: 4 }}>
+            <button
+              className="mode-btn"
+              onClick={() => void requestLogs()}
+              disabled={!status.target_connected || logsBusy}
+            >
+              Refresh list
+            </button>
+            {logsBusy && (
+              <button className="mode-btn" onClick={() => void cancelLogs()}>
+                Cancel
+              </button>
+            )}
+          </div>
+          {logsError && (
+            <div className="estop-note" role="alert" style={{ color: 'var(--mg-error)' }}>
+              {logsError}
+            </div>
+          )}
+          <ul className="log-list" style={{ marginTop: 4 }}>
+            {logEntries.map((entry) => {
+              const dl = logDownloads.get(entry.id)
+              const pct = dl
+                ? Math.min(100, Math.round((dl.fetched / Math.max(1, dl.total)) * 100))
+                : 0
+              const date =
+                entry.time_utc > 0
+                  ? new Date(entry.time_utc * 1000).toISOString().slice(0, 16).replace('T', ' ')
+                  : '—'
+              return (
+                <li key={entry.id} className="row" style={{ gap: 4 }}>
+                  <span className="mono text-muted">#{entry.id}</span>
+                  <span className="mono text-muted" style={{ flex: 1 }}>
+                    {date}
+                  </span>
+                  <span className="mono">{(entry.size / 1024 / 1024).toFixed(1)} MB</span>
+                  {dl?.path ? (
+                    <span className="mono text-ok">saved</span>
+                  ) : (
+                    <button
+                      className="mode-btn"
+                      onClick={() => void downloadLog(entry.id, entry.size)}
+                      disabled={logsBusy}
+                    >
+                      Download
+                    </button>
+                  )}
+                  {dl && !dl.path && (
+                    <span className="log-progress" style={{ marginLeft: 'auto' }}>
+                      <span style={{ width: `${pct}%` }} />
+                    </span>
+                  )}
+                </li>
+              )
+            })}
+            {logEntries.length === 0 && !logsBusy && (
+              <li className="estop-note">No logs listed yet — press Refresh list.</li>
+            )}
+          </ul>
+
+          <div className="row" style={{ marginTop: 8 }}>
+            <span className="text-muted">Record messages</span>
+            <span className="mono">
+              {recording ? `${recorderFrames} frames` : 'stopped'}
+            </span>
+          </div>
+          <button
+            className={`mode-btn ${recording ? 'active' : ''}`}
+            style={{ width: '100%', marginTop: 4 }}
+            onClick={() => void toggleRecorder()}
+            disabled={!status.target_connected}
+          >
+            {recording ? 'Stop recording' : 'Record received messages'}
+          </button>
+          {recorderDir && (
+            <div className="estop-note" style={{ marginTop: 4 }}>
+              {recording ? 'Recording to' : 'Last session'} {recorderDir}
+            </div>
+          )}
         </div>
         <div className="card">
           <div className="row">
