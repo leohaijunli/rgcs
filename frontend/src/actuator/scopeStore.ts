@@ -72,6 +72,15 @@ const DEFS: SignalDef[] = [
   ...perMotor('fwd.cmd', '', 'cmd', '%', 'Sent cmd', DASH_CMD, false),
   ...perMotor('fc.servo', '', 'cmd', 'µs', 'FC servo', DASH_FC, true),
   {
+    id: 'mag.raw_total',
+    group: 'mag',
+    label: '|B| raw',
+    unit: 'nT',
+    motor: null,
+    dash: DASH_FC,
+    defaultOn: true,
+  },
+  {
     id: 'mag.cal_total',
     group: 'mag',
     label: '|B|',
@@ -136,7 +145,7 @@ export const LIST_GROUPS: ListGroup[] = [
   {
     key: 'mag',
     title: 'Total field |B| (nT)',
-    ids: ['mag.cal_total'],
+    ids: ['mag.raw_total', 'mag.cal_total'],
     emptyHint: (c) =>
       c.targetConnected ? 'Waiting for HIGHRES_IMU…' : 'Connect the PX4 serial link.',
   },

@@ -175,9 +175,12 @@ impl<S: RpmSource> MotorTestSession<S> {
         }
         let started = self.started_at.unwrap_or(now);
         let dt = now.duration_since(started).as_secs_f64();
-        let mut out = Vec::with_capacity(self.source.motor_count());
-        for motor in 0..self.source.motor_count() {
-            if let Some(target) = self.source.value(dt, motor) {
+        // Read every motor from the same tick snapshot (forward mode must
+        // drive all four from one SITL sample).
+        let targets = self.source.values(dt);
+        let mut out = Vec::with_capacity(targets.len());
+        for (motor, target) in targets.into_iter().enumerate() {
+            if let Some(target) = target {
                 let prev = self.last_values[motor];
                 let value = self.interlock.clamp(prev, target);
                 self.last_values[motor] = value;

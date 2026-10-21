@@ -24,12 +24,15 @@ use maggcs_core::motor_test::scope::{self, ScopeBus};
 use maggcs_core::motor_test::service::{MotorTestCommand, MotorTestEvent, MotorTestService};
 use maggcs_core::motor_test::source::ForwardSlot;
 use maggcs_core::motor_test::{SessionState, DEFAULT_TICK_HZ};
-use maggcs_core::params::codec::{decode_param_id, encode_param_id, IntEncoding};
+use maggcs_core::params::codec::{encode_param_id, IntEncoding};
 use maggcs_core::params::model::{ParamType, ParamValue};
 
 /// Maximum time to observe the release pass before closing an actuator link.
 const MOTOR_TEST_STOP_TIMEOUT: Duration = Duration::from_secs(2);
 const DEFAULT_MOTOR_TEST_TARGET_SYSTEM_ID: u8 = 1;
+/// How old the last target-FC heartbeat may be before the window shows the
+/// serial target as "heartbeat lost". PX4 streams HEARTBEAT at 1 Hz.
+const TARGET_HEARTBEAT_STALE: Duration = Duration::from_secs(3);
 
 use crate::motor_test_state::limits_for_load;
 use crate::motor_test_state::{
@@ -43,6 +46,9 @@ use crate::state::AppState;
 pub struct ActuatorStatus {
     pub connected: bool,
     pub fc_alive: bool,
+    /// The serial target PX4's heartbeat is fresh (`false` when no target is
+    /// connected). Distinct from `fc_alive`, which describes the primary link.
+    pub target_fc_alive: bool,
     /// The one hard interlock: sending is only ever allowed while disarmed.
     pub armed: bool,
     /// Raw PX4 custom-mode bitmask (kept for diagnostics).
@@ -74,8 +80,14 @@ pub struct ActuatorStatus {
     pub sdlog_mode: Option<f32>,
     /// Normalized SITL servo outputs 1–4 (the forward INPUT), latest sample.
     pub input_values: Vec<f32>,
+    /// The SITL's raw `SERVO_OUTPUT_RAW` 1–4 in µs (what `input_values` was
+    /// normalized from). Empty when no SITL link is attached.
+    pub input_pwm: Vec<u16>,
     /// Values actually sent to the FC as ACTUATOR_TEST (the OUTPUT), 0 when idle.
     pub output_values: Vec<f32>,
+    /// The target FC's actual `SERVO_OUTPUT_RAW` main outputs 1–4 in µs (what
+    /// PX4 drives), from the serial telemetry tap; `None` = no sample yet.
+    pub fc_output_pwm: Option<[u16; 4]>,
 }
 
 /// Open the motor-test window, or focus it if it already exists.
@@ -499,15 +511,20 @@ pub async fn actuator_connect_target(
         stream_requests.abort();
     }
     attach_motor_telemetry(&app, telemetry_handle.clone(), target_system_id);
-    // Read COM_MOT_TEST_EN from the PX4 (PX4 denies ACTUATOR_TEST while it is
-    // not 1). The read is spawned so a quiet FC never stalls the connect.
+    // PX4 denies ACTUATOR_TEST while COM_MOT_TEST_EN != 1, so enable it
+    // automatically (a no-op when already 1). Only write after a successful
+    // read proves the parameter exists on this FC, and never block connect.
     let slot = com_mot_test_en;
     let h = telemetry_handle.clone();
     let task = tauri::async_runtime::spawn(async move {
-        if let Some(v) = read_param(&h, target_system_id, "COM_MOT_TEST_EN").await {
-            if let Ok(mut guard) = slot.lock() {
-                *guard = Some(v);
+        let mut value = read_param(&h, target_system_id, "COM_MOT_TEST_EN").await;
+        if value.map(|v| v != 1.0).unwrap_or(false) {
+            if let Ok(echoed) = write_param_int(&h, target_system_id, "COM_MOT_TEST_EN", 1).await {
+                value = Some(echoed);
             }
+        }
+        if let (Some(v), Ok(mut guard)) = (value, slot.lock()) {
+            *guard = Some(v);
         }
     });
     if let Some(target) = state.motor_test.target.lock().as_mut() {
@@ -630,6 +647,36 @@ pub async fn actuator_start_forward(
         .map_err(|e| e.to_string())
 }
 
+/// Standard PPM range of `SERVO_OUTPUT_RAW`: 1000 µs = 0 %, 2000 µs = 100 %.
+const PWM_MIN_US: f32 = 1000.0;
+const PWM_MAX_US: f32 = 2000.0;
+
+/// Map a `SERVO_OUTPUT_RAW` value to 0..=1. Values outside the PPM range are
+/// clamped, so a non-standard output can never forward more than 100 %.
+fn pwm_to_norm(pwm: u16) -> f32 {
+    ((f32::from(pwm) - PWM_MIN_US) / (PWM_MAX_US - PWM_MIN_US)).clamp(0.0, 1.0)
+}
+
+#[cfg(test)]
+mod ppm_tests {
+    use super::pwm_to_norm;
+
+    #[test]
+    fn servo_pwm_maps_1000_to_2000_onto_zero_to_one() {
+        assert_eq!(pwm_to_norm(1000), 0.0);
+        assert_eq!(pwm_to_norm(1500), 0.5);
+        assert_eq!(pwm_to_norm(2000), 1.0);
+    }
+
+    #[test]
+    fn out_of_range_pwm_is_clamped_not_forwarded_above_100_percent() {
+        assert_eq!(pwm_to_norm(0), 0.0);
+        assert_eq!(pwm_to_norm(999), 0.0);
+        assert_eq!(pwm_to_norm(2001), 1.0);
+        assert_eq!(pwm_to_norm(u16::MAX), 1.0);
+    }
+}
+
 /// Tap task: SITL `SERVO_OUTPUT_RAW` → normalized 0..=1 into the forward
 /// slot (latest value wins; the tap never blocks the sender).
 async fn run_sitl_tap(
@@ -646,13 +693,19 @@ async fn run_sitl_tap(
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_secs_f64())
                         .unwrap_or(0.0);
-                    let pwm_to_norm = |pwm: u16| (((pwm as f32) - 1000.0) / 1000.0).clamp(0.0, 1.0);
                     if let Ok(mut st) = slot.lock() {
                         st.values = [
                             pwm_to_norm(servo.servo1_raw),
                             pwm_to_norm(servo.servo2_raw),
                             pwm_to_norm(servo.servo3_raw),
                             pwm_to_norm(servo.servo4_raw),
+                        ]
+                        .to_vec();
+                        st.raw_pwm = [
+                            servo.servo1_raw,
+                            servo.servo2_raw,
+                            servo.servo3_raw,
+                            servo.servo4_raw,
                         ]
                         .to_vec();
                         st.last_update_s = Some(now);
@@ -725,23 +778,19 @@ async fn read_param(handle: &ConnectionHandle, target_system_id: u8, name: &str)
     .unwrap_or(None)
 }
 
-/// Write one `INT32` parameter to the FC with `PARAM_SET` (byte-concat PX4
-/// encoding) and wait for the FC's `PARAM_VALUE` echo. Returns the echoed
-/// value, or `None` on timeout / a closed link.
-///
-/// `MAV_PARAM_TYPE_INT32` carries the PX4 `SDLOG_MODE` (0/1/2) and the
-/// parameter cache uses the same byte-concat codec, so the written bits round
-/// trip exactly.
-async fn write_param(
+/// Write one `INT32` parameter over the target link and confirm it by reading
+/// it back. PX4 does not broadcast a `PARAM_VALUE` in reply to `PARAM_SET` (it
+/// only answers `PARAM_REQUEST_READ`), so the read-back is the only
+/// confirmation. Four tries so a busy serial link does not turn a successful
+/// write into a spurious failure; the confirmed value is returned.
+async fn write_param_int(
     handle: &ConnectionHandle,
     target_system_id: u8,
     name: &str,
-    value: i64,
-) -> Option<f32> {
-    // Subscribe before sending and accept only the configured FC's reply.
-    let mut events =
-        handle.subscribe_route(MessageRoute::messages(&[22]).from(target_system_id, 1));
-    let wire = maggcs_core::params::codec::encode(ParamValue::Int(value), IntEncoding::ByteConcat);
+    value: i32,
+) -> Result<f32, String> {
+    let wire =
+        maggcs_core::params::codec::encode(ParamValue::Int(value as i64), IntEncoding::ByteConcat);
     let msg = MavMessage::PARAM_SET(::mavlink::common::PARAM_SET_DATA {
         target_system: target_system_id,
         target_component: 1,
@@ -750,26 +799,29 @@ async fn write_param(
         param_type: ParamType::I32.to_mav(),
     });
     if handle.send(msg).await.is_err() {
-        return None;
+        return Err(format!("{name} write failed: link down"));
     }
-    tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            match events.recv().await {
-                Ok(ConnectionEvent::Message(env)) => {
-                    if let MavMessage::PARAM_VALUE(p) = &env.message {
-                        if decode_param_id(&p.param_id) == name {
-                            return Some(p.param_value);
-                        }
-                    }
-                }
-                Ok(_) => {}
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+    let mut confirmed = None;
+    for _ in 0..4 {
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        if let Some(v) = read_param(handle, target_system_id, name).await {
+            // The wire f32 for an INT32 is the integer's bit pattern
+            // (byte-concat); compare the decoded integer.
+            let got = match maggcs_core::params::codec::decode(
+                v,
+                ParamType::I32,
+                IntEncoding::ByteConcat,
+            ) {
+                ParamValue::Int(i) => i as i32,
+                _ => -1,
+            };
+            confirmed = Some(v);
+            if got == value {
+                break;
             }
         }
-    })
-    .await
-    .unwrap_or(None)
+    }
+    confirmed.ok_or_else(|| format!("no reply to the {name} read (timeout or link down)"))
 }
 
 /// Toggle or set the FC's on-board SD-card log mode over the motor test's
@@ -809,9 +861,41 @@ pub async fn actuator_set_sdlog_mode(
         })
         .ok_or_else(|| "no serial PX4 target — connect it first".to_string())?;
     let (handle, target_system_id, slot) = target;
-    let echoed = write_param(&handle, target_system_id, "SDLOG_MODE", value)
-        .await
-        .ok_or_else(|| "no reply to the SDLOG_MODE write (timeout or link down)".to_string())?;
+    let echoed = write_param_int(&handle, target_system_id, "SDLOG_MODE", value as i32).await?;
+    if let Ok(mut guard) = slot.lock() {
+        *guard = Some(echoed);
+    }
+    Ok(echoed)
+}
+
+/// Enable or disable `COM_MOT_TEST_EN` on the target PX4. PX4 refuses
+/// `MAV_CMD_ACTUATOR_TEST` while this is not 1, so the window enables it
+/// automatically on connect; this command lets the operator flip it back.
+#[tauri::command]
+pub async fn actuator_set_mot_test_en(
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<f32, String> {
+    let (handle, target_system_id, slot) = state
+        .motor_test
+        .target
+        .lock()
+        .as_ref()
+        .map(|runtime| {
+            (
+                runtime.target.handle.clone(),
+                runtime.target.target_system_id,
+                runtime.target.com_mot_test_en.clone(),
+            )
+        })
+        .ok_or_else(|| "no serial PX4 target — connect it first".to_string())?;
+    let echoed = write_param_int(
+        &handle,
+        target_system_id,
+        "COM_MOT_TEST_EN",
+        i32::from(enabled),
+    )
+    .await?;
     if let Ok(mut guard) = slot.lock() {
         *guard = Some(echoed);
     }
@@ -1285,6 +1369,15 @@ impl AppState {
             .filter(|heartbeat| {
                 target_system_id.is_none_or(|system_id| heartbeat.system_id == system_id)
             });
+        // The serial target's heartbeat age, so the window can show the link
+        // it actually commands instead of only the primary link.
+        let target_fc_alive = self
+            .motor_test
+            .telemetry
+            .lock()
+            .as_ref()
+            .and_then(|t| t.last_heartbeat_at)
+            .is_some_and(|at| at.elapsed() <= TARGET_HEARTBEAT_STALE);
         let (armed, custom_mode, autopilot_px4, mode_label) = match target_hb {
             Some(hb) => (
                 hb.base_mode.safety_armed,
@@ -1338,6 +1431,15 @@ impl AppState {
             .as_ref()
             .and_then(|link| link.slot.lock().ok().map(|st| st.values.clone()))
             .unwrap_or_default();
+        // The same sample's raw microseconds, so the window shows the exact
+        // source value the percentage came from.
+        let input_pwm = self
+            .motor_test
+            .sitl
+            .lock()
+            .as_ref()
+            .and_then(|link| link.slot.lock().ok().map(|st| st.raw_pwm.clone()))
+            .unwrap_or_default();
         // The OUTPUT: the values the session sent to the FC as ACTUATOR_TEST.
         let output_values = self
             .motor_test
@@ -1346,6 +1448,14 @@ impl AppState {
             .as_ref()
             .map(|r| (*r.output.borrow()).clone())
             .unwrap_or_default();
+        // The target FC's actual SERVO_OUTPUT_RAW (what PX4 drives), captured
+        // by the serial telemetry tap.
+        let fc_output_pwm = self
+            .motor_test
+            .telemetry
+            .lock()
+            .as_ref()
+            .and_then(|t| t.fc_servo_pwm);
         let (target_connected, target_endpoint, target_system_id, com_mot_test_en, sdlog_mode) = {
             let guard = self.motor_test.target.lock();
             match guard.as_ref() {
@@ -1365,6 +1475,7 @@ impl AppState {
                 .map(|l| l.link_state == maggcs_core::mavlink::LinkState::Connected)
                 .unwrap_or(false),
             fc_alive: link.as_ref().map(|l| l.fc_alive).unwrap_or(false),
+            target_fc_alive,
             armed,
             custom_mode,
             autopilot_px4,
@@ -1379,9 +1490,11 @@ impl AppState {
             target_endpoint,
             target_system_id,
             input_values,
+            input_pwm,
             output_values,
             com_mot_test_en,
             sdlog_mode,
+            fc_output_pwm,
         }
     }
 }
@@ -1448,6 +1561,8 @@ pub fn attach_motor_telemetry(
         calib: state.calibration.get(),
         last_mag_total_nt: None,
         hb: None,
+        fc_servo_pwm: None,
+        last_heartbeat_at: None,
     });
     let tap_app = app.clone();
     let telemetry_task =
@@ -1501,6 +1616,7 @@ async fn run_motor_telemetry_tap(
                         if let Ok(hb) = maggcs_core::telemetry::Heartbeat::try_from(&*env) {
                             telemetry.hb = Some(hb);
                         }
+                        telemetry.last_heartbeat_at = Some(std::time::Instant::now());
                     }
                     MavMessage::HIGHRES_IMU(imu) => {
                         // HIGHRES_IMU mag fields are gauss on the wire; the
@@ -1537,6 +1653,12 @@ async fn run_motor_telemetry_tap(
                     MavMessage::SERVO_OUTPUT_RAW(servo) => {
                         // What the target FC reports on its main outputs —
                         // the serial-side counterpart of the SITL servos.
+                        telemetry.fc_servo_pwm = Some([
+                            servo.servo1_raw,
+                            servo.servo2_raw,
+                            servo.servo3_raw,
+                            servo.servo4_raw,
+                        ]);
                         bus.push_all(scope::servo_samples(
                             "fc",
                             now_epoch_s(),

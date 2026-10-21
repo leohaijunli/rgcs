@@ -91,6 +91,8 @@ interface ActuatorStatus {
   sitl_feed_age_s: number | null
   /** The motor test's own target link (real PX4, serial). */
   target_connected: boolean
+  /** The serial target PX4's heartbeat is fresh (not the primary link). */
+  target_fc_alive: boolean
   target_endpoint: string | null
   target_system_id: number | null
   /** COM_MOT_TEST_EN read from the target PX4 (null = unknown). */
@@ -100,8 +102,13 @@ interface ActuatorStatus {
   sdlog_mode: number | null
   /** Normalized SITL servo outputs 1–4 (the forward INPUT). */
   input_values: number[]
+  /** The SITL's raw SERVO_OUTPUT_RAW 1–4 in µs (what input_values came from). */
+  input_pwm: number[]
   /** Values sent to the FC as ACTUATOR_TEST (the OUTPUT), 0 when idle. */
   output_values: number[]
+  /** The target FC's actual SERVO_OUTPUT_RAW main outputs 1–4 in µs (what
+   * PX4 drives), from the serial telemetry tap; null = no sample yet. */
+  fc_output_pwm: number[] | null
 }
 
 const IDLE: ActuatorStatus = {
@@ -118,23 +125,22 @@ const IDLE: ActuatorStatus = {
   sitl_endpoint: null,
   sitl_feed_age_s: null,
   target_connected: false,
+  target_fc_alive: false,
   target_endpoint: null,
   target_system_id: null,
   com_mot_test_en: null,
   sdlog_mode: null,
   input_values: [],
+  input_pwm: [],
   output_values: [],
+  fc_output_pwm: null,
 }
-
-/** Middle column content: the control cards, or the signal scope. */
-type MidView = 'controls' | 'scope'
 
 export function ActuatorApp() {
   const tauri = isTauri()
   // Collect scope samples for the window's whole lifetime, so the history
-  // is there when the operator switches to the Scope tab.
+  // is there when the operator looks at the scope below the controls.
   useScopeFeed()
-  const [view, setView] = useState<MidView>('controls')
   const [status, setStatus] = useState<ActuatorStatus>(IDLE)
   const [load, setLoad] = useState<Load>('none')
   const [source, setSource] = useState<Source>('manual')
@@ -754,6 +760,7 @@ export function ActuatorApp() {
           <div className="motor-bars" style={{ marginTop: 6 }}>
             {Array.from({ length: MOTOR_COUNT }, (_, i) => {
               const v = status.input_values[i] ?? 0
+              const us = status.input_pwm[i]
               return (
                 <div key={i} className="motor-bar">
                   <span className="mono motor-label">M{i + 1}</span>
@@ -761,12 +768,16 @@ export function ActuatorApp() {
                     <div className="bar-fill input" style={{ width: `${v * 100}%` }} />
                   </div>
                   <span className="mono motor-value">{(v * 100).toFixed(0)}%</span>
+                  <span className="mono motor-pwm" title="SITL SERVO_OUTPUT_RAW">
+                    {us != null ? `${us} µs` : '—'}
+                  </span>
                 </div>
               )
             })}
           </div>
           <div className="estop-note" style={{ marginTop: 4 }}>
-            SITL main outputs 1–4, normalized 0..1 → the forward slot.
+            SITL SERVO_OUTPUT_RAW 1–4; % = (µs − 1000) / 1000 (1000 µs = 0%,
+            2000 µs = 100%) → the forward slot.
           </div>
         </div>
       </aside>
@@ -799,28 +810,9 @@ export function ActuatorApp() {
                 STOP
               </button>
             )}
-            <button
-              className={`mode-btn view-tab ${view === 'controls' ? 'active' : ''}`}
-              onClick={() => setView('controls')}
-            >
-              Controls
-            </button>
-            <button
-              className={`mode-btn view-tab ${view === 'scope' ? 'active' : ''}`}
-              onClick={() => setView('scope')}
-            >
-              Scope
-            </button>
           </span>
         </div>
-        {view === 'scope' && (
-          <SignalScope
-            sitlConnected={status.sitl_connected}
-            targetConnected={status.target_connected}
-            calLoaded={calLoaded}
-          />
-        )}
-        <div className="controls-grid" style={view === 'scope' ? { display: 'none' } : undefined}>
+        <div className="controls-grid">
           <div className="card">
             <h3>Prop load</h3>
             <div className="btn-row">
@@ -1069,6 +1061,11 @@ export function ActuatorApp() {
           </div>
         </div>
       </div>
+      <SignalScope
+        sitlConnected={status.sitl_connected}
+        targetConnected={status.target_connected}
+        calLoaded={calLoaded}
+      />
       </main>
 
       {/* Right: the actuator output to the real PX4 (serial). */}
@@ -1144,6 +1141,24 @@ export function ActuatorApp() {
             </span>
           </div>
           <div className="row">
+            <span className="text-muted">Target heartbeat</span>
+            <span
+              className={`mono ${
+                !status.target_connected
+                  ? ''
+                  : status.target_fc_alive
+                    ? 'text-ok'
+                    : 'text-error'
+              }`}
+            >
+              {!status.target_connected
+                ? '—'
+                : status.target_fc_alive
+                  ? 'alive'
+                  : 'lost'}
+            </span>
+          </div>
+          <div className="row">
             <span className="text-muted">Primary GCS link</span>
             <span className="mono">{status.fc_alive ? 'heartbeat alive' : 'heartbeat lost'}</span>
           </div>
@@ -1190,20 +1205,27 @@ export function ActuatorApp() {
           <div className="motor-bars" style={{ marginTop: 6 }}>
             {Array.from({ length: MOTOR_COUNT }, (_, i) => {
               const v = status.output_values[i] ?? 0
+              const actualUs = status.fc_output_pwm?.[i]
               return (
                 <div key={i} className="motor-bar">
                   <span className="mono motor-label">M{i + 1}</span>
                   <div className="bar-track">
                     <div className="bar-fill output" style={{ width: `${v * 100}%` }} />
                   </div>
-                  <span className="mono motor-value">{(v * 100).toFixed(0)}%</span>
+                  <span className="mono motor-value" title={`${(v * 100).toFixed(1)}%`}>
+                    {(v * 100).toFixed(0)}%
+                  </span>
+                  <span className="mono motor-pwm" title="Actual PX4 SERVO_OUTPUT_RAW">
+                    {actualUs != null ? `${actualUs} µs` : '—'}
+                  </span>
                 </div>
               )
             })}
           </div>
           <div className="estop-note" style={{ marginTop: 4 }}>
-            Every ACTUATOR_TEST goes out over this serial link to the real PX4
-            (the main GCS keeps its own link — e.g. UDP SITL).
+            Every ACTUATOR_TEST goes out over this serial link to the real PX4.
+            % = the sent command; µs = PX4's actual SERVO_OUTPUT_RAW (not a
+            linear mapping of the command).
           </div>
         </div>
         {/* On-board SD-card log (features 1–3): set SDLOG_MODE over the serial
@@ -1329,7 +1351,7 @@ export function ActuatorApp() {
             onClick={() => void toggleRecorder()}
             disabled={!status.target_connected}
           >
-            {recording ? 'Stop recording' : 'Record received messages'}
+            {recording ? 'Logger off' : 'Logger on'}
           </button>
           {recorderDir && (
             <div className="estop-note" style={{ marginTop: 4 }}>
@@ -1407,11 +1429,17 @@ export function ActuatorApp() {
           )}
         </div>
 
-        <MotTestEnGate motTestEn={motTestEn} />
+        <MotTestEnGate
+          motTestEn={
+            status.com_mot_test_en != null
+              ? status.com_mot_test_en !== 0
+              : motTestEn
+          }
+        />
 
         <div className="estop-note">
-          Tests run while the FC is disarmed; PX4 denies ACTUATOR_TEST otherwise
-          (enable COM_MOT_TEST_EN=1 on the FC).
+          Tests run while the FC is disarmed; PX4 denies ACTUATOR_TEST otherwise.
+          COM_MOT_TEST_EN=1 is set automatically when the target connects.
         </div>
       </aside>
     </div>
@@ -1429,8 +1457,8 @@ function MotTestEnGate({ motTestEn }: { motTestEn: boolean | null }) {
   return (
     <div className="mot-en-gate">
       <span>
-        COM_MOT_TEST_EN=0 — the FC rejects every motor-test command. Set it to
-        1 in Parameters (reboot required after Apply).
+        COM_MOT_TEST_EN=0 — the FC rejects every motor-test command. Automatic
+        enable did not take; set it to 1 in Parameters (reboot after Apply).
       </span>
       <button className="mode-btn" style={{ width: '100%', marginTop: 6 }} onClick={openParams}>
         Open Parameters

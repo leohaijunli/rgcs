@@ -225,9 +225,19 @@ async fn run(
             stop_event = Some(reason);
         }
 
+        // Enqueue a tick's frames back-to-back so PX4 applies all four
+        // `ACTUATOR_TEST` functions in one consumer pass (the motors must move
+        // together). Only the stop/release pass waits for the transport write,
+        // so `stop_and_wait` still guarantees the release frames hit the wire.
+        let stopping = session.state() == SessionState::Stopping;
         let mut send_succeeded = true;
         for frame in outgoing {
-            if handle.send_confirmed(frame).await.is_err() {
+            let result = if stopping {
+                handle.send_confirmed(frame).await
+            } else {
+                handle.send(frame).await
+            };
+            if result.is_err() {
                 send_succeeded = false;
                 break;
             }

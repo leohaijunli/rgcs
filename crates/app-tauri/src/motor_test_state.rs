@@ -255,6 +255,13 @@ pub struct MotorTelemetry {
     /// The target FC's latest heartbeat (armed / mode) decoded from the serial
     /// link the motor test sends to — the state that gates the START button.
     pub hb: Option<maggcs_core::telemetry::Heartbeat>,
+    /// The target FC's latest `SERVO_OUTPUT_RAW` main outputs 1–4 in µs — what
+    /// PX4 actually drives (0 = output not driven), shown alongside the
+    /// normalized command in the OUTPUT panel.
+    pub fc_servo_pwm: Option<[u16; 4]>,
+    /// When the last target-FC heartbeat arrived. Unlike `hb` (the decoded
+    /// state) this lets the status poll tell "alive now" from "was alive once".
+    pub last_heartbeat_at: Option<std::time::Instant>,
 }
 
 /// Process-wide holder; `Default` = nothing running. `last_state` mirrors the

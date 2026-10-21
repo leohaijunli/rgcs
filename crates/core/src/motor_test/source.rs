@@ -33,6 +33,14 @@ pub trait RpmSource: Send {
     /// Target value for `motor` (0-based) at session-relative time `t_s`.
     /// `None` = no command this tick for this motor.
     fn value(&mut self, t_s: f64, motor: usize) -> Option<f32>;
+    /// All motors' targets for one tick. Sources backed by a shared slot
+    /// override this to read the slot **once**, so every motor in a tick is
+    /// driven from the same sample (forwarding must not mix two SITL frames).
+    fn values(&mut self, t_s: f64) -> Vec<Option<f32>> {
+        (0..self.motor_count())
+            .map(|motor| self.value(t_s, motor))
+            .collect()
+    }
 }
 
 /// Manual mode: the latest slider value wins (values merge, never queue —
@@ -184,6 +192,14 @@ impl RpmSource for AnySource {
             AnySource::Forward(f) => f.value(t_s, motor),
         }
     }
+
+    fn values(&mut self, t_s: f64) -> Vec<Option<f32>> {
+        match self {
+            AnySource::Manual(m) => m.values(t_s),
+            AnySource::Preset(p) => p.values(t_s),
+            AnySource::Forward(f) => f.values(t_s),
+        }
+    }
 }
 
 /// Slot freshness bound: a SITL feed that goes quiet for this long counts
@@ -209,6 +225,9 @@ pub type ForwardSlot = std::sync::Arc<std::sync::Mutex<ForwardState>>;
 pub struct ForwardState {
     /// Last value per motor, normalized 0..=1.
     pub values: Vec<f32>,
+    /// Last raw `SERVO_OUTPUT_RAW` microseconds per motor, untouched, so the
+    /// window can show the exact source value (not a re-derived estimate).
+    pub raw_pwm: Vec<u16>,
     /// Seconds since epoch of the last tap update; `None` before the first.
     pub last_update_s: Option<f64>,
 }
@@ -217,6 +236,7 @@ impl ForwardState {
     pub fn new(motors: usize) -> Self {
         Self {
             values: vec![0.0; motors],
+            raw_pwm: vec![0; motors],
             last_update_s: None,
         }
     }
@@ -245,23 +265,31 @@ impl RpmSource for ForwardSource {
         self.motors
     }
 
-    fn value(&mut self, _t_s: f64, motor: usize) -> Option<f32> {
+    fn value(&mut self, t_s: f64, motor: usize) -> Option<f32> {
+        self.values(t_s).into_iter().nth(motor).flatten()
+    }
+
+    /// One lock per tick: the four motors must all be forwarded from the
+    /// same SITL `SERVO_OUTPUT_RAW` sample, never a mix of two frames.
+    fn values(&mut self, _t_s: f64) -> Vec<Option<f32>> {
         let now = now_epoch_s();
         let Ok(guard) = self.slot.lock() else {
-            return Some(0.0); // poisoned lock: idle, never spin
+            return vec![Some(0.0); self.motors]; // poisoned lock: idle, never spin
         };
         let fresh = guard
             .last_update_s
             .is_some_and(|t| t + FORWARD_STALE_AFTER_S >= now);
         if fresh {
-            return guard.values.get(motor).copied();
+            return (0..self.motors)
+                .map(|motor| guard.values.get(motor).copied())
+                .collect();
         }
         // No sample yet (or the feed went stale) within the start grace:
         // forward idle so a just-started session survives the first taps.
         if now < self.grace_until_s {
-            return Some(0.0);
+            return vec![Some(0.0); self.motors];
         }
-        None // exhausted: the session stops itself
+        vec![None; self.motors] // exhausted: the session stops itself
     }
 }
 
@@ -415,6 +443,23 @@ mod tests {
             (FORWARD_START_GRACE_S * 1000.0) as u64 + 100,
         ));
         assert_eq!(s.value(0.0, 0), None, "stale feed: exhausted");
+    }
+
+    #[test]
+    fn forward_values_come_from_one_snapshot_for_all_motors() {
+        let slot = forward_slot(4);
+        {
+            let mut st = slot.lock().unwrap();
+            st.values = vec![0.25, 0.5, 0.75, 1.0];
+            st.last_update_s = Some(epoch_now());
+        }
+        let mut s = ForwardSource::new(slot, 4);
+        // One call = one slot lock, so a SITL frame arriving mid-tick cannot
+        // split the four motors across two samples.
+        assert_eq!(
+            s.values(0.0),
+            vec![Some(0.25), Some(0.5), Some(0.75), Some(1.0)]
+        );
     }
 
     /// Test-only: reach the slot behind a source.
