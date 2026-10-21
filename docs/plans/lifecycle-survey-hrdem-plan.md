@@ -110,7 +110,7 @@
 - **接线**(`stores/terrain.ts` `ensureTile` 重写):候选收集(⓪ config 手动覆盖 `terrain_override_dir` → 记住的/自动探测文件夹 discover → ① HRDEM session status)→ 新命令 `terrain_select`(core 解析器薄封装)→ Use 即加载(选中失败逐候选回退);`SuggestDownload` → store 新 `suggestDownload` 标志(芯片提示 GLO-30 入口)+ allowDialog 时目录对话框。原 4 步 firstSurface 优先链退役(`check-surface.mjs` 仍绿——`firstSurface` 工具保留供其它调用)。手动覆盖 = 目录选择动作写入 `AppConfig.terrain_override_dir`(新字段,serde default)——"覆盖动作记入配置"落地,重启仍生效。
 - **UI chip**(Layers ▸ Terrain):来源(HRDEM (NRCan)/LiDAR 1 m/GeoTIFF ~30 m)+ 分辨率 + 采集年代(超 `dem_max_age_years` 黄色 ⚠)+ 垂直基准 + 版本;PatternStep 的 drape 来源标签补 hrdem 分支(此前 hrdem 被误标 LiDAR)。i18n 5 新键(706 keys)。
 - **H10/H11 暂缓**(操作员 2026-10-21):issues O9/O10,状态表已划出。
-- 验证:core 716(source_select 9);clippy `-D warnings`、fmt;`tsc`、build、12 个 check、i18n 全绿。**chip 截图与 ensureTile 浏览器端回归留待主机内存恢复**(本轮宿主内存枯竭,Chromium 无法启动;逻辑面已由 resolver 单测与静态检查覆盖)。
+- 验证:core 716(source_select 9);clippy `-D warnings`、fmt;`tsc`、build、12 个 check、i18n 全绿。**浏览器回归已补(2026-10-21)**:`ensureTile` 经 `terrain_select` 解析器选中候选并加载(lidar/1 m/2018-06-01);chip 渲染 `LiDAR 1 m · 1 m · acquired 2018 ⚠ · CGVD2013 · DEM version …`(年代超 3 年阈值黄警),截图 `docs/screenshots/h6-chip.png`。
 
 #### PJ4 执行记录 (2026-10-20)
 
