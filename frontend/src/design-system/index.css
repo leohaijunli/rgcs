@@ -283,13 +283,15 @@ html.field-mode {
   font-size: 14px;
 }
 
+/* `!important`: the icon buttons carry an inline `minWidth: size` (32) — the
+ * field-mode floor is absolute and must beat it (U12 acceptance). */
 html.field-mode button,
 html.field-mode select,
 html.field-mode input,
 html.field-mode textarea,
 html.field-mode [role='button'] {
-  min-width: 44px;
-  min-height: 44px;
+  min-width: 44px !important;
+  min-height: 44px !important;
 }
 
 /* The arbitrary small text sizes are px-based and would ignore the rem bump:

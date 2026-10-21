@@ -17,8 +17,11 @@ export const useDevicesStore = create<DevicesState>((set) => ({
   load: async () => {
     try {
       const { invoke } = await import('@tauri-apps/api/core')
-      const devices = await invoke<SerialDeviceInfo[]>('enumerate_devices')
-      set({ devices, loaded: true })
+      // A shell that answers `null` (a failed scan, an older build) must not
+      // leave `devices` null: every consumer reads `.length` (RtkDrawer's
+      // effect blanks the whole window otherwise — found 2026-10-21).
+      const devices = await invoke<SerialDeviceInfo[] | null>('enumerate_devices')
+      set({ devices: Array.isArray(devices) ? devices : [], loaded: true })
     } catch {
       // Browser dev (no Tauri runtime): report empty.
       set({ devices: [], loaded: true })
@@ -40,7 +43,10 @@ export function startDeviceWatcher(): void {
     try {
       const { listen } = await import('@tauri-apps/api/event')
       await listen<SerialDeviceInfo[]>('devices_changed', (e) => {
-        useDevicesStore.setState({ devices: e.payload, loaded: true })
+        useDevicesStore.setState({
+          devices: Array.isArray(e.payload) ? e.payload : [],
+          loaded: true,
+        })
       })
     } catch {
       /* browser dev: no events */

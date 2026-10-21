@@ -60,8 +60,11 @@ export function IconButton({
     <button
       title={title}
       aria-label={title}
-      style={{ width: size, height: size }}
-      className={`flex items-center justify-center rounded transition-colors ${
+      style={{ width: size, height: size, minWidth: size }}
+      // `shrink-0`: under a narrow top bar a flex row must not squeeze an
+      // icon button below its own size — the target floor is a hard minimum
+      // (check-topbar asserts ≥32 px; issues O8).
+      className={`flex shrink-0 items-center justify-center rounded transition-colors ${
         active ? 'bg-accent text-accent-ink' : 'text-muted hover:bg-canvas hover:text-ink'
       } ${className}`}
       {...rest}

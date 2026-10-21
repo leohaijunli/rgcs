@@ -15,7 +15,9 @@ const BAUD_RATES = [38_400, 115_200, 230_400, 460_800, 921_600]
 
 export default function RtkDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { t } = useTranslation()
-  const devices = useDevicesStore((s) => s.devices)
+  // Defensive: a partially-initialised store must not crash the header
+  // (RtkDrawer is always mounted inside TopBar — found 2026-10-21).
+  const devices = useDevicesStore((s) => s.devices) ?? []
   const loadDevices = useDevicesStore((s) => s.load)
   const stats = useRtkStore((s) => s.stats)
   const foreign = useRtkStore((s) => s.foreign)

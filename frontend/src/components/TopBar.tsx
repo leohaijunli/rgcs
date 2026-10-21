@@ -333,35 +333,45 @@ export default function TopBar() {
 
   return (
     <header className="flex h-12 shrink-0 items-center gap-3 border-b border-line bg-panel px-3">
-      <div className="flex items-baseline gap-2">
-        <span className="text-lg font-semibold tracking-wide text-accent">{t('app.title')}</span>
+      {/* Everything left of the right cluster lives in one shrinkable,
+       * overflow-hidden wrapper (issues O8): at 1280 a long project name used
+       * to push the settings button off-screen. The name and the status text
+       * truncate first; the right cluster and the icon buttons never shrink. */}
+      {/* `overflow-hidden`: when the left content exceeds its share, the tabs
+       * must clip INSIDE this box rather than slide under the right cluster —
+       * a status pill painting over the last tab intercepted its clicks
+       * (found 2026-10-21). The right cluster never shrinks and stays whole. */}
+      <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
+        <div className="flex shrink-0 items-baseline gap-2">
+          <span className="text-lg font-semibold tracking-wide text-accent">{t('app.title')}</span>
+        </div>
+
+        {/* The open project (PJ3): a pill that opens the project home; the
+         * measurement type shows in the survey list (one registered kind). */}
+        <button
+          data-testid="project-pill"
+          onClick={() => setProjectOpen(true)}
+          title={project?.crs ?? t('project.title')}
+          className={`flex ${CONTROL} min-w-0 max-w-[120px] items-center gap-1.5 rounded border px-2.5 text-xs 2xl:max-w-[180px] ${
+            project ? 'border-line bg-canvas text-ink hover:bg-panel' : 'border-dashed border-line text-muted hover:text-ink'
+          }`}
+        >
+          <span className="truncate">{project ? project.name : t('project.noProject')}</span>
+        </button>
+
+        <Tabs
+          items={VIEWS.map((v) => ({
+            id: v,
+            label:
+              v === 'preflight' && badge !== null ? `${t(`nav.${v}`)} ${badge}` : t(`nav.${v}`),
+          }))}
+          active={view}
+          onChange={setView}
+          className="shrink-0 text-sm [&>button]:px-3 [&>button]:py-1.5"
+        />
       </div>
 
-      {/* The open project (PJ3): a pill that opens the project home; the
-       * measurement type shows in the survey list (one registered kind). */}
-      <button
-        data-testid="project-pill"
-        onClick={() => setProjectOpen(true)}
-        title={project?.crs ?? t('project.title')}
-        className={`flex ${CONTROL} max-w-[180px] items-center gap-1.5 rounded border px-2.5 text-xs ${
-          project ? 'border-line bg-canvas text-ink hover:bg-panel' : 'border-dashed border-line text-muted hover:text-ink'
-        }`}
-      >
-        <span className="truncate">{project ? project.name : t('project.noProject')}</span>
-      </button>
-
-      <Tabs
-        items={VIEWS.map((v) => ({
-          id: v,
-          label:
-            v === 'preflight' && badge !== null ? `${t(`nav.${v}`)} ${badge}` : t(`nav.${v}`),
-        }))}
-        active={view}
-        onChange={setView}
-        className="text-sm [&>button]:px-3 [&>button]:py-1.5"
-      />
-
-      <div className="ml-auto flex items-center gap-2">
+      <div className="ml-auto flex shrink-0 items-center gap-2">
         {stale && (
           <span data-testid="link-stale-age" className="text-[10px] text-warn">
             {staleText}

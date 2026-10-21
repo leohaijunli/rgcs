@@ -91,7 +91,7 @@ Headless/主界面也要用副链路，需要把 SITL 连接提升到 AppState �
 `Date.now()+2s` 之前的帧(状态栏显示 "settling…");同时门闸结束后再
 `inspector_set_traces`,让 mapper 基线与 fs EMA 在门闸内收敛,消除混排。
 
-### O8 [P2][frontend/harness] Playwright 检查壳自 PJ3 起失效;修复后暴露两类预存在问题
+### O8 [已解决 2026-10-21] [frontend/harness] Playwright 检查壳自 PJ3 起失效;修复后暴露两类预存在问题
 2026-10-20 修复:①强制启动页(PJ3)把所有 Playwright 检查挡在启动面——各检查
 脚本现经 `window.__mgProject` 注入一次性项目跳过;②headless SwiftShader 下
 Cesium 渲染崩溃页面(A8 已记录的渲染器 artifact)——新增 `?nomap` URL 开关
@@ -100,9 +100,16 @@ Cesium 渲染崩溃页面(A8 已记录的渲染器 artifact)——新增 `?nomap
 `check-teardown` 的 `3 · Waypoints` 选择器是 U17a 前的旧格式(已改 hasText);
 `check-safety` 的 `Flight` 标签在 U1 已更名 `Fly`(已改);`check-teardown`
 clean-quit 的 confirm 断言与 guard 异步存在竞态(已加 waitUntil)。
-**仍失败(预存在,非本次改动):`check-topbar` 2 条**——1280 宽下 settings 按钮
-24×32 低于 32px 目标下限且"fully inside"断言失败(U2 的"低优先级折叠进 More"
-与直量 settings 按钮的断言冲突,需要么按钮常驻、要么断言改为量 More 菜单内)。
+**全部解决(2026-10-21)**:
+- `IconButton` 加 `shrink-0` + `minWidth`——顶栏窄屏下图标按钮不再被压到 24/28 px;
+- 顶栏改为「左侧可收缩包装(`min-w-0 flex-1 overflow-hidden`)+ 右侧 `shrink-0`
+  集群」:长项目名先截断(≤1366 时 `max-w-[120px]`),**左侧内容超出时在自身盒内
+  裁剪,绝不滑到右侧集群之下**——此前状态药丸会盖住最后一个阶段标签(Fly),
+  Playwright 点击被拦截(check-safety/preflight/command-ux 间歇超时的真凶);
+- `devices` store 对 `enumerate_devices` 返回 null 做守卫(RtkDrawer 常驻顶栏,
+  null → `devices.length` 崩页,整个窗口空白)——连带修了 `RtkDrawer` 的防御读取;
+- field-mode 的 44 px 下限改 `!important`(胜过 IconButton 的行内 `minWidth`)。
+`check-topbar` 28/28,全部 10 个 Playwright 脚本绿。
 
 ### O9 [P2][data] H10 对比验证暂缓(操作员 2026-10-21)
 HRDEM×BC LiDAR 重叠区对比(RMSE/偏差/最大差/空洞率)与 WCS 一次性交叉对照
