@@ -81,3 +81,33 @@ export function applyThemePref(pref: ThemePref): void {
     set(pref)
   }
 }
+
+// ---------------------------------------------------------------------------
+// Field mode (plan §7 U12): a touch/outdoor profile — ≥44 px targets, 14 px
+// base text, fewer animations. Applied as an `html.field-mode` class next to
+// `data-theme`, so it composes with every palette including `night-red`.
+// ---------------------------------------------------------------------------
+
+const FIELD_MODE_KEY = 'maggcs.fieldMode'
+
+/** Read the persisted field-mode flag (`false` = never set). */
+export function readFieldMode(): boolean {
+  try {
+    return localStorage.getItem(FIELD_MODE_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
+export function saveFieldMode(on: boolean): void {
+  try {
+    localStorage.setItem(FIELD_MODE_KEY, on ? 'true' : 'false')
+  } catch {
+    /* private mode */
+  }
+}
+
+/** Apply (or remove) the `field-mode` class on `<html>`. */
+export function applyFieldMode(on: boolean): void {
+  document.documentElement.classList.toggle('field-mode', on)
+}

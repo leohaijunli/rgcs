@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { applyThemePref, readThemePref, saveThemePref, type ThemePref } from '../design-system/theme'
+import { applyFieldMode, applyThemePref, readFieldMode, readThemePref, saveFieldMode, saveThemePref, type ThemePref } from '../design-system/theme'
 
 /** The five job stages (U1): free switching, no forced linearity. `plan`
  * keeps the four planning step cards; the map editing tools are `plan`-only
@@ -34,6 +34,8 @@ export const isPlanStage = (view: View): boolean => view === 'plan'
 interface UiState {
   view: View
   theme: Theme
+  /** U12: the touch/outdoor profile. */
+  fieldMode: boolean
   planStep: PlanStep
   dockTab: DockTab
   rightOpen: boolean
@@ -77,6 +79,8 @@ interface UiState {
   surveyHeading: number
   setView: (v: View) => void
   setTheme: (t: Theme) => void
+  /** U12 field-mode toggle (Settings ▸ Appearance). */
+  setFieldMode: (on: boolean) => void
   setPlanStep: (step: PlanStep) => void
   /** Open `step` and reveal `field` (scroll + highlight): the blocker-chip
    * navigation (U17b). */
@@ -114,6 +118,8 @@ const initialTheme: Theme = typeof localStorage !== 'undefined' ? readThemePref(
 export const useUiStore = create<UiState>((set) => ({
   view: 'fly',
   theme: initialTheme,
+  /** U12 field mode: touch ≥44 px, 14 px text, reduced motion. */
+  fieldMode: typeof localStorage !== 'undefined' ? readFieldMode() : false,
   planStep: 'area',
   dockTab: 'qc',
   rightOpen: !narrowScreen(),
@@ -147,6 +153,11 @@ export const useUiStore = create<UiState>((set) => ({
     saveThemePref(theme)
     applyThemePref(theme)
     set({ theme })
+  },
+  setFieldMode: (on) => {
+    saveFieldMode(on)
+    applyFieldMode(on)
+    set({ fieldMode: on })
   },
   setPlanStep: (planStep) => set({ planStep }),
   focusPlanField: (planStep, field) =>

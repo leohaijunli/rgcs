@@ -1,17 +1,19 @@
-// Live altitude profile chart (operator request 2026-10-17): actual AMSL
-// from telemetry, DTM ground and DSM surface sampled under each recorded fix
-// from the loaded dem-prep tile, and the rangefinder/lidar range from
-// `DISTANCE_SENSOR` (R1). X = along-track distance in sync with the map's
-// trail (both derive from the same telemetry snapshots); the window
-// auto-follows the head past [`FOLLOW_WINDOW_M`]. Rendered in the map's
-// bottom drawer (below the map), and reused by DR6's profile page.
+// Live altitude profile chart (operator request 2026-10-17, restyled to the
+// Signal Inspector's toolbar/plot language 2026-10-21): actual AMSL from
+// telemetry, the planned (drape) curve interpolated from the solver preview,
+// DTM ground and DSM surface sampled under each recorded fix from the loaded
+// dem-prep tile, and the rangefinder/lidar range from `DISTANCE_SENSOR` (R1).
+// X = along-track distance in sync with the map's trail (both derive from the
+// same telemetry snapshots); the window auto-follows the head past
+// [`FOLLOW_WINDOW_M`]. Rendered in the map's bottom drawer (below the map).
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import uPlot from 'uplot'
 import { invoke } from '@tauri-apps/api/core'
 import { useTelemetryStore } from '../stores/telemetry'
 import { useTerrainStore } from '../stores/terrain'
+import { useMissionStore } from '../stores/mission'
 import { cssVar } from '../design-system/theme'
 import { isTauri } from '../inspector/mock'
 
@@ -25,6 +27,8 @@ const SAMPLE_MS = 1_500
 const LIDAR_FRESH_MS = 3_000
 /** Follow window: past this track length the x axis trails the head. */
 const FOLLOW_WINDOW_M = 2_000
+/** uPlot throws on ragged series: every column must match the x length. */
+const PLOT_HEIGHT = 180
 
 interface Fix {
   lat: number
@@ -54,9 +58,14 @@ export default function LiveAltitudeProfile() {
   const fixesRef = useRef<Fix[]>([])
   const dtmRef = useRef<(number | null)[]>([])
   const dsmRef = useRef<(number | null)[]>([])
+  const plannedRef = useRef<(number | null)[]>([])
+  const plannedSpecRef = useRef<string>('')
   const sampledToRef = useRef(0)
   const snapshot = useTelemetryStore((s) => s.snapshot)
   const demFolder = useTerrainStore((s) => s.tile?.path ?? null)
+  const tile = useTerrainStore((s) => s.tile)
+  const drapeSpecHash = useMissionStore((s) => s.drapePreview?.result.spec_hash ?? null)
+  const drapePreview = useMissionStore((s) => s.drapePreview)
   const [demError, setDemError] = useState<string | null>(null)
   const [lidarSeen, setLidarSeen] = useState(false)
   const autoLoaded = useRef(false)
@@ -146,6 +155,37 @@ export default function LiveAltitudeProfile() {
     return () => clearInterval(timer)
   }, [tauri, demFolder])
 
+  // The planned (drape) curve: nearest-sample `z_plan` from the solver
+  // preview, per fix, cached per preview (a new solve re-interpolates). The
+  // heights are DEM-datum like the DTM — the anchored AMSL is the same frame.
+  const plannedSamples = useMemo(() => {
+    if (!drapePreview) return null
+    return drapePreview.result.lines.flatMap((l) => l.profile)
+  }, [drapePreview])
+
+  const interpolatePlanned = (fixes: Fix[]): (number | null)[] => {
+    const out = plannedRef.current.slice(0, fixes.length)
+    while (out.length < fixes.length) out.push(null)
+    if (!plannedSamples || plannedSamples.length === 0) return out
+    for (let i = plannedRef.current.length; i < fixes.length; i++) {
+      const f = fixes[i]
+      let best: number | null = null
+      let bestD2 = Number.POSITIVE_INFINITY
+      for (const sm of plannedSamples) {
+        const d2 = (sm.y - f.lat) ** 2 + (sm.x - f.lon) ** 2
+        if (d2 < bestD2) {
+          bestD2 = d2
+          best = sm.z_plan
+        }
+      }
+      // A fix far from every planned line (ferry, manual detour) is a gap.
+      // ~5 m in degrees·lat at 48°N; anything beyond reads as unplanned.
+      out[i] = bestD2 <= (6 / 111_320) ** 2 ? (best as number) : null
+    }
+    plannedRef.current = out
+    return out
+  }
+
   // Chart redraw at a fixed cadence.
   useEffect(() => {
     if (!tauri) return
@@ -164,43 +204,68 @@ export default function LiveAltitudeProfile() {
         dist.push(dist[i - 1] + haversineM(fixes[i - 1], fixes[i]))
       }
       const total = dist[dist.length - 1]
-      const amsl = fixes.map((f) => f.amsl)
-      const lidar = fixes.map((f) => f.lidar)
-      const data = [dist, amsl, dtmRef.current, dsmRef.current, lidar] as unknown as uPlot.AlignedData
+      // uPlot throws on ragged series: every column must be exactly as long
+      // as x. The DEM sampler lags the fix stream (batched every 1.5 s), so
+      // pad the trailing columns with null — spanGaps bridges them.
+      const padTo = (arr: (number | null)[], n: number): (number | null)[] => {
+        const out = arr.slice(0, n)
+        while (out.length < n) out.push(null)
+        return out
+      }
+      const n = fixes.length
+      const planned =
+        plannedSpecRef.current === drapeSpecHash
+          ? interpolatePlanned(fixes)
+          : (plannedRef.current = new Array(n).fill(null))
+      plannedSpecRef.current = drapeSpecHash ?? ''
+      const data = [
+        dist,
+        fixes.map((f) => f.amsl),
+        padTo(planned, n),
+        padTo(dtmRef.current, n),
+        padTo(dsmRef.current, n),
+        padTo(fixes.map((f) => f.lidar), n),
+      ] as unknown as uPlot.AlignedData
       const w = host.clientWidth || 640
       const xMin = total > FOLLOW_WINDOW_M ? total - FOLLOW_WINDOW_M : 0
       const xMax = Math.max(total, total * 1.02, 50)
-      if (!plotRef.current) {
-        host.textContent = ''
-        const stroke = (c: string) => cssVar(c)
-        const opts: uPlot.Options = {
-          width: w,
-          height: 180,
-          legend: { show: true, live: false },
-          scales: { x: { time: false, range: () => [xMin, xMax] } },
-          axes: [
-            { stroke: stroke('--mg-muted'), label: 'm', grid: { stroke: stroke('--mg-border') } },
-            { stroke: stroke('--mg-muted'), label: 'm AMSL', grid: { stroke: stroke('--mg-border') } },
-          ],
-          series: [
-            {},
-            { label: t('drawer.profile.actual'), stroke: stroke('--mg-accent'), width: 2 },
-            { label: t('drawer.profile.planned'), stroke: stroke('--mg-muted'), width: 1.5, dash: [6, 3], spanGaps: true },
-            { label: t('drawer.profile.dtm'), stroke: stroke('--mg-ok'), width: 1.5, spanGaps: true },
-            { label: t('drawer.profile.dsm'), stroke: stroke('--mg-warn'), width: 1.5, spanGaps: true },
-            {
-              label: t('drawer.profile.lidar'),
-              stroke: stroke('--mg-mag'),
-              width: 1,
-              dash: [4, 3],
-              spanGaps: true,
-            },
-          ],
+      try {
+        if (!plotRef.current) {
+          host.textContent = ''
+          const stroke = (c: string) => cssVar(c)
+          const opts: uPlot.Options = {
+            width: w,
+            height: PLOT_HEIGHT,
+            legend: { show: true, live: false },
+            scales: { x: { time: false, range: () => [xMin, xMax] } },
+            axes: [
+              { stroke: stroke('--mg-muted'), label: 'm', grid: { stroke: stroke('--mg-border') } },
+              { stroke: stroke('--mg-muted'), label: 'm AMSL', grid: { stroke: stroke('--mg-border') } },
+            ],
+            series: [
+              {},
+              { label: t('drawer.profile.actual'), stroke: stroke('--mg-accent'), width: 2 },
+              { label: t('drawer.profile.planned'), stroke: stroke('--mg-muted'), width: 1.5, dash: [6, 3], spanGaps: true },
+              { label: t('drawer.profile.dtm'), stroke: stroke('--mg-ok'), width: 1.5, spanGaps: true },
+              { label: t('drawer.profile.dsm'), stroke: stroke('--mg-warn'), width: 1.5, spanGaps: true },
+              {
+                label: t('drawer.profile.lidar'),
+                stroke: stroke('--mg-mag'),
+                width: 1,
+                dash: [4, 3],
+                spanGaps: true,
+              },
+            ],
+          }
+          plotRef.current = new uPlot(opts, data, host)
+        } else {
+          plotRef.current.setData(data)
+          plotRef.current.setScale('x', { min: xMin, max: xMax })
         }
-        plotRef.current = new uPlot(opts, data, host)
-      } else {
-        plotRef.current.setData(data)
-        plotRef.current.setScale('x', { min: xMin, max: xMax })
+      } catch (e) {
+        // A draw failure must not kill the interval: the next tick retries
+        // with fresh (padded) columns.
+        console.warn('altitude profile draw failed', e)
       }
     }, REDRAW_MS)
     return () => clearInterval(timer)
@@ -210,7 +275,7 @@ export default function LiveAltitudeProfile() {
   useEffect(() => {
     const onResize = () => {
       const host = hostRef.current
-      if (host && plotRef.current) plotRef.current.setSize({ width: host.clientWidth || 640, height: 180 })
+      if (host && plotRef.current) plotRef.current.setSize({ width: host.clientWidth || 640, height: PLOT_HEIGHT })
     }
     window.addEventListener('resize', onResize)
     return () => {
@@ -224,20 +289,26 @@ export default function LiveAltitudeProfile() {
 
   return (
     <div className="flex flex-col gap-1">
-      <div className="flex items-center gap-2 text-[11px]">
+      {/* Inspector-style toolbar: status chips left, facts right. */}
+      <div className="flex flex-wrap items-center gap-2 text-[11px]">
         <span className={`mono ${lidarSeen ? 'text-ok' : 'text-muted'}`}>
           {lidarSeen ? t('drawer.profile.lidarUp') : t('drawer.profile.lidarDown')}
         </span>
-        {demFolder ? (
-          <span className="mono truncate text-muted" title={demFolder}>
-            {demFolder.split(/[\\/]/).pop()}
+        {tile && (
+          <span className="mono truncate text-muted" data-testid="profile-source-chip" title={demFolder ?? ''}>
+            {tile.source === 'hrdem'
+              ? t('terrain.sourceHrdem')
+              : tile.source === 'geotiff'
+                ? t('terrain.sourceGeotiff')
+                : t('terrain.sourceLidar')}
+            {tile.resolution_m != null ? ` · ${tile.resolution_m} m` : ''}
           </span>
-        ) : (
-          <span className="text-warn">{t('drawer.profile.noDemHint')}</span>
         )}
-        {demError && <span className="text-error">{demError}</span>}
+        {!demFolder && <span className="text-warn">{t('drawer.profile.noDemHint')}</span>}
+        {demError && <span className="mono truncate text-error">{demError}</span>}
+        <span className="ml-auto text-muted">{t('drawer.profile.title')}</span>
       </div>
-      <div ref={hostRef} className="min-h-[180px]" />
+      <div ref={hostRef} className="min-h-[180px] w-full" />
     </div>
   )
 }

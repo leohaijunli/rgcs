@@ -61,6 +61,13 @@
 - **实现(前端)**:新纯函数 `mission/drapeApply.ts::applyCompiled`(编译产物按块替换 pattern block;块内 pinned 高度按位置容差恢复;`21/85` 降落项按位置键贴地;块外一律原样;返回重锚定的线表);`stores/mission.ts` 合并 `runDrapePreview`/`runTerrainDrape` 为单管线 `runDrapeOnce(apply)`(指纹、600 ms 防抖、A3 告警、unchanged 不置 dirty 语义保持);手动编辑(lastPattern 清空)→ fail-closed 报"regenerate the pattern",不再静默保留旧高度;DrapeBlock/SyncStep provenance(`dem:<folder>`、dem_ref.hash)改读新 `DrapeState`;删除 `meshDrape.ts`、`DrapeState.report`(DrapeReport)/`meshDrape` 字段与 `MESH_*` 文案。
 - **验证**:`cargo test -p maggcs-core` 全绿(drape.rs 测试随模块删除,699 lib + 集成);`cargo test -p maggcs-app` 76 通过(新增 `drape_apply_tests` 3 条:H 链转换数值断言 ±0.02、链外 fail-closed、命令项透传);`drape_pipeline.rs`(solve→compile 真实文件 I/O)3 条通过;clippy `-D warnings`(core+app)、fmt、`git diff --check`;前端 `tsc`、production build、14 个 check 脚本 + `check:agl`(27 条,重定向到 `applyCompiled`)全绿;ts-rs 绑定重生成,删除 `DrapeReport/DrapeOptions.ts`。**行为变更**:terrain 模式不再有 mesh 兜底;手动编辑不重 drape;块外手动航点不参与 drape(AGL 行显示 unknown)。ADR-005 addendum、ADR-022 已更新。实机复验归 DR6 走查单。
 
+#### 高度曲线修复 + Inspector 风格排版 (2026-10-21,操作员报告)
+
+- **根因(曲线不显示)**:`LiveAltitudeProfile` 的 series 声明 6 条(DR6b 加了 Planned)但 `AlignedData` 只给 5 列——uPlot 对列数不齐直接抛错,每秒重绘每次都失败,host 被清空后永无画布;叠加 DEM 采样(1.5 s 批)滞后于 fixes(2 m 抽稀)时 dtm/dsm 数组短于 x,同错。**修复**:所有列 `padTo(n)` 补 null(spanGaps 桥接),绘制包 try/catch(失败下个 tick 重试)。
+- **Planned (drape) 序列真正接线**:按 fix 就近采样 `drapePreview.result.lines[].profile.z_plan`(度² 距离,>~5 m 视为不在计划线上 = 间隙);缓存 per fix,新 solve(spec_hash 变)重算。
+- **排版(参照 Signal Inspector)**:顶部 toolbar 行——LIDAR 状态 chip、DEM 来源 chip(来源/分辨率,H6)、错误、右侧标题;plot 全宽;单测样式 token 与 Inspector 同源(`--mg-*`)。
+- **验证**:mock 遥测 + mock DEM 浏览器走查——drawer 展开、uPlot canvas 出现、五条 series 图例齐全、零页面错误;截图 `docs/screenshots/profile-restyled.png`;`tsc`/build 绿。main.tsx 同轮修复(此前被脚本误改的 `createRoot` 引用)。
+
 #### U11 执行记录 (2026-10-21)
 
 - **Tools 菜单协调徽标**:新命令 `tools_status` → `Vec<ToolStatus{id, open, busy}>`(inspector/actuator/params 三个独立窗口的开窗状态 + motor-test 会话 `is_sending()`);`ToolsPopover` 开启时 1 s 轮询,行尾渲染徽标——窗口开着 = 绿点,电机测试发送中 = 黄色 "sending"。点击菜单项沿用既有 open 命令(`show`+`set_focus`)即"置前",不重复开窗。
