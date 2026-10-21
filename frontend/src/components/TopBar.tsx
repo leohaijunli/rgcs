@@ -20,6 +20,7 @@ import { useTelemetryStore } from '../stores/telemetry'
 import { useLinkStore } from '../stores/link'
 import { useProjectStore } from '../stores/project'
 import { useAlerts, raiseAlert } from '../stores/alerts'
+import type { ToolStatus } from '../generated-types/ToolStatus'
 import { FIELD_STALE_MS, useHeartbeatAge } from '../hooks/useDataAge'
 import { useIsNarrow } from '../hooks/useIsNarrow'
 import { getSafetyConfig } from '../desktop/appConfig'
@@ -516,7 +517,22 @@ function ToolsPopover({
 }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
+  const [tools, setTools] = useState<ToolStatus[]>([])
   const ref = useRef<HTMLDivElement>(null)
+
+  // U11: the badges (window open / motor test sending) poll while the menu
+  // is open — one cheap command, no event plumbing for a popover.
+  useEffect(() => {
+    if (!open || !isTauri()) return
+    const tick = () =>
+      void invoke<ToolStatus[]>('tools_status')
+        .then(setTools)
+        .catch(() => {})
+    tick()
+    const id = window.setInterval(tick, 1000)
+    return () => window.clearInterval(id)
+  }, [open])
+  const toolState = (id: string) => tools.find((t) => t.id === id)
 
   useEffect(() => {
     if (!open) return
@@ -560,6 +576,7 @@ function ToolsPopover({
           >
             <LineChart size={14} />
             {t('inspector.open')}
+            <ToolBadge state={toolState('inspector')} />
           </button>
           <button
             onClick={() => {
@@ -570,6 +587,7 @@ function ToolsPopover({
           >
             <Gauge size={14} />
             {t('tools.motorTest')}
+            <ToolBadge state={toolState('actuator')} />
           </button>
           <button
             onClick={() => {
@@ -580,6 +598,7 @@ function ToolsPopover({
           >
             <SlidersHorizontal size={14} />
             {t('tools.parameters')}
+            <ToolBadge state={toolState('params')} />
           </button>
           <button
             onClick={() => {
@@ -616,5 +635,20 @@ function ToolsPopover({
         </div>
       )}
     </div>
+  )
+}
+
+
+/** U11: the Tools menu badge — a dot when the window is open, "sending"
+ * (amber) while the motor test is sending ActuatorTest frames. */
+function ToolBadge({ state }: { state: ToolStatus | undefined }) {
+  const { t } = useTranslation()
+  if (!state?.open) return null
+  return state.busy ? (
+    <span data-testid="tool-busy-badge" className="ml-auto text-[10px] text-warn">
+      {t('tools.sending')}
+    </span>
+  ) : (
+    <span data-testid="tool-open-badge" className="ml-auto h-1.5 w-1.5 rounded-full bg-ok" />
   )
 }

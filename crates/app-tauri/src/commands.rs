@@ -407,6 +407,39 @@ pub fn enumerate_devices() -> Result<Vec<SerialDeviceInfo>, String> {
     manager.enumerate().map_err(|e| e.to_string())
 }
 
+/// One Tools ▾ entry's coordination state (plan §7 U11): whether the window
+/// is open (the menu shows a dot) and whether its work is in flight (the
+/// motor-test row shows "sending").
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub struct ToolStatus {
+    /// `inspector` | `actuator` | `params` — matches the open commands.
+    pub id: String,
+    pub open: bool,
+    /// The tool's work is in flight (motor test is sending ActuatorTest
+    /// frames); the menu badges it so the operator sees it without switching.
+    pub busy: bool,
+}
+
+/// The Tools ▾ coordination snapshot (U11). Clicking a menu entry already
+/// focuses the existing window (the open commands `show` + `set_focus`),
+/// so this only feeds the badges.
+#[tauri::command]
+pub fn tools_status(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Vec<ToolStatus> {
+    use tauri::Manager;
+    let open = |label: &str| app.get_webview_window(label).is_some();
+    let motor_sending = state
+        .motor_test
+        .session()
+        .is_some_and(|s| s.is_sending());
+    vec![
+        ToolStatus { id: "inspector".into(), open: open("inspector"), busy: false },
+        ToolStatus { id: "actuator".into(), open: open("actuator"), busy: motor_sending },
+        ToolStatus { id: "params".into(), open: open("params"), busy: false },
+    ]
+}
+
 /// The startup card's clock row (L8): epoch milliseconds plus the IANA
 /// timezone name when the OS exposes one. std has no portable timezone API,
 /// so Linux reads `/etc/timezone` (or the `/etc/localtime` symlink) and

@@ -153,6 +153,7 @@ pub fn run() {
             inspector_service::set_mag_calibration,
             calibration_service::mag_calibration_status,
             commands::clock_info,
+            commands::tools_status,
             commands::udev_rules_present,
             diagnostics_service::diagnostics_export,
             inspector_service::inspector_catalog,

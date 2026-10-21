@@ -21,6 +21,7 @@ export default {
     parameters: 'Parameters',
     logs: 'Logs',
     diagnostics: 'Export diagnostics',
+    sending: 'sending',
   },
 
   drawer: { profile: {
