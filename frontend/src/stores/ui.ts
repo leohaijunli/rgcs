@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { writeShared } from './sharedState'
 import { applyFieldMode, applyThemePref, readFieldMode, readThemePref, saveFieldMode, saveThemePref, type ThemePref } from '../design-system/theme'
 
 /** The five job stages (U1): free switching, no forced linearity. `plan`
@@ -115,7 +116,7 @@ function narrowScreen(): boolean {
 
 const initialTheme: Theme = typeof localStorage !== 'undefined' ? readThemePref() : 'dark'
 
-export const useUiStore = create<UiState>((set) => ({
+export const useUiStore = create<UiState>((set, get) => ({
   view: 'fly',
   theme: initialTheme,
   /** U12 field mode: touch ≥44 px, 14 px text, reduced motion. */
@@ -177,8 +178,17 @@ export const useUiStore = create<UiState>((set) => ({
   toggleHeights: () => set((s) => ({ showHeights: !s.showHeights })),
   toggleTrailByAgl: () => set((s) => ({ trailByAgl: !s.trailByAgl })),
   setImageryStyle: (imageryStyle) => set({ imageryStyle }),
-  toggleGrid: () => set((s) => ({ showGrid: !s.showGrid })),
-  toggleCoverage: () => set((s) => ({ showCoverage: !s.showCoverage })),
+  // A11 phase 1: the layer toggles are shared state — the local field is the
+  // projection, the write goes through the versioned core store so a second
+  // webview (the detached map, U15) sees the same truth.
+  toggleGrid: () => {
+    set((s) => ({ showGrid: !s.showGrid }))
+    void writeShared('layers.grid', get().showGrid)
+  },
+  toggleCoverage: () => {
+    set((s) => ({ showCoverage: !s.showCoverage }))
+    void writeShared('layers.coverage', get().showCoverage)
+  },
   setSurveySize: (surveySize) => set({ surveySize }),
   setSurveyHeading: (surveyHeading) => set({ surveyHeading }),
 }))

@@ -31,6 +31,7 @@ pub mod project;
 pub mod recorder;
 pub mod rtk;
 pub mod safety;
+pub mod shared_state;
 pub mod signals;
 pub mod survey;
 pub mod survey_profile;

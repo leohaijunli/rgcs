@@ -140,6 +140,10 @@ pub struct AppState {
     /// The live drape monitor (DR6): one per flight, its baseline the
     /// uploaded/compiled drape result; `None` while not monitoring.
     pub drape_monitor: Mutex<Option<crate::terrain_service::MonitorSession>>,
+    /// Cross-window single source of truth (A11 phase 1): versioned UI state
+    /// (layer toggles first), written through the `shared_state_*` commands
+    /// and broadcast to every window.
+    pub shared: maggcs_core::shared_state::SharedState,
 }
 
 impl AppState {

@@ -22,6 +22,7 @@ mod params_service;
 mod project_service;
 mod recorder_service;
 mod rtk_service;
+mod shared_state_service;
 mod state;
 mod telemetry_pump;
 mod terrain_server;
@@ -155,6 +156,9 @@ pub fn run() {
             calibration_service::mag_calibration_status,
             commands::clock_info,
             commands::tools_status,
+            shared_state_service::shared_state_get,
+            shared_state_service::shared_state_snapshot,
+            shared_state_service::shared_state_set,
             commands::udev_rules_present,
             diagnostics_service::diagnostics_export,
             inspector_service::inspector_catalog,
