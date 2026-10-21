@@ -61,6 +61,12 @@
 - **实现(前端)**:新纯函数 `mission/drapeApply.ts::applyCompiled`(编译产物按块替换 pattern block;块内 pinned 高度按位置容差恢复;`21/85` 降落项按位置键贴地;块外一律原样;返回重锚定的线表);`stores/mission.ts` 合并 `runDrapePreview`/`runTerrainDrape` 为单管线 `runDrapeOnce(apply)`(指纹、600 ms 防抖、A3 告警、unchanged 不置 dirty 语义保持);手动编辑(lastPattern 清空)→ fail-closed 报"regenerate the pattern",不再静默保留旧高度;DrapeBlock/SyncStep provenance(`dem:<folder>`、dem_ref.hash)改读新 `DrapeState`;删除 `meshDrape.ts`、`DrapeState.report`(DrapeReport)/`meshDrape` 字段与 `MESH_*` 文案。
 - **验证**:`cargo test -p maggcs-core` 全绿(drape.rs 测试随模块删除,699 lib + 集成);`cargo test -p maggcs-app` 76 通过(新增 `drape_apply_tests` 3 条:H 链转换数值断言 ±0.02、链外 fail-closed、命令项透传);`drape_pipeline.rs`(solve→compile 真实文件 I/O)3 条通过;clippy `-D warnings`(core+app)、fmt、`git diff --check`;前端 `tsc`、production build、14 个 check 脚本 + `check:agl`(27 条,重定向到 `applyCompiled`)全绿;ts-rs 绑定重生成,删除 `DrapeReport/DrapeOptions.ts`。**行为变更**:terrain 模式不再有 mesh 兜底;手动编辑不重 drape;块外手动航点不参与 drape(AGL 行显示 unknown)。ADR-005 addendum、ADR-022 已更新。实机复验归 DR6 走查单。
 
+#### 高度曲线不滚动修复 (2026-10-21,操作员二次报告:"50 s 后不更新")
+
+- **根因(操作员的坐标轴假设正确)**:`scales.x.range` 是**创建时闭包**——uPlot 每次重算 scale 都调用 range 函数,而它捕获的是首帧的 `xMin/xMax`,后续 `setData`/`setScale` 的新范围被 range 返回的旧值覆盖 → **可视窗口冻结在创建时范围**,数据继续更新但曲线画在右边界外(操作员看到"数据不更新";mock 探针读 `plot.data` 一切正常,正因如此上一轮没能复现)。修复:当前窗口存入 `xRangeRef`,`range: () => xRangeRef.current`,去掉冗余 setScale。
+- **顺带修正**:`sampledToRef.current = from + rows.length`(原 `fixes.length` 会跳过 IPC 在途期间到达的 fix,使 dtm/dsm 列错位);工具栏新增 `{{count}} fixes · last {{age}} s ago` 观测芯片(计数停 = 遥测链路问题;计数涨曲线冻 = 绘制问题),下次飞行可直接判别。
+- **验证**:mock 100 s 探针读 `plot.scales.x`——scaleMax 从 160 → 320 → 479 → 639 随数据推进(修复前冻结在创建值);截图 `docs/screenshots/profile-scroll.png`;`tsc`/build/i18n(711 keys)绿。
+
 #### 高度曲线修复 + Inspector 风格排版 (2026-10-21,操作员报告)
 
 - **根因(曲线不显示)**:`LiveAltitudeProfile` 的 series 声明 6 条(DR6b 加了 Planned)但 `AlignedData` 只给 5 列——uPlot 对列数不齐直接抛错,每秒重绘每次都失败,host 被清空后永无画布;叠加 DEM 采样(1.5 s 批)滞后于 fixes(2 m 抽稀)时 dtm/dsm 数组短于 x,同错。**修复**:所有列 `padTo(n)` 补 null(spanGaps 桥接),绘制包 try/catch(失败下个 tick 重试)。

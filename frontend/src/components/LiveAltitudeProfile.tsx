@@ -61,6 +61,12 @@ export default function LiveAltitudeProfile() {
   const plannedRef = useRef<(number | null)[]>([])
   const plannedSpecRef = useRef<string>('')
   const sampledToRef = useRef(0)
+  const lastFixAtRef = useRef(0)
+  /** The live follow window. `scales.x.range` is a closure created ONCE with
+   * the plot — capturing xMin/xMax directly would freeze the visible window
+   * at the creation-time extent (the curve kept drawing past the right edge:
+   * data updated, the picture did not scroll). */
+  const xRangeRef = useRef<[number, number]>([0, 50])
   const snapshot = useTelemetryStore((s) => s.snapshot)
   const demFolder = useTerrainStore((s) => s.tile?.path ?? null)
   const tile = useTerrainStore((s) => s.tile)
@@ -128,6 +134,7 @@ export default function LiveAltitudeProfile() {
       return
     }
     fixesRef.current.push(fix)
+    lastFixAtRef.current = Date.now()
   }, [snapshot])
 
   // DEM sampling: batch `terrain_sample` over the fixes since the last pass.
@@ -147,7 +154,10 @@ export default function LiveAltitudeProfile() {
             dtmRef.current.push(row.dtm_m)
             dsmRef.current.push(row.dsm_m)
           }
-          sampledToRef.current = fixes.length
+          // `from + rows.length`, NOT `fixes.length`: fixes that arrived while
+          // the IPC was in flight belong to the NEXT batch — sampling them
+          // here would desync the dtm/dsm columns from the fix stream.
+          sampledToRef.current = from + rows.length
           setDemError(null)
         })
         .catch((e) => setDemError(String(e)))
@@ -229,6 +239,7 @@ export default function LiveAltitudeProfile() {
       const w = host.clientWidth || 640
       const xMin = total > FOLLOW_WINDOW_M ? total - FOLLOW_WINDOW_M : 0
       const xMax = Math.max(total, total * 1.02, 50)
+      xRangeRef.current = [xMin, xMax]
       try {
         if (!plotRef.current) {
           host.textContent = ''
@@ -237,7 +248,7 @@ export default function LiveAltitudeProfile() {
             width: w,
             height: PLOT_HEIGHT,
             legend: { show: true, live: false },
-            scales: { x: { time: false, range: () => [xMin, xMax] } },
+            scales: { x: { time: false, range: () => xRangeRef.current } },
             axes: [
               { stroke: stroke('--mg-muted'), label: 'm', grid: { stroke: stroke('--mg-border') } },
               { stroke: stroke('--mg-muted'), label: 'm AMSL', grid: { stroke: stroke('--mg-border') } },
@@ -258,9 +269,11 @@ export default function LiveAltitudeProfile() {
             ],
           }
           plotRef.current = new uPlot(opts, data, host)
+          if (import.meta.env?.DEV) {
+            ;(window as unknown as { __mgProfile?: unknown }).__mgProfile = plotRef
+          }
         } else {
           plotRef.current.setData(data)
-          plotRef.current.setScale('x', { min: xMin, max: xMax })
         }
       } catch (e) {
         // A draw failure must not kill the interval: the next tick retries
@@ -285,6 +298,12 @@ export default function LiveAltitudeProfile() {
     }
   }, [])
 
+  const [, forceTick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => forceTick((n) => n + 1), 1_000)
+    return () => clearInterval(id)
+  }, [])
+
   if (!tauri) return null
 
   return (
@@ -306,7 +325,10 @@ export default function LiveAltitudeProfile() {
         )}
         {!demFolder && <span className="text-warn">{t('drawer.profile.noDemHint')}</span>}
         {demError && <span className="mono truncate text-error">{demError}</span>}
-        <span className="ml-auto text-muted">{t('drawer.profile.title')}</span>
+        <span className="mono ml-auto text-muted" data-testid="profile-fixes" title={t('drawer.profile.fixesHint')}>
+          {t('drawer.profile.fixes', { count: fixesRef.current.length, age: Math.round((Date.now() - lastFixAtRef.current) / 1000) })}
+        </span>
+        <span className="text-muted">{t('drawer.profile.title')}</span>
       </div>
       <div ref={hostRef} className="min-h-[180px] w-full" />
     </div>

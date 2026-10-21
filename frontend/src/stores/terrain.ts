@@ -48,6 +48,12 @@ export interface MeshSampler {
 }
 
 interface TerrainState {
+  /** Ground (AMSL) under the vehicle, maintained by MapView's ground effect
+   * (mesh → geoid → DEM tile — the reference the map's own AGL readouts
+   * use). The HUD reads this instead of running its own — stricter — chain,
+   * so the two can never disagree (field report 2026-10-21: mesh on, map AGL
+   * live, HUD blank). `null` before the first sample. */
+  vehicleGroundAmslM: number | null
   /** The picked dem-prep output folder (parent with index.json, or a tile). */
   folder: string | null
   /** All tiles discovered under `folder`. */
@@ -208,6 +214,7 @@ export const useTerrainStore = create<TerrainState>((set, get) => ({
   homeGroundAmsl: null,
   amslAnchorOffsetM: null,
   meshSampler: null,
+  vehicleGroundAmslM: null,
   sampleGround: async (points) => {
     if (points.length === 0) {
       set({ groundBySeq: null })

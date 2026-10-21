@@ -436,6 +436,9 @@ export default function MapView() {
         ground = g ?? null
       }
       setVehicleGround(ground)
+      // Mirror into the terrain store: the HUD's AGL(DTM) reads this instead
+      // of running its own sampler — one ground reference, never disagreeing.
+      useTerrainStore.setState({ vehicleGroundAmslM: ground })
       // Landed self-calibration (2026-10-18 field report): the altimeter's
       // anchor error is a constant bias, so `ground − reported AMSL` captured
       // while ON_GROUND fixes the whole flight — takeoff at A, landing at B,

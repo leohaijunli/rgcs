@@ -24,7 +24,11 @@ export default function Hud() {
   const att = snapshot?.attitude ?? null
   const pos = snapshot?.global_position ?? null
   const samplePointAmsl = useTerrainStore((st) => st.samplePointAmsl)
-  const [groundAmsl, setGroundAmsl] = useState<number | null>(null)
+  const vehicleGround = useTerrainStore((st) => st.vehicleGroundAmslM)
+  const [sampledGround, setSampledGround] = useState<number | null>(null)
+  // The map's ground effect maintains `vehicleGroundAmslM` continuously; the
+  // HUD's own sampler only runs when that is missing (?nomap harness).
+  const groundAmsl = vehicleGround ?? sampledGround
   // AGL relative to the DTM under the vehicle (DR6): the anchored AMSL minus
   // the sampled ground — the same frame the plan was draped in, unlike REL
   // which is home-relative. Debounced like the ConfirmContextBar readout.
@@ -44,12 +48,12 @@ export default function Hud() {
     })
   }, [pos, groundAmsl])
   useEffect(() => {
-    if (pos == null) return
+    if (pos == null || vehicleGround != null) return
     const id = setTimeout(() => {
-      void samplePointAmsl(pos.latitude_deg, pos.longitude_deg).then((g) => setGroundAmsl(g))
+      void samplePointAmsl(pos.latitude_deg, pos.longitude_deg).then((g) => setSampledGround(g))
     }, 500)
     return () => clearTimeout(id)
-  }, [pos?.latitude_deg, pos?.longitude_deg, samplePointAmsl])
+  }, [pos?.latitude_deg, pos?.longitude_deg, samplePointAmsl, vehicleGround])
 
   if (!snapshot) return null
   const speedMs = pos ? Math.hypot(pos.velocity.x_m_s, pos.velocity.y_m_s) : 0

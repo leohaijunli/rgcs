@@ -37,6 +37,9 @@ export default {
     dtm: 'DTM ground',
     dsm: 'DSM surface',
     lidar: 'Lidar range',
+    fixes: '{{count}} fixes · last {{age}} s ago',
+    fixesHint:
+      'If the count stops growing while flying, the telemetry stream stalled — check the link; if it grows but the curve is frozen, note the console and report.',
   } },
 
   link: {
