@@ -1,0 +1,185 @@
+{
+  "tilejson": "2.1.0",
+  "name": "MagGCS DEM",
+  "version": "8e8b266df87514ac",
+  "format": "quantized-mesh-1.0",
+  "scheme": "tms",
+  "projection": "EPSG:4326",
+  "tiles": [
+    "{z}/{x}/{y}.terrain"
+  ],
+  "extensions": [
+    "octvertexnormals"
+  ],
+  "bounds": [
+    -123.38564618341728,
+    48.552997160499466,
+    -123.37481100103432,
+    48.56018674712739
+  ],
+  "minzoom": 0,
+  "maxzoom": 19,
+  "available": [
+    [
+      {
+        "startX": 0,
+        "startY": 0,
+        "endX": 0,
+        "endY": 0
+      }
+    ],
+    [
+      {
+        "startX": 0,
+        "startY": 1,
+        "endX": 0,
+        "endY": 1
+      }
+    ],
+    [
+      {
+        "startX": 1,
+        "startY": 3,
+        "endX": 1,
+        "endY": 3
+      }
+    ],
+    [
+      {
+        "startX": 2,
+        "startY": 6,
+        "endX": 2,
+        "endY": 6
+      }
+    ],
+    [
+      {
+        "startX": 5,
+        "startY": 12,
+        "endX": 5,
+        "endY": 12
+      }
+    ],
+    [
+      {
+        "startX": 10,
+        "startY": 24,
+        "endX": 10,
+        "endY": 24
+      }
+    ],
+    [
+      {
+        "startX": 20,
+        "startY": 49,
+        "endX": 20,
+        "endY": 49
+      }
+    ],
+    [
+      {
+        "startX": 40,
+        "startY": 98,
+        "endX": 40,
+        "endY": 98
+      }
+    ],
+    [
+      {
+        "startX": 80,
+        "startY": 197,
+        "endX": 80,
+        "endY": 197
+      }
+    ],
+    [
+      {
+        "startX": 161,
+        "startY": 394,
+        "endX": 161,
+        "endY": 394
+      }
+    ],
+    [
+      {
+        "startX": 322,
+        "startY": 788,
+        "endX": 322,
+        "endY": 788
+      }
+    ],
+    [
+      {
+        "startX": 644,
+        "startY": 1576,
+        "endX": 644,
+        "endY": 1576
+      }
+    ],
+    [
+      {
+        "startX": 1288,
+        "startY": 3152,
+        "endX": 1288,
+        "endY": 3153
+      }
+    ],
+    [
+      {
+        "startX": 2576,
+        "startY": 6305,
+        "endX": 2577,
+        "endY": 6306
+      }
+    ],
+    [
+      {
+        "startX": 5153,
+        "startY": 12611,
+        "endX": 5154,
+        "endY": 12612
+      }
+    ],
+    [
+      {
+        "startX": 10306,
+        "startY": 25222,
+        "endX": 10308,
+        "endY": 25224
+      }
+    ],
+    [
+      {
+        "startX": 20612,
+        "startY": 50445,
+        "endX": 20616,
+        "endY": 50448
+      }
+    ],
+    [
+      {
+        "startX": 41225,
+        "startY": 100891,
+        "endX": 41233,
+        "endY": 100896
+      }
+    ],
+    [
+      {
+        "startX": 82450,
+        "startY": 201782,
+        "endX": 82466,
+        "endY": 201792
+      }
+    ],
+    [
+      {
+        "startX": 164901,
+        "startY": 403564,
+        "endX": 164932,
+        "endY": 403585
+      }
+    ]
+  ],
+  "verticalDatum": "ellipsoidWgs84"
+}

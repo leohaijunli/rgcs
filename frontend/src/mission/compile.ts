@@ -184,16 +184,27 @@ function params4(params: readonly number[]): [number, number, number, number] {
  * matching `core::plan::PlannedMission::compile`. Command items (see
  * [`commandUsesCoordinate`]) keep their stored `z`: it is a command argument,
  * not an altitude, so it is never re-datumed.
+ *
+ * `anchorCompensationM` (field report 2026-10-21): PX4 flies altitude
+ * setpoints in its own EKF-origin frame, whose AMSL estimate carries a
+ * constant error δ. The landed self-calibration measures δ (`ground −
+ * reported`), and the mission upload subtracts it so the vehicle's TRUE
+ * altitude lands on the planned one — the DEM clearance the plan promised.
+ * Applied to every coordinate item (both frames carry the same bias); never
+ * to the stored plan, the map or the export, which stay on the true datum.
+ * `0`/`null` = no calibration yet → no compensation (fail-open).
  */
 export function compileWaypoints(
   waypoints: PlannedWaypoint[],
   mode: AltitudeMode,
   homeAmslM: number,
+  anchorCompensationM: number = 0,
 ): MissionItem[] {
   const frame = FRAME_BY_MODE[mode]
   return waypoints.map((wp, seq) => {
     const coordinate = commandUsesCoordinate(wp.command)
     const itemFrame = coordinate ? frame : ('mission' as MissionFrame)
+    const rawZ = coordinate ? amslToFrame(wp.altitude.meters, frame, homeAmslM) : wp.altitude.meters
     return {
       seq,
       frame: itemFrame,
@@ -201,7 +212,7 @@ export function compileWaypoints(
       params: Array.from(params4(wp.params), wire),
       x: Math.round(wp.position.latitude_deg * 1e7),
       y: Math.round(wp.position.longitude_deg * 1e7),
-      z: wire(coordinate ? amslToFrame(wp.altitude.meters, frame, homeAmslM) : wp.altitude.meters),
+      z: wire(coordinate ? rawZ - anchorCompensationM : rawZ),
       autocontinue: wp.autocontinue,
       current: seq === 0,
     }

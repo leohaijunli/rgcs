@@ -9,6 +9,7 @@ import { useTranslation } from 'react-i18next'
 import { exportPlanFile, importPlanFile } from '../../../mission/planfile'
 import { compileWaypoints } from '../../../mission/compile'
 import { useMissionStore, VERTICAL_DATUM_UNVERIFIED_ERROR } from '../../../stores/mission'
+import { useTerrainStore } from '../../../stores/terrain'
 import { useLinkStore } from '../../../stores/link'
 import type { SyncPhase } from '../../../mission/sync'
 import SyncStatusLine from './SyncStatusLine'
@@ -60,6 +61,7 @@ export default function SyncStep({
   const connected = Boolean(link?.fc_alive)
   const waypoints = useMissionStore((s) => s.waypoints)
   const altitudeMode = useMissionStore((s) => s.altitudeMode)
+  const anchorOffset = useTerrainStore((s) => s.amslAnchorOffsetM)
   const home = useMissionStore((s) => s.home)
   const blocks = useMissionStore((s) => s.blocks)
   const planBase = useMissionStore((s) => s.planBase)
@@ -145,6 +147,14 @@ export default function SyncStep({
           planHashFull={planHashFull}
           fcHashFull={fcHashFull}
         />
+      )}
+      {hasItems && anchorOffset != null && Math.abs(anchorOffset) >= 0.05 && (
+        // The upload compensates the measured EKF-origin bias so the vehicle's
+        // TRUE altitude lands on the planned one (field report 2026-10-21).
+        // Shown for the audit: planned heights stay untouched on disk/export.
+        <div className="text-[11px] text-muted" data-testid="anchor-compensation-note">
+          {t('plan.anchorCompensation', { offset: anchorOffset.toFixed(1) })}
+        </div>
       )}
       <div className="flex items-stretch gap-1.5">
         <button

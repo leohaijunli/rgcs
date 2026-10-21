@@ -1,0 +1,24 @@
+{
+  "version": "e69057195b1f1977",
+  "raster_crs": "EPSG:4326",
+  "resolution_m": 1.0,
+  "bounds": {
+    "north": 48.556947383940845,
+    "south": 48.55525571649898,
+    "east": -123.37897241190709,
+    "west": -123.38151464463103
+  },
+  "vertical_datum": "orthometric_cgvd2013",
+  "has_dsm": true,
+  "has_dtm": true,
+  "source": "hrdem",
+  "dlat_deg": 8.998231073746e-6,
+  "dlon_deg": 0.00001359482740077,
+  "stac_item_id": "BC-Vancouver_Island_Sunshine_Coast_2018-1m",
+  "project_name": "BC-Vancouver_Island_Sunshine_Coast_2018-1m",
+  "acquisition": "2019-10-01T12:00:00Z",
+  "original_crs": "EPSG:3979 (NAD83(CSRS) / Canada Atlas Lambert)",
+  "provenance_sha256": "67a2be8ecf1ed8c147036022ab5366e57e550c117315fdff58bf4134915e8738",
+  "gdal_version": "GDAL 3.10.3, released 2025/04/01",
+  "proj_version": "Rel. 9.6.2, June 4th, 2025"
+}

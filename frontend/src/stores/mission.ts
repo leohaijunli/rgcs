@@ -669,7 +669,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
         patch.dirty = false
         patch.lastSyncedHash = itemsHash(
           orderedMissionItems(
-            compileWaypoints(s.waypoints, s.altitudeMode, homeAmsl(s.home)),
+            compileWaypoints(s.waypoints, s.altitudeMode, homeAmsl(s.home), anchorCompensationM()),
             s.blocks,
             s.planBase ?? undefined,
           ),
@@ -752,7 +752,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
   flyable: () => {
     const s = get()
     return orderedMissionItems(
-      compileWaypoints(s.waypoints, s.altitudeMode, homeAmsl(s.home)),
+      compileWaypoints(s.waypoints, s.altitudeMode, homeAmsl(s.home), anchorCompensationM()),
       s.blocks,
       s.planBase ?? undefined,
     )
@@ -840,6 +840,15 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       planCleared: false,
     }),
 }))
+
+/** The EKF-origin bias measured by the landed self-calibration (δ): the
+ * upload subtracts it from every coordinate item so the vehicle's TRUE
+ * altitude lands on the planned one (field report 2026-10-21: waypoints 58 m
+ * above home, the aircraft 53 m AGL). `null` calibration → 0 (fail-open). */
+function anchorCompensationM(): number {
+  const offset = useTerrainStore.getState().amslAnchorOffsetM
+  return offset != null && Number.isFinite(offset) ? offset : 0
+}
 
 /** Helper: convert MAVLink int lat/lon (×1e7) to degrees. */
 export function degFromMavInt(v: number): number {

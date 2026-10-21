@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "source": "hrdem-lidar",
+  "stac_api": "https://datacube.services.geo.ca/stac/api/search",
+  "collection": "hrdem-lidar",
+  "item_id": "BC-Vancouver_Island_Sunshine_Coast_2018-1m",
+  "acquisition_datetime": "2019-10-01T12:00:00Z",
+  "dtm_href": "https://canelevation-dem.s3.ca-central-1.amazonaws.com/hrdem-lidar/BC-Vancouver_Island_Sunshine_Coast_2018-1m-dtm.tif",
+  "dsm_href": "https://canelevation-dem.s3.ca-central-1.amazonaws.com/hrdem-lidar/BC-Vancouver_Island_Sunshine_Coast_2018-1m-dsm.tif",
+  "fetched_utc": "2026-10-20T02:29:35Z",
+  "license": "Open Government Licence - Canada 2.0",
+  "license_url": "https://open.canada.ca/en/open-government-licence-canada",
+  "horizontal_crs": "EPSG:4326 (WGS84, per ADR-018 §D null transform)",
+  "vertical_datum": "CGVD2013 (EPSG:6647), orthometric, metres",
+  "datum_note": "NAD83(CSRS) to WGS84 via the null transform per ADR-018 §D (~1 m horizontal residual, accepted and recorded)",
+  "datum_pipeline": "null (proj strings sharing GRS80: +proj=lcc +lat_1=49 +lat_2=77 +lat_0=49 +lon_0=-95 +x_0=0 +y_0=0 +ellps=GRS80 +units=m +no_defs -> +proj=longlat +ellps=GRS80 +no_defs)",
+  "proj_default_operation": "unknown id, Inverse of Canada Atlas Lambert + NAD83(CSRS) to WGS 84 (2), 1 m, Canada - onshore and offshore - Alberta; British Columbia; Manitoba; New Brunswick; Newfoundland and Labrador; Northwest Territories; Nova Scotia; Nunavut; Ontario; Prince Edward Island; Quebec; Saskatchewan; Yukon.",
+  "aoi_center_lat": 48.55587544144488,
+  "aoi_center_lon": -123.38073613527618,
+  "aoi_core_m": [
+    278.2390413305493,
+    246.16327345662987
+  ],
+  "aoi_buffer_m": 250.0,
+  "resolution_m": 1.0,
+  "resampling": "dtm=bilinear, dsm=max",
+  "wgs84_bounds": [
+    -123.387660365926,
+    48.5513467523119,
+    -123.373812401111,
+    48.5604041396035
+  ],
+  "spec_hash": "6624a3cdfe3560a845004bfe8522de217e80c0d2e6613131adf6c06ab7a672e1",
+  "gdal_version": "GDAL 3.10.3, released 2025/04/01",
+  "proj_version": "Rel. 9.6.2, June 4th, 2025",
+  "dtm": {
+    "path": "dtm.tif",
+    "sha256": "735da1456f0d8499e49c7c3d406de182df972ebe5be8bed1c1daca1d50135bed"
+  },
+  "dsm": {
+    "path": "dsm.tif",
+    "sha256": "ffb1d1a6c2e4de40d3bd6c8d8d71570754876e06ae312d1e349460b22cbb311a"
+  },
+  "native_dtm": {
+    "path": "native/dtm-3979.tif",
+    "sha256": "daccdca08015f0dabd52ab5dd0de3597f950e5e17b763871a2f9507117c8aafc"
+  },
+  "native_dsm": {
+    "path": "native/dsm-3979.tif",
+    "sha256": "e6ae988bf3165645bace7c0d4f1eec50bc794afeb205ec45eb860786dbd27333"
+  }
+}

@@ -54,6 +54,7 @@ async function bundle(entry) {
 const { useMissionStore } = await bundle('stores/mission.ts')
 const { planSyncStatus, planSyncPhase } = await bundle('mission/sync.ts')
 const { shortHash } = await bundle('mission/hash.ts')
+const { compileWaypoints } = await bundle('mission/compile.ts')
 
 const failures = []
 let passed = 0
@@ -550,6 +551,44 @@ await check('an in-flight operation beats a stale stored mismatch', async () => 
 
   await useMissionStore.getState().upload()
   eq(phase(), 'uploading', 'a fresh upload beats the stale mismatch')
+})
+
+console.log('\nEKF-origin altitude compensation (field 2026-10-21):')
+
+const wp = (meters, command = 16) => ({
+  position: { latitude_deg: 48.5, longitude_deg: -123.4 },
+  altitude: { datum: 'AMSL_EGM96', meters },
+  command,
+  params: [0, 0, 0, 0],
+  autocontinue: true,
+  locked: false,
+})
+
+await check('compileWaypoints subtracts the measured EKF-origin bias from coordinate items', () => {
+  const items = compileWaypoints([wp(100), wp(120)], 'amsl', 0, 5)
+  eq(items[0].z, 95, 'planned 100 − δ 5')
+  eq(items[1].z, 115, 'planned 120 − δ 5')
+})
+
+await check('the stored plan and the export stay on the true datum (offset only at upload)', () => {
+  const items = compileWaypoints([wp(100)], 'amsl', 0)
+  eq(items[0].z, 100, 'no offset passed = untouched (export path)')
+})
+
+await check('command items (DO_*) are never compensated', () => {
+  const items = compileWaypoints([wp(12, 178)], 'amsl', 0, 5)
+  eq(items[0].z, 12, 'a command param is not an altitude')
+})
+
+await check('null calibration fails open (no shift)', () => {
+  const items = compileWaypoints([wp(100)], 'amsl', 0, 0)
+  eq(items[0].z, 100, 'δ unknown → compile as planned')
+})
+
+await check('relative mode compensates too (same constant bias)', () => {
+  // stored AMSL 130, home 30 → relative 100; δ 5 → 95
+  const items = compileWaypoints([wp(130)], 'relative', 30, 5)
+  eq(items[0].z, 95, 'relative − δ')
 })
 
 console.log('\ncompact hash (U17d):')

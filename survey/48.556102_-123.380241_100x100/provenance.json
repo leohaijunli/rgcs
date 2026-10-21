@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "source": "hrdem-lidar",
+  "stac_api": "https://datacube.services.geo.ca/stac/api/search",
+  "collection": "hrdem-lidar",
+  "item_id": "BC-Vancouver_Island_Sunshine_Coast_2018-1m",
+  "acquisition_datetime": "2019-10-01T12:00:00Z",
+  "dtm_href": "https://canelevation-dem.s3.ca-central-1.amazonaws.com/hrdem-lidar/BC-Vancouver_Island_Sunshine_Coast_2018-1m-dtm.tif",
+  "dsm_href": "https://canelevation-dem.s3.ca-central-1.amazonaws.com/hrdem-lidar/BC-Vancouver_Island_Sunshine_Coast_2018-1m-dsm.tif",
+  "fetched_utc": "2026-10-18T08:25:59Z",
+  "license": "Open Government Licence - Canada 2.0",
+  "license_url": "https://open.canada.ca/en/open-government-licence-canada",
+  "horizontal_crs": "EPSG:4326 (WGS84, per ADR-018 §D null transform)",
+  "vertical_datum": "CGVD2013 (EPSG:6647), orthometric, metres",
+  "datum_note": "NAD83(CSRS) to WGS84 via the null transform per ADR-018 §D (~1 m horizontal residual, accepted and recorded)",
+  "datum_pipeline": "null (proj strings sharing GRS80: +proj=lcc +lat_1=49 +lat_2=77 +lat_0=49 +lon_0=-95 +x_0=0 +y_0=0 +ellps=GRS80 +units=m +no_defs -> +proj=longlat +ellps=GRS80 +no_defs)",
+  "proj_default_operation": "unknown id, Inverse of Canada Atlas Lambert + NAD83(CSRS) to WGS 84 (2), 1 m, Canada - onshore and offshore - Alberta; British Columbia; Manitoba; New Brunswick; Newfoundland and Labrador; Northwest Territories; Nova Scotia; Nunavut; Ontario; Prince Edward Island; Quebec; Saskatchewan; Yukon.",
+  "aoi_center_lat": 48.5561021,
+  "aoi_center_lon": -123.380241,
+  "aoi_core_m": [
+    100.0,
+    100.0
+  ],
+  "aoi_buffer_m": 20.0,
+  "resolution_m": 1.0,
+  "resampling": "dtm=bilinear, dsm=max",
+  "wgs84_bounds": [
+    -123.381503426615,
+    48.5552640561039,
+    -123.378978591067,
+    48.5569401444943
+  ],
+  "spec_hash": "07b08f9a1ed7c2c7aa6f03c3fecbcd55afdbe2280d519a5e18cdf3baf8aa3416",
+  "gdal_version": "GDAL 3.10.3, released 2025/04/01",
+  "proj_version": "Rel. 9.6.2, June 4th, 2025",
+  "dtm": {
+    "path": "dtm.tif",
+    "sha256": "53a129ab371e92cc56b37c8b949b518bd591e9eaa11d0b02c76538ee2ee0a54b"
+  },
+  "dsm": {
+    "path": "dsm.tif",
+    "sha256": "50d4b4a99e906e5b34d9ffcd8425a103b2b24da4b329722e46a748d3741b34a6"
+  },
+  "native_dtm": {
+    "path": "native/dtm-3979.tif",
+    "sha256": "00d53ad9105fcc8473bfda0a1895931a46352bf182952c83a056659898f7c141"
+  },
+  "native_dsm": {
+    "path": "native/dsm-3979.tif",
+    "sha256": "dc958b673e9d434323c95c72df677ff31cdbf15126adc918203edf7e54639fc2"
+  }
+}

@@ -376,6 +376,8 @@ export default {
     eventLogHint: 'The full event log (incl. forced-arm marks) is in the alert center — the list button in the top bar.',
   },
   plan: {
+    anchorCompensation:
+      'EKF origin bias {{offset}} m compensated at upload — planned heights unchanged on disk.',
     waypoint: 'Waypoint',
     lockHeight: 'Lock height (re-drape keeps it)',
     aglUnknown: 'AGL unknown (no terrain)',
