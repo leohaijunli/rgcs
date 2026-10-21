@@ -411,6 +411,9 @@ pub async fn run<R: Runtime>(
             format!("shutdown stage {name}: {outcome:?}"),
         ));
     }
+    // U15: a detached map window never outlives the app — the main window's
+    // teardown takes it down (closing the map alone only re-embeds).
+    crate::map_service::close_map_on_shutdown(app);
     Ok(report)
 }
 

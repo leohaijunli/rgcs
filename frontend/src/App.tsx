@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useTelemetryBridge } from './desktop/bridge'
 import { isTauri } from './inspector/mock'
 import { useProjectStore } from './stores/project'
@@ -21,6 +22,7 @@ import AutoConnectDialog from './components/dialogs/AutoConnectDialog'
 import TargetChangeDialog from './components/dialogs/TargetChangeDialog'
 import TeardownDialog from './components/dialogs/TeardownDialog'
 import PreflightPanel from './components/PreflightPanel'
+import { useDetachedMap } from './stores/detachedMap'
 
 /** True when the event target is a text field where the browser's own undo
  * should win (Ctrl+Z inside an input must not revert the whole plan). */
@@ -51,6 +53,7 @@ export default function App() {
   usePlanHistoryShortcuts()
   // U12: `?` opens the keyboard shortcut sheet (Esc closes; no dangerous
   // command carries a single-key shortcut).
+  const { t } = useTranslation()
   const { open: shortcutsOpen, setOpen: setShortcutsOpen } = useShortcutsSheet()
   // The forced start page (operator decision 2026-10-18): with no project
   // open the app shows project selection only — recent projects listed for
@@ -66,6 +69,10 @@ export default function App() {
   // page under SwiftShader on some runners (A8 artifact), and every UI surface
   // except the map itself is testable without it. Production is unaffected.
   const noMap = new URLSearchParams(window.location.search).has('nomap')
+  // U15: the map can live in its own webview — the main window then runs
+  // map-free (bigger HUD/strip/checklist) and shows a re-embed affordance.
+  const detachedMap = useDetachedMap()
+  const hideMap = noMap || detachedMap.detached
 
   if (showStart) {
     return <StartPage />
@@ -77,7 +84,27 @@ export default function App() {
       <div className="flex min-h-0 flex-1">
         <main className="relative flex min-w-0 flex-1 flex-col">
           <div className="relative min-h-0 flex-1">
-            {noMap ? null : (
+            {hideMap ? (
+              <div
+                data-testid="map-detached-placeholder"
+                className="flex h-full flex-col items-center justify-center gap-3 text-sm text-muted"
+              >
+                <span>
+                  {detachedMap.detached
+                    ? t('mapWindow.detachedHere')
+                    : t('mapWindow.noMap')}
+                </span>
+                {detachedMap.detached && (
+                  <button
+                    data-testid="map-bring-back"
+                    onClick={() => void detachedMap.bringBack()}
+                    className="touch-target h-9 rounded border border-line bg-panel px-3 text-xs text-ink hover:bg-canvas"
+                  >
+                    {t('mapWindow.bringBack')}
+                  </button>
+                )}
+              </div>
+            ) : (
               <MapErrorBoundary>
                 <MapView />
               </MapErrorBoundary>

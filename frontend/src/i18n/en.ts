@@ -24,6 +24,13 @@ export default {
     sending: 'sending',
   },
 
+  mapWindow: {
+    caption: 'Detached map — closing this window puts the map back in the main window.',
+    detachedHere: 'The map is open in its own window.',
+    noMap: 'The map is unavailable.',
+    bringBack: 'Bring map back',
+    popOut: 'Pop out map',
+  },
   shortcuts: {
     title: 'Keyboard shortcuts',
     note: 'No dangerous command carries a single-key shortcut — flight commands always go through their graded confirmations.',

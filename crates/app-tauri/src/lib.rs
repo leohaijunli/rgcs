@@ -16,6 +16,7 @@ mod inspector_service;
 mod instruments_service;
 mod lifecycle_service;
 mod logs_service;
+mod map_service;
 mod mission_service;
 mod motor_test_state;
 mod params_service;
@@ -156,6 +157,9 @@ pub fn run() {
             calibration_service::mag_calibration_status,
             commands::clock_info,
             commands::tools_status,
+            map_service::map_open,
+            map_service::map_close,
+            map_service::map_status,
             shared_state_service::shared_state_get,
             shared_state_service::shared_state_snapshot,
             shared_state_service::shared_state_set,

@@ -50,6 +50,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: 'index.html',
+        map: 'map.html',
         inspector: 'inspector.html',
         actuator: 'actuator.html',
         params: 'params.html',

@@ -26,8 +26,8 @@
 | 状态 | 工作包 | 依据/缺口 |
 |---|---|---|
 | 已实现 | A1–A4、A6–A10、L1–L10、U1、U2–U5、U8、U9、U11–U14、U17、PJ1–PJ4、H0–H4、H6–H8、DR1–DR7、DR9(事后评估版) | 逐项证据见下方执行记录(2026-10-15 → 2026-10-18)。要点:H1 live 验收与 H0 夹具 ±2 px 逐像元一致;H2 强制 §D 空变换;H3 DSM-max 保峰实测锁定;H7 真实 CGG2013 格网 + 两段式控制点互校(**PX4 实机 <0.5 m 现场验收仍待**);A2 主链断开联合回归全绿;L5 强制解锁三处记录时间戳一致;L9 goto 距离/地形守卫;L10 场景测试集(core 757);A8 WebGL context lost 隔离与 Restart;U17a–d Plan 步骤就绪/阻塞/批量编辑/同步相位;PJ1–PJ3 项目模型、profile 注册表与强制启动页;DR1–DR7 全链(spec/solver/compile/preview/监控/记录导出)+ DR9 雷达偏置稳健估计。**DR8 已取消(操作员,不做方位角扫描)**;U7 中仅 HUD 的 AGL 读数由 DR6b 提供,其余 U7 内容仍 ⏸。 |
-| 部分实现 | A5、PJ3(数据侧)、A11(phase 1) | A5 清单引擎 + Drape 组 + PJ2 模板已就位。**A11 第一阶段(2026-10-21)**:版本化 KV + 命令 + 广播 + 图层开关切片。**A9 与 U5 收尾均已完成(2026-10-20,见执行记录)**:solve→compile 为唯一航点来源(`meshDrape.ts`/`terrain_drape` 已删);每个 Fail 项有修复入口,不可行区段逐项确认落地。PJ3 界面完成,但测量/会话**数据**要等 M4(⏸)才写入 project store。 |
-| 未实现/未验收 | U15、U16 | U15 地图分离(进行中);U16 图层管理。**H5、H10、H11 与 A11 后续切片按操作员 2026-10-21 指示暂缓(issues O11/O9/O10/O12)**。 |
+| 部分实现 | A5、PJ3(数据侧)、A11(phase 1)、U15(phase 1:主窗侧完成,地图窗手动验收/相机同步待 A11) | A5 清单引擎 + Drape 组 + PJ2 模板已就位。**A11 第一阶段(2026-10-21)**:版本化 KV + 命令 + 广播 + 图层开关切片。**A9 与 U5 收尾均已完成(2026-10-20,见执行记录)**:solve→compile 为唯一航点来源(`meshDrape.ts`/`terrain_drape` 已删);每个 Fail 项有修复入口,不可行区段逐项确认落地。PJ3 界面完成,但测量/会话**数据**要等 M4(⏸)才写入 project store。 |
+| 未实现/未验收 | U16 | U16 图层管理。**H5、H10、H11 与 A11 后续切片按操作员 2026-10-21 指示暂缓(issues O11/O9/O10/O12)**。 |
 | 明确推迟 | ⏸ 项 | 按「范围与状态」与规则 10 执行,不得因上述审查而擅自解冻。 |
 
 **实机/现场待验收清单**(代码与自动化测试已完成,需真机):
@@ -60,6 +60,14 @@
 - **实现(后端 `terrain_service.rs`)**:`drape_preview` 在 `spawn_blocking` 内 `solve → compile`,新增 `waypoints`(compiled NAV 项经真实 H7 链转 `AMSL_EGM96`,共享 `vertical_chain_offset`,`VERTICAL_DATUM_CHAIN_ERROR` fail-closed)与 `landing_amsl_m`(降落点采样 DEM 表面、同链转换;`DrapeLineInput` 同 `[lon,lat]` 约定);速度项(178)与 datum 原样透传(z 是命令参数);`DrapeResult.compiled` 保持 DEM datum——监控基线与锚定 fix 同帧。
 - **实现(前端)**:新纯函数 `mission/drapeApply.ts::applyCompiled`(编译产物按块替换 pattern block;块内 pinned 高度按位置容差恢复;`21/85` 降落项按位置键贴地;块外一律原样;返回重锚定的线表);`stores/mission.ts` 合并 `runDrapePreview`/`runTerrainDrape` 为单管线 `runDrapeOnce(apply)`(指纹、600 ms 防抖、A3 告警、unchanged 不置 dirty 语义保持);手动编辑(lastPattern 清空)→ fail-closed 报"regenerate the pattern",不再静默保留旧高度;DrapeBlock/SyncStep provenance(`dem:<folder>`、dem_ref.hash)改读新 `DrapeState`;删除 `meshDrape.ts`、`DrapeState.report`(DrapeReport)/`meshDrape` 字段与 `MESH_*` 文案。
 - **验证**:`cargo test -p maggcs-core` 全绿(drape.rs 测试随模块删除,699 lib + 集成);`cargo test -p maggcs-app` 76 通过(新增 `drape_apply_tests` 3 条:H 链转换数值断言 ±0.02、链外 fail-closed、命令项透传);`drape_pipeline.rs`(solve→compile 真实文件 I/O)3 条通过;clippy `-D warnings`(core+app)、fmt、`git diff --check`;前端 `tsc`、production build、14 个 check 脚本 + `check:agl`(27 条,重定向到 `applyCompiled`)全绿;ts-rs 绑定重生成,删除 `DrapeReport/DrapeOptions.ts`。**行为变更**:terrain 模式不再有 mesh 兜底;手动编辑不重 drape;块外手动航点不参与 drape(AGL 行显示 unknown)。ADR-005 addendum、ADR-022 已更新。实机复验归 DR6 走查单。
+
+#### U15 执行记录 (2026-10-21,phase 1)
+
+- **操作员 2026-10-21 指示**:A11 后续切片(选中/相机/drape 跨窗同步)与 H5 暂缓(issues O12/O11),U15 因此只保证图层开关经 shared state 同步。
+- **后端 `map_service`**:`map_open`(创建/聚焦 `map` webview,`map.html`)、`map_close`(回嵌)、`map_status`(主窗布局门禁)、`close_map_on_shutdown`(泛型 Runtime,由 `lifecycle_service::run` 在停机路径调用——**主窗关闭连带关地图窗(L4)**);`map_window` 事件在窗口 `Destroyed` 时广播(关闭地图窗 → 回嵌,**不等于退出**)。
+- **前端**:新 `map.html` + `src/map/main.tsx`(与内嵌同源:MapView + MapErrorBoundary + HeartbeatBanner + AlertLayer + 点击穿透的说明条;独立 webview/WebGL,崩溃只影响自身);`stores/detachedMap.ts`(map_status 初值 + map_window 事件);App 的 `hideMap = noMap || detached` 分支——分离时主窗显示占位 + **Bring map back**;TopBar 新增 **Pop out map** 按钮;vite 增 `map` 入口。
+- **验收(主窗侧自动化,`check-map-window.mjs` 8 条)**:分离态占位与"bring back"出现;**Flight menu / RTL / 五阶段导航 / 告警中心在无地图时全部可用**(主窗自足);非分离态不显示分离文案与按钮。截图 `shots-u15/map-detached-main.png`。
+- **待办/边界(如实记录)**:地图窗本身需 Tauri 壳(手动验收:弹出→主窗无地图→关地图窗回嵌→主窗关闭连带关地图窗);窗口位置/大小/多显示器回落未实现(计划该项标 *verify*);相机/选中跨窗同步待 A11(issues O12)。
 
 #### A11 第一阶段执行记录 (2026-10-21)
 

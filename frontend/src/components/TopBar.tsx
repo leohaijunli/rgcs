@@ -12,6 +12,7 @@ import {
   ShieldOff,
   SlidersHorizontal,
   PackageOpen,
+  ExternalLink,
 } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -451,6 +452,14 @@ export default function TopBar() {
             </span>
           )}
         </span>
+        <IconButton
+          title={t('mapWindow.popOut')}
+          size={32}
+          data-testid="map-popout"
+          onClick={() => void invoke('map_open').catch(() => {})}
+        >
+          <ExternalLink size={15} />
+        </IconButton>
         <IconButton
           title={t('settings.menu')}
           size={32}

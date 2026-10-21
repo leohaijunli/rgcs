@@ -25,6 +25,7 @@
     "check:drape-error": "node scripts/check-drape-error.mjs",
     "check:plan-profile": "node scripts/check-plan-profile.mjs",
     "check:field-mode": "node scripts/check-field-mode.mjs",
+    "check:map-window": "node scripts/check-map-window.mjs",
     "tauri": "tauri"
   },
   "dependencies": {
