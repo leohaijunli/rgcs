@@ -4,6 +4,13 @@
 // cannot strand the operator without controls. The alert banner is mounted
 // here too, so a Critical stays visible on a full-screen map (U3/U15).
 
+// NOTE (must match src/main.tsx): the Cesium worker/asset base URL and the
+// locale shim are REQUIRED for the globe to initialise — without them Cesium
+// resolves its workers relative to the page and fails with
+// "An error occurred while rendering. Rendering has stopped." (the detached
+// window showed exactly that before this fix).
+import '../locale-shim'
+window.CESIUM_BASE_URL = '/cesium/'
 import '../design-system/index.css'
 import React from 'react'
 import { createRoot } from 'react-dom/client'
