@@ -14,6 +14,7 @@ import { invoke } from '@tauri-apps/api/core'
 import type { GeoPoint } from '../../../generated-types/GeoPoint'
 import type { SurveyPrepStatus } from '../../../generated-types/SurveyPrepStatus'
 import type { SurveyPrepState } from '../../../generated-types/SurveyPrepState'
+import { formatBytes } from '../../../util/units'
 import { useTerrainStore } from '../../../stores/terrain'
 import { classifyPrepError } from '../../../util/surveyPrep'
 
@@ -31,20 +32,6 @@ function inTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 }
 
-function formatBytes(bytes: number | bigint): string {
-  // ts-rs types u64 as bigint; the value crosses as a JSON number well below
-  // the safe-integer bound, so narrowing here is exact for raster sizes.
-  const n = typeof bytes === 'bigint' ? Number(bytes) : bytes
-  if (n < 1024) return `${n} B`
-  const units = ['KiB', 'MiB', 'GiB']
-  let value = n / 1024
-  let i = 0
-  while (value >= 1024 && i < units.length - 1) {
-    value /= 1024
-    i += 1
-  }
-  return `${value.toFixed(1)} ${units[i]}`
-}
 
 export default function SurveyPrepCard({
   center,

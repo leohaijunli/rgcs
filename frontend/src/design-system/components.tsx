@@ -453,6 +453,72 @@ export function ConfirmBar({
 }
 
 /** Format a command round-trip for the status strip. */
+
+/**
+ * U13: one long-task readout — a determinate/indeterminate bar, the sent/total
+ * (or stage) label, an elapsed timer and an optional cancel button. Every
+ * long operation (mission sync, DEM fetch/build, log download) renders this
+ * instead of its own ad-hoc text so the operator reads them the same way.
+ */
+export function TaskProgress({
+  label,
+  sent,
+  total,
+  indeterminate = false,
+  startedAtMs,
+  onCancel,
+  danger = false,
+}: {
+  label: string
+  /** Progress counters; omit for an indeterminate bar. */
+  sent?: number
+  total?: number
+  indeterminate?: boolean
+  /** Wall-clock epoch ms the task started at — renders the elapsed time. */
+  startedAtMs?: number | null
+  onCancel?: () => void
+  danger?: boolean
+}) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (startedAtMs == null) return
+    const id = window.setInterval(() => setNow(Date.now()), 500)
+    return () => window.clearInterval(id)
+  }, [startedAtMs])
+  const pct =
+    !indeterminate && total != null && total > 0 && sent != null
+      ? Math.min(100, Math.round((sent / total) * 100))
+      : null
+  const elapsed = startedAtMs != null ? formatElapsedMs(now - startedAtMs) : null
+  return (
+    <div className="space-y-1" data-testid="task-progress">
+      <div className="flex items-center justify-between gap-2 text-[11px]">
+        <span className="text-ink">{label}</span>
+        <span className="mono text-muted">
+          {sent != null && total != null ? `${sent}/${total}` : ''}
+          {elapsed ? ` · ${elapsed}` : ''}
+        </span>
+      </div>
+      <div className="h-1.5 w-full overflow-hidden rounded bg-canvas">
+        <div
+          className={`h-full ${danger ? 'bg-error' : 'bg-accent'}`}
+          style={pct != null ? { width: `${pct}%` } : { width: '30%', animation: 'mg-task-pulse 1.2s ease-in-out infinite alternate' }}
+          data-testid="task-progress-bar"
+        />
+      </div>
+      {onCancel && (
+        <button
+          data-testid="task-cancel"
+          onClick={onCancel}
+          className="touch-target h-8 w-full rounded border border-line bg-canvas px-2 text-xs text-ink hover:bg-panel"
+        >
+          Cancel
+        </button>
+      )}
+    </div>
+  )
+}
+
 export function formatElapsedMs(ms: number | null): string | null {
   if (ms == null || !Number.isFinite(ms)) return null
   return `${(ms / 1000).toFixed(1)} s`

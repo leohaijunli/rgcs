@@ -270,6 +270,10 @@ fn dem_prep_binary() -> Result<PathBuf, String> {
     )
 }
 
+/// U13: set by `terrain3d_cancel` — the running `run_stage` polls it and
+/// kills its `dem-prep` child, reporting the neutral "cancelled" outcome.
+static STAGE_CANCELLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// One pipeline stage: spawn `dem-prep <args>`, stream its stdout lines to
 /// the frontend as `terrain3d_progress` events, and fail with the tail of
 /// stderr when the exit status is not success.
@@ -293,20 +297,52 @@ fn run_stage(
             .lines()
             .map_while(Result::ok)
         {
+            // U13: a cancel request kills the child mid-stream — the reader
+            // sees EOF, and the wait below reports the cancelled outcome.
+            if STAGE_CANCELLED.load(Ordering::SeqCst) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("cancelled".into());
+            }
             let _ = app.emit(
                 "terrain3d_progress",
                 serde_json::json!({ "stage": stage, "line": line }),
             );
         }
     }
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("dem-prep {stage}: {e}"))?;
-    if output.status.success() {
-        return Ok(());
+    // Poll the exit status so a cancel can kill while we wait (a blocking
+    // `wait_with_output` would be unkillable from the command thread).
+    let mut stderr_buf = String::new();
+    loop {
+        // Drain stdout to EOF first (the lines loop above returns only when
+        // the pipe closes or we cancel); between lines, poll the cancel flag.
+        if STAGE_CANCELLED.load(Ordering::SeqCst) {
+            let _ = child.kill();
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if status.success() {
+                    return Ok(());
+                }
+                break;
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(100)),
+            Err(e) => return Err(format!("dem-prep {stage}: {e}")),
+        }
     }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let tail: String = stderr.lines().rev().take(3).collect::<Vec<_>>().join("; ");
+    if let Some(mut err) = child.stderr.take() {
+        use std::io::Read;
+        let _ = err.read_to_string(&mut stderr_buf);
+    }
+    let tail: String = stderr_buf
+        .lines()
+        .rev()
+        .take(3)
+        .collect::<Vec<_>>()
+        .join("; ");
+    if STAGE_CANCELLED.load(Ordering::SeqCst) {
+        return Err("cancelled".into());
+    }
     // An old dem-prep prints its usage line for unknown subcommands — tell
     // the operator to rebuild instead of pasting the usage back.
     if tail.contains("usage: dem-prep") {
@@ -698,6 +734,18 @@ pub async fn survey_prepare_cancel() -> Result<bool, String> {
         return Ok(true);
     }
     Ok(false)
+}
+
+/// U13: cancel the running 3D build / DEM fetch (`run_stage` polls this and
+/// kills its child). `true` when something was actually running.
+///
+/// # Errors
+///
+/// Never — the flag set is infallible; the runner surfaces the outcome.
+#[tauri::command]
+pub fn terrain3d_cancel() -> Result<bool, String> {
+    let was = STAGE_CANCELLED.swap(true, Ordering::SeqCst);
+    Ok(was)
 }
 
 /// One-click build from a **local** data folder (ADR-004 addendum): BC LiDAR

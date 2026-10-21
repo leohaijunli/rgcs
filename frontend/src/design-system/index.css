@@ -313,3 +313,13 @@ html.field-mode :focus-visible {
   outline: 2px solid var(--mg-accent);
   outline-offset: 1px;
 }
+
+/* U13 TaskProgress: the indeterminate bar pulse. */
+@keyframes mg-task-pulse {
+  from {
+    margin-left: 0%;
+  }
+  to {
+    margin-left: 70%;
+  }
+}

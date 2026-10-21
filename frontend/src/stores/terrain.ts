@@ -83,7 +83,7 @@ interface TerrainState {
   coverage: DemBounds | null
   setCoverage: (bounds: DemBounds | null) => void
   /** One-click build/download in flight (`fetch`/`process`/`terrain`). */
-  building3d: { stage: string; line: string } | null
+  building3d: { stage: string; line: string; startedAtMs: number } | null
   /** Error from the one-click build/download. */
   buildError3d: string | null
   /** DTM under each mission waypoint (seq → metres), sampled by the map and
@@ -425,7 +425,7 @@ export const useTerrainStore = create<TerrainState>((set, get) => ({
       const source = await invoke<string | null>('terrain3d_dem_source')
       if (source) {
         startBuildWatcher()
-        set({ building3d: { stage: 'process', line: '' }, buildError3d: null })
+        set({ building3d: { stage: 'process', line: '', startedAtMs: Date.now() }, buildError3d: null })
         const tileset = await invoke<string>('terrain3d_build_from_dem', { maxzoom: null })
         await serveBuilt3d(tileset, source)
         set({ building3d: null })
@@ -436,7 +436,7 @@ export const useTerrainStore = create<TerrainState>((set, get) => ({
       const aoi = await surveyAoi()
       if (aoi) {
         startBuildWatcher()
-        set({ building3d: { stage: 'hrdem', line: '' }, buildError3d: null })
+        set({ building3d: { stage: 'hrdem', line: '', startedAtMs: Date.now() }, buildError3d: null })
         const tileset = await invoke<string>('terrain3d_build_from_survey', {
           lat: aoi.lat,
           lon: aoi.lon,
@@ -493,7 +493,7 @@ export const useTerrainStore = create<TerrainState>((set, get) => ({
   },
   download3d: async (lat, lon, sizeKm) => {
     startBuildWatcher()
-    set({ building3d: { stage: 'fetch', line: '' }, buildError3d: null })
+    set({ building3d: { stage: 'fetch', line: '', startedAtMs: Date.now() }, buildError3d: null })
     try {
       const { invoke } = await import('@tauri-apps/api/core')
       const out = await invoke<string>('terrain3d_download', {
@@ -511,7 +511,7 @@ export const useTerrainStore = create<TerrainState>((set, get) => ({
   },
   build3d: async (folder) => {
     startBuildWatcher()
-    set({ building3d: { stage: 'process', line: '' }, buildError3d: null })
+    set({ building3d: { stage: 'process', line: '', startedAtMs: Date.now() }, buildError3d: null })
     try {
       const { invoke } = await import('@tauri-apps/api/core')
       const out = await invoke<string>('terrain3d_build', { folder, maxzoom: null })
@@ -614,11 +614,15 @@ function startBuildWatcher(): void {
       const { listen } = await import('@tauri-apps/api/event')
       await listen<{ stage: string; line: string }>('terrain3d_progress', (e) => {
         // The survey-area fetch shares the event with the 3D pipeline; route
-        // by stage so both log streams stay independent.
+        // by stage so both log streams stay independent. The building entry
+        // keeps its start time for the elapsed readout (U13).
         if (e.payload.stage === 'hrdem') {
           useTerrainStore.setState({ surveyPrep: e.payload })
         } else {
-          useTerrainStore.setState({ building3d: e.payload })
+          const prev = useTerrainStore.getState().building3d
+          useTerrainStore.setState({
+            building3d: { ...e.payload, startedAtMs: prev?.startedAtMs ?? Date.now() },
+          })
         }
       })
     } catch {

@@ -429,14 +429,23 @@ pub struct ToolStatus {
 pub fn tools_status(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Vec<ToolStatus> {
     use tauri::Manager;
     let open = |label: &str| app.get_webview_window(label).is_some();
-    let motor_sending = state
-        .motor_test
-        .session()
-        .is_some_and(|s| s.is_sending());
+    let motor_sending = state.motor_test.session().is_some_and(|s| s.is_sending());
     vec![
-        ToolStatus { id: "inspector".into(), open: open("inspector"), busy: false },
-        ToolStatus { id: "actuator".into(), open: open("actuator"), busy: motor_sending },
-        ToolStatus { id: "params".into(), open: open("params"), busy: false },
+        ToolStatus {
+            id: "inspector".into(),
+            open: open("inspector"),
+            busy: false,
+        },
+        ToolStatus {
+            id: "actuator".into(),
+            open: open("actuator"),
+            busy: motor_sending,
+        },
+        ToolStatus {
+            id: "params".into(),
+            open: open("params"),
+            busy: false,
+        },
     ]
 }
 

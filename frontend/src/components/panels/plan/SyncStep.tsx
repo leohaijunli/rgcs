@@ -10,6 +10,7 @@ import { exportPlanFile, importPlanFile } from '../../../mission/planfile'
 import { compileWaypoints } from '../../../mission/compile'
 import { useMissionStore, VERTICAL_DATUM_UNVERIFIED_ERROR } from '../../../stores/mission'
 import { useTerrainStore } from '../../../stores/terrain'
+import { TaskProgress } from '../../../design-system/components'
 import { useLinkStore } from '../../../stores/link'
 import type { SyncPhase } from '../../../mission/sync'
 import SyncStatusLine from './SyncStatusLine'
@@ -67,6 +68,11 @@ export default function SyncStep({
   const planBase = useMissionStore((s) => s.planBase)
   const busy = useMissionStore((s) => s.busy)
   const syncState = useMissionStore((s) => s.syncState)
+  // U13: the wall clock the current busy phase started at (for the elapsed).
+  const [taskStartedAtMs, setTaskStartedAtMs] = useState<number | null>(null)
+  useEffect(() => {
+    setTaskStartedAtMs(busy ? Date.now() : null)
+  }, [busy, syncState])
   const lastEvent = useMissionStore((s) => s.lastEvent)
   const upload = useMissionStore((s) => s.upload)
   const download = useMissionStore((s) => s.download)
@@ -212,22 +218,26 @@ export default function SyncStep({
       </div>
 
       {/* Progress and errors render directly under the primary button. */}
-      {(busy || lastEvent) && (
-        <div className="text-xs text-muted">
-          {busy ? (
-            <span className="text-accent">{t(`plan.status.${syncState}`)}</span>
-          ) : lastEvent && lastEvent.kind === 'failed' ? (
-            <span className="text-error">
-              {t('plan.failed')}: {lastEvent.message ?? '—'}
-            </span>
-          ) : lastEvent && lastEvent.kind === 'progress' ? (
-            <span>
-              {t(`plan.op.${lastEvent.op}`)} {lastEvent.sent}/{lastEvent.total}
-            </span>
-          ) : (
-            lastEvent && <span className="text-ok">{t(`plan.done.${lastEvent.op}`)}</span>
-          )}
+      {busy ? (
+        // U13: the mission ops share one TaskProgress readout — bar, counts,
+        // elapsed. Cancelling mid-MAVLink-upload is not protocol-safe (a half
+        // mission left on the FC), so there is no cancel button by design;
+        // disconnect is the abort, and the Sync gate flags the mismatch.
+        <TaskProgress
+          label={t(`plan.status.${syncState}`)}
+          sent={lastEvent?.kind === 'progress' ? lastEvent.sent ?? undefined : undefined}
+          total={lastEvent?.kind === 'progress' ? lastEvent.total ?? undefined : undefined}
+          indeterminate={lastEvent?.kind !== 'progress'}
+          startedAtMs={taskStartedAtMs}
+        />
+      ) : lastEvent && lastEvent.kind === 'failed' ? (
+        <div className="rounded border border-error px-2 py-1 text-[11px] text-error">
+          {t('plan.failed')}: {lastEvent.message ?? '—'}
         </div>
+      ) : (
+        lastEvent && (
+          <div className="text-[11px] text-ok">{t(`plan.done.${lastEvent.op}`)}</div>
+        )
       )}
     </div>
   )

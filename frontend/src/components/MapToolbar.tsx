@@ -19,7 +19,9 @@ import {
   Plus,
 } from 'lucide-react'
 import { useUiStore } from '../stores/ui'
+import { invoke } from '@tauri-apps/api/core'
 import { getSafetyConfig } from '../desktop/appConfig'
+import { TaskProgress } from '../design-system/components'
 import { useTerrainStore } from '../stores/terrain'
 import {
   IconButton,
@@ -219,8 +221,16 @@ function Terrain3DToggle() {
         </div>
       )}
       {!terrain3d && building3d && (
-        <div className="mono px-1 text-[10px] text-muted">
-          [{building3d.stage}] {building3d.line.slice(-60) || t('terrain.building')}
+        // U13: the 3D build gets the shared readout — stage, streamed log
+        // line, elapsed, and the cancel that kills the dem-prep child.
+        <div className="px-1">
+          <TaskProgress
+            label={`[${building3d.stage}] ${(building3d.line.slice(-40)) || t('terrain.building')}`}
+            indeterminate
+            startedAtMs={building3d.startedAtMs}
+            danger={false}
+            onCancel={() => void invoke<boolean>('terrain3d_cancel').catch(() => {})}
+          />
         </div>
       )}
       {!terrain3d && !building3d && (
