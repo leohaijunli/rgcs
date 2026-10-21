@@ -112,10 +112,21 @@ async function boot(detached) {
   const page = await boot(true)
   check(
     await page
-      .waitForSelector('[data-testid="map-detached-placeholder"]', { timeout: 8000 })
+      .waitForSelector('[data-testid="map-detached-strip"]', { timeout: 8000 })
       .then(() => true)
       .catch(() => false),
-    'the main window shows the detached-map placeholder',
+    'the main window shows the slim detached-map strip (no blank panel)',
+  )
+  check(
+    (await page.locator('[data-testid="map-detached-placeholder"]').count()) === 0,
+    'no big empty map placeholder is rendered',
+  )
+  check(
+    await page
+      .waitForSelector('text=Altitude profile', { timeout: 5000 })
+      .then(() => true)
+      .catch(() => false),
+    'the freed space opens the altitude-profile drawer',
   )
   check(
     await page.getByRole('button', { name: 'Bring map back' }).count() === 1,
@@ -138,11 +149,8 @@ async function boot(detached) {
 // render — what matters is that it is NOT the detached variant.)
 {
   const page = await boot(false)
-  const text = await page
-    .locator('[data-testid="map-detached-placeholder"]')
-    .innerText()
-    .catch(() => '')
-  check(!/own window/i.test(text), 'without detaching the placeholder is not the detached variant')
+  const strip = await page.locator('[data-testid="map-detached-strip"]').count()
+  check(strip === 0, 'without detaching there is no detached strip')
   check(
     (await page.getByRole('button', { name: 'Bring map back' }).count()) === 0,
     'no bring-back button while the map is not detached',

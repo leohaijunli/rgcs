@@ -84,27 +84,26 @@ export default function App() {
       <div className="flex min-h-0 flex-1">
         <main className="relative flex min-w-0 flex-1 flex-col">
           <div className="relative min-h-0 flex-1">
-            {hideMap ? (
+            {/* Detached map (U15): the map area is *gone*, not blank — the
+             * HUD, the command strip and the profile drawer take the room,
+             * and only a slim bar names the state and offers the way back
+             * (a big empty panel would just waste the screen). */}
+            {detachedMap.detached && (
               <div
-                data-testid="map-detached-placeholder"
-                className="flex h-full flex-col items-center justify-center gap-3 text-sm text-muted"
+                data-testid="map-detached-strip"
+                className="flex items-center gap-2 border-b border-line bg-panel px-3 py-1 text-[11px] text-muted"
               >
-                <span>
-                  {detachedMap.detached
-                    ? t('mapWindow.detachedHere')
-                    : t('mapWindow.noMap')}
-                </span>
-                {detachedMap.detached && (
-                  <button
-                    data-testid="map-bring-back"
-                    onClick={() => void detachedMap.bringBack()}
-                    className="touch-target h-9 rounded border border-line bg-panel px-3 text-xs text-ink hover:bg-canvas"
-                  >
-                    {t('mapWindow.bringBack')}
-                  </button>
-                )}
+                <span>{t('mapWindow.detachedHere')}</span>
+                <button
+                  data-testid="map-bring-back"
+                  onClick={() => void detachedMap.bringBack()}
+                  className="rounded border border-line bg-canvas px-2 py-0.5 text-[11px] text-ink hover:bg-panel"
+                >
+                  {t('mapWindow.bringBack')}
+                </button>
               </div>
-            ) : (
+            )}
+            {!hideMap && (
               <MapErrorBoundary>
                 <MapView />
               </MapErrorBoundary>
@@ -118,7 +117,7 @@ export default function App() {
             <AlertLayer />
             <ErrorBanner />
           </div>
-          <ProfileDrawer />
+          <ProfileDrawer defaultOpen={detachedMap.detached} />
         </main>
         <RightInspector />
       </div>

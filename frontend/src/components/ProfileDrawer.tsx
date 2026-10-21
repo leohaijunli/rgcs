@@ -3,13 +3,18 @@
 // The chart always follows the flight track; the drawer only controls
 // visibility/height.
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import LiveAltitudeProfile from './LiveAltitudeProfile'
 
-export default function ProfileDrawer() {
+export default function ProfileDrawer({ defaultOpen = false }: { defaultOpen?: boolean } = {}) {
   const { t } = useTranslation()
-  const [open, setOpen] = useState(false)
+  // U15: with the map detached the main window opens this drawer by default —
+  // the freed space carries the altitude profile instead of sitting empty.
+  const [open, setOpen] = useState(defaultOpen)
+  useEffect(() => {
+    if (defaultOpen) setOpen(true)
+  }, [defaultOpen])
 
   return (
     <div className="border-t border-line bg-panel">

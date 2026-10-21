@@ -14,6 +14,7 @@ import MapErrorBoundary from '../components/MapErrorBoundary'
 import AlertLayer from '../components/AlertLayer'
 import HeartbeatBanner from '../components/HeartbeatBanner'
 import { initAppConfig } from '../desktop/appConfig'
+import { useTelemetryBridge } from '../desktop/bridge'
 import { applyFieldMode, applyThemePref, readFieldMode, readThemePref } from '../design-system/theme'
 
 applyThemePref(readThemePref())
@@ -21,6 +22,22 @@ applyFieldMode(readFieldMode())
 
 /** A slim, click-through caption: which window this is, and that closing it
  * re-embeds the map in the main window (U15 window semantics). */
+/** The bridge must run here too: link, telemetry and mission events are what
+ * MapView draws (without it the detached map is an empty globe). */
+function MapWindowShell() {
+  useTelemetryBridge()
+  return (
+    <div className="relative h-screen w-screen bg-canvas text-ink">
+      <MapErrorBoundary>
+        <MapView />
+      </MapErrorBoundary>
+      <MapWindowBar />
+      <HeartbeatBanner />
+      <AlertLayer />
+    </div>
+  )
+}
+
 function MapWindowBar() {
   const { t } = useTranslation()
   return (
@@ -34,14 +51,7 @@ void initAppConfig().finally(() => {
   const root = createRoot(document.getElementById('root') as HTMLElement)
   root.render(
     <React.StrictMode>
-      <div className="relative h-screen w-screen bg-canvas text-ink">
-        <MapErrorBoundary>
-          <MapView />
-        </MapErrorBoundary>
-        <MapWindowBar />
-        <HeartbeatBanner />
-        <AlertLayer />
-      </div>
+      <MapWindowShell />
     </React.StrictMode>,
   )
 })
