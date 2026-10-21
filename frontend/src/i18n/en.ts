@@ -20,6 +20,7 @@ export default {
     motorTest: 'Motor test',
     parameters: 'Parameters',
     logs: 'Logs',
+    diagnostics: 'Export diagnostics',
   },
 
   drawer: { profile: {

@@ -11,6 +11,7 @@ mod command_service;
 mod commands;
 mod config_service;
 mod console_service;
+mod diagnostics_service;
 mod inspector_service;
 mod instruments_service;
 mod lifecycle_service;
@@ -150,6 +151,7 @@ pub fn run() {
             calibration_service::mag_calibration_status,
             commands::clock_info,
             commands::udev_rules_present,
+            diagnostics_service::diagnostics_export,
             inspector_service::inspector_catalog,
             inspector_service::inspector_list_algorithms,
             inspector_service::inspector_open_ulog,
@@ -170,6 +172,16 @@ pub fn run() {
             app.state::<AppState>().set_config(config);
             // L8: the mag calibration survives restarts via its sidecar file.
             calibration_service::load_at_startup(app.handle(), &app.state::<AppState>());
+            // A10: the rolling file log + panic hook; the guard lives forever.
+            {
+                use tauri::Manager;
+                let log_dir = app
+                    .path()
+                    .app_log_dir()
+                    .unwrap_or_else(|_| std::env::temp_dir());
+                let path = diagnostics_service::init_file_logger(&log_dir);
+                diagnostics_service::install_panic_hook(&path);
+            }
 
             // One alert pump for the process: every transition the core
             // alert center records is forwarded to all webviews (A3).

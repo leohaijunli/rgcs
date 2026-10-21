@@ -25,7 +25,7 @@
 
 | 状态 | 工作包 | 依据/缺口 |
 |---|---|---|
-| 已实现 | A1–A4、A6–A9、L1–L10、U1、U2–U5、U8、U9、U17、PJ1、PJ2、PJ3、H0–H4、H7、H8、DR1–DR7、DR9(事后评估版) | 逐项证据见下方执行记录(2026-10-15 → 2026-10-18)。要点:H1 live 验收与 H0 夹具 ±2 px 逐像元一致;H2 强制 §D 空变换;H3 DSM-max 保峰实测锁定;H7 真实 CGG2013 格网 + 两段式控制点互校(**PX4 实机 <0.5 m 现场验收仍待**);A2 主链断开联合回归全绿;L5 强制解锁三处记录时间戳一致;L9 goto 距离/地形守卫;L10 场景测试集(core 757);A8 WebGL context lost 隔离与 Restart;U17a–d Plan 步骤就绪/阻塞/批量编辑/同步相位;PJ1–PJ3 项目模型、profile 注册表与强制启动页;DR1–DR7 全链(spec/solver/compile/preview/监控/记录导出)+ DR9 雷达偏置稳健估计。**DR8 已取消(操作员,不做方位角扫描)**;U7 中仅 HUD 的 AGL 读数由 DR6b 提供,其余 U7 内容仍 ⏸。 |
+| 已实现 | A1–A4、A6–A10、L1–L10、U1、U2–U5、U8、U9、U17、PJ1、PJ2、PJ3、H0–H4、H7、H8、DR1–DR7、DR9(事后评估版) | 逐项证据见下方执行记录(2026-10-15 → 2026-10-18)。要点:H1 live 验收与 H0 夹具 ±2 px 逐像元一致;H2 强制 §D 空变换;H3 DSM-max 保峰实测锁定;H7 真实 CGG2013 格网 + 两段式控制点互校(**PX4 实机 <0.5 m 现场验收仍待**);A2 主链断开联合回归全绿;L5 强制解锁三处记录时间戳一致;L9 goto 距离/地形守卫;L10 场景测试集(core 757);A8 WebGL context lost 隔离与 Restart;U17a–d Plan 步骤就绪/阻塞/批量编辑/同步相位;PJ1–PJ3 项目模型、profile 注册表与强制启动页;DR1–DR7 全链(spec/solver/compile/preview/监控/记录导出)+ DR9 雷达偏置稳健估计。**DR8 已取消(操作员,不做方位角扫描)**;U7 中仅 HUD 的 AGL 读数由 DR6b 提供,其余 U7 内容仍 ⏸。 |
 | 部分实现 | A5、PJ3(数据侧) | A5 清单引擎 + Drape 组 + PJ2 模板已就位。**A9 与 U5 收尾均已完成(2026-10-20,见执行记录)**:solve→compile 为唯一航点来源(`meshDrape.ts`/`terrain_drape` 已删);每个 Fail 项有修复入口,不可行区段逐项确认落地。PJ3 界面完成,但测量/会话**数据**要等 M4(⏸)才写入 project store。 |
 | 未实现/未验收 | L8、A10、A11、U11–U16、PJ4、H5、H6、H10、H11 | L8 启动自检/连接确认;A10 诊断包;A11 跨窗口单一事实源(U15 前置,未完成前 U15 不得上线);U11 多窗口协调、U12 现场模式、U13 长任务、U14 设计系统整理、U15 地图分离、U16 图层管理;PJ4 项目资源与归档;H5 惰性分块、H6 来源自动解析、H10 对比验证、H11 点云路径。 |
 | 明确推迟 | ⏸ 项 | 按「范围与状态」与规则 10 执行,不得因上述审查而擅自解冻。 |
@@ -49,7 +49,7 @@
 6. ~~A9 收尾~~(已实施 2026-10-20,见 A9 执行记录)。
 7. ~~U5 收尾~~(已实施 2026-10-20,见 U5 执行记录)。
 8. ~~L8~~(已实施 2026-10-20,见 L8 执行记录)。
-9. 再推进 P2/P4:A10、PJ4、H6、H10、U11–U14;**A11 完成后才可启动 U15/U16**;⏸ 项必须等待明确解冻。
+9. 再推进 P2/P4:~~A10~~(已实施 2026-10-20)、PJ4、H6、H10、U11–U14;**A11 完成后才可启动 U15/U16**;⏸ 项必须等待明确解冻。
 
 ### 验证基线 (2026-10-15)
 
@@ -60,6 +60,13 @@
 - **实现(后端 `terrain_service.rs`)**:`drape_preview` 在 `spawn_blocking` 内 `solve → compile`,新增 `waypoints`(compiled NAV 项经真实 H7 链转 `AMSL_EGM96`,共享 `vertical_chain_offset`,`VERTICAL_DATUM_CHAIN_ERROR` fail-closed)与 `landing_amsl_m`(降落点采样 DEM 表面、同链转换;`DrapeLineInput` 同 `[lon,lat]` 约定);速度项(178)与 datum 原样透传(z 是命令参数);`DrapeResult.compiled` 保持 DEM datum——监控基线与锚定 fix 同帧。
 - **实现(前端)**:新纯函数 `mission/drapeApply.ts::applyCompiled`(编译产物按块替换 pattern block;块内 pinned 高度按位置容差恢复;`21/85` 降落项按位置键贴地;块外一律原样;返回重锚定的线表);`stores/mission.ts` 合并 `runDrapePreview`/`runTerrainDrape` 为单管线 `runDrapeOnce(apply)`(指纹、600 ms 防抖、A3 告警、unchanged 不置 dirty 语义保持);手动编辑(lastPattern 清空)→ fail-closed 报"regenerate the pattern",不再静默保留旧高度;DrapeBlock/SyncStep provenance(`dem:<folder>`、dem_ref.hash)改读新 `DrapeState`;删除 `meshDrape.ts`、`DrapeState.report`(DrapeReport)/`meshDrape` 字段与 `MESH_*` 文案。
 - **验证**:`cargo test -p maggcs-core` 全绿(drape.rs 测试随模块删除,699 lib + 集成);`cargo test -p maggcs-app` 76 通过(新增 `drape_apply_tests` 3 条:H 链转换数值断言 ±0.02、链外 fail-closed、命令项透传);`drape_pipeline.rs`(solve→compile 真实文件 I/O)3 条通过;clippy `-D warnings`(core+app)、fmt、`git diff --check`;前端 `tsc`、production build、14 个 check 脚本 + `check:agl`(27 条,重定向到 `applyCompiled`)全绿;ts-rs 绑定重生成,删除 `DrapeReport/DrapeOptions.ts`。**行为变更**:terrain 模式不再有 mesh 兜底;手动编辑不重 drape;块外手动航点不参与 drape(AGL 行显示 unknown)。ADR-005 addendum、ADR-022 已更新。实机复验归 DR6 走查单。
+
+#### A10 执行记录 (2026-10-20)
+
+- **文件日志**:新 `diagnostics_service.rs`——`tracing` + `EnvFilter`(`RUST_LOG` 覆盖,默认 `info`)+ `tracing-appender` 每日滚动(`app_log_dir/maggcs.log*`),worker guard 停驻进程级 `OnceLock`(谁都能写、谁都不 drop);启动写同步版本 banner(`maggcs v{VERSION} — logging started`——非阻塞 writer 可能滞后,验收要读文件)。
+- **panic hook**:`install_panic_hook` 同步追加 `PANIC v{VERSION} at <loc>: <msg>` 到日志文件(崩溃 dump 不能丢),再链默认 hook。**验收(计划原文"触发测试 panic 后文件存在且含版本")**:`a_triggered_panic_lands_in_the_log_with_the_version`——`catch_unwind` 触发 panic,断言文件含版本 banner 与 PANIC 行,3 条诊断单测全绿。
+- **诊断包**:Tools ▸ **Export diagnostics**(`diagnostics_export` 命令)→ `app_log_dir/diagnostics-<ts>/`:全部 `maggcs.log*`、`config.json`(**无密钥**——AppConfig 不含凭据,key 在 Tauri auth store)、`alerts.json`(当前告警快照)、`session.json`(有记录会话时)、`README.txt`(自述);完成/失败经 A3 告警行回显路径。
+- 验证:app 85(诊断 3);clippy `-D warnings`、fmt;`tsc`、build、i18n(697 keys)全绿。`tracing` 依赖从工作区脚手架正式入库。RUST_LOG 默认 info,生产调试时无需重编译。
 
 #### L8 执行记录 (2026-10-20)
 

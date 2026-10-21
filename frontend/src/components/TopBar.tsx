@@ -11,6 +11,7 @@ import {
   ShieldCheck,
   ShieldOff,
   SlidersHorizontal,
+  PackageOpen,
 } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -18,7 +19,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { useTelemetryStore } from '../stores/telemetry'
 import { useLinkStore } from '../stores/link'
 import { useProjectStore } from '../stores/project'
-import { useAlerts } from '../stores/alerts'
+import { useAlerts, raiseAlert } from '../stores/alerts'
 import { FIELD_STALE_MS, useHeartbeatAge } from '../hooks/useDataAge'
 import { useIsNarrow } from '../hooks/useIsNarrow'
 import { getSafetyConfig } from '../desktop/appConfig'
@@ -478,6 +479,27 @@ function fixKey(fix: string): string {
   return map[fix] ?? 'noGps'
 }
 
+/** A10: export the diagnostics bundle and surface the folder path. */
+async function exportDiagnostics(): Promise<void> {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const bundle = await invoke<{ folder: string; files: string[] }>('diagnostics_export')
+    raiseAlert({
+      source: 'system',
+      severity: 'info',
+      text: `Diagnostics exported to ${bundle.folder} (${bundle.files.length} files)`,
+      key: 'diagnostics-exported',
+    })
+  } catch (e) {
+    raiseAlert({
+      source: 'system',
+      severity: 'warn',
+      text: `Diagnostics export failed: ${String(e)}`,
+      key: 'diagnostics-exported',
+    })
+  }
+}
+
 /** Tools ▾: the window launchers, one popover (motor-test plan §5). */
 function ToolsPopover({
   onInspector,
@@ -568,6 +590,17 @@ function ToolsPopover({
           >
             <FileDown size={14} />
             {t('tools.logs')}
+          </button>
+          <button
+            data-testid="diagnostics-export"
+            onClick={() => {
+              setOpen(false)
+              void exportDiagnostics()
+            }}
+            className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-sm text-ink hover:bg-canvas"
+          >
+            <PackageOpen size={14} />
+            {t('tools.diagnostics')}
           </button>
           <button
             data-testid="about-open"
