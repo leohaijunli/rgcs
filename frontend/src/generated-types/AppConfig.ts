@@ -52,4 +52,10 @@ plan: PlanPrefs,
  * different sysid/vehicle asks the operator to confirm (a second GCS on
  * the bus or a re-plugged FC must not be flown unnoticed).
  */
-last_target: LastTarget | null, };
+last_target: LastTarget | null, 
+/**
+ * A manually chosen DEM folder (H6 manual override): set when the
+ * operator picks a dem-prep output in the folder dialog; the resolver
+ * treats it as the first candidate. `None` = full auto.
+ */
+terrain_override_dir: string | null, };

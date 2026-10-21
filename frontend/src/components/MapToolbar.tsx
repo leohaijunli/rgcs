@@ -19,6 +19,7 @@ import {
   Plus,
 } from 'lucide-react'
 import { useUiStore } from '../stores/ui'
+import { getSafetyConfig } from '../desktop/appConfig'
 import { useTerrainStore } from '../stores/terrain'
 import {
   IconButton,
@@ -239,6 +240,7 @@ function TerrainToggle() {
   const uncovered = useTerrainStore((s) => s.uncovered)
   const tiles = useTerrainStore((s) => s.tiles)
   const tile = useTerrainStore((s) => s.tile)
+  const suggestDownload = useTerrainStore((s) => s.suggestDownload)
   const load = useTerrainStore((s) => s.load)
   const clear = useTerrainStore((s) => s.clear)
   return (
@@ -254,10 +256,32 @@ function TerrainToggle() {
       {uncovered && !error && (
         <div className="px-1 text-[10px] text-warn">{t('terrain.uncovered')}</div>
       )}
-      {overlay && (
-        <div className="px-1 text-[10px] text-muted">
-          {t('terrain.version')} {overlay.version}
-          {tiles.length > 1 && tile && (
+      {overlay && tile && (
+        <div className="px-1 text-[10px] text-muted" data-testid="terrain-chip">
+          {/* H6 chip: source / resolution / acquisition age / datum, with the
+           * age warning when past the configured threshold. */}
+          {tile.source === 'hrdem'
+            ? t('terrain.sourceHrdem')
+            : tile.source === 'geotiff'
+              ? t('terrain.sourceGeotiff')
+              : t('terrain.sourceLidar')}
+          {tile.resolution_m != null && <span> · {tile.resolution_m} m</span>}
+          {tile.acquisition && (
+            <DemAgeChip acquisition={tile.acquisition} />
+          )}
+          {tile.vertical_datum && (
+            <span>
+              {' · '}
+              {tile.vertical_datum === 'orthometric_cgvd2013'
+                ? t('terrain.datumCgvd2013')
+                : t('terrain.datumEgm96')}
+            </span>
+          )}
+          <span>
+            {' · '}
+            {t('terrain.version')} {overlay.version}
+          </span>
+          {tiles.length > 1 && (
             <span>
               {' · '}
               {tile.folder || '—'} ({tiles.length})
@@ -265,6 +289,26 @@ function TerrainToggle() {
           )}
         </div>
       )}
+      {suggestDownload && !error && (
+        <div className="px-1 text-[10px] text-warn">{t('terrain.suggestDownload')}</div>
+      )}
     </div>
+  )
+}
+
+
+/** H6: the acquisition age with the configured staleness warning. */
+function DemAgeChip({ acquisition }: { acquisition: string }) {
+  const { t } = useTranslation()
+  const years = (Date.now() - Date.parse(acquisition)) / (365.25 * 24 * 3600 * 1000)
+  if (!Number.isFinite(years)) return null
+  const limit = getSafetyConfig().dem_max_age_years
+  const stale = limit != null && years > limit
+  return (
+    <span className={stale ? 'text-warn' : undefined}>
+      {' · '}
+      {t('terrain.acquired', { year: acquisition.slice(0, 4) })}
+      {stale ? ' ⚠' : ''}
+    </span>
   )
 }

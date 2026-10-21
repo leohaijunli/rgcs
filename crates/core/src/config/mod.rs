@@ -115,6 +115,11 @@ pub struct AppConfig {
     /// the bus or a re-plugged FC must not be flown unnoticed).
     #[serde(default)]
     pub last_target: Option<LastTarget>,
+    /// A manually chosen DEM folder (H6 manual override): set when the
+    /// operator picks a dem-prep output in the folder dialog; the resolver
+    /// treats it as the first candidate. `None` = full auto.
+    #[serde(default)]
+    pub terrain_override_dir: Option<String>,
 }
 
 /// The last confirmed link target (L8): sysid plus the vehicle type label the
@@ -174,6 +179,7 @@ impl Default for AppConfig {
             safety: SafetyConfig::default(),
             plan: PlanPrefs::default(),
             last_target: None,
+            terrain_override_dir: None,
         }
     }
 }

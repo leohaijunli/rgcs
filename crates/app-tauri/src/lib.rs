@@ -102,6 +102,7 @@ pub fn run() {
             logs_service::logs_request_list,
             logs_service::logs_download,
             logs_service::logs_cancel,
+            terrain_service::terrain_select,
             terrain_service::terrain_sample,
             terrain_service::terrain_process_raw,
             terrain_service::geoid_sample,

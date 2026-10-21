@@ -686,7 +686,9 @@ function DrapeBlock() {
           <span className="text-muted">
             {tile?.source === 'geotiff'
               ? t('plan.pattern.drape.sourceGeotiff')
-              : t('plan.pattern.drape.sourceLidar')}
+              : tile?.source === 'hrdem'
+                ? t('terrain.sourceHrdem')
+                : t('plan.pattern.drape.sourceLidar')}
           </span>
           {/* The tightest planned clearance the solver produced; `null` on a
            * DTM-only source — the panel says so instead of a fake number. */}

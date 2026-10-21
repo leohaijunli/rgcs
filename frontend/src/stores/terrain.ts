@@ -4,10 +4,12 @@
 // tile covering the survey area; the drape reuses the same pick.
 
 import { create } from 'zustand'
+import type { SourceCandidate } from '../generated-types/SourceCandidate'
+import type { SourceSelection } from '../generated-types/SourceSelection'
+import { getTerrainOverrideDir, setTerrainOverrideDir } from '../desktop/appConfig'
 import type { DemBounds } from '../generated-types/DemBounds'
 import type { DemSource } from '../generated-types/DemSource'
 import type { SurveyPrepStatus } from '../generated-types/SurveyPrepStatus'
-import { firstSurface, type SurfaceSource } from '../util/surface'
 
 /** One tile from `terrain_discover` (absolute folder + placement). */
 export interface DiscoveredTile {
@@ -18,6 +20,10 @@ export interface DiscoveredTile {
   has_dsm: boolean
   /** What produced the DEM — the drape report labels it (LiDAR preferred). */
   source: DemSource
+  /** H6 chip facts (from the tile's dem.json). */
+  resolution_m: number | null
+  acquisition: string | null
+  vertical_datum: 'orthometric_cgvd2013' | 'amsl_egm96' | null
 }
 
 export interface TerrainOverlay {
@@ -51,6 +57,9 @@ interface TerrainState {
   overlay: TerrainOverlay | null
   /** True when a survey area exists but no tile covers it (N1 hint). */
   uncovered: boolean
+  /** H6: no candidate covers the AOI — the Layers chip offers the GLO-30
+   * download tier ④ (the resolver never downloads on its own). */
+  suggestDownload: boolean
   /** True while a discover/load is in flight. */
   loading: boolean
   /** Error from the last load attempt (shown in the Layers popover). */
@@ -185,6 +194,7 @@ export const useTerrainStore = create<TerrainState>((set, get) => ({
   tile: null,
   overlay: null,
   uncovered: false,
+  suggestDownload: false,
   loading: false,
   error: null,
   terrain3d: null,
@@ -297,52 +307,104 @@ export const useTerrainStore = create<TerrainState>((set, get) => ({
       if (path) set({ error: null })
       return path
     }
-    // Priority order (the folder picker is the last resort): a remembered
-    // dem-prep folder → the survey area's prepared HRDEM session → a DEM
-    // folder discovered beside the app / via MAGCS_DEM_DIR. The drape button
-    // and the altitude profile both land here, so the DEM is handled
-    // automatically whenever the operator already has one.
-    const sources: SurfaceSource[] = [
-      async () => {
-        const remembered = get().folder ?? sessionStorage.getItem('maggcs.terrainFolder')
-        return remembered ? await load(remembered) : null
-      },
-      // "Prepare survey area" (U9b) already fetched exactly the DTM the drape
-      // needs; its session folder is a valid single-tile DEM, so reuse it and
-      // spare the operator a manual folder pick after a prepare.
-      async () => {
-        const aoi = await surveyAoi()
-        if (!aoi) return null
+    // H6 source resolution: gather every reachable candidate (the manual
+    // override recorded in config, the remembered/auto-probed folders, the
+    // prepared HRDEM session), then let the pure core resolver pick the
+    // highest-precision one covering the survey AOI. The GLO-30 download is
+    // a *suggestion* — the resolver never downloads (plan rule 13).
+    const candidates: SourceCandidate[] = []
+    const aoiCenter = await surveyAoi()
+    const aoi = aoiCenter
+      ? {
+          north: aoiCenter.lat + aoiCenter.height / 2 / 111_320,
+          south: aoiCenter.lat - aoiCenter.height / 2 / 111_320,
+          east: aoiCenter.lon + aoiCenter.width / 2 / (111_320 * Math.cos((aoiCenter.lat * Math.PI) / 180)),
+          west: aoiCenter.lon - aoiCenter.width / 2 / (111_320 * Math.cos((aoiCenter.lat * Math.PI) / 180)),
+        }
+      : null
+
+    // Discover one folder into candidates (a failed folder falls through).
+    const gatherFolder = async (folder: string): Promise<void> => {
+      try {
+        const { tiles } = await invoke<{ tiles: DiscoveredTile[] }>('terrain_discover', { folder })
+        for (const tile of tiles) {
+          candidates.push({
+            id: tile.path,
+            source: tile.source,
+            resolution_m: tile.resolution_m ?? (tile.source === 'geotiff' ? 30 : 1),
+            bounds: tile.bounds,
+            has_dsm: tile.has_dsm,
+            acquisition: tile.acquisition,
+          })
+        }
+      } catch {
+        /* not a dem-prep output — the next tier tries */
+      }
+    }
+
+    // ⓪ the manual override (config) — first candidate, resolver still ranks.
+    const overrideDir =
+      getTerrainOverrideDir() ?? get().folder ?? sessionStorage.getItem('maggcs.terrainFolder')
+    if (overrideDir) await gatherFolder(overrideDir)
+    // ② local processed tiles beside the app / MAGCS_DEM_DIR.
+    const autoSource = await invoke<string | null>('terrain3d_dem_source')
+    if (autoSource && autoSource !== overrideDir) await gatherFolder(autoSource)
+    // ① the prepared HRDEM session (U9b): one candidate, tier ①.
+    if (aoiCenter) {
+      try {
         const status = await invoke<SurveyPrepStatus>('survey_prepare_status', {
-          lat: aoi.lat,
-          lon: aoi.lon,
-          widthM: aoi.width,
-          heightM: aoi.height,
+          lat: aoiCenter.lat,
+          lon: aoiCenter.lon,
+          widthM: aoiCenter.width,
+          heightM: aoiCenter.height,
           outDir: null,
         })
-        return status.state === 'ready' && status.folder ? await load(status.folder) : null
-      },
-      // A DEM shipped next to the app, or pointed at with MAGCS_DEM_DIR.
-      async () => {
-        const source = await invoke<string | null>('terrain3d_dem_source')
-        return source ? await load(source) : null
-      },
-    ]
-    // Nothing automatic panned out: ask for the dem-prep output folder — but
-    // only when the caller allows a dialog (a background drape does not).
-    if (allowDialog) {
-      sources.push(async () => {
-        const { open } = await import('@tauri-apps/plugin-dialog')
-        const picked = await open({ multiple: false, directory: true })
-        if (!picked || typeof picked !== 'string') return null
-        sessionStorage.setItem('maggcs.terrainFolder', picked)
-        return await load(picked)
-      })
+        if (status.state === 'ready' && status.folder && status.bounds) {
+          candidates.push({
+            id: status.folder,
+            source: 'hrdem',
+            resolution_m: status.resolution_m ?? 1,
+            bounds: status.bounds,
+            has_dsm: status.has_dsm,
+            acquisition: status.acquisition,
+          })
+        }
+      } catch {
+        /* no prepared session */
+      }
     }
-    const resolved = await firstSurface(...sources)
-    if (!resolved) set({ loading: false })
-    return resolved
+
+    const selection: SourceSelection | null =
+      candidates.length === 0
+        ? 'suggest_download'
+        : aoi
+          ? await invoke<SourceSelection>('terrain_select', { candidates, aoi })
+          : { use: candidates[0] }
+
+    if (selection !== 'suggest_download') {
+      const path = await load(selection.use.id)
+      if (path) return path
+      // The chosen candidate failed to load (corrupt sidecar?); fall through
+      // to the remaining sources rather than dying on it.
+      for (const c of candidates) {
+        if (c.id === selection.use.id) continue
+        const fallback = await load(c.id)
+        if (fallback) return fallback
+      }
+    }
+    set({ loading: false, suggestDownload: selection === 'suggest_download' })
+    if (allowDialog) {
+      const { open } = await import('@tauri-apps/plugin-dialog')
+      const picked = await open({ multiple: false, directory: true })
+      if (picked && typeof picked === 'string') {
+        // H6 manual override: recorded into the config, resolver-first next boot.
+        setTerrainOverrideDir(picked)
+        return await load(picked)
+      }
+    }
+    return null
   },
+
   clear: () =>
     set((st) => ({ overlay: null, tile: null, tiles: [], folder: null, uncovered: false, loading: false, error: null, homeGroundAmsl: null, amslAnchorOffsetM: st.amslAnchorOffsetM })),
   start3d: async () => {

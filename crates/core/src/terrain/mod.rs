@@ -24,6 +24,7 @@ pub mod cog;
 pub mod drape_compile;
 pub mod drape_solver;
 pub mod drape_spec;
+pub mod source_select;
 
 pub use cog::CogDem;
 

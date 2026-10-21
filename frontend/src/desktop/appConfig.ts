@@ -59,6 +59,9 @@ let plan = DEFAULT_PLAN
 /** The last confirmed link target (L8); `null` before the first connect. */
 let lastTarget: LastTarget | null = null
 
+/** The manually chosen DEM folder (H6 override); `null` = full auto. */
+let terrainOverrideDir: string | null = null
+
 /** The loaded safety thresholds. Callers re-read this each render so a config
  * reload is reflected without a second store. */
 export function getSafetyConfig(): SafetyConfig {
@@ -87,6 +90,17 @@ export function setLastTarget(next: LastTarget): void {
   scheduleSave()
 }
 
+/** The manual DEM override (H6), if any. */
+export function getTerrainOverrideDir(): string | null {
+  return terrainOverrideDir
+}
+
+/** Record a manual DEM folder choice (H6) and persist. */
+export function setTerrainOverrideDir(dir: string | null): void {
+  terrainOverrideDir = dir
+  scheduleSave()
+}
+
 function inTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 }
@@ -112,6 +126,7 @@ function snapshot(): AppConfig {
     safety,
     plan,
     last_target: lastTarget,
+    terrain_override_dir: terrainOverrideDir,
   }
 }
 
@@ -134,6 +149,7 @@ function applyConfig(config: AppConfig): void {
   safety = config.safety
   plan = config.plan ?? DEFAULT_PLAN
   lastTarget = config.last_target ?? null
+  terrainOverrideDir = config.terrain_override_dir ?? null
 }
 
 let saveTimer: number | undefined

@@ -100,6 +100,12 @@ pub struct DiscoveredTile {
     pub has_dsm: bool,
     /// What produced the DEM (LiDAR preferred for the low-altitude drape).
     pub source: DemSource,
+    /// Chip facts (H6): nominal resolution, acquisition date, vertical datum
+    /// — read from the tile's `dem.json` (`None` when the index entry predates
+    /// the field or the sidecar is missing).
+    pub resolution_m: Option<f64>,
+    pub acquisition: Option<String>,
+    pub vertical_datum: Option<VerticalDatum>,
 }
 
 /// The tiles under a dem-prep output folder (N1).
@@ -125,19 +131,23 @@ pub async fn terrain_discover(folder: String) -> Result<TerrainDiscovery, String
     let index_path = dir.join("index.json");
     if index_path.is_file() {
         let tiles = maggcs_core::terrain::load_tile_index(dir).map_err(|e| e.to_string())?;
-        return Ok(TerrainDiscovery {
-            tiles: tiles
-                .into_iter()
-                .map(|t| DiscoveredTile {
-                    path: dir.join(&t.folder).display().to_string(),
-                    folder: t.folder,
-                    bounds: t.bounds,
-                    version: t.version,
-                    has_dsm: t.has_dsm,
-                    source: t.source,
-                })
-                .collect(),
-        });
+        let mut out = Vec::with_capacity(tiles.len());
+        for t in tiles {
+            let path = dir.join(&t.folder).display().to_string();
+            let meta = tile_metadata(&dir.join(&t.folder));
+            out.push(DiscoveredTile {
+                path,
+                folder: t.folder,
+                bounds: t.bounds,
+                version: t.version,
+                has_dsm: t.has_dsm,
+                source: t.source,
+                resolution_m: meta.as_ref().map(|m| m.resolution_m),
+                acquisition: meta.and_then(|m| m.acquisition),
+                vertical_datum: None,
+            });
+        }
+        return Ok(TerrainDiscovery { tiles: out });
     }
     // Single-tile folder (dem.json + hillshade.png directly under `folder`).
     if dir.join("dem.json").is_file() {
@@ -155,6 +165,9 @@ pub async fn terrain_discover(folder: String) -> Result<TerrainDiscovery, String
                 version: meta.version,
                 has_dsm: meta.has_dsm,
                 source: meta.source,
+                resolution_m: Some(meta.resolution_m),
+                acquisition: meta.acquisition,
+                vertical_datum: Some(meta.vertical_datum),
             }],
         });
     }
@@ -162,6 +175,14 @@ pub async fn terrain_discover(folder: String) -> Result<TerrainDiscovery, String
         "{}: no index.json or dem.json found",
         dir.display()
     ))
+}
+
+/// The `dem.json` sidecar of one tile, tolerantly: an index built by an
+/// older `dem-prep` may not carry the H6 chip facts, so a missing or corrupt
+/// sidecar degrades to `None` instead of failing discovery.
+fn tile_metadata(tile_dir: &Path) -> Option<DemMetadata> {
+    let text = std::fs::read_to_string(tile_dir.join("dem.json")).ok()?;
+    serde_json::from_str(&text).ok()
 }
 
 /// Start (or restart) the local 3D terrain tileset server on
@@ -1785,4 +1806,23 @@ pub fn drape_export(
     )
     .map_err(|e| e.to_string())?;
     Ok(Some(dir))
+}
+
+/// H6: rank DEM source candidates for an AOI — the pure strategy lives in
+/// `core::terrain::source_select`; this command only carries the candidates
+/// the frontend gathered (discovered tiles, the prepared HRDEM session) over
+/// the IPC. No IO, no download (tier ④ is a suggestion the frontend shows).
+///
+/// # Errors
+///
+/// A stringified deserialization error (Tauri does the JSON decoding).
+#[tauri::command]
+pub fn terrain_select(
+    candidates: Vec<maggcs_core::terrain::source_select::SourceCandidate>,
+    aoi: maggcs_core::terrain::DemBounds,
+) -> Result<maggcs_core::terrain::source_select::SourceSelection, String> {
+    Ok(maggcs_core::terrain::source_select::select_source(
+        &candidates,
+        &aoi,
+    ))
 }

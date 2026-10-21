@@ -664,6 +664,13 @@ export default {
     'google-satellite': 'Satellite',
     'google-hybrid': 'Hybrid',
     grid: 'Grid',
+    sourceHrdem: 'HRDEM (NRCan)',
+    sourceLidar: 'LiDAR 1 m',
+    sourceGeotiff: 'GeoTIFF ~30 m (DTM-only)',
+    acquired: 'acquired {{year}}',
+    datumCgvd2013: 'CGVD2013',
+    datumEgm96: 'AMSL (EGM96)',
+    suggestDownload: 'No DEM covers this area — download GLO-30 from the 3D terrain toggle or prepare the survey area.',
   },
   dock: {
     profile: 'Profile / AGL',
