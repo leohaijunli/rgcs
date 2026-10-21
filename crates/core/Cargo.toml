@@ -23,6 +23,7 @@ serde_json = "1"
 # the upload read-back, the preflight check, the monitor baseline and the
 # archive).
 sha2.workspace = true
+zip.workspace = true
 # Advisory file lock for the project directory (ADR-019: one process per
 # project; the OS releases the lock on process death, so no stale locks).
 fs2 = "0.4"

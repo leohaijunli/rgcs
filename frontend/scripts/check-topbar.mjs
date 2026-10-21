@@ -149,6 +149,15 @@ async function boot(width, height) {
     window.__mockLink({ link_state: 'connected', endpoint: 'udpin:0.0.0.0:14550', fc_alive: true })
     setInterval(() => window.__mockTelemetry(Date.now()), 300)
   })
+
+// L8: confirm the (first) target change and let the auto-connect window
+// expire — otherwise the startup dialogs gate every later click.
+await p.waitForSelector('[data-testid="autoconnect-dialog"]', { state: 'detached', timeout: 15000 }).catch(() => {})
+const targetConfirm = p.locator('[data-testid="target-change-confirm"]')
+await targetConfirm.waitFor({ state: 'visible', timeout: 8000 }).catch(() => {})
+if ((await targetConfirm.count()) > 0) await targetConfirm.click()
+await p.waitForSelector('[data-testid="target-change-dialog"]', { state: 'detached', timeout: 5000 }).catch(() => {})
+
   await mkdir(shotsDir, { recursive: true })
   await waitUntilOn(p, async () => (await p.locator('[data-testid="topbar-status"]').count()) === 1, 20000)
   return p

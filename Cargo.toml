@@ -26,3 +26,4 @@ tiff = "0.11"
 las = { version = "0.11", features = ["laz"] }
 sha2 = "0.10"
 png = "0.17"
+zip = { version = "2", default-features = false, features = ["deflate"] }

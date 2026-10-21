@@ -187,3 +187,8 @@ export function initAppConfig(owner = false): Promise<void> {
   })()
   return initPromise
 }
+
+// Dev-only handle for the Playwright checks (same pattern as `__mgMission`).
+if (import.meta.env?.DEV && typeof window !== 'undefined') {
+  ;(window as unknown as { __mgAppConfig?: unknown }).__mgAppConfig = { getLastTarget }
+}

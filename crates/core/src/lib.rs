@@ -9,6 +9,7 @@
 //! which carries a [`height::HeightDatum`] tag. See ADR-006.
 
 pub mod alerts;
+pub mod archive;
 pub mod calib;
 pub mod commands;
 pub mod config;

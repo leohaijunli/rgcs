@@ -201,6 +201,14 @@ await page.evaluate(() => {
   window.__mockFeedStart()
   window.__mockLink({ link_state: 'connected', endpoint: 'udpin:0.0.0.0:14550', fc_alive: true })
 })
+// L8: the startup dialogs gate the shell — let the auto-connect window
+// expire and confirm the (first) target change before anything clicks.
+await page.waitForSelector('[data-testid="autoconnect-dialog"]', { state: 'detached', timeout: 15000 }).catch(() => {})
+const targetConfirm = page.locator('[data-testid="target-change-confirm"]')
+await targetConfirm.waitFor({ state: 'visible', timeout: 8000 }).catch(() => {})
+if ((await targetConfirm.count()) > 0) await targetConfirm.click()
+await page.waitForSelector('[data-testid="target-change-dialog"]', { state: 'detached', timeout: 5000 }).catch(() => {})
+
 await mkdir(shotsDir, { recursive: true })
 await waitUntil(async () => (await page.locator('[data-testid="flight-menu"]').count()) === 1, 20000)
 

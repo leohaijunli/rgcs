@@ -8,10 +8,10 @@
 // surveying-state refinement lands with M1 ⏸).
 
 import * as Dialog from '@radix-ui/react-dialog'
-import { FolderOpen, Plus, X } from 'lucide-react'
+import { FileDown, FolderOpen, FolderUp, Plus, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { open as pickFolder } from '@tauri-apps/plugin-dialog'
+import { open as pickFolder, save as pickSave } from '@tauri-apps/plugin-dialog'
 import { isTauri } from '../../inspector/mock'
 import { useProjectStore } from '../../stores/project'
 import { StatusDot } from '../../design-system/components'
@@ -95,6 +95,58 @@ export default function ProjectHome({ open, onOpenChange }: { open: boolean; onO
     if (typeof dir === 'string') await run(dir)
   }
 
+  /** PJ4: export the open project to a zip via a save dialog. */
+  const [exportNote, setExportNote] = useState<string | null>(null)
+  const exportProject = async () => {
+    if (!isTauri() || !project) return
+    setExportNote(null)
+    const dest = await pickSave({
+      defaultPath: `${project.name.replace(/[^\w-]+/g, '_')}.zip`,
+      filters: [{ name: 'Project archive', extensions: ['zip'] }],
+    })
+    if (typeof dest !== 'string') return
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      const manifest = await invoke<{ project_id: string; files: string[] }>('project_export', {
+        zipPath: dest,
+      })
+      setExportNote(`${manifest.files.length} files exported`)
+    } catch (e) {
+      setExportNote(String(e))
+    }
+  }
+
+  /** PJ4: import a project zip next to the existing projects (the recent
+   * list's parent, so the imported project shows up beside them). */
+  const importProject = async () => {
+    if (!isTauri()) return
+    setExportNote(null)
+    const { invoke } = await import('@tauri-apps/api/core')
+    const zip = await pickFile()
+    if (typeof zip !== 'string') return
+    const first = recent()[0]?.path
+    const projectsRoot = first ? first.split(/[\\/]/).slice(0, -1).join('/') : null
+    if (!projectsRoot) {
+      setExportNote('Import needs a known project folder first — open one project, then import.')
+      return
+    }
+    try {
+      const target = await invoke<string>('project_import', { zipPath: zip, projectsRoot })
+      await openProject(target)
+      setExportNote(null)
+    } catch (e) {
+      setExportNote(String(e))
+    }
+  }
+  const pickFile = async (): Promise<string | null> => {
+    const picked = await pickFolder({
+      multiple: false,
+      directory: false,
+      filters: [{ name: 'Project archive', extensions: ['zip'] }],
+    })
+    return typeof picked === 'string' ? picked : null
+  }
+
   useEffect(() => {
     if (!open) setCreating(false)
   }, [open])
@@ -118,6 +170,7 @@ export default function ProjectHome({ open, onOpenChange }: { open: boolean; onO
             </Dialog.Close>
           </div>
 
+          {exportNote && <div className="mb-2 text-[11px] text-muted">{exportNote}</div>}
           {armed && <div className="mb-2 text-[11px] text-error">{t('project.armedRefusal')}</div>}
           {!armed && error && <div className="mb-2 text-[11px] text-error">{error}</div>}
 
@@ -146,6 +199,16 @@ export default function ProjectHome({ open, onOpenChange }: { open: boolean; onO
               >
                 <FolderOpen size={13} />
                 {t('project.open')}
+              </button>
+
+              <button
+                disabled={busy}
+                data-testid="project-import"
+                onClick={() => void importProject()}
+                className="flex w-full items-center gap-2 rounded border border-line bg-canvas px-2 py-1.5 text-xs text-ink hover:bg-panel disabled:opacity-50"
+              >
+                <FolderUp size={13} />
+                {t('project.import')}
               </button>
 
               {creating ? (
@@ -216,6 +279,16 @@ export default function ProjectHome({ open, onOpenChange }: { open: boolean; onO
                 ))}
                 {surveys.length === 0 && <div className="text-[11px] text-muted">{t('project.noSurveys')}</div>}
               </div>
+
+              <button
+                disabled={busy}
+                data-testid="project-export"
+                onClick={() => void exportProject()}
+                className="flex w-full items-center gap-2 rounded border border-line bg-canvas px-2 py-1.5 text-xs text-ink hover:bg-panel disabled:opacity-50"
+              >
+                <FileDown size={13} />
+                {t('project.export')}
+              </button>
 
               <button
                 disabled={busy}

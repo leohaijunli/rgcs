@@ -67,6 +67,53 @@ pub fn project_open(state: State<'_, AppState>, path: String) -> Result<Project,
     Ok(manifest)
 }
 
+/// PJ4: export the open project (project.json, surveys, A4 session files,
+/// resources) into a sha256-manifested zip. The path comes from a save
+/// dialog in the frontend.
+///
+/// # Errors
+///
+/// A stringified error when no project is open or the archive fails.
+#[tauri::command]
+pub fn project_export(
+    state: State<'_, AppState>,
+    zip_path: String,
+) -> Result<maggcs_core::archive::ArchiveManifest, String> {
+    let guard = state.project.lock();
+    let Some(store) = guard.as_ref() else {
+        return Err("no project is open".into());
+    };
+    maggcs_core::archive::export_project(store.root(), std::path::Path::new(&zip_path))
+        .map_err(|e| e.to_string())
+}
+
+/// PJ4: import a project archive under `projects_root`, hash-verified; the
+/// returned folder feeds `project_open` (the caller decides whether to open
+/// the imported project right away).
+///
+/// # Errors
+///
+/// A stringified error when the archive is not a project export, any hash
+/// mismatches, the project id already exists at the root, or writing fails.
+#[tauri::command]
+pub fn project_import(
+    state: State<'_, AppState>,
+    zip_path: String,
+    projects_root: String,
+) -> Result<String, String> {
+    let guard = state.project.lock();
+    if guard.is_some() {
+        return Err("close the open project before importing".into());
+    }
+    drop(guard);
+    let target = maggcs_core::archive::import_project(
+        std::path::Path::new(&zip_path),
+        std::path::Path::new(&projects_root),
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(target.display().to_string())
+}
+
 /// Close the open project, releasing its lock. `true` when one was open.
 #[tauri::command]
 pub fn project_close(state: State<'_, AppState>) -> Result<bool, String> {

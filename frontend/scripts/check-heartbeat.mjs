@@ -147,6 +147,9 @@ await page.addInitScript((heartbeatTimeoutMs) => {
     return at
   }
 
+  // L8: config round-trips in memory so a confirmed target stays confirmed
+  // across the script's link-restored edges (the real backend persists it).
+  let storedConfig = null
   window.__TAURI_INTERNALS__ = {
     transformCallback: (cb, once = false) => {
       const id = Math.floor(Math.random() * 1e9)
@@ -162,6 +165,11 @@ await page.addInitScript((heartbeatTimeoutMs) => {
         return fired + 1000
       }
       if (cmd.startsWith('plugin:event|')) return null
+      if (cmd === 'config_load') return storedConfig
+      if (cmd === 'config_save') {
+        storedConfig = args?.config ?? null
+        return null
+      }
       if (cmd === 'alert_snapshot') return []
       if (cmd === 'enumerate_devices') return []
       if (cmd === 'link_status' || cmd === 'connect' || cmd === 'link_error') return null
@@ -191,6 +199,14 @@ await page.evaluate(() => {
   window.__mockFeedStart()
   window.__mockLink({ link_state: 'connected', endpoint: 'udpin:0.0.0.0:14550', fc_alive: true })
 })
+// L8: confirm the (first) target change and let the auto-connect window
+// expire — otherwise the startup dialogs gate every later click.
+await page.waitForSelector('[data-testid="autoconnect-dialog"]', { state: 'detached', timeout: 15000 }).catch(() => {})
+const targetConfirm = page.locator('[data-testid="target-change-confirm"]')
+await targetConfirm.waitFor({ state: 'visible', timeout: 8000 }).catch(() => {})
+if ((await targetConfirm.count()) > 0) await targetConfirm.click()
+await page.waitForSelector('[data-testid="target-change-dialog"]', { state: 'detached', timeout: 5000 }).catch(() => {})
+
 await page.waitForTimeout(1000)
 check((await banner.count()) === 0, 'no banner while the heartbeat is alive')
 check(

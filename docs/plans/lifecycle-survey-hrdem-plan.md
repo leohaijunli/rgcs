@@ -25,9 +25,9 @@
 
 | 状态 | 工作包 | 依据/缺口 |
 |---|---|---|
-| 已实现 | A1–A4、A6–A10、L1–L10、U1、U2–U5、U8、U9、U17、PJ1、PJ2、PJ3、H0–H4、H7、H8、DR1–DR7、DR9(事后评估版) | 逐项证据见下方执行记录(2026-10-15 → 2026-10-18)。要点:H1 live 验收与 H0 夹具 ±2 px 逐像元一致;H2 强制 §D 空变换;H3 DSM-max 保峰实测锁定;H7 真实 CGG2013 格网 + 两段式控制点互校(**PX4 实机 <0.5 m 现场验收仍待**);A2 主链断开联合回归全绿;L5 强制解锁三处记录时间戳一致;L9 goto 距离/地形守卫;L10 场景测试集(core 757);A8 WebGL context lost 隔离与 Restart;U17a–d Plan 步骤就绪/阻塞/批量编辑/同步相位;PJ1–PJ3 项目模型、profile 注册表与强制启动页;DR1–DR7 全链(spec/solver/compile/preview/监控/记录导出)+ DR9 雷达偏置稳健估计。**DR8 已取消(操作员,不做方位角扫描)**;U7 中仅 HUD 的 AGL 读数由 DR6b 提供,其余 U7 内容仍 ⏸。 |
+| 已实现 | A1–A4、A6–A10、L1–L10、U1、U2–U5、U8、U9、U17、PJ1–PJ4、H0–H4、H7、H8、DR1–DR7、DR9(事后评估版) | 逐项证据见下方执行记录(2026-10-15 → 2026-10-18)。要点:H1 live 验收与 H0 夹具 ±2 px 逐像元一致;H2 强制 §D 空变换;H3 DSM-max 保峰实测锁定;H7 真实 CGG2013 格网 + 两段式控制点互校(**PX4 实机 <0.5 m 现场验收仍待**);A2 主链断开联合回归全绿;L5 强制解锁三处记录时间戳一致;L9 goto 距离/地形守卫;L10 场景测试集(core 757);A8 WebGL context lost 隔离与 Restart;U17a–d Plan 步骤就绪/阻塞/批量编辑/同步相位;PJ1–PJ3 项目模型、profile 注册表与强制启动页;DR1–DR7 全链(spec/solver/compile/preview/监控/记录导出)+ DR9 雷达偏置稳健估计。**DR8 已取消(操作员,不做方位角扫描)**;U7 中仅 HUD 的 AGL 读数由 DR6b 提供,其余 U7 内容仍 ⏸。 |
 | 部分实现 | A5、PJ3(数据侧) | A5 清单引擎 + Drape 组 + PJ2 模板已就位。**A9 与 U5 收尾均已完成(2026-10-20,见执行记录)**:solve→compile 为唯一航点来源(`meshDrape.ts`/`terrain_drape` 已删);每个 Fail 项有修复入口,不可行区段逐项确认落地。PJ3 界面完成,但测量/会话**数据**要等 M4(⏸)才写入 project store。 |
-| 未实现/未验收 | L8、A10、A11、U11–U16、PJ4、H5、H6、H10、H11 | L8 启动自检/连接确认;A10 诊断包;A11 跨窗口单一事实源(U15 前置,未完成前 U15 不得上线);U11 多窗口协调、U12 现场模式、U13 长任务、U14 设计系统整理、U15 地图分离、U16 图层管理;PJ4 项目资源与归档;H5 惰性分块、H6 来源自动解析、H10 对比验证、H11 点云路径。 |
+| 未实现/未验收 | A11、U11–U16、H5、H6、H10、H11 | A11 跨窗口单一事实源(U15 前置,未完成前 U15 不得上线);U11 多窗口协调、U12 现场模式、U13 长任务、U14 设计系统整理、U15 地图分离、U16 图层管理;H5 惰性分块、H6 来源自动解析、H10 对比验证、H11 点云路径。 |
 | 明确推迟 | ⏸ 项 | 按「范围与状态」与规则 10 执行,不得因上述审查而擅自解冻。 |
 
 **实机/现场待验收清单**(代码与自动化测试已完成,需真机):
@@ -49,7 +49,7 @@
 6. ~~A9 收尾~~(已实施 2026-10-20,见 A9 执行记录)。
 7. ~~U5 收尾~~(已实施 2026-10-20,见 U5 执行记录)。
 8. ~~L8~~(已实施 2026-10-20,见 L8 执行记录)。
-9. 再推进 P2/P4:~~A10~~(已实施 2026-10-20)、PJ4、H6、H10、U11–U14;**A11 完成后才可启动 U15/U16**;⏸ 项必须等待明确解冻。
+9. 再推进 P2/P4:~~A10~~、~~PJ4~~(均已实施 2026-10-20)、H6、H10、U11–U14;**A11 完成后才可启动 U15/U16**;⏸ 项必须等待明确解冻。
 
 ### 验证基线 (2026-10-15)
 
@@ -60,6 +60,15 @@
 - **实现(后端 `terrain_service.rs`)**:`drape_preview` 在 `spawn_blocking` 内 `solve → compile`,新增 `waypoints`(compiled NAV 项经真实 H7 链转 `AMSL_EGM96`,共享 `vertical_chain_offset`,`VERTICAL_DATUM_CHAIN_ERROR` fail-closed)与 `landing_amsl_m`(降落点采样 DEM 表面、同链转换;`DrapeLineInput` 同 `[lon,lat]` 约定);速度项(178)与 datum 原样透传(z 是命令参数);`DrapeResult.compiled` 保持 DEM datum——监控基线与锚定 fix 同帧。
 - **实现(前端)**:新纯函数 `mission/drapeApply.ts::applyCompiled`(编译产物按块替换 pattern block;块内 pinned 高度按位置容差恢复;`21/85` 降落项按位置键贴地;块外一律原样;返回重锚定的线表);`stores/mission.ts` 合并 `runDrapePreview`/`runTerrainDrape` 为单管线 `runDrapeOnce(apply)`(指纹、600 ms 防抖、A3 告警、unchanged 不置 dirty 语义保持);手动编辑(lastPattern 清空)→ fail-closed 报"regenerate the pattern",不再静默保留旧高度;DrapeBlock/SyncStep provenance(`dem:<folder>`、dem_ref.hash)改读新 `DrapeState`;删除 `meshDrape.ts`、`DrapeState.report`(DrapeReport)/`meshDrape` 字段与 `MESH_*` 文案。
 - **验证**:`cargo test -p maggcs-core` 全绿(drape.rs 测试随模块删除,699 lib + 集成);`cargo test -p maggcs-app` 76 通过(新增 `drape_apply_tests` 3 条:H 链转换数值断言 ±0.02、链外 fail-closed、命令项透传);`drape_pipeline.rs`(solve→compile 真实文件 I/O)3 条通过;clippy `-D warnings`(core+app)、fmt、`git diff --check`;前端 `tsc`、production build、14 个 check 脚本 + `check:agl`(27 条,重定向到 `applyCompiled`)全绿;ts-rs 绑定重生成,删除 `DrapeReport/DrapeOptions.ts`。**行为变更**:terrain 模式不再有 mesh 兜底;手动编辑不重 drape;块外手动航点不参与 drape(AGL 行显示 unknown)。ADR-005 addendum、ADR-022 已更新。实机复验归 DR6 走查单。
+
+#### PJ4 执行记录 (2026-10-20)
+
+- **core `archive/`**(新,zip 经 workspace 新依赖 `zip 2/deflate`):`export_project(root, out_zip)` 打包项目目录全部文件(跳过 `.lock`)为 sha256 manifest 的 zip;`import_project(zip, projects_root)` **先全量校验哈希、后写盘**——单字节不匹配即整体拒绝且不留半成品;`ArchiveManifest{schema_version, project_id(=项目文件夹名), project_name, exported_utc_us, app_version, files[]}`;schema 升级拒绝、manifest 未列/多余文件拒绝、项目 id slug 校验。M4 清单与 NRCan 排除条款随 M4/M7 解冻。
+- **验收(计划原文)**:导入后重建同一项目与航线表——`export_then_import_rebuilds_the_project_and_its_route_tables`(survey.json 逐字节相等 + ProjectStore 重开逐字段);哈希不匹配拒绝(`a_hash_mismatch_rejects_the_import_and_writes_nothing` + 断言无部分项目);另有已存在 id `Exists`、未来 schema 版本拒绝,共 6 条。
+- **app 命令**:`project_export`(须有打开项目)、`project_import`(打开项目时拒绝,返回目标目录)。
+- **前端(ProjectHome)**:打开项目视图加 **Export project (zip)**(保存对话框);启动页加 **Import project (zip)**(文件对话框;导入根取最近项目的父目录,导入后直接打开)。
+- **Playwright 回归修复(L8 对话框与脚本交互)**:启动对话框(自动连接 3 s 窗口 + 首连目标确认)会以全屏 overlay 阻塞后续点击——preflight/safety/command-ux/heartbeat/topbar 的 mock 增加"等窗口过期 + 确认目标"helper;heartbeat/topbar 的 mock config 内存回环(真机持久化语义);helper 的确认改为 waitFor visible(修复 React 渲染时序竞态)。全套 10 脚本绿:preflight 29、safety 22、command-ux 30、startup 14、alerts 18、alert-ux 25、teardown 22、heartbeat 24、topbar 26(仅存 O8 的 2 条 U2 遗留)。`__mgAppConfig` DEV 句柄新增。
+- 验证:core 707(archive 6)、app 85、clippy `-D warnings`、fmt;`tsc`、build、check:i18n(699 keys)全绿。
 
 #### A10 执行记录 (2026-10-20)
 

@@ -66,6 +66,8 @@ pub fn run() {
             project_service::project_save_survey,
             project_service::project_list_sessions,
             project_service::project_save_session,
+            project_service::project_export,
+            project_service::project_import,
             commands::install_udev_rules,
             commands::mission_upload,
             commands::mission_download,

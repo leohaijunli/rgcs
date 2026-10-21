@@ -344,6 +344,8 @@ export default {
     closeProject: 'Close project',
     kind: 'Survey type',
     armedRefusal: 'The vehicle is armed — disarm before switching or closing the project.',
+    export: 'Export project (zip)',
+    import: 'Import project (zip)',
   },
   review: {
     forcedArm: 'Forced arm',
