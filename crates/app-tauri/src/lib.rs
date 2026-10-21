@@ -6,6 +6,7 @@
 
 mod actuator_service;
 mod alert_service;
+mod calibration_service;
 mod command_service;
 mod commands;
 mod config_service;
@@ -146,6 +147,9 @@ pub fn run() {
             inspector_service::inspector_status,
             inspector_service::inspector_set_traces,
             inspector_service::set_mag_calibration,
+            calibration_service::mag_calibration_status,
+            commands::clock_info,
+            commands::udev_rules_present,
             inspector_service::inspector_catalog,
             inspector_service::inspector_list_algorithms,
             inspector_service::inspector_open_ulog,
@@ -164,6 +168,8 @@ pub fn run() {
             // config, so load it before the first command can run.
             let config = config_service::load_at_startup(app.handle());
             app.state::<AppState>().set_config(config);
+            // L8: the mag calibration survives restarts via its sidecar file.
+            calibration_service::load_at_startup(app.handle(), &app.state::<AppState>());
 
             // One alert pump for the process: every transition the core
             // alert center records is forwarded to all webviews (A3).

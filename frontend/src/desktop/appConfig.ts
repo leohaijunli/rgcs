@@ -10,6 +10,7 @@
 
 import { invoke } from '@tauri-apps/api/core'
 import type { AppConfig } from '../generated-types/AppConfig'
+import type { LastTarget } from '../generated-types/LastTarget'
 import type { PlanPrefs } from '../generated-types/PlanPrefs'
 import type { SafetyConfig } from '../generated-types/SafetyConfig'
 import { useAlertSound } from '../stores/alertSound'
@@ -55,6 +56,9 @@ let safety = DEFAULT_SAFETY
 const DEFAULT_PLAN: PlanPrefs = { last_center: null, presets: [] }
 let plan = DEFAULT_PLAN
 
+/** The last confirmed link target (L8); `null` before the first connect. */
+let lastTarget: LastTarget | null = null
+
 /** The loaded safety thresholds. Callers re-read this each render so a config
  * reload is reflected without a second store. */
 export function getSafetyConfig(): SafetyConfig {
@@ -69,6 +73,17 @@ export function getPlanPrefs(): PlanPrefs {
 /** Update the planning prefs and persist (debounced) to the config file. */
 export function updatePlanPrefs(next: PlanPrefs): void {
   plan = next
+  scheduleSave()
+}
+
+/** The last confirmed link target (L8). */
+export function getLastTarget(): LastTarget | null {
+  return lastTarget
+}
+
+/** Record a confirmed link target and persist (L8). */
+export function setLastTarget(next: LastTarget): void {
+  lastTarget = next
   scheduleSave()
 }
 
@@ -96,6 +111,7 @@ function snapshot(): AppConfig {
     alert_volume: useAlertSound.getState().volume,
     safety,
     plan,
+    last_target: lastTarget,
   }
 }
 
@@ -117,6 +133,7 @@ function applyConfig(config: AppConfig): void {
   useAlertSound.setState({ volume: config.alert_volume })
   safety = config.safety
   plan = config.plan ?? DEFAULT_PLAN
+  lastTarget = config.last_target ?? null
 }
 
 let saveTimer: number | undefined

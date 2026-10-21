@@ -15,6 +15,8 @@ import ProfileDrawer from './components/ProfileDrawer'
 import ErrorBanner from './components/ErrorBanner'
 import AlertLayer from './components/AlertLayer'
 import HeartbeatBanner from './components/HeartbeatBanner'
+import AutoConnectDialog from './components/dialogs/AutoConnectDialog'
+import TargetChangeDialog from './components/dialogs/TargetChangeDialog'
 import TeardownDialog from './components/dialogs/TeardownDialog'
 import PreflightPanel from './components/PreflightPanel'
 
@@ -85,6 +87,8 @@ export default function App() {
             <MockBanner />
             <Hud />
             <HeartbeatBanner />
+            <AutoConnectDialog />
+            <TargetChangeDialog />
             <AlertLayer />
             <ErrorBanner />
           </div>

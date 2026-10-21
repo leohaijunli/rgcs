@@ -110,6 +110,20 @@ pub struct AppConfig {
     /// parameter presets ("40 m AGL · 5 m/s · 5 m spacing").
     #[serde(default)]
     pub plan: PlanPrefs,
+    /// The last flight controller this GCS connected to (L8). A connect to a
+    /// different sysid/vehicle asks the operator to confirm (a second GCS on
+    /// the bus or a re-plugged FC must not be flown unnoticed).
+    #[serde(default)]
+    pub last_target: Option<LastTarget>,
+}
+
+/// The last confirmed link target (L8): sysid plus the vehicle type label the
+/// frontend decodes from the heartbeat (e.g. `"quadrotor"`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct LastTarget {
+    pub system_id: u8,
+    pub vehicle: String,
 }
 
 /// Planning preferences persisted with the app config (U8).
@@ -159,6 +173,7 @@ impl Default for AppConfig {
             alert_volume: DEFAULT_ALERT_VOLUME,
             safety: SafetyConfig::default(),
             plan: PlanPrefs::default(),
+            last_target: None,
         }
     }
 }
@@ -354,5 +369,29 @@ mod tests {
     fn empty_endpoint_falls_back_to_default() {
         let cfg = AppConfig::from_json(r#"{"version":1,"endpoint":"   "}"#).expect("parse");
         assert_eq!(cfg.endpoint, DEFAULT_ENDPOINT);
+    }
+
+    /// L8: the last confirmed target is optional — an older file without it
+    /// deserializes to `None`, and a round trip keeps the recorded target.
+    #[test]
+    fn last_target_is_optional_and_round_trips() {
+        let old = AppConfig::from_json(r#"{"version":1}"#).expect("parse");
+        assert_eq!(old.last_target, None);
+        let cfg = AppConfig {
+            last_target: Some(LastTarget {
+                system_id: 1,
+                vehicle: "quadrotor".into(),
+            }),
+            ..AppConfig::default()
+        };
+        let json = cfg.to_json_pretty().expect("serialize");
+        let back = AppConfig::from_json(&json).expect("parse");
+        assert_eq!(
+            back.last_target,
+            Some(LastTarget {
+                system_id: 1,
+                vehicle: "quadrotor".into()
+            })
+        );
     }
 }

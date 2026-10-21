@@ -565,15 +565,21 @@ pub fn inspector_catalog(state: State<'_, AppState>) -> Result<Vec<CatalogEntry>
 /// the motor-test tap on the next attach.
 #[tauri::command]
 pub fn set_mag_calibration(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     json: Option<String>,
 ) -> Result<bool, String> {
-    let cal = match json {
-        None => None,
-        Some(text) => {
-            Some(maggcs_core::calib::MagCalibration::from_json(&text).map_err(|e| e.to_string())?)
-        }
-    };
+    let cal = json
+        .as_deref()
+        .map(maggcs_core::calib::MagCalibration::from_json)
+        .transpose()
+        .map_err(|e| e.to_string())?;
+    // 0. L8: persist the sidecar so a restart keeps the calibration — the
+    //    file is the source of truth, the store below is its in-memory mirror.
+    crate::calibration_service::persist_to_path(
+        &crate::calibration_service::mag_cal_path(&app)?,
+        json.as_deref(),
+    )?;
     // 1. Shared store: the single source of truth across windows/links.
     state.calibration.set(cal.clone());
     // 2. Inspector session: calibrate the plotted mag traces and the derived

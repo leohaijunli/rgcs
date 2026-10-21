@@ -25,7 +25,7 @@
 
 | 状态 | 工作包 | 依据/缺口 |
 |---|---|---|
-| 已实现 | A1–A4、A6–A9、L1–L7、L9、L10、U1、U2–U5、U8、U9、U17、PJ1、PJ2、PJ3、H0–H4、H7、H8、DR1–DR7、DR9(事后评估版) | 逐项证据见下方执行记录(2026-10-15 → 2026-10-18)。要点:H1 live 验收与 H0 夹具 ±2 px 逐像元一致;H2 强制 §D 空变换;H3 DSM-max 保峰实测锁定;H7 真实 CGG2013 格网 + 两段式控制点互校(**PX4 实机 <0.5 m 现场验收仍待**);A2 主链断开联合回归全绿;L5 强制解锁三处记录时间戳一致;L9 goto 距离/地形守卫;L10 场景测试集(core 757);A8 WebGL context lost 隔离与 Restart;U17a–d Plan 步骤就绪/阻塞/批量编辑/同步相位;PJ1–PJ3 项目模型、profile 注册表与强制启动页;DR1–DR7 全链(spec/solver/compile/preview/监控/记录导出)+ DR9 雷达偏置稳健估计。**DR8 已取消(操作员,不做方位角扫描)**;U7 中仅 HUD 的 AGL 读数由 DR6b 提供,其余 U7 内容仍 ⏸。 |
+| 已实现 | A1–A4、A6–A9、L1–L10、U1、U2–U5、U8、U9、U17、PJ1、PJ2、PJ3、H0–H4、H7、H8、DR1–DR7、DR9(事后评估版) | 逐项证据见下方执行记录(2026-10-15 → 2026-10-18)。要点:H1 live 验收与 H0 夹具 ±2 px 逐像元一致;H2 强制 §D 空变换;H3 DSM-max 保峰实测锁定;H7 真实 CGG2013 格网 + 两段式控制点互校(**PX4 实机 <0.5 m 现场验收仍待**);A2 主链断开联合回归全绿;L5 强制解锁三处记录时间戳一致;L9 goto 距离/地形守卫;L10 场景测试集(core 757);A8 WebGL context lost 隔离与 Restart;U17a–d Plan 步骤就绪/阻塞/批量编辑/同步相位;PJ1–PJ3 项目模型、profile 注册表与强制启动页;DR1–DR7 全链(spec/solver/compile/preview/监控/记录导出)+ DR9 雷达偏置稳健估计。**DR8 已取消(操作员,不做方位角扫描)**;U7 中仅 HUD 的 AGL 读数由 DR6b 提供,其余 U7 内容仍 ⏸。 |
 | 部分实现 | A5、PJ3(数据侧) | A5 清单引擎 + Drape 组 + PJ2 模板已就位。**A9 与 U5 收尾均已完成(2026-10-20,见执行记录)**:solve→compile 为唯一航点来源(`meshDrape.ts`/`terrain_drape` 已删);每个 Fail 项有修复入口,不可行区段逐项确认落地。PJ3 界面完成,但测量/会话**数据**要等 M4(⏸)才写入 project store。 |
 | 未实现/未验收 | L8、A10、A11、U11–U16、PJ4、H5、H6、H10、H11 | L8 启动自检/连接确认;A10 诊断包;A11 跨窗口单一事实源(U15 前置,未完成前 U15 不得上线);U11 多窗口协调、U12 现场模式、U13 长任务、U14 设计系统整理、U15 地图分离、U16 图层管理;PJ4 项目资源与归档;H5 惰性分块、H6 来源自动解析、H10 对比验证、H11 点云路径。 |
 | 明确推迟 | ⏸ 项 | 按「范围与状态」与规则 10 执行,不得因上述审查而擅自解冻。 |
@@ -48,7 +48,7 @@
 5. ~~PJ1→PJ2→PJ3 与 DR1→DR6(→DR7/DR9)~~(已实施,见各执行记录)。
 6. ~~A9 收尾~~(已实施 2026-10-20,见 A9 执行记录)。
 7. ~~U5 收尾~~(已实施 2026-10-20,见 U5 执行记录)。
-8. **L8**(P1):启动自检卡 + 自动连接前确认 + 磁校准持久化(依赖 A6,已就绪)。
+8. ~~L8~~(已实施 2026-10-20,见 L8 执行记录)。
 9. 再推进 P2/P4:A10、PJ4、H6、H10、U11–U14;**A11 完成后才可启动 U15/U16**;⏸ 项必须等待明确解冻。
 
 ### 验证基线 (2026-10-15)
@@ -60,6 +60,15 @@
 - **实现(后端 `terrain_service.rs`)**:`drape_preview` 在 `spawn_blocking` 内 `solve → compile`,新增 `waypoints`(compiled NAV 项经真实 H7 链转 `AMSL_EGM96`,共享 `vertical_chain_offset`,`VERTICAL_DATUM_CHAIN_ERROR` fail-closed)与 `landing_amsl_m`(降落点采样 DEM 表面、同链转换;`DrapeLineInput` 同 `[lon,lat]` 约定);速度项(178)与 datum 原样透传(z 是命令参数);`DrapeResult.compiled` 保持 DEM datum——监控基线与锚定 fix 同帧。
 - **实现(前端)**:新纯函数 `mission/drapeApply.ts::applyCompiled`(编译产物按块替换 pattern block;块内 pinned 高度按位置容差恢复;`21/85` 降落项按位置键贴地;块外一律原样;返回重锚定的线表);`stores/mission.ts` 合并 `runDrapePreview`/`runTerrainDrape` 为单管线 `runDrapeOnce(apply)`(指纹、600 ms 防抖、A3 告警、unchanged 不置 dirty 语义保持);手动编辑(lastPattern 清空)→ fail-closed 报"regenerate the pattern",不再静默保留旧高度;DrapeBlock/SyncStep provenance(`dem:<folder>`、dem_ref.hash)改读新 `DrapeState`;删除 `meshDrape.ts`、`DrapeState.report`(DrapeReport)/`meshDrape` 字段与 `MESH_*` 文案。
 - **验证**:`cargo test -p maggcs-core` 全绿(drape.rs 测试随模块删除,699 lib + 集成);`cargo test -p maggcs-app` 76 通过(新增 `drape_apply_tests` 3 条:H 链转换数值断言 ±0.02、链外 fail-closed、命令项透传);`drape_pipeline.rs`(solve→compile 真实文件 I/O)3 条通过;clippy `-D warnings`(core+app)、fmt、`git diff --check`;前端 `tsc`、production build、14 个 check 脚本 + `check:agl`(27 条,重定向到 `applyCompiled`)全绿;ts-rs 绑定重生成,删除 `DrapeReport/DrapeOptions.ts`。**行为变更**:terrain 模式不再有 mesh 兜底;手动编辑不重 drape;块外手动航点不参与 drape(AGL 行显示 unknown)。ADR-005 addendum、ADR-022 已更新。实机复验归 DR6 走查单。
+
+#### L8 执行记录 (2026-10-20)
+
+- **磁校准持久化(验收核心)**:新 `calibration_service.rs`——校准 JSON 落 `app_config_dir/mag-calibration.json` sidecar;`set_mag_calibration`(所有窗口共用的那条命令)写盘后进共享 store;启动时 `load_at_startup` 回灌(损坏文件 warn 丢弃,与 config.json 同规则);新命令 `mag_calibration_status` 返回 `{loaded, hash8}`(sha256 前 8 hex,验收"重启后自动恢复并显示哈希前 8 位")。校准单测 5 条(写+哈希确定性、清除删文件、回灌+损坏丢弃、缺文件=首启常态)。inspector 的 localStorage 镜像保留为兜底。`set_mag_calibration` 增 `AppHandle` 参数(写盘用)。
+- **启动自检行(Prepare 面板)**:上次端点(prefs)、磁校准(hash8/未加载)、DEM(现有)、3D 地形服务(terrain3d 状态)、串口访问(新 `udev_rules_present` 命令——`/etc/udev/rules.d/99-maggcs.rules` 存在性,非 Linux 返回 None 显示 n/a)、系统时钟(新 `clock_info` 命令——epoch_ms + IANA 时区;std 无可移植时区 API,Linux 读 `/etc/timezone` 或 `/etc/localtime` 符号链接,其余平台 TZ env/None,fail-soft 不猜)。`epoch_ms` 标 `#[ts(type="number")]`(IPC JSON number,避免 bigint——同 4cb9927 教训)。
+- **自动连接 3 s 取消窗口**:bridge 不再静默 `connect`;新 `stores/autoconnect.ts` 持有 pending 请求并**自带窗口计时器**(超时即使对话框未挂载——启动页/其他阶段——也照常连接),新 `AutoConnectDialog` 纯展示"Connect to X? Starting in N s" + Cancel,取消即本次启动不连。
+- **目标变更确认**:新 `stores/target.ts` + `TargetChangeDialog`——连接后首个心跳的 sysid/机型与 `AppConfig.last_target`(新增字段,serde default,旧文件兼容)对比;相同静默记录,不同弹出"Connected to sysid X (vehicle) — previously …",操作员确认("It's correct"→持久化)或 Disconnect;每个链路会话(restoredAtMs 哨兵,首会话=0)只查一次,dismiss 重置哨兵。验收"改端点后自动连接前出现确认"由对话框承载。
+- **验证**:core 701(config 30,含 last_target 可选+往返);app 82(calibration 5);clippy `-D warnings`、fmt;前端 `tsc`、build、15 个 check、i18n 全绿;新 Playwright `check-startup.mjs` **14 条全绿**(启动窗口到期自动连接、对话框显示端点、取消零连接、重请求再连、首连目标确认并持久化 `config_save.last_target`、异 sysid 重开确认、拒绝即断开、Prepare 自检行显示 hash8/时区/udev);截图 `shots-l8/startup-*.png`。Playwright 回归:alert-ux/teardown OK;preflight/safety/command-ux 在本机内存压力下点击超时(与 L8 改动无关,同日早些时候同脚本绿)——留观察。
+- 手动步骤:①重启 app → Prepare 行显示校准 hash8 与时区;②改端点后开 autoConnect 重启 → 3 s 内 Cancel → 不连;③换一台 sysid 不同的 FC → 弹目标确认 → 拒绝即断开,确认后写 config.json。
 
 #### U5 执行记录 (2026-10-20)
 

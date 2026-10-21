@@ -407,6 +407,67 @@ pub fn enumerate_devices() -> Result<Vec<SerialDeviceInfo>, String> {
     manager.enumerate().map_err(|e| e.to_string())
 }
 
+/// The startup card's clock row (L8): epoch milliseconds plus the IANA
+/// timezone name when the OS exposes one. std has no portable timezone API,
+/// so Linux reads `/etc/timezone` (or the `/etc/localtime` symlink) and
+/// other platforms report `None` — the row then says "unknown", never a
+/// guessed name.
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub struct ClockInfo {
+    /// Over the IPC a JSON number, not a bigint (see `PlannedWaypoint` note).
+    #[ts(type = "number")]
+    pub epoch_ms: u64,
+    pub timezone: Option<String>,
+}
+
+#[tauri::command]
+pub fn clock_info() -> ClockInfo {
+    ClockInfo {
+        epoch_ms: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0),
+        timezone: read_timezone(),
+    }
+}
+
+/// Best-effort IANA timezone name; `None` beats a wrong name.
+fn read_timezone() -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(tz) = std::fs::read_to_string("/etc/timezone") {
+            let tz = tz.trim();
+            if !tz.is_empty() {
+                return Some(tz.to_string());
+            }
+        }
+        if let Ok(target) = std::fs::read_link("/etc/localtime") {
+            let s = target.display().to_string();
+            if let Some(i) = s.find("zoneinfo/") {
+                return Some(s[i + "zoneinfo/".len()..].to_string());
+            }
+        }
+        None
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        std::env::var("TZ").ok().filter(|tz| !tz.is_empty())
+    }
+}
+
+/// Whether the udev permission rules are installed (L8 startup card). `None`
+/// on non-Linux (the row says "n/a"); the helper writes the fixed
+/// `99-maggcs.rules` file, so existence is the whole check.
+#[tauri::command]
+pub fn udev_rules_present() -> Option<bool> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    Some(std::path::Path::new("/etc/udev/rules.d/99-maggcs.rules").is_file())
+}
+
 /// SITL home file name inside the app config dir.
 const SITL_HOME_FILE: &str = "sitl-home.json";
 

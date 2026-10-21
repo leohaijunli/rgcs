@@ -24,7 +24,6 @@ import type { MissionItem } from '../generated-types/MissionItem'
 import type { TelemetryError } from '../generated-types/TelemetryError'
 import type { MissionEventPayload } from '../stores/mission'
 import i18n from '../i18n'
-import { reportConnectError } from './connect'
 import { logEvent } from '../stores/eventlog'
 import { syncSitlHome, usePrefsStore } from './prefs'
 import type { CommandEventPayload } from '../stores/command'
@@ -144,7 +143,10 @@ export function useTelemetryBridge() {
         // build or on a fresh profile (Settings -> Vehicle).
         syncSitlHome(usePrefsStore.getState().initialPosition)
         if (autoConnect) {
-          await invoke('connect', { endpoint }).catch(reportConnectError)
+          // L8: the operator gets a 3 s cancel window instead of a silent
+          // connect — the dialog fires `connect` when the countdown expires.
+          const { useAutoConnectStore } = await import('../stores/autoconnect')
+          useAutoConnectStore.getState().request(endpoint)
         }
       }
       void useDevicesStore.getState().load()
