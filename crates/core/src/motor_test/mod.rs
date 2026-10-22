@@ -9,7 +9,9 @@
 //! - PX4 **denies** the command while armed or with `COM_MOT_TEST_EN != 1`,
 //!   which is exactly the interlock we want: the test needs no arming and is
 //!   refused if the vehicle is.
-//! - `param2 <= 0` releases control (motors off) — the stop path.
+//! - `param2 <= 0` releases test control — the stop path. On a disarmed
+//!   target this returns to its configured disarmed outputs, not necessarily
+//!   zero PWM or mechanically stopped motors.
 //!
 //! The session is a pure state machine fed by the service shell: it decides
 //! what to send, the shell sends it. All stop triggers funnel through one
@@ -23,7 +25,9 @@ pub mod source;
 
 pub use interlock::{Interlock, SafetyLimits, HEARTBEAT_STALE};
 pub use mag_alarm::{MagAlarm, MagAlarmConfig, MagAlarmState};
-pub use service::{MotorTestCommand, MotorTestEvent, MotorTestService, StopReason};
+pub use service::{
+    MotorTestCommand, MotorTestEvent, MotorTestService, MotorTestStopError, StopReason, StopReceipt,
+};
 pub use source::{
     AnySource, ManualSource, MotorSlot, PresetKind, PresetSource, RpmSource, SenderConfig,
     WaveformPreset,
@@ -55,7 +59,7 @@ pub enum SessionState {
     Ready,
     /// Sending manual values at the configured rate.
     ManualRunning,
-    /// Stopping: release frames sent, settling back to Idle.
+    /// Active commands stopped; release transport writes are still pending.
     Stopping,
     /// Latched: only an explicit reset clears it.
     Emergency,
@@ -103,6 +107,9 @@ pub struct MotorTestSession<S: RpmSource> {
     started_at: Option<Instant>,
     busy_streak: u32,
     stop_reason: Option<StopReason>,
+    /// Generating releases must not settle the session before the transport
+    /// has confirmed every write. Also tracks incomplete emergency releases.
+    release_pending: bool,
 }
 
 impl<S: RpmSource> MotorTestSession<S> {
@@ -116,6 +123,7 @@ impl<S: RpmSource> MotorTestSession<S> {
             started_at: None,
             busy_streak: 0,
             stop_reason: None,
+            release_pending: false,
         }
     }
 
@@ -139,8 +147,8 @@ impl<S: RpmSource> MotorTestSession<S> {
 
     /// Operator start (after the app-layer confirmation): begin sending.
     pub fn start(&mut self, now: Instant) {
-        if self.state == SessionState::Emergency {
-            return; // latched: require an explicit reset first
+        if matches!(self.state, SessionState::Stopping | SessionState::Emergency) {
+            return; // incomplete release or emergency latch: never resume
         }
         self.started_at = Some(now);
         self.busy_streak = 0;
@@ -232,11 +240,14 @@ impl<S: RpmSource> MotorTestSession<S> {
         }
         self.state = SessionState::Stopping;
         self.stop_reason = Some(reason);
+        self.release_pending = true;
     }
 
-    /// Release frames (motors off) for every motor; settles Stopping → Idle.
-    pub fn release_frames(&mut self) -> Vec<MavMessage> {
-        let frames: Vec<MavMessage> = (0..self.source.motor_count())
+    /// Release test control for every motor without claiming delivery.
+    /// The service calls [`Self::complete_release`] only after all transport
+    /// writes succeed; a failed pass can safely retry this same full batch.
+    pub fn release_frames(&self) -> Vec<MavMessage> {
+        (0..self.source.motor_count())
             .map(|motor| {
                 actuator_test_frame(
                     self.interlock.limits().target_sys,
@@ -246,22 +257,39 @@ impl<S: RpmSource> MotorTestSession<S> {
                     0.0, // timeout <= 0 = ACTION_RELEASE_CONTROL
                 )
             })
-            .collect();
+            .collect()
+    }
+
+    pub(crate) fn release_pending(&self) -> bool {
+        self.release_pending
+    }
+
+    /// Settle a release pass after every transport write has succeeded.
+    /// Emergency remains latched; an incomplete pass must not call this.
+    pub fn complete_release(&mut self) {
+        if !self.release_pending {
+            return;
+        }
+        self.release_pending = false;
         self.last_values.fill(0.0);
         if self.state == SessionState::Stopping {
             self.state = SessionState::Idle;
         }
-        frames
     }
 
-    /// Emergency: latch; only `reset_emergency` clears it.
+    /// Emergency: stop active commands and request a full release pass.
+    /// Only a reset after confirmed release clears the latch.
     pub fn emergency_stop(&mut self) {
+        if self.state == SessionState::Emergency {
+            return;
+        }
         self.state = SessionState::Emergency;
-        self.last_values.fill(0.0);
+        self.stop_reason = Some(StopReason::Emergency);
+        self.release_pending = true;
     }
 
     pub fn reset_emergency(&mut self) {
-        if self.state == SessionState::Emergency {
+        if self.state == SessionState::Emergency && !self.release_pending {
             self.state = SessionState::Idle;
         }
     }
@@ -282,6 +310,9 @@ impl MotorTestSession<ManualSource> {
 impl MotorTestSession<source::AnySource> {
     /// Manual start: keep (or restore) the slider source and begin sending.
     pub fn start_manual(&mut self, now: Instant) {
+        if matches!(self.state, SessionState::Stopping | SessionState::Emergency) {
+            return;
+        }
         if let source::AnySource::Preset(_) | source::AnySource::Forward(_) = &self.source {
             // A finished/previous bounded source is replaced by the manual
             // source of the same width; slider values were kept untouched
@@ -295,6 +326,9 @@ impl MotorTestSession<source::AnySource> {
     /// Preset start: the waveform owns the values for its duration; the
     /// sliders are disconnected (their update is ignored) until it ends.
     pub fn start_preset(&mut self, preset: source::WaveformPreset, now: Instant) {
+        if matches!(self.state, SessionState::Stopping | SessionState::Emergency) {
+            return;
+        }
         self.source =
             source::AnySource::Preset(source::PresetSource::new(preset, self.last_values.len()));
         self.start(now);
@@ -304,6 +338,9 @@ impl MotorTestSession<source::AnySource> {
     /// latest normalized outputs of the source vehicle (SITL); the session
     /// reads it each tick and stops itself when the feed goes stale.
     pub fn start_forward(&mut self, slot: source::ForwardSlot, now: Instant) {
+        if matches!(self.state, SessionState::Stopping | SessionState::Emergency) {
+            return;
+        }
         self.source =
             source::AnySource::Forward(source::ForwardSource::new(slot, self.last_values.len()));
         self.start(now);
@@ -364,6 +401,8 @@ mod tests {
         s.interlock_mut().observe_heartbeat(true, now);
         let frames = s.tick(now);
         assert_eq!(frames.len(), 1, "release frame for the one motor");
+        assert_eq!(s.state(), SessionState::Stopping);
+        s.complete_release();
         assert_eq!(s.state(), SessionState::Idle);
         assert_eq!(s.take_stop_reason(), Some(StopReason::Armed));
     }
@@ -376,6 +415,8 @@ mod tests {
         s.start(now);
         let later = now + std::time::Duration::from_secs(3);
         let frames = s.tick(later);
+        assert_eq!(s.state(), SessionState::Stopping);
+        s.complete_release();
         assert_eq!(s.state(), SessionState::Idle);
         assert_eq!(s.take_stop_reason(), Some(StopReason::HeartbeatStale));
         assert_eq!(frames.len(), 1, "release frame");
@@ -392,6 +433,8 @@ mod tests {
         assert_eq!(s.state(), SessionState::Stopping);
         let frames = s.release_frames();
         assert_eq!(frames.len(), 1);
+        assert_eq!(s.state(), SessionState::Stopping);
+        s.complete_release();
         assert_eq!(s.state(), SessionState::Idle);
     }
 
@@ -406,6 +449,13 @@ mod tests {
         // Start is refused while latched.
         s.start(now);
         assert_eq!(s.state(), SessionState::Emergency);
+        s.reset_emergency();
+        assert_eq!(
+            s.state(),
+            SessionState::Emergency,
+            "unconfirmed release stays latched"
+        );
+        s.complete_release();
         s.reset_emergency();
         assert_eq!(s.state(), SessionState::Idle);
     }
@@ -434,6 +484,8 @@ mod tests {
         let later = now + std::time::Duration::from_millis(200);
         let frames = s.tick(later);
         assert_eq!(frames.len(), 1, "release frame");
+        assert_eq!(s.state(), SessionState::Stopping);
+        s.complete_release();
         assert_eq!(s.state(), SessionState::Idle);
         assert_eq!(s.take_stop_reason(), Some(StopReason::Completed));
     }
@@ -484,6 +536,7 @@ mod tests {
         s2.start(now);
         let _ = s2.tick(now);
         let frames = s2.tick(now + std::time::Duration::from_secs(3));
+        s2.complete_release();
         assert_eq!(s2.state(), SessionState::Idle);
         assert_eq!(s2.take_stop_reason(), Some(StopReason::HeartbeatStale));
         assert_eq!(frames.len(), 1, "release frame");
@@ -499,6 +552,7 @@ mod tests {
         let _ = s.tick(now);
         s.interlock_mut().observe_heartbeat(true, now);
         let frames = s.tick(now + std::time::Duration::from_millis(100));
+        s.complete_release();
         assert_eq!(s.state(), SessionState::Idle);
         assert_eq!(s.take_stop_reason(), Some(StopReason::Armed));
         assert_eq!(frames.len(), 1, "release frame");

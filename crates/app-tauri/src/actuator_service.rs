@@ -24,8 +24,8 @@ use maggcs_core::motor_test::scope::{self, ScopeBus};
 use maggcs_core::motor_test::service::{MotorTestCommand, MotorTestEvent, MotorTestService};
 use maggcs_core::motor_test::source::ForwardSlot;
 use maggcs_core::motor_test::{SessionState, DEFAULT_TICK_HZ};
-use maggcs_core::params::codec::{encode_param_id, IntEncoding};
 use maggcs_core::params::model::{ParamType, ParamValue};
+use maggcs_core::params::{ParamEntry, ParamObservation, ParamService};
 
 /// Maximum time to observe the release pass before closing an actuator link.
 const MOTOR_TEST_STOP_TIMEOUT: Duration = Duration::from_secs(2);
@@ -73,11 +73,13 @@ pub struct ActuatorStatus {
     pub target_system_id: Option<u8>,
     /// `COM_MOT_TEST_EN` read from the target PX4 (`None` = unknown): PX4
     /// denies ACTUATOR_TEST while this is not 1.
-    pub com_mot_test_en: Option<f32>,
+    pub com_mot_test_en: Option<i32>,
     /// `SDLOG_MODE` read from the target PX4 (`None` = unknown): 0 = disabled,
     /// 1 = always, 2 = log when armed. The motor-test window's on-board log
     /// toggle reads and writes this.
-    pub sdlog_mode: Option<f32>,
+    pub sdlog_mode: Option<i32>,
+    pub sdlog_backend: Option<i32>,
+    pub parameter_restart_pending: bool,
     /// Normalized SITL servo outputs 1–4 (the forward INPUT), latest sample.
     pub input_values: Vec<f32>,
     /// The SITL's raw `SERVO_OUTPUT_RAW` 1–4 in µs (what `input_values` was
@@ -248,14 +250,21 @@ pub async fn actuator_set_values(
 /// Operator stop. Idempotent: fine with no session (link already died).
 #[tauri::command]
 pub async fn actuator_stop(state: State<'_, AppState>) -> Result<(), String> {
-    let _ = send_session(&state, MotorTestCommand::Stop).await;
-    Ok(())
+    stop_active_session(&state).await
 }
 
 /// Emergency stop: latched in the session; the UI mirrors it.
 #[tauri::command]
 pub async fn actuator_estop(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    let _ = send_session(&state, MotorTestCommand::Emergency).await;
+    if let Some(service) = service_of(&state) {
+        let receipt = service
+            .emergency_stop_and_wait()
+            .await
+            .map_err(|error| error.to_string())?;
+        state.motor_test.note_state(receipt.state);
+    } else {
+        state.motor_test.note_state(SessionState::Emergency);
+    }
     pin_window(&app, false);
     Ok(())
 }
@@ -481,18 +490,24 @@ pub async fn actuator_connect_target(
     // The mag/ESC alarm reads HIGHRES_IMU / ESC_STATUS from the target FC.
     // Stream-rate requests and the parameter read are link-scoped tasks;
     // publish their owner before starting any observers.
-    let com_mot_test_en = std::sync::Arc::new(std::sync::Mutex::new(None));
-    let sdlog_mode = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let (params, _param_events, parameter_task) =
+        ParamService::spawn_with_task(handle.clone(), target_system_id, 1);
+    let initial_params = params.clone();
     let telemetry_handle = handle.clone();
     *state.motor_test.target.lock() = Some(TargetLinkRuntime {
         target: MotorTestTarget {
             handle,
             endpoint,
             target_system_id,
-            com_mot_test_en: com_mot_test_en.clone(),
-            sdlog_mode: sdlog_mode.clone(),
+            params,
+            restart_pending: Default::default(),
         },
-        runtime: AuxiliaryLinkRuntime::new(telemetry_handle.clone(), []),
+        runtime: AuxiliaryLinkRuntime::new(
+            telemetry_handle.clone(),
+            [tauri::async_runtime::spawn(async move {
+                let _ = parameter_task.await;
+            })],
+        ),
     });
     // The scope needs these at useful rates; the FC defaults are low or
     // absent (ESC_STATUS only streams when asked). Stream rates only —
@@ -511,36 +526,16 @@ pub async fn actuator_connect_target(
         stream_requests.abort();
     }
     attach_motor_telemetry(&app, telemetry_handle.clone(), target_system_id);
-    // PX4 denies ACTUATOR_TEST while COM_MOT_TEST_EN != 1, so enable it
-    // automatically (a no-op when already 1). Only write after a successful
-    // read proves the parameter exists on this FC, and never block connect.
-    let slot = com_mot_test_en;
-    let h = telemetry_handle.clone();
+    // Discovery is read-only. Permission changes use an explicit verified set.
     let task = tauri::async_runtime::spawn(async move {
-        let mut value = read_param(&h, target_system_id, "COM_MOT_TEST_EN").await;
-        if value.map(|v| v != 1.0).unwrap_or(false) {
-            if let Ok(echoed) = write_param_int(&h, target_system_id, "COM_MOT_TEST_EN", 1).await {
-                value = Some(echoed);
-            }
-        }
-        if let (Some(v), Ok(mut guard)) = (value, slot.lock()) {
-            *guard = Some(v);
-        }
-    });
-    if let Some(target) = state.motor_test.target.lock().as_mut() {
-        target.runtime.add_task(task);
-    } else {
-        task.abort();
-    }
-    // Read SDLOG_MODE (0=disabled, 1=always, 2=armed-only) so the on-board
-    // log toggle starts from the FC's actual setting, not a guess.
-    let slot = sdlog_mode;
-    let h = telemetry_handle.clone();
-    let task = tauri::async_runtime::spawn(async move {
-        if let Some(v) = read_param(&h, target_system_id, "SDLOG_MODE").await {
-            if let Ok(mut guard) = slot.lock() {
-                *guard = Some(v);
-            }
+        let _ = initial_params.request_fc_version().await;
+        for name in [
+            "COM_MOT_TEST_EN",
+            "SDLOG_MODE",
+            "SDLOG_BACKEND",
+            "THR_MDL_FAC",
+        ] {
+            let _ = initial_params.read(name).await;
         }
     });
     if let Some(target) = state.motor_test.target.lock().as_mut() {
@@ -741,131 +736,110 @@ fn service_of(state: &AppState) -> Option<MotorTestService> {
         .map(|r| r.svc.clone())
 }
 
-/// Request one parameter by name from the FC and wait for its `PARAM_VALUE`
-/// (PX4 answers `PARAM_REQUEST_READ` with `param_index = -1` by name). Returns
-/// `None` on timeout / a closed link; the caller treats that as "unknown".
-async fn read_param(handle: &ConnectionHandle, target_system_id: u8, name: &str) -> Option<f32> {
-    // Subscribe before sending and accept only the configured FC's reply.
-    let mut events =
-        handle.subscribe_route(MessageRoute::messages(&[22]).from(target_system_id, 1));
-    let req = MavMessage::PARAM_REQUEST_READ(::mavlink::common::PARAM_REQUEST_READ_DATA {
-        target_system: target_system_id,
-        target_component: 1,
-        param_id: maggcs_core::params::codec::encode_param_id(name).into(),
-        param_index: -1, // -1 = by name
-    });
-    if handle.send(req).await.is_err() {
-        return None;
-    }
-    tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            match events.recv().await {
-                Ok(ConnectionEvent::Message(env)) => {
-                    if let MavMessage::PARAM_VALUE(p) = &env.message {
-                        // The requested name echoes back in the reply.
-                        if maggcs_core::params::codec::decode_param_id(&p.param_id) == name {
-                            return Some(p.param_value);
-                        }
-                    }
-                }
-                Ok(_) => {}
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
-            }
-        }
-    })
-    .await
-    .unwrap_or(None)
-}
-
-/// Write one `INT32` parameter over the target link and confirm it by reading
-/// it back. PX4 does not broadcast a `PARAM_VALUE` in reply to `PARAM_SET` (it
-/// only answers `PARAM_REQUEST_READ`), so the read-back is the only
-/// confirmation. Four tries so a busy serial link does not turn a successful
-/// write into a spurious failure; the confirmed value is returned.
-async fn write_param_int(
-    handle: &ConnectionHandle,
-    target_system_id: u8,
-    name: &str,
-    value: i32,
-) -> Result<f32, String> {
-    let wire =
-        maggcs_core::params::codec::encode(ParamValue::Int(value as i64), IntEncoding::ByteConcat);
-    let msg = MavMessage::PARAM_SET(::mavlink::common::PARAM_SET_DATA {
-        target_system: target_system_id,
-        target_component: 1,
-        param_id: encode_param_id(name).into(),
-        param_value: wire,
-        param_type: ParamType::I32.to_mav(),
-    });
-    if handle.send(msg).await.is_err() {
-        return Err(format!("{name} write failed: link down"));
-    }
-    let mut confirmed = None;
-    for _ in 0..4 {
-        tokio::time::sleep(Duration::from_millis(120)).await;
-        if let Some(v) = read_param(handle, target_system_id, name).await {
-            // The wire f32 for an INT32 is the integer's bit pattern
-            // (byte-concat); compare the decoded integer.
-            let got = match maggcs_core::params::codec::decode(
-                v,
-                ParamType::I32,
-                IntEncoding::ByteConcat,
-            ) {
-                ParamValue::Int(i) => i as i32,
-                _ => -1,
-            };
-            confirmed = Some(v);
-            if got == value {
-                break;
-            }
-        }
-    }
-    confirmed.ok_or_else(|| format!("no reply to the {name} read (timeout or link down)"))
-}
-
-/// Toggle or set the FC's on-board SD-card log mode over the motor test's
-/// serial target link (`SDLOG_MODE`: 0 = disabled, 1 = always, 2 = when
-/// armed). Writes the parameter, confirms the FC's echo, and refreshes the
-/// cached value the status poll reads.
-///
-/// `mode` is one of `"disabled"`, `"always"`, `"armed"`. A motor-test bench
-/// runs disarmed, so `"armed"` would not log — `"always"` is the useful
-/// choice there.
-#[tauri::command]
-pub async fn actuator_set_sdlog_mode(
-    state: State<'_, AppState>,
-    mode: String,
-) -> Result<f32, String> {
-    let value = match mode.as_str() {
-        "disabled" => 0i64,
-        "always" => 1i64,
-        "armed" => 2i64,
-        other => {
-            return Err(format!(
-                "unknown SDLOG_MODE: {other} (use disabled|always|armed)"
-            ))
-        }
-    };
-    let target = state
+fn target_params(state: &AppState) -> Result<(usize, ParamService), String> {
+    state
         .motor_test
         .target
         .lock()
         .as_ref()
         .map(|runtime| {
             (
-                runtime.target.handle.clone(),
-                runtime.target.target_system_id,
-                runtime.target.sdlog_mode.clone(),
+                runtime.target.handle.handle_id(),
+                runtime.target.params.clone(),
             )
         })
-        .ok_or_else(|| "no serial PX4 target — connect it first".to_string())?;
-    let (handle, target_system_id, slot) = target;
-    let echoed = write_param_int(&handle, target_system_id, "SDLOG_MODE", value as i32).await?;
-    if let Ok(mut guard) = slot.lock() {
-        *guard = Some(echoed);
+        .ok_or_else(|| "no serial PX4 target — connect it first".into())
+}
+
+fn ensure_parameter_target(state: &AppState, link_id: usize) -> Result<(), String> {
+    if state
+        .motor_test
+        .target
+        .lock()
+        .as_ref()
+        .is_some_and(|runtime| runtime.target.handle.handle_id() == link_id)
+    {
+        Ok(())
+    } else {
+        Err("parameter target changed during transaction".into())
     }
-    Ok(echoed)
+}
+
+#[tauri::command]
+pub async fn actuator_param_read(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<ParamObservation, String> {
+    let (id, svc) = target_params(&state)?;
+    let entry = svc.read(&name).await.map_err(|error| error.to_string())?;
+    ensure_parameter_target(&state, id)?;
+    Ok(ParamObservation { entry, age_ms: 0 })
+}
+
+#[tauri::command]
+pub async fn actuator_param_set(
+    state: State<'_, AppState>,
+    name: String,
+    value: ParamValue,
+    ptype: ParamType,
+) -> Result<ParamEntry, String> {
+    let _ops = state.ops().lock().await;
+    if state
+        .motor_test
+        .session()
+        .is_some_and(|session| session.is_sending())
+    {
+        return Err("stop the motor test before changing target parameters".into());
+    }
+    let (id, svc) = target_params(&state)?;
+    let current = svc.read(&name).await.map_err(|error| error.to_string())?;
+    if current.ptype != ptype {
+        return Err(format!(
+            "{name} type mismatch: expected {:?}",
+            current.ptype
+        ));
+    }
+    let entry = svc
+        .set_confirmed(&name, value, ptype)
+        .await
+        .map_err(|error| error.to_string())?;
+    ensure_parameter_target(&state, id)?;
+    if matches!(
+        name.as_str(),
+        "SDLOG_MODE" | "SDLOG_BACKEND" | "SDLOG_PROFILE"
+    ) {
+        if let Some(target) = state.motor_test.target.lock().as_ref() {
+            target
+                .target
+                .restart_pending
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+    Ok(entry)
+}
+
+/// Set the SD boot policy; this does not start an active SD capture.
+#[tauri::command]
+pub async fn actuator_set_sdlog_mode(
+    state: State<'_, AppState>,
+    mode: String,
+) -> Result<i32, String> {
+    let value = match mode.as_str() {
+        "armed" => 0i32,
+        "boot_until_disarm" => 1,
+        "always" => 2,
+        "aux1" => 3,
+        "first_arm" => 4,
+        other => return Err(format!("unknown SDLOG_MODE: {other}")),
+    };
+    actuator_param_set(
+        state,
+        "SDLOG_MODE".into(),
+        ParamValue::Int(value as i64),
+        ParamType::I32,
+    )
+    .await?;
+    Ok(value)
 }
 
 /// Enable or disable `COM_MOT_TEST_EN` on the target PX4. PX4 refuses
@@ -875,31 +849,16 @@ pub async fn actuator_set_sdlog_mode(
 pub async fn actuator_set_mot_test_en(
     state: State<'_, AppState>,
     enabled: bool,
-) -> Result<f32, String> {
-    let (handle, target_system_id, slot) = state
-        .motor_test
-        .target
-        .lock()
-        .as_ref()
-        .map(|runtime| {
-            (
-                runtime.target.handle.clone(),
-                runtime.target.target_system_id,
-                runtime.target.com_mot_test_en.clone(),
-            )
-        })
-        .ok_or_else(|| "no serial PX4 target — connect it first".to_string())?;
-    let echoed = write_param_int(
-        &handle,
-        target_system_id,
-        "COM_MOT_TEST_EN",
-        i32::from(enabled),
+) -> Result<i32, String> {
+    let value = i32::from(enabled);
+    actuator_param_set(
+        state,
+        "COM_MOT_TEST_EN".into(),
+        ParamValue::Int(value as i64),
+        ParamType::I32,
     )
     .await?;
-    if let Ok(mut guard) = slot.lock() {
-        *guard = Some(echoed);
-    }
-    Ok(echoed)
+    Ok(value)
 }
 
 /// Rebuild the SD-log runtime for the current serial target PX4. Idempotent:
@@ -1295,13 +1254,11 @@ async fn stop_active_session(state: &AppState) -> Result<(), String> {
     let Some(service) = service_of(state) else {
         return Ok(());
     };
-    let stopped_sending = tokio::time::timeout(MOTOR_TEST_STOP_TIMEOUT, service.stop_and_wait())
+    let receipt = tokio::time::timeout(MOTOR_TEST_STOP_TIMEOUT, service.stop_and_wait())
         .await
         .map_err(|_| "timed out waiting for motor-test release; link kept open".to_string())?
         .map_err(|error| format!("motor-test release failed; link kept open: {error}"))?;
-    if stopped_sending {
-        state.motor_test.note_state(SessionState::Idle);
-    }
+    state.motor_test.note_state(receipt.state);
     Ok(())
 }
 
@@ -1322,11 +1279,14 @@ async fn forward_events(app: AppHandle, mut rx: tokio::sync::mpsc::Receiver<Moto
                     }]);
                 }
                 pin_window(&app, s.is_sending());
-                let _ = app.emit("actuator_event", SessionPayload::State(s));
+                let _ = app.emit("actuator_event", SessionPayload::State { state: s });
             }
             MotorTestEvent::Stopped(reason) => {
                 pin_window(&app, false);
-                let _ = app.emit("actuator_event", SessionPayload::Stopped(reason));
+                let _ = app.emit("actuator_event", SessionPayload::Stopped { reason });
+            }
+            MotorTestEvent::ReleaseFailed(error) => {
+                let _ = app.emit("actuator_stop_warning", error.to_string());
             }
         }
     }
@@ -1336,8 +1296,12 @@ async fn forward_events(app: AppHandle, mut rx: tokio::sync::mpsc::Receiver<Moto
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum SessionPayload {
-    State(SessionState),
-    Stopped(maggcs_core::motor_test::service::StopReason),
+    State {
+        state: SessionState,
+    },
+    Stopped {
+        reason: maggcs_core::motor_test::service::StopReason,
+    },
 }
 
 /// Pin/unpin the motor-test window (operator request: on top while sending).
@@ -1463,8 +1427,8 @@ impl AppState {
                     true,
                     Some(runtime.target.endpoint.clone()),
                     Some(runtime.target.target_system_id),
-                    runtime.target.com_mot_test_en.lock().ok().and_then(|g| *g),
-                    runtime.target.sdlog_mode.lock().ok().and_then(|g| *g),
+                    cached_int(&runtime.target.params, "COM_MOT_TEST_EN"),
+                    cached_int(&runtime.target.params, "SDLOG_MODE"),
                 ),
                 None => (false, None, None, None, None),
             }
@@ -1494,8 +1458,29 @@ impl AppState {
             output_values,
             com_mot_test_en,
             sdlog_mode,
+            sdlog_backend: self
+                .motor_test
+                .target
+                .lock()
+                .as_ref()
+                .and_then(|runtime| cached_int(&runtime.target.params, "SDLOG_BACKEND")),
+            parameter_restart_pending: self.motor_test.target.lock().as_ref().is_some_and(
+                |runtime| {
+                    runtime
+                        .target
+                        .restart_pending
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                },
+            ),
             fc_output_pwm,
         }
+    }
+}
+
+fn cached_int(service: &ParamService, name: &str) -> Option<i32> {
+    match service.cache().get(name)?.value {
+        ParamValue::Int(value) => i32::try_from(value).ok(),
+        _ => None,
     }
 }
 

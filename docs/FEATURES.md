@@ -87,10 +87,11 @@ motor test → RTK → FC logs → parameters → mission/command → (recorder)
   motor test is stopped first, whatever link it drives (its own serial target
   or the primary link), so no props keep spinning after the GCS lets go.
 - Settings ▸ Shut down and closing the main window stop everything and exit.
-- The motor test is stopped *while its link is still up*, and the `Stop` is
-  awaited (not fire-and-forget), so the release frames reach the flight
-  controller before the socket closes instead of waiting for PX4's own 3 s
-  timeout.
+- The motor test is stopped *while its link is still up*. Stop and Emergency
+  Stop await the transport write for every motor's release command before
+  reporting success. Failed/incomplete releases retain the session and link
+  for retry; Emergency remains latched. A write receipt is not a PX4 ACK or
+  electrical-output measurement. The configured PX4 test timeout is 0.3 s.
 - Each stage has its own 2 s budget and the whole best-effort sequence a 10 s
   one; a hung service is cut off and reported, never blocks the exit. Stages
   that time out or fail raise a `warn` alert naming the stage.
@@ -339,6 +340,20 @@ remains the PX4 autopilot default (1).
   repeated triggers; alarm = window flash + beeps + Acknowledge. Enable and
   threshold are in the right panel.
 - **FC prerequisites**: `COM_MOT_TEST_EN=1`; test runs only while disarmed.
+- **Stopping**: normal and emergency stops release all configured functions
+  with `ACTUATOR_TEST.param2=0`, within a 2 s overall command/write budget.
+  Active commands remain stopped after a failed pass, and the full release
+  batch is retried. Reset cannot clear an incomplete emergency release.
+- **Target parameters**: reads and writes go only to the serial-target PX4
+  (never the primary-link vehicle). Integer parameters are decoded from
+  PX4's byte-concat encoding, so `COM_MOT_TEST_EN=1` shows "enabled" — not a
+  denormal float. A write is reported only after the FC's own echo **and** a
+  read-back match; a clamped or mismatched value is an error that shows the
+  actual value. Connecting reads (never writes) `COM_MOT_TEST_EN`,
+  `SDLOG_MODE`, `SDLOG_BACKEND` and `THR_MDL_FAC`. `SDLOG_MODE` labels follow
+  PX4 v1.17 semantics (0 = armed until disarm, 2 = boot until shutdown, …)
+  and a change flags "restart pending" — it does not reconfigure a running
+  logger.
 
 ## Signal Inspector (Tools ▸)
 

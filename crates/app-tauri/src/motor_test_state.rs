@@ -38,11 +38,11 @@ pub struct MotorTestTarget {
     pub target_system_id: u8,
     /// `COM_MOT_TEST_EN` read from the PX4 (`None` = not read yet / unknown).
     /// PX4 denies `ACTUATOR_TEST` while this parameter is not 1.
-    pub com_mot_test_en: std::sync::Arc<std::sync::Mutex<Option<f32>>>,
+    pub params: maggcs_core::params::ParamService,
     /// `SDLOG_MODE` read from the PX4 (`None` = not read yet / unknown):
     /// 0 = disabled, 1 = always, 2 = log when armed. The motor-test window's
     /// on-board log toggle reads and writes it over the serial link.
-    pub sdlog_mode: std::sync::Arc<std::sync::Mutex<Option<f32>>>,
+    pub restart_pending: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Owns a motor-test auxiliary link and its link-scoped tasks. Stop is

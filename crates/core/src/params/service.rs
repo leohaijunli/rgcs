@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use std::sync::Mutex as StdMutex;
 use tokio::sync::{broadcast, mpsc, oneshot};
@@ -34,6 +34,14 @@ const PULL_QUIET: Duration = Duration::from_secs(2);
 const BATCH_LEN: usize = 100;
 /// Per-send echo timeout (retried by the session budget).
 const SET_TIMEOUT: Duration = Duration::from_secs(1);
+pub const TRANSACTION_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct ParamObservation {
+    pub entry: ParamEntry,
+    pub age_ms: u64,
+}
 
 /// Terminal set outcome surfaced to the caller.
 #[derive(Debug, Clone, PartialEq)]
@@ -68,11 +76,28 @@ pub enum ParamEvent {
 }
 
 /// Errors surfaced through the command channel.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum ParamError {
+    #[error("another parameter transaction is running")]
     Busy,
+    #[error("parameter target is disconnected")]
     NotConnected,
+    #[error("parameter transaction timed out")]
     Timeout,
+    #[error("parameter transaction cancelled")]
+    Cancelled,
+    #[error("parameter name must contain 1–16 non-NUL ASCII characters")]
+    InvalidName,
+    #[error("parameter value does not match {expected:?}")]
+    TypeMismatch { expected: ParamType },
+    #[error("parameter value is outside its declared type range")]
+    OutOfRange,
+    #[error("parameter {name} read-back differs: requested {requested:?}, observed {actual:?}")]
+    VerificationMismatch {
+        name: String,
+        requested: ParamValue,
+        actual: ParamValue,
+    },
 }
 
 /// A set reply held until the FC's echo resolves it.
@@ -91,8 +116,15 @@ impl PendingReply {
                 Ok(SetResult::Clamped { requested, actual })
             }
             SetOutcome::Timeout => Err(ParamError::Timeout),
+            SetOutcome::TypeMismatch { expected } => Err(ParamError::TypeMismatch { expected }),
         };
         let _ = reply.send(result);
+    }
+
+    fn reject(&mut self, error: ParamError) {
+        if let Some(reply) = self.0.take() {
+            let _ = reply.send(Err(error));
+        }
     }
 }
 
@@ -231,20 +263,25 @@ impl ParamService {
 
     /// Read one parameter by name (lazy load); resolves with the FC's value.
     pub async fn read(&self, name: &str) -> Result<ParamEntry, ParamError> {
+        validate_name(name)?;
         let (tx, rx) = oneshot::channel();
         let req = ReadRequest {
             name: name.to_string(),
             reply: tx,
         };
-        if self
-            .cmd_tx
-            .send(Command::Read(Box::new(req)))
-            .await
-            .is_err()
-        {
-            return Err(ParamError::NotConnected);
-        }
-        rx.await.unwrap_or(Err(ParamError::NotConnected))
+        tokio::time::timeout(TRANSACTION_TIMEOUT, async {
+            if self
+                .cmd_tx
+                .send(Command::Read(Box::new(req)))
+                .await
+                .is_err()
+            {
+                return Err(ParamError::NotConnected);
+            }
+            rx.await.map_err(|_| ParamError::NotConnected)?
+        })
+        .await
+        .map_err(|_| ParamError::Timeout)?
     }
 
     /// Set one parameter; resolves on the FC's echo (or timeout).
@@ -254,6 +291,8 @@ impl ParamService {
         value: ParamValue,
         ptype: ParamType,
     ) -> Result<SetResult, ParamError> {
+        validate_name(name)?;
+        validate_value(value, ptype)?;
         let (tx, rx) = oneshot::channel();
         let req = SetRequest {
             name: name.to_string(),
@@ -261,10 +300,86 @@ impl ParamService {
             ptype,
             reply: tx,
         };
-        if self.cmd_tx.send(Command::Set(Box::new(req))).await.is_err() {
-            return Err(ParamError::NotConnected);
+        tokio::time::timeout(TRANSACTION_TIMEOUT, async {
+            if self.cmd_tx.send(Command::Set(Box::new(req))).await.is_err() {
+                return Err(ParamError::NotConnected);
+            }
+            rx.await.map_err(|_| ParamError::NotConnected)?
+        })
+        .await
+        .map_err(|_| ParamError::Timeout)?
+    }
+
+    /// Capture the set echo and require an explicit fresh read-back. A
+    /// clamped/rejected value is retained in the cache but never succeeds.
+    pub async fn set_confirmed(
+        &self,
+        name: &str,
+        value: ParamValue,
+        ptype: ParamType,
+    ) -> Result<ParamEntry, ParamError> {
+        tokio::time::timeout(TRANSACTION_TIMEOUT, async {
+            match self.set(name, value, ptype).await? {
+                SetResult::Confirmed(_) => {}
+                SetResult::Clamped { actual, .. } => {
+                    return Err(ParamError::VerificationMismatch {
+                        name: name.into(),
+                        requested: value,
+                        actual,
+                    })
+                }
+                SetResult::Timeout => return Err(ParamError::Timeout),
+            }
+            let entry = self.read(name).await?;
+            if entry.ptype != ptype {
+                return Err(ParamError::TypeMismatch { expected: ptype });
+            }
+            if !entry.value.same_as(value) {
+                return Err(ParamError::VerificationMismatch {
+                    name: name.into(),
+                    requested: value,
+                    actual: entry.value,
+                });
+            }
+            Ok(entry)
+        })
+        .await
+        .map_err(|_| ParamError::Timeout)?
+    }
+}
+
+pub fn validate_name(name: &str) -> Result<(), ParamError> {
+    if name.is_empty()
+        || name.len() > super::codec::PARAM_ID_LEN
+        || !name.is_ascii()
+        || name.as_bytes().contains(&0)
+    {
+        Err(ParamError::InvalidName)
+    } else {
+        Ok(())
+    }
+}
+
+pub fn validate_value(value: ParamValue, ptype: ParamType) -> Result<(), ParamError> {
+    let range = match ptype {
+        ParamType::U8 => (0, u8::MAX as i64),
+        ParamType::I8 => (i8::MIN as i64, i8::MAX as i64),
+        ParamType::U16 => (0, u16::MAX as i64),
+        ParamType::I16 => (i16::MIN as i64, i16::MAX as i64),
+        ParamType::U32 => (0, u32::MAX as i64),
+        ParamType::I32 => (i32::MIN as i64, i32::MAX as i64),
+        ParamType::Real32 => {
+            return match value {
+                ParamValue::Real(v) if v.is_finite() => Ok(()),
+                ParamValue::Real(_) => Err(ParamError::OutOfRange),
+                _ => Err(ParamError::TypeMismatch { expected: ptype }),
+            }
         }
-        rx.await.unwrap_or(Err(ParamError::NotConnected))
+    };
+    match value {
+        ParamValue::Int(v) if v >= range.0 && v <= range.1 => Ok(()),
+        ParamValue::Int(_) => Err(ParamError::OutOfRange),
+        _ => Err(ParamError::TypeMismatch { expected: ptype }),
     }
 }
 
@@ -273,12 +388,33 @@ impl ParamService {
 /// round-trip to the protocol task.
 #[derive(Clone, Default)]
 pub struct ParamCache {
-    entries: Arc<StdMutex<HashMap<String, ParamEntry>>>,
+    entries: Arc<StdMutex<HashMap<String, (ParamEntry, Instant)>>>,
 }
 
 impl ParamCache {
     pub fn get(&self, name: &str) -> Option<ParamEntry> {
-        self.entries.lock().ok()?.get(name).cloned()
+        self.entries
+            .lock()
+            .ok()?
+            .get(name)
+            .map(|(entry, _)| entry.clone())
+    }
+
+    pub fn observation(&self, name: &str) -> Option<ParamObservation> {
+        self.entries
+            .lock()
+            .ok()?
+            .get(name)
+            .map(|(entry, at)| ParamObservation {
+                entry: entry.clone(),
+                age_ms: at.elapsed().as_millis().min(u64::MAX as u128) as u64,
+            })
+    }
+
+    pub fn clear(&self) {
+        if let Ok(mut entries) = self.entries.lock() {
+            entries.clear();
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -291,7 +427,7 @@ impl ParamCache {
 
     fn update(&self, entry: ParamEntry) {
         if let Ok(mut guard) = self.entries.lock() {
-            guard.insert(entry.name.clone(), entry);
+            guard.insert(entry.name.clone(), (entry, Instant::now()));
         }
     }
 }
@@ -309,7 +445,8 @@ async fn run(
 ) {
     use super::session::PullUpdate;
 
-    let mut events = handle.subscribe_route(MessageRoute::messages(PARAM_MESSAGE_IDS));
+    let mut events = handle
+        .subscribe_route(MessageRoute::messages(PARAM_MESSAGE_IDS).from(target_sys, target_comp));
     let mut session = ParamSession::default();
     let mut batch: Vec<ParamEntry> = Vec::new();
     let mut batch_names: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -361,8 +498,9 @@ async fn run(
                         set_deadline = None;
                         read_deadline = None;
                         if let Some((_, reply)) = pending_read_reply.take() {
-                            let _ = reply.send(Err(ParamError::Timeout));
+                            let _ = reply.send(Err(ParamError::Cancelled));
                         }
+                        pending_set_reply.reject(ParamError::Cancelled);
                     }
                     Command::Shutdown => {
                         session.cancel();
@@ -432,6 +570,13 @@ async fn run(
                 match ev {
                     Ok(ConnectionEvent::Message(env)) => {
                         if let MavMessage::AUTOPILOT_VERSION(v) = &env.message {
+                            let capabilities = v.capabilities.bits();
+                            let encoding = if capabilities & 16 != 0 {
+                                super::codec::IntEncoding::ByteConcat
+                            } else if capabilities & 131_072 != 0 {
+                                super::codec::IntEncoding::Cast
+                            } else { super::codec::IntEncoding::ByteConcat };
+                            session.set_encoding(encoding);
                             // 4 bytes MSB→LSB: major.minor.patch.type.
                             let f = v.flight_sw_version;
                             let ver = format!(
@@ -444,6 +589,7 @@ async fn run(
                             let _ = evt_tx.send(ParamEvent::FcVersion(ver));
                         }
                         if let MavMessage::PARAM_VALUE(v) = &env.message {
+                            if decode_param_id(&v.param_id) == "_HASH_CHECK" { continue; }
                             let Some(ptype) = ParamType::from_mav(v.param_type) else {
                                 continue;
                             };
@@ -501,6 +647,13 @@ async fn run(
                                 _ => {}
                             }
                         }
+                    }
+                    Ok(ConnectionEvent::LinkError(_)) | Ok(ConnectionEvent::Connected { .. }) | Ok(ConnectionEvent::Failed(_)) => {
+                        session.cancel();
+                        cache.clear();
+                        pending_set_reply.reject(ParamError::NotConnected);
+                        if let Some((_, reply)) = pending_read_reply.take() { let _ = reply.send(Err(ParamError::NotConnected)); }
+                        set_deadline = None; read_deadline = None; quiet_deadline = None;
                     }
                     Ok(_) => continue,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,

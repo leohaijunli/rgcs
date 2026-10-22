@@ -140,6 +140,8 @@ pub fn run() {
             actuator_service::actuator_reset_emergency,
             actuator_service::actuator_set_sdlog_mode,
             actuator_service::actuator_set_mot_test_en,
+            actuator_service::actuator_param_read,
+            actuator_service::actuator_param_set,
             actuator_service::actuator_logs_request_list,
             actuator_service::actuator_logs_download,
             actuator_service::actuator_logs_cancel,

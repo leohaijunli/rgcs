@@ -70,6 +70,9 @@ pub enum SetOutcome {
     },
     /// Retries exhausted.
     Timeout,
+    TypeMismatch {
+        expected: ParamType,
+    },
 }
 
 /// Retry budgets (plan §4.2; N retries per missing index).
@@ -140,6 +143,12 @@ impl ParamSession {
         out
     }
 
+    pub fn set_encoding(&mut self, encoding: IntEncoding) {
+        if !self.is_busy() {
+            self.encoding = encoding;
+        }
+    }
+
     pub fn is_busy(&self) -> bool {
         self.pulling || self.pending_set.is_some() || self.pending_read.is_some()
     }
@@ -185,7 +194,11 @@ impl ParamSession {
             if pending.name == p.name {
                 let pending = self.pending_set.take().expect("checked");
                 let actual = codec::decode(p.raw_value, p.ptype, self.encoding);
-                let outcome = if pending.value.same_as(actual) {
+                let outcome = if pending.ptype != p.ptype {
+                    SetOutcome::TypeMismatch {
+                        expected: pending.ptype,
+                    }
+                } else if pending.value.same_as(actual) {
                     SetOutcome::Confirmed(actual)
                 } else {
                     SetOutcome::Clamped {
@@ -209,7 +222,11 @@ impl ParamSession {
 
         if !self.pulling {
             // Unsolicited broadcast (e.g. another GCS changed a param):
-            // store it and hand it to the shell (external change).
+            // store it and hand it to the shell (external change). Sentinel
+            // and out-of-table frames are still not parameters.
+            if p.name == "_HASH_CHECK" || p.index >= p.count {
+                return (None, None, None);
+            }
             let entry = ParamEntry {
                 name: p.name,
                 index: p.index,
@@ -228,6 +245,9 @@ impl ParamSession {
             }
         }
         self.total = Some(p.count);
+        if p.index >= p.count || p.name == "_HASH_CHECK" {
+            return (None, None, None);
+        }
         let entry = ParamEntry {
             name: p.name,
             index: p.index,
@@ -499,5 +519,93 @@ mod pull_reissue_tests {
         let (update, resend) = s.on_pull_timeout();
         assert_eq!(update, None);
         assert!(resend.is_none());
+    }
+
+    #[test]
+    fn hash_check_sentinel_is_not_a_parameter_or_progress() {
+        let mut s = session();
+        s.start_pull().expect("idle");
+        // PX4 emits `_HASH_CHECK` with a special index outside the real
+        // table: it must not count toward `received` or satisfy completion.
+        let (entry, update, _) = s.on_param_value(IncomingParam {
+            index: 65_535,
+            count: 2,
+            name: "_HASH_CHECK".into(),
+            raw_value: 1.0,
+            ptype: ParamType::I32,
+        });
+        assert!(entry.is_none());
+        assert!(update.is_none());
+        assert_eq!(s.entries().len(), 0, "hash sentinel is not stored");
+        // The real parameter still completes the (2-entry) pull.
+        let (_, update, _) = s.on_param_value(IncomingParam {
+            index: 0,
+            count: 2,
+            name: "COM_MOT_TEST_EN".into(),
+            raw_value: f32::from_bits(1),
+            ptype: ParamType::I32,
+        });
+        assert!(matches!(
+            update,
+            Some(PullUpdate::Progress {
+                received: 1,
+                total: 2
+            })
+        ));
+    }
+
+    #[test]
+    fn out_of_range_index_is_dropped() {
+        let mut s = session();
+        let (entry, update, _) = s.on_param_value(IncomingParam {
+            index: 5,
+            count: 2,
+            name: "BAD".into(),
+            raw_value: 0.0,
+            ptype: ParamType::I32,
+        });
+        assert!(entry.is_none());
+        assert!(update.is_none());
+    }
+
+    #[test]
+    fn set_echo_with_a_different_type_is_a_mismatch_not_a_confirmation() {
+        let mut s = session();
+        s.start_set("COM_MOT_TEST_EN", ParamValue::Int(1), ParamType::I32)
+            .expect("idle");
+        // A buggy/foreign FC echoes REAL32 for an INT32 request: the echo
+        // value must never be accepted as the requested integer.
+        let (entry, _, _) = s.on_param_value(IncomingParam {
+            index: 0,
+            count: 1,
+            name: "COM_MOT_TEST_EN".into(),
+            raw_value: 1.0,
+            ptype: ParamType::Real32,
+        });
+        assert!(entry.is_some(), "the observed value is still cached");
+        let (name, outcome) = s.take_set_outcome().expect("set resolved");
+        assert_eq!(name, "COM_MOT_TEST_EN");
+        assert_eq!(
+            outcome,
+            SetOutcome::TypeMismatch {
+                expected: ParamType::I32
+            }
+        );
+    }
+
+    #[test]
+    fn encoding_cannot_change_mid_transaction() {
+        let mut s = session();
+        s.start_set("P", ParamValue::Int(1), ParamType::I32)
+            .expect("idle");
+        s.set_encoding(IntEncoding::Cast);
+        assert_eq!(s.encoding, IntEncoding::ByteConcat);
+        s.on_set_timeout(); // exhaust
+        s.on_set_timeout();
+        s.on_set_timeout();
+        s.on_set_timeout(); // budget exhausted: transaction over
+        assert!(!s.is_busy());
+        s.set_encoding(IntEncoding::Cast);
+        assert_eq!(s.encoding, IntEncoding::Cast);
     }
 }

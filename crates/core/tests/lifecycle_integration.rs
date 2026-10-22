@@ -188,6 +188,7 @@ impl ManagedService for MotorTestStage {
                 loop {
                     match events.recv().await {
                         Some(MotorTestEvent::Stopped(_)) => return true,
+                        Some(MotorTestEvent::ReleaseFailed(_)) => return false,
                         Some(MotorTestEvent::StateChanged(state)) => {
                             self.states.lock().expect("states").push(state);
                             if !state.is_sending() {

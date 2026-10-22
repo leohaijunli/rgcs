@@ -150,12 +150,22 @@ async fn stop_running_motor_test(state: &AppState, deadline: Duration) -> StopOu
         Some(running) => running.svc.clone(),
         None => return StopOutcome::NotRunning,
     };
-    stop_motor_test_before_cleanup(service.stop_and_wait(), deadline, || {
-        state.motor_test.running.lock().take();
-        state
-            .motor_test
-            .note_state(maggcs_core::motor_test::SessionState::Idle);
-    })
+    stop_motor_test_before_cleanup(
+        async {
+            service
+                .stop_and_wait()
+                .await
+                .map(|receipt| receipt.released_motors > 0)
+                .map_err(|error| error.to_string())
+        },
+        deadline,
+        || {
+            state.motor_test.running.lock().take();
+            state
+                .motor_test
+                .note_state(maggcs_core::motor_test::SessionState::Idle);
+        },
+    )
     .await
 }
 

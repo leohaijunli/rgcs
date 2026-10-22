@@ -231,14 +231,12 @@ async fn stop_and_wait_confirms_release_frames_before_returning() {
         .expect("test frame was sent");
 
     let sent_at = tokio::time::Instant::now();
-    let was_sending = timeout(Duration::from_secs(2), svc.stop_and_wait())
+    let receipt = timeout(Duration::from_secs(3), svc.stop_and_wait())
         .await
         .expect("stop confirmation is bounded")
         .expect("release pass sent");
-    assert!(
-        was_sending,
-        "worker must report that it stopped an active session"
-    );
+    assert_eq!(receipt.released_motors, 4);
+    assert_eq!(receipt.state, SessionState::Idle);
 
     let mut releases = 0;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
