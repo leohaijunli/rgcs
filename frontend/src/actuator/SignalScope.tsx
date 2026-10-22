@@ -140,7 +140,13 @@ function withAlpha(color: string, alpha: number): string {
 
 // ----------------------------------------------------------- component ---
 
-export default function SignalScope({ sitlConnected, targetConnected, calLoaded }: HintContext) {
+export default function SignalScope({
+  sitlConnected,
+  targetConnected,
+  calLoaded,
+  legendOpen = true,
+  onToggleLegend,
+}: HintContext & { legendOpen?: boolean; onToggleLegend?: () => void }) {
   const initial = useMemo(loadPersisted, [])
   const [checked, setChecked] = useState<Set<string>>(() => new Set(initial.checked))
   const [windowS, setWindowS] = useState(initial.windowS)
@@ -237,10 +243,19 @@ export default function SignalScope({ sitlConnected, targetConnected, calLoaded 
   const panes = PANES.map((p) => ({ ...p, defs: paneDefs(p.group) })).filter((p) => p.defs.length > 0)
 
   return (
-    <div className="scope-grid">
+    <div className={`scope-grid${legendOpen ? ' legend-open' : ''}`}>
       <SignalList checked={checked} hint={hint} nowT={nowT} onToggle={toggle} />
       <div className="scope-plots">
         <div className="scope-toolbar">
+          {onToggleLegend && (
+            <button
+              className="mode-btn scope-btn"
+              onClick={onToggleLegend}
+              title={legendOpen ? 'Hide the signal list' : 'Show the signal list'}
+            >
+              {legendOpen ? '◀ Signals' : 'Signals ▶'}
+            </button>
+          )}
           <span className="section-title">Window</span>
           <select
             className="scope-select"

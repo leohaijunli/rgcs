@@ -678,3 +678,74 @@ body,
   height: 100%;
   background: var(--mg-accent, #4c9e5f);
 }
+
+/* ---- Responsive workspace (Task 9) --------------------------------------- */
+
+/* Logging details dock at wide sizes; at narrow sizes the card collapses to
+ * a summary row and expands on demand. */
+.logging-card .logging-body {
+  display: block;
+}
+.logging-card .logging-summary {
+  display: none;
+}
+
+@media (max-width: 1100px) {
+  /* One primary body-scroll region; the header stays fixed so Stop and
+   * Emergency Stop are always visible while the rest scrolls. */
+  .actuator-grid {
+    display: block;
+    height: 100%;
+    overflow-y: auto;
+  }
+  .actuator-header {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  .actuator-left,
+  .actuator-mid,
+  .actuator-right {
+    width: 100%;
+    border: 0;
+    border-bottom: 1px solid var(--mg-border);
+  }
+  .controls-grid {
+    grid-template-columns: 1fr;
+  }
+  .controls-grid > .card:nth-child(n + 3) {
+    grid-column: auto;
+  }
+  .state-strip {
+    flex-wrap: wrap;
+  }
+  .actuator-left {
+    flex-direction: column;
+  }
+  /* Collapsible signal legend: hidden by default, toggled from the toolbar.
+   * The scope plots become the flexible full-width region. */
+  .signal-list {
+    display: none;
+  }
+  .scope-grid.legend-open .signal-list {
+    display: block;
+  }
+  .scope-grid,
+  .scope-grid.legend-open {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  /* Logging details collapse to a summary row at narrow widths and expand on
+   * demand (expand/collapse toggle in the card header). */
+  .logging-card .logging-body {
+    display: none;
+  }
+  .logging-card .logging-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .logging-card.logging-expanded .logging-body {
+    display: block;
+  }
+}

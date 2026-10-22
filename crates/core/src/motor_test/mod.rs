@@ -19,12 +19,24 @@
 
 pub mod interlock;
 pub mod mag_alarm;
+pub mod mapping;
+pub mod pwm;
+pub mod run;
 pub mod scope;
 pub mod service;
 pub mod source;
 
 pub use interlock::{Interlock, SafetyLimits, HEARTBEAT_STALE};
 pub use mag_alarm::{MagAlarm, MagAlarmConfig, MagAlarmState};
+pub use mapping::{
+    build_output_map, mapped_feedback_pwm, MappingIssue, OutputAssignment, OutputMap,
+    OutputMapState, ServoChannel, ServoPort, MOTOR_FUNCTION_BASE, SERVO_CHANNELS_PER_PORT,
+};
+pub use pwm::{PwmModel, PwmModelError, PWM_US_MAX};
+pub use run::{
+    RunAction, RunConfig, RunCoordinator, RunError, RunPhase, RunStatus, RunStep, POST_ROLL,
+    PRE_ROLL, RUN_FINALIZE_TIMEOUT,
+};
 pub use service::{
     MotorTestCommand, MotorTestEvent, MotorTestService, MotorTestStopError, StopReason, StopReceipt,
 };
@@ -101,8 +113,12 @@ pub fn actuator_test_frame(
 pub struct MotorTestSession<S: RpmSource> {
     state: SessionState,
     source: S,
-    /// Last accepted value per motor, for slew limiting.
+    /// Last accepted demand fraction per motor, for slew limiting.
+    last_demands: Vec<f32>,
+    /// Last compensated `ACTUATOR_TEST` values sent to the FC, for the UI.
     last_values: Vec<f32>,
+    /// Per-motor mapped PWM configuration used to compensate the command.
+    pwm_models: Vec<PwmModel>,
     interlock: Interlock,
     started_at: Option<Instant>,
     busy_streak: u32,
@@ -118,7 +134,9 @@ impl<S: RpmSource> MotorTestSession<S> {
         Self {
             state: SessionState::Idle,
             source,
+            last_demands: vec![0.0; motors],
             last_values: vec![0.0; motors],
+            pwm_models: vec![PwmModel::default(); motors],
             interlock: Interlock::new(limits),
             started_at: None,
             busy_streak: 0,
@@ -139,8 +157,19 @@ impl<S: RpmSource> MotorTestSession<S> {
         &self.interlock
     }
 
-    /// The last values actually sent to the FC (post clamp/slew), for the
-    /// window's output readout — `0.0` when idle.
+    /// Replace the per-motor PWM models. The caller sends this before every
+    /// start, so an idle mapping refresh can never leave stale compensation.
+    /// A missing model falls back to the identity 1000–2000 µs, factor 0.
+    pub fn set_pwm_models(&mut self, models: Vec<PwmModel>) {
+        self.pwm_models.clear();
+        self.pwm_models
+            .extend(models.into_iter().take(self.last_values.len()));
+        self.pwm_models
+            .resize(self.last_values.len(), PwmModel::default());
+    }
+
+    /// The last compensated values actually sent to the FC (post clamp/slew),
+    /// for the window's output readout — `0.0` when idle.
     pub fn output_values(&self) -> Vec<f32> {
         self.last_values.clone()
     }
@@ -152,6 +181,7 @@ impl<S: RpmSource> MotorTestSession<S> {
         }
         self.started_at = Some(now);
         self.busy_streak = 0;
+        self.last_demands.fill(0.0);
         self.last_values.fill(0.0);
         self.state = SessionState::ManualRunning;
     }
@@ -168,10 +198,11 @@ impl<S: RpmSource> MotorTestSession<S> {
             // HEARTBEAT at 1 Hz, so a session started before the first
             // heartbeat reaches it would otherwise stop on its very first tick
             // (the reported "bounces straight back to idle"). Hold for the
-            // heartbeat timeout; if no heartbeat arrives within it the link is
-            // dead and the session stops. An *armed* first heartbeat still
-            // stops immediately, and the FC-side ACTUATOR_TEST deny is the
-            // backstop while the armed state is unknown.
+            // heartbeat timeout *without sending active commands*: no
+            // ACTUATOR_TEST may reach an unidentified/dirty safety state. If
+            // no heartbeat arrives within the timeout the link is dead and the
+            // session stops. An *armed* first heartbeat still stops
+            // immediately, and the FC-side ACTUATOR_TEST deny is the backstop.
             let started = self.started_at.unwrap_or(now);
             let waiting_for_first = reason == StopReason::HeartbeatStale
                 && !self.interlock.has_heartbeat()
@@ -180,6 +211,7 @@ impl<S: RpmSource> MotorTestSession<S> {
                 self.stop(reason);
                 return self.release_frames();
             }
+            return Vec::new();
         }
         let started = self.started_at.unwrap_or(now);
         let dt = now.duration_since(started).as_secs_f64();
@@ -189,8 +221,10 @@ impl<S: RpmSource> MotorTestSession<S> {
         let mut out = Vec::with_capacity(targets.len());
         for (motor, target) in targets.into_iter().enumerate() {
             if let Some(target) = target {
-                let prev = self.last_values[motor];
-                let value = self.interlock.clamp(prev, target);
+                let prev = self.last_demands[motor];
+                let demand = self.interlock.clamp(prev, target);
+                self.last_demands[motor] = demand;
+                let value = self.pwm_models[motor].command_for_fraction(demand);
                 self.last_values[motor] = value;
                 out.push(actuator_test_frame(
                     self.interlock.limits().target_sys,
@@ -271,6 +305,7 @@ impl<S: RpmSource> MotorTestSession<S> {
             return;
         }
         self.release_pending = false;
+        self.last_demands.fill(0.0);
         self.last_values.fill(0.0);
         if self.state == SessionState::Stopping {
             self.state = SessionState::Idle;
@@ -341,8 +376,11 @@ impl MotorTestSession<source::AnySource> {
         if matches!(self.state, SessionState::Stopping | SessionState::Emergency) {
             return;
         }
-        self.source =
-            source::AnySource::Forward(source::ForwardSource::new(slot, self.last_values.len()));
+        self.source = source::AnySource::Forward(source::ForwardSource::with_models(
+            slot,
+            self.last_values.len(),
+            self.pwm_models.clone(),
+        ));
         self.start(now);
     }
 
@@ -503,43 +541,80 @@ mod tests {
     }
 
     #[test]
-    fn fresh_session_holds_for_the_first_heartbeat() {
+    fn fresh_session_holds_for_the_first_heartbeat_without_sending() {
         // The reported "bounces straight back to idle": Start clicked before
         // the FC's first heartbeat reaches the session — the interlock had no
         // `armed` state and failed on the very first tick. A fresh session
-        // must hold for the first heartbeat within the timeout instead.
+        // must hold for the first heartbeat within the timeout instead, and
+        // must not emit active commands while the safety state is unknown.
         let mut s = session(&[0.4]);
         let now = Instant::now();
         s.start(now);
-        // First tick, no heartbeat yet: still sending, not stopped.
-        let frames = s.tick(now);
+        // First tick, no heartbeat yet: no ACTUATOR_TEST at all.
         assert!(
-            !frames.is_empty(),
-            "keeps sending while awaiting the first heartbeat"
+            s.tick(now).is_empty(),
+            "no active command without heartbeat"
         );
         assert_eq!(s.state(), SessionState::ManualRunning);
 
-        // Still no heartbeat: the grace window holds.
+        // Still no heartbeat: the grace window holds without sending.
         let mid = now + std::time::Duration::from_millis(500);
-        let frames = s.tick(mid);
-        assert!(!frames.is_empty());
+        assert!(s.tick(mid).is_empty());
         assert_eq!(s.state(), SessionState::ManualRunning);
 
         // The first heartbeat arrives, not armed: normal interlock resumes.
         s.interlock_mut().observe_heartbeat(false, mid);
         let frames = s.tick(mid + std::time::Duration::from_millis(100));
-        assert!(!frames.is_empty());
+        assert!(!frames.is_empty(), "sends after a fresh disarmed heartbeat");
         assert_eq!(s.state(), SessionState::ManualRunning);
 
         // No heartbeat at all within the grace window: the session stops.
         let mut s2 = session(&[0.4]);
         s2.start(now);
-        let _ = s2.tick(now);
+        assert!(s2.tick(now).is_empty());
         let frames = s2.tick(now + std::time::Duration::from_secs(3));
         s2.complete_release();
         assert_eq!(s2.state(), SessionState::Idle);
         assert_eq!(s2.take_stop_reason(), Some(StopReason::HeartbeatStale));
         assert_eq!(frames.len(), 1, "release frame");
+    }
+
+    #[test]
+    fn pwm_model_compensates_after_slew_and_reports_the_sent_command() {
+        let mut s = session(&[0.375]);
+        // 0.375 is the target fraction for 1400 µs on 1100–1900 µs.
+        s.set_pwm_models(vec![PwmModel::new(1100, 1900, false, 0.5).expect("model")]);
+        let now = Instant::now();
+        s.interlock_mut().observe_heartbeat(false, now);
+        s.start(now);
+        let frames = s.tick(now);
+        let MavMessage::COMMAND_LONG(command) = &frames[0] else {
+            panic!("actuator command");
+        };
+        assert!(
+            (command.param1 - 0.257_812_5).abs() < 1e-6,
+            "compensated command, got {}",
+            command.param1
+        );
+        let sent = s.output_values();
+        assert!((sent[0] - command.param1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn pwm_model_does_not_change_release_frames() {
+        let mut s = session(&[0.4]);
+        s.set_pwm_models(vec![PwmModel::new(1100, 1900, true, 0.5).expect("model")]);
+        let now = Instant::now();
+        s.interlock_mut().observe_heartbeat(false, now);
+        s.start(now);
+        let _ = s.tick(now);
+        s.stop(StopReason::Command);
+        let frames = s.release_frames();
+        let MavMessage::COMMAND_LONG(command) = &frames[0] else {
+            panic!("release command");
+        };
+        assert_eq!(command.param1, 0.0);
+        assert_eq!(command.param2, 0.0);
     }
 
     #[test]

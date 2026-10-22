@@ -2,6 +2,8 @@
 //! value comes from. A2 ships `ManualSource` (slider values, latest wins);
 //! Profile replay (A6) and speed functions (A7) implement the same trait.
 
+use super::pwm::PwmModel;
+
 /// One motor the sender drives. `function` is the 1-based motor function PX4
 /// expects in `MAV_CMD_ACTUATOR_TEST.param5` (1 = Motor 1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -246,17 +248,37 @@ impl ForwardState {
 pub struct ForwardSource {
     slot: ForwardSlot,
     motors: usize,
+    /// Target PWM models, indexed by motor. Empty means "use the slot's
+    /// pre-normalized values" (tests / pre-Task-5 fallback).
+    models: Vec<PwmModel>,
     /// Idle-forward grace deadline (epoch seconds), set at construction.
     grace_until_s: f64,
 }
 
 impl ForwardSource {
     pub fn new(slot: ForwardSlot, motors: usize) -> Self {
+        Self::with_models(slot, motors, Vec::new())
+    }
+
+    /// Forward the SITL's raw pulse through the same target PWM model used
+    /// for manual/preset commands, so 1400 µs stays 1400 µs on a reversed or
+    /// narrow-range mapped output.
+    pub fn with_models(slot: ForwardSlot, motors: usize, models: Vec<PwmModel>) -> Self {
         Self {
             slot,
             motors,
+            models,
             grace_until_s: now_epoch_s() + FORWARD_START_GRACE_S,
         }
+    }
+
+    fn target_fraction(&self, motor: usize, state: &ForwardState) -> Option<f32> {
+        let Some(model) = self.models.get(motor) else {
+            return state.values.get(motor).copied();
+        };
+        let raw = state.raw_pwm.get(motor).copied().unwrap_or(0);
+        let pulse = f32::from(raw).clamp(f32::from(model.min_us), f32::from(model.max_us));
+        Some(model.fraction_for_pulse(pulse).unwrap_or(0.0))
     }
 }
 
@@ -281,7 +303,7 @@ impl RpmSource for ForwardSource {
             .is_some_and(|t| t + FORWARD_STALE_AFTER_S >= now);
         if fresh {
             return (0..self.motors)
-                .map(|motor| guard.values.get(motor).copied())
+                .map(|motor| self.target_fraction(motor, &guard))
                 .collect();
         }
         // No sample yet (or the feed went stale) within the start grace:
@@ -443,6 +465,38 @@ mod tests {
             (FORWARD_START_GRACE_S * 1000.0) as u64 + 100,
         ));
         assert_eq!(s.value(0.0, 0), None, "stale feed: exhausted");
+    }
+
+    #[test]
+    fn forward_converts_raw_pulse_through_the_target_model() {
+        let slot = forward_slot(2);
+        {
+            let mut st = slot.lock().unwrap();
+            st.values = vec![0.4, 0.4];
+            st.raw_pwm = vec![1400, 1400];
+            st.last_update_s = Some(epoch_now());
+        }
+        let models = vec![
+            PwmModel::new(1000, 2000, false, 0.0).expect("model"),
+            PwmModel::new(1100, 1900, false, 0.5).expect("model"),
+        ];
+        let mut s = ForwardSource::with_models(slot, 2, models);
+        let values = s.values(0.0);
+        assert!((values[0].expect("identity") - 0.4).abs() < 1e-6);
+        assert!((values[1].expect("narrow") - 0.375).abs() < 1e-6);
+    }
+
+    #[test]
+    fn forward_clamps_pulses_outside_the_target_range() {
+        let slot = forward_slot(1);
+        {
+            let mut st = slot.lock().unwrap();
+            st.raw_pwm = vec![900];
+            st.last_update_s = Some(epoch_now());
+        }
+        let models = vec![PwmModel::new(1100, 1900, false, 0.0).expect("model")];
+        let mut s = ForwardSource::with_models(slot, 1, models);
+        assert_eq!(s.value(0.0, 0), Some(0.0));
     }
 
     #[test]

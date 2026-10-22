@@ -139,8 +139,17 @@ impl LogsState {
                         }
                     }
                     msg = route.recv() => {
-                        let Some(m) = msg_ok(msg) else { return };
-                        let (events, frames) = match protocol.handle(&m.message) {
+                        let envelope = match classify_route(msg) {
+                            RouteStep::Message(envelope) => envelope,
+                            // Ordinary lifecycle reports and broadcast lag are
+                            // not download failures; keep serving the link.
+                            RouteStep::Skip => continue,
+                            RouteStep::Closed => return,
+                        };
+                        let (events, frames) = match protocol.handle(
+                            &envelope.message,
+                            std::time::Instant::now(),
+                        ) {
                             Ok(v) => v,
                             Err(e) => {
                                 emit_failed(&state, &app, e.to_string());
@@ -206,15 +215,23 @@ impl std::fmt::Debug for LogsState {
     }
 }
 
-/// A `RoutedEvents` recv result: `None` = the link bus closed.
-fn msg_ok(
+/// What one `RoutedEvents` wake means for the download task. Only a closed
+/// bus ends the task; a lagged subscriber simply misses frames, and link
+/// lifecycle reports are irrelevant to the protocol.
+pub(crate) enum RouteStep {
+    Message(Box<maggcs_core::mavlink::MessageEnvelope>),
+    Skip,
+    Closed,
+}
+
+pub(crate) fn classify_route(
     msg: Result<ConnectionEvent, tokio::sync::broadcast::error::RecvError>,
-) -> Option<maggcs_core::mavlink::MessageEnvelope> {
+) -> RouteStep {
     match msg {
-        Ok(ConnectionEvent::Message(env)) => Some(*env),
-        Ok(_) => None,
-        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => None,
-        Err(_) => None,
+        Ok(ConnectionEvent::Message(envelope)) => RouteStep::Message(envelope),
+        Ok(_) => RouteStep::Skip,
+        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => RouteStep::Skip,
+        Err(tokio::sync::broadcast::error::RecvError::Closed) => RouteStep::Closed,
     }
 }
 
@@ -281,6 +298,7 @@ pub async fn logs_cancel(state: State<'_, AppState>) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use maggcs_core::mavlink::{MavMessage, MessageEnvelope};
     use std::sync::atomic::{AtomicBool, Ordering};
 
     #[tokio::test]
@@ -301,5 +319,66 @@ mod tests {
 
         assert!(matches!(outcome, StopOutcome::Stopped { .. }));
         assert!(exited.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn dropping_a_replaced_runtime_stops_its_task() {
+        struct Signal(Arc<AtomicBool>);
+        impl Drop for Signal {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let dropped = Arc::new(AtomicBool::new(false));
+        let signal = Signal(Arc::clone(&dropped));
+        let (commands, _receiver) = tokio::sync::mpsc::channel::<LogCommand>(1);
+        let task = tauri::async_runtime::spawn(async move {
+            let _signal = signal;
+            std::future::pending::<()>().await;
+        });
+        let runtime = LogsRuntime {
+            commands: Some(commands),
+            task: Some(task),
+        };
+
+        // Replacement drops the previous runtime without a graceful stop.
+        drop(runtime);
+        for _ in 0..50 {
+            if dropped.load(Ordering::SeqCst) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "the replaced runtime's task must be aborted"
+        );
+    }
+
+    #[test]
+    fn route_classifier_skips_lag_and_lifecycle_events() {
+        assert!(matches!(
+            classify_route(Ok(ConnectionEvent::HeartbeatRestored)),
+            RouteStep::Skip
+        ));
+        assert!(matches!(
+            classify_route(Err(tokio::sync::broadcast::error::RecvError::Lagged(3))),
+            RouteStep::Skip
+        ));
+        assert!(matches!(
+            classify_route(Err(tokio::sync::broadcast::error::RecvError::Closed)),
+            RouteStep::Closed
+        ));
+
+        let envelope = MessageEnvelope {
+            header: Default::default(),
+            message: MavMessage::HEARTBEAT(Default::default()),
+            received_at: std::time::Instant::now(),
+        };
+        assert!(matches!(
+            classify_route(Ok(ConnectionEvent::Message(Box::new(envelope)))),
+            RouteStep::Message(_)
+        ));
     }
 }

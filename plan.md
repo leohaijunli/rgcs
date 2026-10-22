@@ -35,6 +35,11 @@ This review covers commit `b8759be`. PX4 behavior below was checked against offi
 | Emergency stop clears local state without generating release frames. Normal stop changes state before selecting confirmed writes. | Emergency stopping relies on timeout; normal stop can acknowledge queueing rather than completed transport writes. | `crates/core/src/motor_test/mod.rs:237–261`, `crates/core/src/motor_test/service.rs:219–239` |
 | Load limits are not reliably updated when a service is reused; preset/forward starts default to “no props”. | The selected load and backend output envelope can disagree. | `crates/app-tauri/src/actuator_service.rs:169–227,613–638` |
 
+The SD-logging findings are resolved: the motor-test panel no longer writes
+`SDLOG_MODE` (it reads and displays the hardware values), and the PC-side
+received-message recorder was removed; "Check logger"/"Start capture" now
+control the PX4 file logger. The other findings remain the tasks below.
+
 Two additional reliability problems matter for the logging workflow:
 
 - Healthy downloads can exhaust the retry budget after approximately **six seconds**, because progress does not reset the download timeout/retry state.
@@ -167,8 +172,8 @@ Provide direct controls in **Target Parameters**:
 | Parameter | Observed value | State | Controls |
 |---|---|---|---|
 | `COM_MOT_TEST_EN` | Enabled — `1` | Fresh | Read / Enable / Disable |
-| `SDLOG_MODE` | Armed until disarm — `0` | Confirmed | Read / Select / Apply |
-| `SDLOG_BACKEND` | SD + MAVLink — `3` | Restart pending | Read / Edit / Apply |
+| `SDLOG_MODE` | Armed until disarm — `0` | Confirmed | Read (read-only in the motor-test panel) |
+| `SDLOG_BACKEND` | SD + MAVLink — `3` | Restart pending | Read (read-only in the motor-test panel) |
 
 States should include **Reading, Pending, Confirmed, Mismatch, Unknown, Stale, and Unsupported**.
 
@@ -338,7 +343,13 @@ Each row should be a separately approved, verified change.
 |---|---|---|
 | 1 — Stop/ESTOP | Software complete | 43 focused core unit tests, 4 motor-service integration tests, 2 lifecycle integration tests; `cargo check -p maggcs-app --tests` and Rust formatting passed. Controlled transport regressions hold every write confirmation, fail motor 2 while attempting the remaining releases, and verify emergency latching. |
 | 2 — Target parameters | Software complete | 730 core lib tests + 8 integration tests pass; clippy `-D warnings` clean. Session regressions: `_HASH_CHECK` sentinel excluded, out-of-range index dropped, REAL32 echo of an INT32 set is a type mismatch (never confirmation), encoding frozen mid-transaction. Codec already proves `0/1/2/−1` byte-concat round-trips. |
-| 3–9 | Pending | Implementation will proceed in order. Physical pulse measurements and SD capture acceptance require the connected 6X and firmware identification. |
+| 3 — Target binding + load | Software complete | 94 app lib tests pass (1 ignored); 730 core lib tests pass (1 ignored); motor-test service integration (4) and lifecycle binding (1) pass; clippy `-D warnings` and frontend `tsc --noEmit` clean. New regressions cover no target/telemetry/heartbeat/stale/armed/mismatched-heartbeat refusals, connection-identity replacement, non-idle start refusal, per-load caps/slew, and no `ACTUATOR_TEST` before the first heartbeat. Physical pulse verification remains part of Task 4/5 bench acceptance. |
+| 4 — Node/port/channel mapping | Software complete; bench PWM check pending | 741 core lib tests pass (1 ignored), including 11 mapping tests; 97 app lib tests pass (1 ignored), including foreign-frame, selected-node/port and MAIN/AUX bank separation regressions; motor-test service integration (4) pass; clippy `-D warnings` and frontend `tsc --noEmit` clean. Permuted MAIN/AUX assignments select the intended physical channel and duplicate functions are reported invalid. Physical pulse verification still requires the connected 6X and firmware identification. |
+| 5 — Target-compensated PWM matching | Software complete; bench PWM check pending | 751 core lib tests pass (1 ignored), including 49 pulse/model round-trip cases across five range/reversal/thrust-factor configurations (≤1 µs); 99 app lib tests pass (1 ignored) and 5 integration tests pass, including model fallback and target-model capture/send-before-start regressions; clippy `-D warnings`, `cargo fmt`, frontend `tsc --noEmit` and build clean. Physical pin tracking (±5 µs) still requires the connected 6X and firmware identification. |
+| 6 — Target-shell SD capture control/status | Software complete; bench capture pending | 771 core lib tests pass (1 ignored), including 17 capture state-machine tests (check/existing recording, exact echo marker, unique path, storage, recovery stop, bounded finalization and timeout errors); 106 app lib tests pass (1 ignored) and 4 motor-service integration tests pass, including the mandatory owned-Recording gate; clippy `-D warnings`, `cargo fmt`, frontend `tsc --noEmit` and build clean. Bench repair verified in software: Check no longer fails on an existing recording, Stop is available after failure/existing state, and `SDLOG_MODE`/`SDLOG_BACKEND` are read-only hardware readouts. Physical capture acceptance requires the connected 6X and firmware identification. |
+| 7 — Log-transfer timing, validation and ownership | Software complete | 771 core lib tests pass (1 ignored), including a byte-exact 960 s simulated transfer that keeps the retry budget reset, malformed-chunk rejection, and gap detection; 106 app lib tests pass (1 ignored), including the lag/lifecycle route classifier and replaced-runtime abort; clippy `-D warnings` and `cargo fmt` clean. |
+| 8 — Per-test coordinator + recovery manifest | Software complete; 20-run bench pending | 779 core lib tests pass (1 ignored), including 8 coordinator tests (pre-roll gate, post-roll before stop, abort with motor release, stop timeout, capture failure, interruption); 111 app lib tests pass (1 ignored), including atomic manifest round-trip, safe test ids, still-recording reconciliation and finished-manifest preservation; 4 motor-service + 2 lifecycle integration tests pass; clippy `-D warnings`, `cargo fmt`, frontend `tsc --noEmit` and build clean. The manifest is written at every boundary under `<app_data>/motor-tests/<test_id>/manifest.json`; reconnect reconciles pending runs. The 20-consecutive-artifact acceptance still requires the connected 6X. |
+| 9 — Responsive workspace + generated events | Pending | Implementation will proceed after Task 8. |
 
 Task 1 introduces typed transport-only `StopReceipt`/`MotorTestStopError`,
 retains pending releases after failures, and makes both desktop stop commands
@@ -350,6 +361,83 @@ adds `set_confirmed` (echo + read-back verification, mismatch is an error),
 typed `ParamError` variants, transaction deadlines, capability-based integer
 encoding, target-filtered routes, and removes the automatic
 `COM_MOT_TEST_EN=1` write on connect (discovery is read-only).
+
+Task 3 binds every session to a `MotorTestTargetRef` (connection + system +
+component) and the declared `MotorTestLoad`. All starts run one readiness check
+that requires a fresh, matching, disarmed PX4 heartbeat before any
+`ACTUATOR_TEST` is sent. Reusing a session requires both target and load to
+match; an idle mismatch is stopped with confirmed release before replacement,
+and a sending session refuses replacement. The core session now holds its
+first heartbeat without emitting a frame, so a stale pre-connect heartbeat can
+never produce a command burst.
+
+Task 4 binds the SITL feed to the dedicated source connection, node and PWM
+bank. `PWM_MAIN_FUNC1..8` / `PWM_AUX_FUNC1..8` are read from the serial target
+on connect and via `actuator_refresh_mapping`; PX4 functions 101–104 map to
+Motor1–4. `SERVO_OUTPUT_RAW` is stored per MAIN/AUX bank, so a foreign node,
+foreign port or AUX frame cannot overwrite MAIN feedback. The window shows the
+mapped channel for each motor and feeds the µs reading from that channel;
+unmapped, unreadable and duplicate assignments are explicit.
+
+Task 5 reads each mapped channel's `PWM_*_MIN/MAX/REV/DISn` and the target's
+`THR_MDL_FAC`, builds one `PwmModel` per motor, and sends the models to the
+session before every start. Manual and preset values are fractions of the
+target channel and are compensated before encoding; forwarded SITL pulses are
+first converted to the same target fraction, so a reversed or narrow-range
+output still reproduces the requested pulse. Missing or invalid parameters
+fall back to the identity model; unmapped motors send identity. The right
+panel shows the endpoints, reversal, thrust factor and disabled state.
+
+Task 6 adds one target-shell controller per serial target. "Check logger" reads
+`logger status` through `SERIAL_CONTROL` (shell device) and reports Ready,
+Recording (this test's file) or Existing recording; it also refreshes
+`SDLOG_MODE`/`SDLOG_BACKEND` for read-only display. Start sends `logger on`; the
+Recording state requires a new `Log file:` path, then every motor start checks
+that phase before creating or reusing a session. An existing recording never
+authorises motor commands. Stop releases motors first, then re-observes status
+before `logger off`, and requires stable "Not logging" observations inside the
+finalization window. Stop remains available after a failed check, an existing
+recording or a timed-out exchange. A non-file logger backend, disabled storage,
+rejected commands, shell timeouts and path reuse are explicit failures; the
+status/path is shown beside the logging controls. Capture is link-scoped and
+reset on target replacement.
+
+Risk boundary: only `logger status`, `logger on` and `logger off` are written,
+only to the dedicated target's shell — never the primary link — and no
+parameter is written. `SDLOG_MODE`/`SDLOG_BACKEND` changes are restart-required
+and stay outside the per-test flow; the panel shows the observed values. The
+PC-side received-message recorder was removed from this window because its
+"Logger on/off" control never affected the PX4 SD file. Capture start/check is
+refused while a motor session is active; a dropped link marks Recording failed
+rather than leaving it trusted. Task 8 adds the per-test pre/post-roll,
+manifest and recovery described below.
+
+Task 7 fixes the log-download protocol. `LogProtocol::handle` now takes the
+observation instant and every accepted `LOG_DATA` chunk (and `LOG_ENTRY`)
+re-anchors the request timeout and clears the retry counter, so a healthy
+transfer is no longer killed after the ~6 s retry budget. Chunks are validated
+against the 90-byte frame and the declared log size before any buffer resize,
+so a malformed `count`/`offset` is an explicit `MalformedChunk` error rather
+than a panic or over-allocation; a chunk past the collected tail but inside the
+log remains a `Gap`. Both download runtimes (primary link and the serial
+target) now use a shared route classifier: broadcast `Lagged` and ordinary
+connection lifecycle events are skipped, and only a closed bus ends the task;
+replacing a runtime drops the old one, which aborts its task. New core tests
+cover a 960 s simulated byte-exact transfer, malformed count, offset past the
+declared size and a preserved gap; app tests cover the classifier and
+replacement abort.
+
+Task 8 adds a pure `RunCoordinator` per test. After the capture service reports
+a new file, the run waits a 1 s pre-roll before the operator's existing START
+is accepted. A transport-confirmed motor start moves it to `MotorRunning`; any
+confirmed release starts a 1 s post-roll, after which the coordinator requests
+`logger off`. Abort releases the motors first. A link/target loss marks the run
+interrupted. The app writes `<app_data>/motor-tests/<test_id>/manifest.json`
+atomically at every boundary with the test id, remote log path, FC identity,
+mapping, read-only `SDLOG_MODE`/`SDLOG_BACKEND`, timestamps, stop reason and
+error. On reconnect, pending manifests are reconciled against live `logger
+status`: a still-recording matching file stays `interrupted`, otherwise the run
+is closed as `reconciled`. A new run is refused while one is active.
 
 | Order | Work | Acceptance criterion |
 |---:|---|---|

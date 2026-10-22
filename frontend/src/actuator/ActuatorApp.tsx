@@ -16,8 +16,10 @@ import { listen } from '@tauri-apps/api/event'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { readTextFile } from '@tauri-apps/plugin-fs'
 import type { ParamEntry } from '../generated-types/ParamEntry'
+import type { LogEntryInfo } from '../generated-types/LogEntryInfo'
 import { isTauri } from '../inspector/mock'
 import SignalScope, { useScopeFeed } from './SignalScope'
+import StartStopButton from './StartStopButton'
 import { scopeStore } from './scopeStore'
 
 /** The parameter that gates motor tests on the FC (parameters plan PM9). */
@@ -34,6 +36,37 @@ const LOADS: Array<{ id: Load; label: string }> = [
   { id: 'plate', label: 'Flat plate' },
   { id: 'props', label: 'Full props' },
 ]
+
+/** PX4 v1.17 SDLOG_MODE meanings shown read-only in the capture panel. */
+const SDLOG_MODE_LABELS: Record<number, string> = {
+  0: 'armed→disarm',
+  1: 'boot→disarm',
+  2: 'boot→shutdown',
+  3: 'AUX1 switch',
+  4: '1st arm→shutdown',
+}
+
+function sdlogModeLabel(value: number | null): string {
+  if (value == null) return 'unknown'
+  return SDLOG_MODE_LABELS[value] ?? `unknown (${value})`
+}
+
+/** PX4 SDLOG_BACKEND is a bitmask: 1 = SD card, 2 = MAVLink. */
+function sdlogBackendLabel(value: number | null): string {
+  if (value == null) return 'unknown'
+  const parts = [value & 1 ? 'SD card' : null, value & 2 ? 'MAVLink' : null].filter(
+    (part): part is string => part != null,
+  )
+  return parts.length > 0 ? `${parts.join(' + ')} (${value})` : `none (${value})`
+}
+
+function captureErrorLabel(error: SdCaptureError | null): string {
+  if (!error) return ''
+  const details = Object.entries(error)
+    .filter(([key]) => key !== 'kind')
+    .map(([key, value]) => `${key}=${String(value)}`)
+  return [error.kind.replaceAll('_', ' '), ...details].join(': ')
+}
 
 /** Command sources. Manual = live sliders; Preset = bounded waveform
  * (self-stopping); Forward = realtime SITL→FC forwarding (design pending). */
@@ -88,6 +121,8 @@ interface ActuatorStatus {
   /** SITL source link (revised D3). */
   sitl_connected: boolean
   sitl_endpoint: string | null
+  /** Node and PWM bank selected for the SITL source. */
+  sitl_source: SitlSourceConfig | null
   sitl_feed_age_s: number | null
   /** The motor test's own target link (real PX4, serial). */
   target_connected: boolean
@@ -97,18 +132,244 @@ interface ActuatorStatus {
   target_system_id: number | null
   /** COM_MOT_TEST_EN read from the target PX4 (null = unknown). */
   com_mot_test_en: number | null
-  /** SDLOG_MODE read from the target PX4 (null = unknown): 0=disabled,
-   * 1=always, 2=armed-only. The on-board log toggle reads/writes it. */
+  /** SDLOG_MODE read from the target PX4 (null = unknown), PX4 v1.17:
+   * 0=armed until disarm, 1=boot until disarm, 2=boot until shutdown,
+   * 3=AUX1 switch, 4=first arm until shutdown. */
   sdlog_mode: number | null
+  /** SDLOG_BACKEND read from the target PX4 (null = unknown); bitmask:
+   * 1=SD card, 2=MAVLink. */
+  sdlog_backend: number | null
   /** Normalized SITL servo outputs 1–4 (the forward INPUT). */
   input_values: number[]
   /** The SITL's raw SERVO_OUTPUT_RAW 1–4 in µs (what input_values came from). */
   input_pwm: number[]
   /** Values sent to the FC as ACTUATOR_TEST (the OUTPUT), 0 when idle. */
   output_values: number[]
-  /** The target FC's actual SERVO_OUTPUT_RAW main outputs 1–4 in µs (what
-   * PX4 drives), from the serial telemetry tap; null = no sample yet. */
-  fc_output_pwm: number[] | null
+  /** Actual PWM for each motor function in µs, selected from its mapped
+   * MAIN/AUX channel; null = unmapped or no fresh sample. */
+  fc_output_pwm: (number | null)[]
+  /** Motor function → physical output mapping read from PWM_*_FUNCx. */
+  output_map: OutputMap
+  /** Per-motor target PWM model used to compensate ACTUATOR_TEST and
+   * forwarded SITL pulses (endpoints, reversal, THR_MDL_FAC, disabled). */
+  pwm_models: PwmModel[]
+  /** Target-shell SD-file capture state (Task 6). */
+  sd_capture: SdCaptureStatus
+  /** Per-test run coordinator + recovery manifest (Task 8). */
+  run: RunSnapshot
+}
+
+type RunPhase =
+  | 'starting_capture'
+  | 'preroll'
+  | 'motor_ready'
+  | 'motor_running'
+  | 'postroll'
+  | 'stopping_capture'
+  | 'complete'
+  | 'aborted'
+  | 'interrupted'
+  | 'failed'
+
+interface RunStatus {
+  test_id: string
+  phase: RunPhase
+  remote_path: string | null
+  stop_reason: string | null
+  error: { kind: string; [key: string]: unknown } | null
+}
+
+interface RunSnapshot {
+  status: RunStatus | null
+  manifest_path: string | null
+}
+
+type CapturePhase =
+  | 'idle'
+  | 'verifying'
+  | 'ready'
+  | 'starting'
+  | 'recording'
+  | 'existing_recording'
+  | 'stopping'
+  | 'finalizing'
+  | 'complete'
+  | 'failed'
+
+interface SdCaptureError {
+  kind: string
+  [key: string]: unknown
+}
+
+interface SdCaptureStatus {
+  phase: CapturePhase
+  test_id: string | null
+  remote_path: string | null
+  logger: {
+    running: boolean
+    backend: string
+    file_logging: boolean
+    remote_path: string | null
+  } | null
+  sdlog_mode: number | null
+  sdlog_backend: number | null
+  last_error: SdCaptureError | null
+}
+
+interface PwmModel {
+  min_us: number
+  max_us: number
+  reversed: boolean
+  thrust_factor: number
+  disabled: boolean
+}
+
+type ServoPort = 'main' | 'aux'
+
+interface ServoChannel {
+  port: ServoPort
+  channel: number
+}
+
+interface OutputAssignment {
+  motor: number
+  channel: ServoChannel | null
+}
+
+interface MappingIssue {
+  kind: 'unreadable' | 'duplicate'
+  port?: ServoPort
+  channel?: number
+  motor?: number
+  first?: ServoChannel
+  second?: ServoChannel
+}
+
+interface OutputMap {
+  motors: OutputAssignment[]
+  state: 'complete' | 'partial' | 'invalid' | 'unknown'
+  issues: MappingIssue[]
+}
+
+interface SitlSourceConfig {
+  endpoint: string
+  system_id: number
+  component_id: number
+  port: ServoPort
+}
+
+function channelLabel(channel: ServoChannel): string {
+  return `${channel.port === 'main' ? 'MAIN' : 'AUX'}${channel.channel}`
+}
+
+function assignmentFor(map: OutputMap, motor: number): OutputAssignment | undefined {
+  return map.motors.find((assignment) => assignment.motor === motor)
+}
+
+interface SitlSourceFieldsProps {
+  endpoint: string
+  onEndpoint: (value: string) => void
+  systemId: number
+  onSystemId: (value: number) => void
+  componentId: number
+  onComponentId: (value: number) => void
+  port: ServoPort
+  onPort: (value: ServoPort) => void
+  connected: boolean
+  error: string | null
+  onConnect: () => void
+  onDisconnect: () => void
+}
+
+function SitlSourceFields(props: SitlSourceFieldsProps) {
+  const validIds =
+    Number.isInteger(props.systemId) &&
+    props.systemId >= 1 &&
+    props.systemId <= 255 &&
+    Number.isInteger(props.componentId) &&
+    props.componentId >= 1 &&
+    props.componentId <= 255
+  return (
+    <>
+      <input
+        className="phrase-input"
+        style={{ width: '100%', margin: 0 }}
+        value={props.endpoint}
+        onChange={(e) => props.onEndpoint(e.target.value)}
+        placeholder="udpin:0.0.0.0:14540"
+        aria-label="SITL endpoint"
+        spellCheck={false}
+        disabled={props.connected}
+      />
+      <label className="motor-row" style={{ marginTop: 6 }}>
+        <span className="motor-label" style={{ width: 92 }}>System ID</span>
+        <input
+          className="phrase-input"
+          style={{ flex: 1, margin: 0 }}
+          type="number"
+          min={1}
+          max={255}
+          step={1}
+          value={props.systemId}
+          onChange={(e) => props.onSystemId(Number(e.target.value))}
+          aria-label="SITL MAVLink system ID"
+          disabled={props.connected}
+        />
+      </label>
+      <label className="motor-row">
+        <span className="motor-label" style={{ width: 92 }}>Component ID</span>
+        <input
+          className="phrase-input"
+          style={{ flex: 1, margin: 0 }}
+          type="number"
+          min={1}
+          max={255}
+          step={1}
+          value={props.componentId}
+          onChange={(e) => props.onComponentId(Number(e.target.value))}
+          aria-label="SITL MAVLink component ID"
+          disabled={props.connected}
+        />
+      </label>
+      <label className="motor-row">
+        <span className="motor-label" style={{ width: 92 }}>Output bank</span>
+        <select
+          className="phrase-input"
+          style={{ flex: 1, margin: 0 }}
+          value={props.port}
+          onChange={(e) => props.onPort(e.target.value as ServoPort)}
+          aria-label="SITL output bank"
+          disabled={props.connected}
+        >
+          <option value="main">MAIN</option>
+          <option value="aux">AUX</option>
+        </select>
+      </label>
+      {props.error && (
+        <div className="estop-note" role="alert" style={{ color: 'var(--mg-error)' }}>
+          {props.error}
+        </div>
+      )}
+      {props.connected ? (
+        <button
+          className="mode-btn"
+          style={{ width: '100%', marginTop: 6 }}
+          onClick={props.onDisconnect}
+        >
+          Disconnect SITL
+        </button>
+      ) : (
+        <button
+          className="mode-btn"
+          style={{ width: '100%', marginTop: 6 }}
+          onClick={props.onConnect}
+          disabled={!validIds || props.endpoint.trim() === ''}
+        >
+          Connect SITL
+        </button>
+      )}
+    </>
+  )
 }
 
 const IDLE: ActuatorStatus = {
@@ -123,6 +384,7 @@ const IDLE: ActuatorStatus = {
   session: 'idle',
   sitl_connected: false,
   sitl_endpoint: null,
+  sitl_source: null,
   sitl_feed_age_s: null,
   target_connected: false,
   target_fc_alive: false,
@@ -130,10 +392,23 @@ const IDLE: ActuatorStatus = {
   target_system_id: null,
   com_mot_test_en: null,
   sdlog_mode: null,
+  sdlog_backend: null,
   input_values: [],
   input_pwm: [],
   output_values: [],
-  fc_output_pwm: null,
+  fc_output_pwm: [],
+  output_map: { motors: [], state: 'unknown', issues: [] },
+  pwm_models: [],
+  sd_capture: {
+    phase: 'idle',
+    test_id: null,
+    remote_path: null,
+    logger: null,
+    sdlog_mode: null,
+    sdlog_backend: null,
+    last_error: null,
+  },
+  run: { status: null, manifest_path: null },
 }
 
 export function ActuatorApp() {
@@ -163,8 +438,14 @@ export function ActuatorApp() {
   const [amplitude, setAmplitude] = useState(0.5)
   const [frequency, setFrequency] = useState(0.5)
   const [duration, setDuration] = useState(5)
-  // Realtime forward (revised D3): the SITL source endpoint.
+  // Realtime forward (revised D3): the SITL node and output bank selected
+  // from the dedicated source connection.
   const [sitlEndpoint, setSitlEndpoint] = useState('udpin:0.0.0.0:14540')
+  const [sitlSystemId, setSitlSystemId] = useState(1)
+  const [sitlComponentId, setSitlComponentId] = useState(1)
+  const [sitlPort, setSitlPort] = useState<ServoPort>('main')
+  const [sitlConnectError, setSitlConnectError] = useState<string | null>(null)
+  const [mappingError, setMappingError] = useState<string | null>(null)
   // The motor test's own target link: the real PX4 over serial (the main
   // GCS keeps its own link, e.g. UDP SITL).
   const [targetEndpoint, setTargetEndpoint] = useState('serial:/dev/ttyACM0:115200')
@@ -174,7 +455,6 @@ export function ActuatorApp() {
   const [stopReason, setStopReason] = useState<string | null>(null)
   // Confirmation state.
   const [phrase, setPhrase] = useState('')
-  const [holdProgress, setHoldProgress] = useState(0)
   // Mag alarm (A4b): enable + threshold are operator inputs; the debounce/
   // hysteresis/cooldown state machine runs in core. `magAlarm` mirrors the
   // core state via the actuator_telemetry/alarm events.
@@ -185,27 +465,26 @@ export function ActuatorApp() {
   // Shared mag calibration (same file as the Signal Inspector): when loaded,
   // the alarm's total field and the inspector's mag traces are A·(m−b).
   const [calLoaded, setCalLoaded] = useState(false)
-  // On-board SD-card log (feature 1): read/write SDLOG_MODE over the serial
-  // target link.
-  const [sdlogBusy, setSdlogBusy] = useState(false)
-  const [sdlogError, setSdlogError] = useState<string | null>(null)
+  // On-board SD-card log: the capture panel reads SDLOG_MODE/BACKEND from the
+  // target PX4 but never writes them.
+  const [captureBusy, setCaptureBusy] = useState(false)
+  const [captureError, setCaptureError] = useState<string | null>(null)
   // SD-log list + download (feature 2): `actuator_logs` events.
-  const [logEntries, setLogEntries] = useState<Array<{ id: number; time_utc: number; size: number }>>([])
+  const [logEntries, setLogEntries] = useState<LogEntryInfo[]>([])
+  const [logsListed, setLogsListed] = useState(false)
   const [logDownloads, setLogDownloads] = useState<Map<number, { fetched: number; total: number; path?: string }>>(new Map())
   const [logsBusy, setLogsBusy] = useState(false)
   const [logsError, setLogsError] = useState<string | null>(null)
-  // Received-message recorder (feature 3): the serial-target tlog toggle.
-  const [recording, setRecording] = useState(false)
-  const [recorderDir, setRecorderDir] = useState<string | null>(null)
-  const [recorderFrames, setRecorderFrames] = useState(0)
+  // Responsive layout (Task 9): collapsible scope legend and expandable
+  // logging details leave the plots as the flexible region at narrow widths.
+  const [legendOpen, setLegendOpen] = useState(true)
+  const [loggingExpanded, setLoggingExpanded] = useState(false)
   const audioCtxRef = useRef<AudioContext | null>(null)
   const beepTimer = useRef<number | undefined>(undefined)
 
   const valuesRef = useRef(values)
   valuesRef.current = values
   const lastSend = useRef(0)
-  const holdTimer = useRef<number | undefined>(undefined)
-  const holdStart = useRef(0)
 
   const running = status.session === 'running' || status.session === 'stopping'
 
@@ -241,7 +520,6 @@ export function ActuatorApp() {
         setStatus(s)
         if (s.target_connected && s.target_system_id !== null) {
           setTargetSystemId(s.target_system_id)
-          setStartError(null)
         }
         if (s.session === 'emergency') setEmergency(true)
         if (prevTargetConnectedRef.current && !s.target_connected) {
@@ -437,8 +715,8 @@ export function ActuatorApp() {
           const p = e.payload
           if (p.kind === 'list') {
             setLogEntries(p.entries ?? [])
+            setLogsListed(true)
             setLogDownloads(new Map())
-            setLogsBusy(false)
             setLogsError(null)
           } else if (p.kind === 'progress') {
             const id = p.id ?? 0
@@ -452,12 +730,13 @@ export function ActuatorApp() {
             setLogDownloads((prev) => {
               const next = new Map(prev)
               const cur = next.get(id)
-              if (cur) next.set(id, { ...cur, path: p.path })
+              next.set(id, { fetched: cur?.fetched ?? 0, total: cur?.total ?? 0, path: p.path })
               return next
             })
             setLogsBusy(false)
           } else if (p.kind === 'failed') {
             setLogsBusy(false)
+            setLogDownloads(new Map())
             setLogsError(p.message ?? 'failed')
           }
         })
@@ -472,6 +751,7 @@ export function ActuatorApp() {
       .then((s) => {
         if (disposed) return
         setLogEntries(s.entries ?? [])
+        setLogsListed((s.entries ?? []).length > 0)
         setLogsError(s.error)
       })
       .catch(() => {})
@@ -481,63 +761,166 @@ export function ActuatorApp() {
     }
   }, [tauri])
 
-  // Feature 3: the serial-target message-recorder toggle — poll its status.
+  // Capture events arrive while a shell exchange progresses, so failures and
+  // existing recordings show up without waiting for the next status poll.
   useEffect(() => {
     if (!tauri) return
-    const poll = async () => {
+    let disposed = false
+    let un: (() => void) | undefined
+    void (async () => {
       try {
-        const s = await invoke<{
-          running: boolean
-          dir: string | null
-          frames: number
-        }>('actuator_recorder_status')
-        setRecording(s.running)
-        setRecorderDir(s.dir)
-        setRecorderFrames(s.frames)
+        un = await listen<{ kind: 'status'; status: SdCaptureStatus }>(
+          'actuator_capture',
+          (e) => {
+            if (disposed || e.payload.kind !== 'status') return
+            setStatus((s) => ({ ...s, sd_capture: e.payload.status }))
+          },
+        )
       } catch {
-        /* not connected */
+        /* events unavailable: the status poll still updates the panel */
       }
+    })()
+    return () => {
+      disposed = true
+      un?.()
     }
-    void poll()
-    const id = setInterval(poll, 1000)
-    return () => clearInterval(id)
   }, [tauri])
 
-  const setSdlogMode = async (mode: 'disabled' | 'always' | 'armed') => {
+  // Run boundaries (pre-roll done, POST-ROLL done, terminal) arrive as they
+  // happen; the poll remains the fallback.
+  useEffect(() => {
     if (!tauri) return
-    setSdlogBusy(true)
-    setSdlogError(null)
+    let disposed = false
+    let un: (() => void) | undefined
+    void (async () => {
+      try {
+        un = await listen<RunStatus>('actuator_run', (e) => {
+          if (disposed) return
+          setStatus((s) => ({ ...s, run: { ...s.run, status: e.payload } }))
+        })
+      } catch {
+        /* events unavailable: the status poll still updates the gate */
+      }
+    })()
+    return () => {
+      disposed = true
+      un?.()
+    }
+  }, [tauri])
+
+  const captureCommand = async (
+    command: 'check' | 'start' | 'stop',
+    testId?: string,
+  ) => {
+    if (!tauri) return
+    setCaptureBusy(true)
+    setCaptureError(null)
     try {
-      const echoed = await invoke<number>('actuator_set_sdlog_mode', { mode })
-      setStatus((s) => ({ ...s, sdlog_mode: echoed }))
+      const status = await invoke<SdCaptureStatus>(
+        command === 'check'
+          ? 'actuator_capture_verify'
+          : command === 'start'
+            ? 'actuator_capture_start'
+            : 'actuator_capture_stop',
+        command === 'start' ? { testId } : undefined,
+      )
+      setStatus((s) => ({ ...s, sd_capture: status }))
     } catch (e) {
-      setSdlogError(String(e))
+      setCaptureError(String(e))
     } finally {
-      setSdlogBusy(false)
+      setCaptureBusy(false)
     }
   }
+
+  const startCapture = () =>
+    captureCommand(
+      'start',
+      `test-${new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '')}`,
+    )
 
   const requestLogs = async () => {
     if (!tauri) return
     setLogsBusy(true)
     setLogsError(null)
+    setLogEntries([])
+    setLogDownloads(new Map())
+    setLogsListed(false)
     try {
-      await invoke('actuator_logs_request_list')
+      const entries = await invoke<LogEntryInfo[]>('actuator_logs_request_list')
+      setLogEntries(entries)
+      setLogsListed(true)
+    } catch (e) {
+      setLogsError(String(e))
+    } finally {
+      setLogsBusy(false)
+    }
+  }
+
+  const downloadLog = async (entry: LogEntryInfo) => {
+    if (!tauri) return
+    setLogsBusy(true)
+    setLogsError(null)
+    try {
+      const started = await invoke<boolean>('actuator_logs_download', {
+        id: entry.id, size: entry.size, timeUtc: entry.time_utc,
+      })
+      if (!started) setLogsBusy(false)
     } catch (e) {
       setLogsBusy(false)
       setLogsError(String(e))
     }
   }
 
-  const downloadLog = async (id: number, size: number) => {
+  const deleteLog = async (entry: LogEntryInfo) => {
     if (!tauri) return
+    const { id, size, time_utc: timeUtc } = entry
+    const mb = (size / 1024 / 1024).toFixed(1)
+    if (
+      !window.confirm(
+        `Delete SD log #${id} (${mb} MB) on the target PX4? This cannot be undone.`,
+      )
+    ) {
+      return
+    }
+    if (!window.confirm(`Last confirmation: permanently delete log #${id}?`)) return
     setLogsBusy(true)
     setLogsError(null)
     try {
-      await invoke('actuator_logs_download', { id, size })
+      const entries = await invoke<LogEntryInfo[]>('actuator_logs_delete', { id, size, timeUtc })
+      setLogEntries(entries)
+      setLogDownloads(new Map())
+      setLogsListed(true)
     } catch (e) {
-      setLogsBusy(false)
       setLogsError(String(e))
+    } finally {
+      setLogsBusy(false)
+    }
+  }
+
+  const eraseAllLogs = async () => {
+    if (!tauri) return
+    if (
+      !window.confirm(
+        'Delete ALL SD logs on the target PX4? Every flight log will be erased. This cannot be undone.',
+      )
+    ) {
+      return
+    }
+    if (!window.confirm('Last confirmation: permanently delete every SD log?')) return
+    setLogsBusy(true)
+    setLogsError(null)
+    try {
+      const entries = await invoke<LogEntryInfo[]>('actuator_logs_erase_all')
+      setLogEntries(entries)
+      setLogDownloads(new Map())
+      setLogsListed(true)
+    } catch (e) {
+      setLogEntries([])
+      setLogDownloads(new Map())
+      setLogsListed(false)
+      setLogsError(String(e))
+    } finally {
+      setLogsBusy(false)
     }
   }
 
@@ -549,21 +932,7 @@ export function ActuatorApp() {
       /* not connected */
     }
     setLogsBusy(false)
-  }
-
-  const toggleRecorder = async () => {
-    if (!tauri) return
-    try {
-      if (recording) {
-        await invoke('actuator_recorder_stop')
-        setRecording(false)
-      } else {
-        await invoke('actuator_recorder_start')
-        setRecording(true)
-      }
-    } catch (e) {
-      setLogsError(String(e))
-    }
+    setLogDownloads(new Map())
   }
 
   const pushValues = useCallback(
@@ -595,8 +964,13 @@ export function ActuatorApp() {
     if (tauri) void invoke('actuator_reset_emergency').catch(() => {})
   }
 
-  const stop = () => {
-    if (tauri) void invoke('actuator_stop').catch(() => {})
+  const stop = async () => {
+    if (!tauri) return
+    try {
+      await invoke('actuator_stop')
+    } catch (error) {
+      setStartError(`Stop failed: ${String(error)}`)
+    }
   }
 
   /** What still gates Start: unlock → (props: typed phrase) → hold. */
@@ -609,16 +983,17 @@ export function ActuatorApp() {
   }, [emergency, unlocked, load, phrase])
 
   /** The one start action — dispatches by the selected source. */
-  const start = () => {
+  const start = async () => {
     if (!tauri || gate !== 'ready' || running) return
     setStartError(null)
     // The backend refuses (e.g. "no link — connect the serial PX4 first");
     // surface it instead of silently doing nothing.
-    const refuse = (e: unknown) => setStartError(typeof e === 'string' ? e : String(e))
-    if (source === 'manual') {
-      void invoke('actuator_start_manual', { load, values: valuesRef.current }).catch(refuse)
-    } else if (source === 'preset') {
-      void invoke('actuator_start_preset', {
+    setStopReason(null)
+    try {
+      if (source === 'manual') {
+        await invoke('actuator_start_manual', { load, values: valuesRef.current })
+      } else if (source === 'preset') {
+        await invoke('actuator_start_preset', {
         load,
         preset: {
           kind: preset,
@@ -626,44 +1001,78 @@ export function ActuatorApp() {
           frequency_hz: frequency,
           duration_s: duration,
         },
-      }).catch(refuse)
-    } else if (source === 'forward') {
-      void invoke('actuator_start_forward').catch(refuse)
+        })
+      } else if (source === 'forward') {
+        await invoke('actuator_start_forward', { load })
+      }
+    } catch (error) {
+      setStartError(typeof error === 'string' ? error : String(error))
     }
   }
 
-  // Hold-to-start (full props): pointerdown begins the ramp; release before
-  // the full duration cancels; completion fires start once.
-  const holdPct = load === 'props' ? holdProgress : 1
-  const beginHold = () => {
-    if (gate !== 'ready' || running) return
-    if (load !== 'props') {
-      start()
-      return
-    }
-    holdStart.current = performance.now()
-    const step = () => {
-      const elapsed = performance.now() - holdStart.current
-      const pct = Math.min(1, elapsed / PROPS_HOLD_MS)
-      setHoldProgress(pct)
-      if (pct >= 1) {
-        holdTimer.current = undefined
-        start()
-        setHoldProgress(0)
-        return
-      }
-      holdTimer.current = window.requestAnimationFrame(step)
-    }
-    holdTimer.current = window.requestAnimationFrame(step)
+  const connectSitl = () => {
+    if (!tauri) return
+    setSitlConnectError(null)
+    void invoke('actuator_connect_sitl', {
+      source: {
+        endpoint: sitlEndpoint,
+        system_id: sitlSystemId,
+        component_id: sitlComponentId,
+        port: sitlPort,
+      },
+    }).catch((error: unknown) => {
+      setSitlConnectError(String(error))
+    })
   }
-  const cancelHold = () => {
-    if (holdTimer.current !== undefined) {
-      window.cancelAnimationFrame(holdTimer.current)
-      holdTimer.current = undefined
-    }
-    setHoldProgress(0)
+  const disconnectSitl = () => {
+    if (!tauri) return
+    setSitlConnectError(null)
+    void invoke('actuator_disconnect_sitl').catch((error: unknown) => {
+      setSitlConnectError(String(error))
+    })
   }
-  useEffect(() => cancelHold, [])
+  const refreshMapping = () => {
+    if (!tauri) return
+    setMappingError(null)
+    void invoke('actuator_refresh_mapping').catch((error: unknown) => {
+      setMappingError(String(error))
+    })
+  }
+
+  // The capture panel reflects observed hardware state; it never writes the
+  // restart-required SD parameters. A check refreshes both values.
+  const sdCapture = status.sd_capture
+  const captureActive =
+    sdCapture.phase === 'recording' || sdCapture.phase === 'existing_recording'
+  const captureSettling = ['verifying', 'starting', 'stopping', 'finalizing'].includes(
+    sdCapture.phase,
+  )
+  const captureCanStop =
+    sdCapture.phase === 'recording' ||
+    sdCapture.phase === 'existing_recording' ||
+    sdCapture.phase === 'failed' ||
+    sdCapture.phase === 'complete'
+  const hardwareMode = sdCapture.sdlog_mode ?? status.sdlog_mode
+  const hardwareBackend = sdCapture.sdlog_backend ?? status.sdlog_backend
+  const run = status.run.status
+  const runBlocksStart =
+    run != null &&
+    ['starting_capture', 'preroll', 'motor_running', 'postroll', 'stopping_capture'].includes(
+      run.phase,
+    )
+  const runLabel = run ? run.phase.replaceAll('_', ' ') : 'no run'
+  const runHint =
+    run?.phase === 'preroll'
+      ? 'Recording — waiting for the 1 s pre-roll before START.'
+      : run?.phase === 'starting_capture'
+        ? 'Confirming the new SD file.'
+        : run?.phase === 'postroll'
+          ? 'Motors released — post-roll before logger off.'
+          : run?.phase === 'stopping_capture'
+            ? 'Confirming logger off.'
+            : run?.error
+              ? String(run.error.kind).replaceAll('_', ' ')
+              : null
 
   return (
     <div className={`actuator-grid ${magAlarm && alarmEnabled ? 'mag-alarm-flash' : ''}`}>
@@ -717,32 +1126,20 @@ export function ActuatorApp() {
         <div className="section-title">Input — SITL</div>
         <div className="card">
           <h3>SITL source (SERVO_OUTPUT_RAW)</h3>
-          <input
-            className="phrase-input"
-            style={{ width: '100%', margin: 0 }}
-            value={sitlEndpoint}
-            onChange={(e) => setSitlEndpoint(e.target.value)}
-            placeholder="udpin:0.0.0.0:14540"
-            aria-label="SITL endpoint"
-            spellCheck={false}
+          <SitlSourceFields
+            endpoint={sitlEndpoint}
+            onEndpoint={setSitlEndpoint}
+            systemId={sitlSystemId}
+            onSystemId={setSitlSystemId}
+            componentId={sitlComponentId}
+            onComponentId={setSitlComponentId}
+            port={sitlPort}
+            onPort={setSitlPort}
+            connected={status.sitl_connected}
+            error={sitlConnectError}
+            onConnect={connectSitl}
+            onDisconnect={disconnectSitl}
           />
-          {status.sitl_connected ? (
-            <button
-              className="mode-btn"
-              style={{ width: '100%', marginTop: 6 }}
-              onClick={() => tauri && void invoke('actuator_disconnect_sitl').catch(() => {})}
-            >
-              Disconnect SITL
-            </button>
-          ) : (
-            <button
-              className="mode-btn"
-              style={{ width: '100%', marginTop: 6 }}
-              onClick={() => tauri && void invoke('actuator_connect_sitl', { endpoint: sitlEndpoint }).catch(() => {})}
-            >
-              Connect SITL
-            </button>
-          )}
           <div className="row" style={{ marginTop: 6 }}>
             <span className="text-muted">Source link</span>
             <span className={`mono ${status.sitl_connected ? 'text-ok' : 'text-error'}`}>
@@ -776,8 +1173,8 @@ export function ActuatorApp() {
             })}
           </div>
           <div className="estop-note" style={{ marginTop: 4 }}>
-            SITL SERVO_OUTPUT_RAW 1–4; % = (µs − 1000) / 1000 (1000 µs = 0%,
-            2000 µs = 100%) → the forward slot.
+            Selected SITL SERVO_OUTPUT_RAW port 1–4; % = (µs − 1000) / 1000
+            (1000 µs = 0%, 2000 µs = 100%) → the forward slot.
           </div>
         </div>
       </aside>
@@ -953,32 +1350,20 @@ export function ActuatorApp() {
         {source === 'forward' && (
           <div className="card">
             <h3>Realtime forward</h3>
-            <input
-              className="phrase-input"
-              style={{ width: '100%', margin: 0 }}
-              value={sitlEndpoint}
-              onChange={(e) => setSitlEndpoint(e.target.value)}
-              placeholder="udpin:0.0.0.0:14540"
-              aria-label="SITL endpoint"
-              spellCheck={false}
+            <SitlSourceFields
+              endpoint={sitlEndpoint}
+              onEndpoint={setSitlEndpoint}
+              systemId={sitlSystemId}
+              onSystemId={setSitlSystemId}
+              componentId={sitlComponentId}
+              onComponentId={setSitlComponentId}
+              port={sitlPort}
+              onPort={setSitlPort}
+              connected={status.sitl_connected}
+              error={sitlConnectError}
+              onConnect={connectSitl}
+              onDisconnect={disconnectSitl}
             />
-            {status.sitl_connected ? (
-              <button
-                className="mode-btn"
-                style={{ width: '100%', marginTop: 6 }}
-                onClick={() => tauri && void invoke('actuator_disconnect_sitl').catch(() => {})}
-              >
-                Disconnect SITL
-              </button>
-            ) : (
-              <button
-                className="mode-btn"
-                style={{ width: '100%', marginTop: 6 }}
-                onClick={() => tauri && void invoke('actuator_connect_sitl', { endpoint: sitlEndpoint }).catch(() => {})}
-              >
-                Connect SITL
-              </button>
-            )}
             <div className="row" style={{ marginTop: 6 }}>
               <span className="text-muted">Source link</span>
               <span className={`mono ${status.sitl_connected ? 'text-ok' : 'text-error'}`}>
@@ -994,8 +1379,9 @@ export function ActuatorApp() {
               </span>
             </div>
             <div className="estop-note" style={{ marginTop: 4 }}>
-              SITL main outputs 1–4 → motors 1–4. Values pass the same
-              interlocks (slew, cap, disarmed-only) as manual control.
+              SITL outputs 1–4 from the selected node and bank → motors 1–4.
+              Values pass the same interlocks (slew, cap, disarmed-only) as
+              manual control.
             </div>
           </div>
         )}
@@ -1020,20 +1406,19 @@ export function ActuatorApp() {
               spellCheck={false}
             />
           )}
-          {running ? (
-            <button className="start-btn stop" style={{ marginTop: 8 }} onClick={stop}>
-              STOP
-            </button>
-          ) : (
-            <button
-              className="start-btn"
-              style={{ marginTop: 8, position: 'relative' }}
+            <StartStopButton
+              running={running}
+              holdMs={load === 'props' ? PROPS_HOLD_MS : 0}
+              onStart={start}
+              onStop={stop}
               disabled={
-                gate !== 'ready' || (source === 'forward' && !status.sitl_connected)
+                gate !== 'ready' ||
+                (source === 'forward' && !status.sitl_connected) ||
+                !status.target_connected ||
+                !status.target_fc_alive ||
+                status.armed ||
+                runBlocksStart
               }
-              onPointerDown={beginHold}
-              onPointerUp={cancelHold}
-              onPointerLeave={cancelHold}
               title={
                 gate === 'emergency'
                   ? 'Reset the emergency latch first'
@@ -1041,19 +1426,21 @@ export function ActuatorApp() {
                     ? 'Unlock the test first'
                     : gate === 'phrase'
                       ? `Type ${PROPS_PHRASE} first`
-                      : source === 'forward'
-                        ? 'Connect the SITL source first'
-                        : load === 'props'
-                          ? 'Hold for 3 seconds'
-                          : 'Start sending'
+                      : !status.target_connected
+                        ? 'Connect the serial PX4 first'
+                        : !status.target_fc_alive
+                          ? 'Waiting for the target PX4 heartbeat'
+                          : status.armed
+                            ? 'Disarm the target PX4 first'
+                            : runBlocksStart
+                              ? runHint ?? 'Wait for the active test run'
+                              : source === 'forward'
+                                ? 'Connect the SITL source first'
+                                : load === 'props'
+                                  ? 'Hold for 3 seconds'
+                                  : 'Start sending'
               }
-            >
-              START
-              {holdPct > 0 && holdPct < 1 && (
-                <span className="hold-fill" style={{ width: `${holdPct * 100}%` }} aria-hidden />
-              )}
-            </button>
-          )}
+            />
           <div className="estop-note" style={{ marginTop: 6 }}>
             {running
               ? 'Sending — Esc or the red button stops everything.'
@@ -1065,6 +1452,8 @@ export function ActuatorApp() {
         sitlConnected={status.sitl_connected}
         targetConnected={status.target_connected}
         calLoaded={calLoaded}
+        legendOpen={legendOpen}
+        onToggleLegend={() => setLegendOpen((v) => !v)}
       />
       </main>
 
@@ -1202,20 +1591,89 @@ export function ActuatorApp() {
               </span>
             </span>
           </div>
+          <div className="row" style={{ marginTop: 6 }}>
+            <span className="text-muted">Output map</span>
+            <span
+              className={`mono ${
+                status.output_map.state === 'complete'
+                  ? 'text-ok'
+                  : status.output_map.state === 'invalid'
+                    ? 'text-error'
+                    : ''
+              }`}
+            >
+              {status.output_map.state}
+            </span>
+          </div>
+          <div className="estop-note" style={{ marginTop: 2 }}>
+            {status.output_map.motors.length === 0
+              ? 'not read yet'
+              : status.output_map.motors
+                  .map((assignment) =>
+                    assignment.channel
+                      ? `M${assignment.motor} ${channelLabel(assignment.channel)}`
+                      : `M${assignment.motor} unmapped`,
+                  )
+                  .join(' · ')}
+          </div>
+          {status.pwm_models.length > 0 && (
+            <div className="estop-note" style={{ marginTop: 2 }}>
+              {status.pwm_models
+                .map(
+                  (model, i) =>
+                    `M${i + 1} ${model.min_us}–${model.max_us}${
+                      model.reversed ? ' rev' : ''
+                    } a=${model.thrust_factor.toFixed(2)}${
+                      model.disabled ? ' dis' : ''
+                    }`,
+                )
+                .join(' · ')}
+            </div>
+          )}
+          {status.output_map.issues.length > 0 && (
+            <div className="estop-note" style={{ marginTop: 2 }}>
+              {status.output_map.issues.length} assignment issue
+              {status.output_map.issues.length === 1 ? '' : 's'} — refresh after
+              checking PWM_MAIN/AUX_FUNCx.
+            </div>
+          )}
+          {mappingError && (
+            <div className="estop-note" role="alert" style={{ color: 'var(--mg-error)' }}>
+              {mappingError}
+            </div>
+          )}
+          <button
+            className="mode-btn"
+            style={{ width: '100%', marginTop: 6 }}
+            onClick={refreshMapping}
+            disabled={!status.target_connected || running}
+          >
+            Refresh mapping
+          </button>
           <div className="motor-bars" style={{ marginTop: 6 }}>
             {Array.from({ length: MOTOR_COUNT }, (_, i) => {
               const v = status.output_values[i] ?? 0
-              const actualUs = status.fc_output_pwm?.[i]
+              const actualUs = status.fc_output_pwm[i]
+              const assignment = assignmentFor(status.output_map, i + 1)
+              const channel = assignment?.channel
               return (
                 <div key={i} className="motor-bar">
-                  <span className="mono motor-label">M{i + 1}</span>
+                  <span
+                    className="mono motor-label"
+                    title={channel ? `Feedback from ${channelLabel(channel)}` : 'No mapped output'}
+                  >
+                    <span>{`M${i + 1}`}</span>
+                    <span style={{ fontSize: 9, color: 'var(--mg-muted)' }}>
+                      {channel ? channelLabel(channel) : 'unmapped'}
+                    </span>
+                  </span>
                   <div className="bar-track">
                     <div className="bar-fill output" style={{ width: `${v * 100}%` }} />
                   </div>
                   <span className="mono motor-value" title={`${(v * 100).toFixed(1)}%`}>
                     {(v * 100).toFixed(0)}%
                   </span>
-                  <span className="mono motor-pwm" title="Actual PX4 SERVO_OUTPUT_RAW">
+                  <span className="mono motor-pwm" title="Mapped PX4 SERVO_OUTPUT_RAW">
                     {actualUs != null ? `${actualUs} µs` : '—'}
                   </span>
                 </div>
@@ -1224,55 +1682,138 @@ export function ActuatorApp() {
           </div>
           <div className="estop-note" style={{ marginTop: 4 }}>
             Every ACTUATOR_TEST goes out over this serial link to the real PX4.
-            % = the sent command; µs = PX4's actual SERVO_OUTPUT_RAW (not a
-            linear mapping of the command).
+            % = the sent command; µs = that motor's mapped physical output (not
+            a linear mapping of the command).
           </div>
         </div>
-        {/* On-board SD-card log (features 1–3): set SDLOG_MODE over the serial
-         * target, list/download the FC's SD logs, and toggle a tlog recorder
-         * of every message received on the serial target link. */}
-        <div className="card">
+        {/* On-board SD-card log: read the restart-required SD parameters and
+         * control the target's file logger; list/download the FC's SD logs. */}
+        <div className={`card logging-card${loggingExpanded ? ' logging-expanded' : ''}`}>
           <h3>On-board log</h3>
+          <div className="logging-summary">
+            <span className="estop-note">
+              {sdCapture.phase === 'recording'
+                ? 'Recording'
+                : sdCapture.phase === 'existing_recording'
+                  ? 'Existing recording'
+                  : `${logEntries.length} SD log${logEntries.length === 1 ? '' : 's'}`}
+            </span>
+            <button
+              className="mode-btn"
+              onClick={() => setLoggingExpanded((v) => !v)}
+              title={loggingExpanded ? 'Collapse logging details' : 'Expand logging details'}
+            >
+              {loggingExpanded ? 'Collapse ▲' : 'Expand ▼'}
+            </button>
+          </div>
+          <div className="logging-body">
           <div className="row">
             <span className="text-muted">SDLOG_MODE</span>
-            <span className="mono">
-              {!status.target_connected
-                ? 'no target'
-                : status.sdlog_mode === 0
-                  ? 'disabled'
-                  : status.sdlog_mode === 1
-                    ? 'always'
-                    : status.sdlog_mode === 2
-                      ? 'armed only'
-                      : status.sdlog_mode == null
-                        ? 'unknown'
-                        : String(status.sdlog_mode)}
+            <span className="mono" title="Read from the target PX4; changes require a reboot">
+              {!status.target_connected ? 'no target' : sdlogModeLabel(hardwareMode)}
             </span>
           </div>
-          <div className="btn-row" style={{ marginTop: 4 }}>
-            {(['disabled', 'always', 'armed'] as const).map((m) => (
-              <button
-                key={m}
-                className={`mode-btn ${
-                  status.sdlog_mode === (m === 'disabled' ? 0 : m === 'always' ? 1 : 2)
-                    ? 'active'
-                    : ''
-                }`}
-                disabled={!status.target_connected || sdlogBusy}
-                onClick={() => void setSdlogMode(m)}
-                title={`Write SDLOG_MODE=${m === 'disabled' ? 0 : m === 'always' ? 1 : 2}`}
-              >
-                {m}
-              </button>
-            ))}
+          <div className="row">
+            <span className="text-muted">SDLOG_BACKEND</span>
+            <span className="mono" title="Read from the target PX4; changes require a reboot">
+              {!status.target_connected ? 'no target' : sdlogBackendLabel(hardwareBackend)}
+            </span>
           </div>
-          {sdlogError && (
-            <div className="estop-note" role="alert" style={{ color: 'var(--mg-error)' }}>
-              {sdlogError}
+          <div className="estop-note" style={{ marginTop: 4 }}>
+            These values are read-only here and may differ from the running logger
+            until the PX4 reboots. Check logger refreshes them from the hardware.
+          </div>
+
+          <div className="row" style={{ marginTop: 8 }}>
+            <span className="text-muted">SD capture</span>
+            <span
+              className={`mono ${
+                sdCapture.phase === 'recording'
+                  ? 'text-ok'
+                  : sdCapture.phase === 'failed'
+                    ? 'text-error'
+                    : sdCapture.phase === 'existing_recording'
+                      ? 'text-muted'
+                      : ''
+              }`}
+            >
+              {sdCapture.phase.replaceAll('_', ' ')}
+            </span>
+          </div>
+          {sdCapture.phase === 'existing_recording' && (
+            <div className="estop-note" style={{ marginTop: 4 }}>
+              The target is already recording a file this test did not start.
+              Capture is independent of START; stop logging manually when finished.
             </div>
           )}
+          {(sdCapture.test_id || sdCapture.remote_path) && (
+            <div className="estop-note" style={{ marginTop: 2 }}>
+              {sdCapture.test_id ?? 'existing file'}
+              {sdCapture.remote_path ? ` · ${sdCapture.remote_path}` : ''}
+            </div>
+          )}
+          <div className="row" style={{ marginTop: 6 }}>
+            <span className="text-muted">Test run</span>
+            <span
+              className={`mono ${
+                run?.phase === 'motor_ready'
+                  ? 'text-ok'
+                  : run?.phase === 'failed' || run?.phase === 'interrupted'
+                    ? 'text-error'
+                    : ''
+              }`}
+            >
+              {runLabel}
+            </span>
+          </div>
+          {runHint && (
+            <div className="estop-note" style={{ marginTop: 2 }}>
+              {runHint}
+            </div>
+          )}
+          {status.run.manifest_path && (
+            <div className="estop-note" style={{ marginTop: 2 }}>
+              Manifest · {status.run.manifest_path}
+            </div>
+          )}
+          {(captureError || sdCapture.last_error) && (
+            <div className="estop-note" role="alert" style={{ color: 'var(--mg-error)' }}>
+              {captureError || captureErrorLabel(sdCapture.last_error)}
+            </div>
+          )}
+          <div className="btn-row" style={{ marginTop: 4 }}>
+            <button
+              className="mode-btn"
+              onClick={() => void captureCommand('check')}
+              disabled={!status.target_connected || captureBusy || running || captureSettling}
+            >
+              Check logger
+            </button>
+            <button
+              className="mode-btn"
+              onClick={() => void startCapture()}
+              disabled={
+                !status.target_connected ||
+                captureBusy ||
+                running ||
+                captureActive ||
+                captureSettling
+              }
+            >
+              Start capture
+            </button>
+            <button
+              className="mode-btn"
+              onClick={() => void captureCommand('stop')}
+              disabled={!status.target_connected || captureBusy || running || !captureCanStop}
+            >
+              Stop capture
+            </button>
+          </div>
           <div className="estop-note" style={{ marginTop: 4 }}>
-            1 = always (a bench runs disarmed, so 'armed only' would not log).
+            SD capture is optional and controlled manually. START and STOP do
+            not start or stop logging. Stop the motor test before stopping the
+            capture or deleting SD logs.
           </div>
 
           <div className="row" style={{ marginTop: 8 }}>
@@ -1286,6 +1827,21 @@ export function ActuatorApp() {
               disabled={!status.target_connected || logsBusy}
             >
               Refresh list
+            </button>
+            <button
+              className="mode-btn"
+              onClick={() => void eraseAllLogs()}
+              disabled={
+                !status.target_connected ||
+                logsBusy ||
+                logEntries.length === 0 ||
+                running ||
+                captureActive ||
+                captureSettling
+              }
+              title="Delete every SD log after two confirmations"
+            >
+              Delete all…
             </button>
             {logsBusy && (
               <button className="mode-btn" onClick={() => void cancelLogs()}>
@@ -1320,12 +1876,22 @@ export function ActuatorApp() {
                   ) : (
                     <button
                       className="mode-btn"
-                      onClick={() => void downloadLog(entry.id, entry.size)}
-                      disabled={logsBusy}
+                      onClick={() => void downloadLog(entry)}
+                      disabled={logsBusy || entry.size === 0 || captureActive || captureSettling}
                     >
                       Download
                     </button>
                   )}
+                  <button
+                    className="mode-btn"
+                    onClick={() => void deleteLog(entry)}
+                    disabled={
+                      logsBusy || running || captureActive || captureSettling
+                    }
+                    title="Delete this SD log after two confirmations"
+                  >
+                    Delete
+                  </button>
                   {dl && !dl.path && (
                     <span className="log-progress" style={{ marginLeft: 'auto' }}>
                       <span style={{ width: `${pct}%` }} />
@@ -1335,29 +1901,10 @@ export function ActuatorApp() {
               )
             })}
             {logEntries.length === 0 && !logsBusy && (
-              <li className="estop-note">No logs listed yet — press Refresh list.</li>
+              <li className="estop-note">{logsListed ? 'No SD logs on the target.' : 'No logs listed yet — press Refresh list.'}</li>
             )}
           </ul>
-
-          <div className="row" style={{ marginTop: 8 }}>
-            <span className="text-muted">Record messages</span>
-            <span className="mono">
-              {recording ? `${recorderFrames} frames` : 'stopped'}
-            </span>
           </div>
-          <button
-            className={`mode-btn ${recording ? 'active' : ''}`}
-            style={{ width: '100%', marginTop: 4 }}
-            onClick={() => void toggleRecorder()}
-            disabled={!status.target_connected}
-          >
-            {recording ? 'Logger off' : 'Logger on'}
-          </button>
-          {recorderDir && (
-            <div className="estop-note" style={{ marginTop: 4 }}>
-              {recording ? 'Recording to' : 'Last session'} {recorderDir}
-            </div>
-          )}
         </div>
         <div className="card">
           <div className="row">
@@ -1439,7 +1986,7 @@ export function ActuatorApp() {
 
         <div className="estop-note">
           Tests run while the FC is disarmed; PX4 denies ACTUATOR_TEST otherwise.
-          COM_MOT_TEST_EN=1 is set automatically when the target connects.
+          Enable COM_MOT_TEST_EN=1 in the target Parameters window if needed.
         </div>
       </aside>
     </div>

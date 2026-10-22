@@ -316,7 +316,7 @@ pub async fn disconnect(app: AppHandle, state: State<'_, AppState>) -> Result<()
     lifecycle_service::run(&app, StopReason::Disconnect)
         .await
         .map_err(|err| refusal_message("Disconnect", &err))?;
-    crate::actuator_service::stop_auxiliary_links(&state).await;
+    crate::actuator_service::stop_auxiliary_links(&app, &state).await;
     // Inspector: stop the live tap and clear the observed message table so
     // the signal tree shows only what the *next* link produces (real FC → SITL
     // must not leave the old FC's messages listed). Trace configs stay until
@@ -388,7 +388,7 @@ pub async fn shutdown_app(app: AppHandle, state: State<'_, AppState>) -> Result<
     lifecycle_service::run(&app, StopReason::ShutdownApp)
         .await
         .map_err(|err| refusal_message("Shut down", &err))?;
-    crate::actuator_service::stop_auxiliary_links(&state).await;
+    crate::actuator_service::stop_auxiliary_links(&app, &state).await;
     let _ = app.emit("link", LinkStatus::disconnected());
     app.exit(0);
     Ok(())
@@ -516,7 +516,7 @@ const SITL_HOME_FILE: &str = "sitl-home.json";
 /// Write `{"lat":..,"lon":..}` into `dir/sitl-home.json`, creating `dir` first.
 ///
 /// Split out of the command so the file format is unit-testable without a
-/// Tauri runtime. The SITL helper (`scripts/sitl/sitl-home.sh`) reads this file
+/// Tauri runtime. The SITL helper (`scripts/sitl/setup_px4_sitl.sh`) reads this file
 /// so PX4 spawns at the same location the operator set in Settings -> Vehicle.
 fn write_sitl_home_file(dir: &Path, lat: f64, lon: f64) -> std::io::Result<()> {
     fs::create_dir_all(dir)?;

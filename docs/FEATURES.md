@@ -13,9 +13,9 @@ in [ARCHITECTURE.md](ARCHITECTURE.md); open work in [issues.md](../issues.md).
   `/dev/ttyUSB*`, Windows `COM*`); the list refreshes live on hotplug, and
   "Fix USB permissions" installs a udev rule through the system password
   prompt (ADR-009; undo by deleting `/etc/udev/rules.d/99-maggcs.rules`).
-- PX4 SITL: `scripts/sitl/run_sitl_docker.sh`; the initial vehicle position
+- PX4 SITL: `scripts/sitl/setup_px4_sitl.sh sim`; the initial vehicle position
   (Settings → Vehicle) is mirrored to the SITL helper so PX4 spawns at the
-  same spot.
+  same spot. SITL exposes only the MAIN output bank; AUX is real-hardware only.
 
 ## Alerts (TopBar badge ▸ drawer)
 
@@ -319,20 +319,49 @@ serial bus carries multiple systems. This is an expected/routing ID only: it
 does not write or change the vehicle's own system-ID parameter; component ID
 remains the PX4 autopilot default (1).
 
+The window is responsive (Task 9): at 1366×768 and wider it keeps the
+three-region layout (input source / controls+plots / output+logging), while at
+1024×640 the regions stack into one primary scroll region with the header
+pinned (Stop and Emergency Stop stay visible). The scope signal legend is
+collapsible from its toolbar, and the logging card collapses to a summary row
+that expands on demand at narrow widths, leaving the plots the flexible
+region.
+
 - **Safety gate** (risk-scaled, operator-declared prop load): no props /
   flat plate — unlock toggle → Start; full props — unlock → type
-  `START PROPS` → hold Start 3 s. Any load/mode change re-locks.
+  `START PROPS` → hold Start 3 s. Any load/mode change re-locks. Start also
+  requires a fresh heartbeat from the exact connected target showing PX4 and
+  disarmed; no motor command is sent before that heartbeat arrives.
 - **Command sources**: Manual sliders (sync-all, ~30 Hz merge, latest value
   wins); Preset waveforms (step/ramp/square/sine — bounded duration,
   self-stopping); Realtime forward — the FC's motors follow a PX4 SITL's
-  live actuator outputs (`SERVO_OUTPUT_RAW` 1–4 → motors 1–4, latest-value
-  slot, stale feed auto-stops).
+  live actuator outputs (latest-value slot, stale feed auto-stops). The
+  source connection also selects the MAVLink system/component ID and MAIN or
+  AUX bank; channels 1–4 from any other node or bank are ignored. Forwarding
+  is capped and slewed by the declared prop load.
+- **Output mapping and feedback**: the serial target's `PWM_MAIN_FUNC1..8`
+  and `PWM_AUX_FUNC1..8` are read on connect and by Refresh mapping. PX4
+  functions 101–104 correspond to Motor1–4, so feedback for each motor is
+  read from its actual physical MAIN/AUX channel (for example M2 MAIN5),
+  never assumed to be servo2. The right panel shows the mapping, reports
+  unreadable or duplicate assignments, and leaves unmapped feedback blank.
+  Source and mapping controls are frozen while sending.
+- **PWM matching**: each mapped channel's `PWM_*_MIN/MAX/REV/DISn` and the
+  target's `THR_MDL_FAC` become one `PwmModel` per motor. Models are sent
+  before every start. Manual and preset values are fractions of the target
+  range and are compensated before encoding; forwarded SITL pulses are
+  converted through the same target model, so a reversed or narrow-range
+  output still reproduces the requested pulse. The right panel shows the
+  endpoints, reversal, thrust factor and disabled state; missing or invalid
+  parameters fall back to the identity 1000–2000 µs model.
 - **Sending**: `MAV_CMD_ACTUATOR_TEST` at 10 Hz addressed to the configured
   target system ID; only that system's heartbeat/ACK and target telemetry are
-  used for the safety gate and plots. FC-side timeout 0.3 s per
-  command (PX4 caps at 3 s), output cap + slew limit per declared load,
-  disarmed-only interlock (armed or stale heartbeat → immediate release),
-  ACK denial stops the test. PX4 needs `COM_MOT_TEST_EN=1`.
+  used for the safety gate and plots. A session is bound to its connection
+  and load: reconnecting the target or changing the load while idle replaces
+  the session, while a sending session must be stopped first. FC-side timeout
+  0.3 s per command (PX4 caps at 3 s), output cap + slew limit per declared
+  load, disarmed-only interlock (armed or stale heartbeat → immediate
+  release), ACK denial stops the test. PX4 needs `COM_MOT_TEST_EN=1`.
 - **Live curves**: calibrated total field (baseline Δ), per-ESC current (A)
   and RPM (right axis) over a 60 s rolling window.
 - **Mag alarm**: threshold watchdog over the EMA-smoothed total field —
@@ -350,10 +379,41 @@ remains the PX4 autopilot default (1).
   denormal float. A write is reported only after the FC's own echo **and** a
   read-back match; a clamped or mismatched value is an error that shows the
   actual value. Connecting reads (never writes) `COM_MOT_TEST_EN`,
-  `SDLOG_MODE`, `SDLOG_BACKEND` and `THR_MDL_FAC`. `SDLOG_MODE` labels follow
-  PX4 v1.17 semantics (0 = armed until disarm, 2 = boot until shutdown, …)
-  and a change flags "restart pending" — it does not reconfigure a running
-  logger.
+  `SDLOG_MODE`, `SDLOG_BACKEND` and `THR_MDL_FAC`. The motor-test window shows
+  `SDLOG_MODE` and `SDLOG_BACKEND` read-only; both are restart-required, so a
+  running logger may not match the stored value. Change them in the Parameters
+  window, not per test.
+- **SD-file capture**: the motor-test window owns one target-shell controller
+  per serial PX4. "Check logger" reads `logger status` and reports either Ready,
+  Recording (this test's own file) or Existing recording (a file already
+  running, which is a valid observation rather than a failed check). Start
+  sends `logger on` and reports Recording only after PX4 names a new `Log file:`
+  path. Every motor start requires that owned Recording state; an existing
+  recording never authorises motor commands. Stop releases motors first, then
+  re-checks status before `logger off`, and waits for stable "Not logging"
+  evidence inside a 10 s finalization window. Stop is available after a failed
+  check, an existing recording or a timed-out exchange, so the operator can
+  always recover. Missing storage, a non-file logger backend, rejected
+  commands, timeouts and path reuse are explicit errors. `SDLOG_MODE` labels
+  follow v1.17 (0 armed→disarm, 1 boot→disarm, 2 boot→shutdown, 3 AUX1,
+  4 first arm→shutdown).
+- **Test run coordinator**: after the capture reports a new file, a 1 s
+  pre-roll runs before START is accepted. A confirmed motor release starts a
+  1 s post-roll, then `logger off`. Abort releases the motors first. Every
+  run writes an atomically updated manifest at
+  `<app_data>/motor-tests/<test_id>/manifest.json` (test id, log path, FC
+  identity, mapping, read-only logger parameters, boundaries, stop reason);
+  a reconnect reconciles pending runs and refuses a new run while one is
+  active.
+- **Log retrieval**: `LOG_REQUEST_LIST` / `LOG_REQUEST_DATA` (ended with
+  `LOG_REQUEST_END`, which stops on-board logging) list and download SD logs;
+  the serial target's logs use the target link. `LOG_DATA` replies are checked
+  against the fixed 90-byte frame and the declared size before any buffer
+  grows, so a malformed reply is an explicit error instead of a panic, and a
+  chunk beyond the collected tail is reported as a gap. Progress re-anchors
+  the request timeout, so long downloads no longer exhaust the retry budget
+  after ~6 s; broadcast lag or an ordinary link lifecycle event no longer stops
+  the download task, and replacing the link aborts the old runtime.
 
 ## Signal Inspector (Tools ▸)
 

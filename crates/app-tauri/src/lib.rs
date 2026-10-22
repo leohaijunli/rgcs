@@ -7,6 +7,7 @@
 mod actuator_service;
 mod alert_service;
 mod calibration_service;
+mod capture_service;
 mod command_service;
 mod commands;
 mod config_service;
@@ -23,6 +24,7 @@ mod params_service;
 mod project_service;
 mod recorder_service;
 mod rtk_service;
+mod run_service;
 mod shared_state_service;
 mod state;
 mod telemetry_pump;
@@ -131,6 +133,7 @@ pub fn run() {
             actuator_service::actuator_disconnect_sitl,
             actuator_service::actuator_connect_target,
             actuator_service::actuator_disconnect_target,
+            actuator_service::actuator_refresh_mapping,
             actuator_service::actuator_start_forward,
             actuator_service::actuator_set_alarm_config,
             actuator_service::actuator_acknowledge_alarm,
@@ -138,17 +141,22 @@ pub fn run() {
             actuator_service::actuator_stop,
             actuator_service::actuator_estop,
             actuator_service::actuator_reset_emergency,
-            actuator_service::actuator_set_sdlog_mode,
+            capture_service::actuator_capture_verify,
+            capture_service::actuator_capture_start,
+            capture_service::actuator_capture_stop,
+            capture_service::actuator_capture_status,
+            run_service::actuator_run_start,
+            run_service::actuator_run_status,
+            run_service::actuator_run_abort,
             actuator_service::actuator_set_mot_test_en,
             actuator_service::actuator_param_read,
             actuator_service::actuator_param_set,
             actuator_service::actuator_logs_request_list,
             actuator_service::actuator_logs_download,
+            actuator_service::actuator_logs_delete,
+            actuator_service::actuator_logs_erase_all,
             actuator_service::actuator_logs_cancel,
             actuator_service::actuator_logs_status,
-            actuator_service::actuator_recorder_start,
-            actuator_service::actuator_recorder_stop,
-            actuator_service::actuator_recorder_status,
             params_service::params_open,
             params_service::params_pull,
             params_service::params_cancel,
@@ -262,7 +270,7 @@ pub fn run() {
                     let _ops = state.ops().lock().await;
                     match lifecycle_service::run(&app, StopReason::WindowClose).await {
                         Ok(_) => {
-                            actuator_service::stop_auxiliary_links(&state).await;
+                            actuator_service::stop_auxiliary_links(&app, &state).await;
                             app.exit(0)
                         }
                         Err(err) => {

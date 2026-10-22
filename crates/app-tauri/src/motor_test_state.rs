@@ -7,12 +7,50 @@ use parking_lot::Mutex as PLMutex;
 use std::time::Duration;
 
 use maggcs_core::calib::mag::MagCalibration;
+use maggcs_core::logs::capture::{SdCaptureError, SdCaptureStatus};
 use maggcs_core::mavlink::ConnectionHandle;
 use maggcs_core::motor_test::mag_alarm::MagAlarm;
+use maggcs_core::motor_test::mapping::{OutputMap, ServoPort, SERVO_CHANNELS_PER_PORT};
+use maggcs_core::motor_test::pwm::PwmModel;
 use maggcs_core::motor_test::scope::ScopeBus;
 use maggcs_core::motor_test::source::ForwardSlot;
 use maggcs_core::motor_test::{MotorTestService, SafetyLimits, SessionState};
 use maggcs_core::signals::derived::EscAggregator;
+
+/// Component ID of the PX4 autopilot (default; the target is route-scoped).
+pub const TARGET_COMPONENT_ID: u8 = 1;
+
+/// Stable identity of the link a motor-test session is bound to. A reconnect
+/// through `actuator_connect_target` creates a new connection ID; a stale
+/// session must never be reused for the replacement target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MotorTestTargetRef {
+    pub connection_id: usize,
+    pub target_system_id: u8,
+    pub target_component_id: u8,
+}
+
+/// Operator-declared prop load. Unknown values are rejected instead of
+/// silently falling back to the most permissive envelope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MotorTestLoad {
+    None,
+    Plate,
+    Props,
+}
+
+impl MotorTestLoad {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "none" => Ok(Self::None),
+            "plate" => Ok(Self::Plate),
+            "props" => Ok(Self::Props),
+            other => Err(format!(
+                "unknown prop load '{other}' (expected none, plate or props)"
+            )),
+        }
+    }
+}
 
 /// The live service handle (plus the event-forwarder task handle, so the
 /// forwarder dies with the entry).
@@ -25,6 +63,16 @@ pub struct RunningMotorTest {
     /// Latest values actually sent to the FC (post clamp/slew) — the
     /// window's actuator-output readout.
     pub output: tokio::sync::watch::Receiver<Vec<f32>>,
+    /// Link and load this service was started with. A start for a different
+    /// target or load must replace the session, never reuse it.
+    pub target: MotorTestTargetRef,
+    pub load: MotorTestLoad,
+}
+
+impl RunningMotorTest {
+    pub fn matches(&self, target: MotorTestTargetRef, load: MotorTestLoad) -> bool {
+        self.target == target && self.load == load
+    }
 }
 
 /// The motor test's own target link: the **real PX4** (serial), separate from
@@ -39,10 +87,26 @@ pub struct MotorTestTarget {
     /// `COM_MOT_TEST_EN` read from the PX4 (`None` = not read yet / unknown).
     /// PX4 denies `ACTUATOR_TEST` while this parameter is not 1.
     pub params: maggcs_core::params::ParamService,
-    /// `SDLOG_MODE` read from the PX4 (`None` = not read yet / unknown):
-    /// 0 = disabled, 1 = always, 2 = log when armed. The motor-test window's
-    /// on-board log toggle reads and writes it over the serial link.
+    /// A confirmed persistent parameter change needs activation after reboot.
     pub restart_pending: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Motor function → physical MAIN/AUX output, read from `PWM_*_FUNCx`.
+    /// Feedback for Motor N is read from this channel, not from servoN.
+    pub output_map: std::sync::Arc<PLMutex<OutputMap>>,
+    /// Per-motor PWM model (endpoints, reversal, thrust factor) for the mapped
+    /// channel. Replaced atomically with the mapping refresh before a start.
+    pub pwm_models: std::sync::Arc<PLMutex<Vec<PwmModel>>>,
+}
+
+impl MotorTestTarget {
+    /// Identity of this connection + node. `connection_id` changes whenever
+    /// the target link is replaced, so pending/started work can detect it.
+    pub fn target_ref(&self) -> MotorTestTargetRef {
+        MotorTestTargetRef {
+            connection_id: self.handle.handle_id(),
+            target_system_id: self.target_system_id,
+            target_component_id: TARGET_COMPONENT_ID,
+        }
+    }
 }
 
 /// Owns a motor-test auxiliary link and its link-scoped tasks. Stop is
@@ -120,10 +184,22 @@ pub struct TargetLinkRuntime {
     pub runtime: AuxiliaryLinkRuntime,
 }
 
+/// Which SITL node and physical output bank feeds the forward slot. The
+/// dedicated connection is the first identity component; these fields pick the
+/// node and port so another system on the same bus cannot overwrite the feed.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SitlSourceConfig {
+    pub endpoint: String,
+    pub system_id: u8,
+    pub component_id: u8,
+    pub port: ServoPort,
+}
+
 /// The SITL source link plus its SERVO_OUTPUT_RAW forwarder runtime.
 pub struct SitlLinkRuntime {
     pub slot: ForwardSlot,
-    pub endpoint: String,
+    pub source: SitlSourceConfig,
     pub runtime: AuxiliaryLinkRuntime,
 }
 
@@ -243,6 +319,13 @@ mod auxiliary_runtime_tests {
     }
 }
 
+/// One physical output bank from the target's `SERVO_OUTPUT_RAW`.
+#[derive(Debug, Clone, Copy)]
+pub struct FcPortOutputs {
+    pub pwm: [u16; SERVO_CHANNELS_PER_PORT as usize],
+    pub at: std::time::Instant,
+}
+
 /// Live mag/ESC telemetry for the motor-test window (A4 wiring): the tap
 /// updates the aggregator + alarm; the window polls or receives events.
 pub struct MotorTelemetry {
@@ -255,10 +338,10 @@ pub struct MotorTelemetry {
     /// The target FC's latest heartbeat (armed / mode) decoded from the serial
     /// link the motor test sends to — the state that gates the START button.
     pub hb: Option<maggcs_core::telemetry::Heartbeat>,
-    /// The target FC's latest `SERVO_OUTPUT_RAW` main outputs 1–4 in µs — what
-    /// PX4 actually drives (0 = output not driven), shown alongside the
-    /// normalized command in the OUTPUT panel.
-    pub fc_servo_pwm: Option<[u16; 4]>,
+    /// The target FC's latest `SERVO_OUTPUT_RAW`, separately for MAIN and AUX.
+    /// Index by [`ServoPort::wire`]; feedback is selected later by the output
+    /// mapping, so AUX bank frames cannot overwrite MAIN values.
+    pub fc_outputs: [Option<FcPortOutputs>; 2],
     /// When the last target-FC heartbeat arrived. Unlike `hb` (the decoded
     /// state) this lets the status poll tell "alive now" from "was alive once".
     pub last_heartbeat_at: Option<std::time::Instant>,
@@ -283,8 +366,76 @@ pub struct MotorTestState {
     /// SD-log list/download state for the serial target PX4 (feature 2); the
     /// protocol runtime is link-scoped and rebuilt with the target.
     pub logs: PLMutex<ActuatorLogs>,
-    /// Received-message recorder (tlog) for the serial target PX4 (feature 3).
-    pub recorder: PLMutex<Option<ActuatorRecorder>>,
+    /// Target-shell SD-file capture (Task 6). Link-scoped like the log
+    /// download runtime; stopped before its target connection is closed.
+    pub capture: PLMutex<ActuatorCapture>,
+    /// Per-test run coordinator + recovery manifest (Task 8).
+    pub run: PLMutex<crate::run_service::ActuatorRun>,
+}
+
+/// The serial target's SD-capture service: one shell controller per target.
+pub struct ActuatorCapture {
+    pub runtime: Option<ActuatorCaptureRuntime>,
+    pub status: std::sync::Arc<PLMutex<SdCaptureStatus>>,
+}
+
+impl Default for ActuatorCapture {
+    fn default() -> Self {
+        Self {
+            runtime: None,
+            status: std::sync::Arc::new(PLMutex::new(SdCaptureStatus::default())),
+        }
+    }
+}
+
+/// A running target-shell capture service.
+pub struct ActuatorCaptureRuntime {
+    pub(crate) target: MotorTestTargetRef,
+    pub(crate) commands: Option<tokio::sync::mpsc::Sender<CaptureRequest>>,
+    pub(crate) task: Option<tauri::async_runtime::JoinHandle<()>>,
+}
+
+impl ActuatorCaptureRuntime {
+    /// Close the command channel and wait for the service task to exit.
+    pub async fn stop(mut self, deadline: std::time::Duration) {
+        self.commands.take();
+        if let Some(mut task) = self.task.take() {
+            if tokio::time::timeout(deadline, &mut task).await.is_err() {
+                task.abort();
+                let _ = task.await;
+            }
+        }
+    }
+}
+
+impl Drop for ActuatorCaptureRuntime {
+    fn drop(&mut self) {
+        if let Some(task) = &self.task {
+            task.abort();
+        }
+    }
+}
+
+/// Capture requests from Tauri commands to the shell task.
+pub(crate) enum CaptureRequest {
+    Shell {
+        command: String,
+        reply: tokio::sync::oneshot::Sender<Result<String, SdCaptureError>>,
+    },
+    Check {
+        sdlog_mode: Option<i32>,
+        sdlog_backend: Option<i32>,
+        reply: tokio::sync::oneshot::Sender<Result<SdCaptureStatus, SdCaptureError>>,
+    },
+    Start {
+        test_id: String,
+        sdlog_mode: Option<i32>,
+        sdlog_backend: Option<i32>,
+        reply: tokio::sync::oneshot::Sender<Result<SdCaptureStatus, SdCaptureError>>,
+    },
+    Stop {
+        reply: tokio::sync::oneshot::Sender<Result<SdCaptureStatus, SdCaptureError>>,
+    },
 }
 
 /// The serial target's SD-log download runtime (feature 2): runs a core
@@ -334,21 +485,15 @@ impl Drop for ActuatorLogsRuntime {
 }
 
 pub(crate) enum ActuatorLogCommand {
-    List,
+    List {
+        reply: tokio::sync::oneshot::Sender<Result<Vec<maggcs_core::logs::LogEntryInfo>, String>>,
+    },
     Download {
         id: u16,
         size: u32,
         save_path: String,
     },
     Cancel,
-}
-
-/// The recorder of messages received on the serial target link (feature 3):
-/// a core `Recorder` whose raw-frame tap captures every inbound frame to a
-/// `session-<utc>.tlog`.
-pub struct ActuatorRecorder {
-    pub recorder: std::sync::Arc<maggcs_core::recorder::Recorder>,
-    pub stop: tokio::sync::watch::Sender<bool>,
 }
 
 impl MotorTestState {
@@ -366,20 +511,45 @@ impl MotorTestState {
 /// Conservative default envelope per declared prop load (plan §2.2-2: the
 /// load sets the output cap and confirmation strength). Numbers are starting
 /// points — M0 bench data will tighten them.
-pub fn limits_for_load(load: &str, target_system_id: u8) -> SafetyLimits {
+pub fn limits_for_load(load: MotorTestLoad, target_system_id: u8) -> SafetyLimits {
     let (max_value, max_slew_per_s) = match load {
         // No props: safest — full range, brisk ramp.
-        "none" => (1.0, 8.0),
+        MotorTestLoad::None => (1.0, 8.0),
         // Flat plates: some thrust, still benign.
-        "plate" => (0.6, 4.0),
+        MotorTestLoad::Plate => (0.6, 4.0),
         // Full props: low cap, slow ramp, until M0 says otherwise.
-        _ => (0.3, 2.0),
+        MotorTestLoad::Props => (0.3, 2.0),
     };
     SafetyLimits {
         max_value,
         max_slew_per_s,
         heartbeat_timeout: Duration::from_millis(1500),
         target_sys: target_system_id,
-        target_comp: 1,
+        target_comp: TARGET_COMPONENT_ID,
+    }
+}
+
+#[cfg(test)]
+mod load_tests {
+    use super::*;
+
+    #[test]
+    fn unknown_load_is_rejected_instead_of_defaulting_to_props() {
+        assert!(MotorTestLoad::parse("typo").is_err());
+        assert_eq!(MotorTestLoad::parse("none"), Ok(MotorTestLoad::None));
+        assert_eq!(MotorTestLoad::parse("plate"), Ok(MotorTestLoad::Plate));
+        assert_eq!(MotorTestLoad::parse("props"), Ok(MotorTestLoad::Props));
+    }
+
+    #[test]
+    fn each_load_applies_its_own_cap_and_slew() {
+        let none = limits_for_load(MotorTestLoad::None, 42);
+        let plate = limits_for_load(MotorTestLoad::Plate, 42);
+        let props = limits_for_load(MotorTestLoad::Props, 42);
+        assert_eq!((none.max_value, none.max_slew_per_s), (1.0, 8.0));
+        assert_eq!((plate.max_value, plate.max_slew_per_s), (0.6, 4.0));
+        assert_eq!((props.max_value, props.max_slew_per_s), (0.3, 2.0));
+        assert_eq!(none.target_sys, 42);
+        assert_eq!(none.target_comp, TARGET_COMPONENT_ID);
     }
 }

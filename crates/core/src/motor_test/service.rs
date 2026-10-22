@@ -10,6 +10,7 @@ use std::future::Future;
 use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
+use ts_rs::TS;
 
 use ::mavlink::MessageData;
 
@@ -79,7 +80,7 @@ impl MotorTestTransport for ConnectionHandle {
 }
 
 /// What ended a running session (surfaced to the UI, plan §8.3).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum StopReason {
     /// Operator pressed stop.
@@ -111,6 +112,11 @@ pub enum MotorTestCommand {
     /// app-side SITL tap feeds it with normalized actuator outputs).
     StartForward {
         slot: super::source::ForwardSlot,
+    },
+    /// Per-motor PWM models for the next start (sent after every mapping
+    /// refresh and before every start).
+    SetPwmModels {
+        models: Vec<super::pwm::PwmModel>,
     },
     /// Latest-value-wins manual update (UI throttles to ~30 Hz).
     SetValues(Vec<f32>),
@@ -270,6 +276,7 @@ async fn run(
                     MotorTestCommand::StartForward { slot } => {
                         session.start_forward(slot, Instant::now())
                     }
+                    MotorTestCommand::SetPwmModels { models } => session.set_pwm_models(models),
                     MotorTestCommand::SetValues(values) => session.set_any_values(values),
                     MotorTestCommand::Stop => session.stop(StopReason::Command),
                     MotorTestCommand::StopAndWait { deadline, reply } => {
