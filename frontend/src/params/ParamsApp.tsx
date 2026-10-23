@@ -89,6 +89,9 @@ export function ParamsApp() {
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [scrollTop, setScrollTop] = useState(0)
   const [viewH, setViewH] = useState(400)
+  /** Scrollbar gutter width, so the fixed header can match the body's content
+   * box (WP3a: header and rows must share column origins within 1 px). */
+  const [gutter, setGutter] = useState(0)
 
   // Load the bundled metadata once (works without a link).
   useEffect(() => {
@@ -308,9 +311,15 @@ export function ParamsApp() {
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
-    const ro = new ResizeObserver(() => setViewH(el.clientHeight))
+    const sync = () => {
+      setViewH(el.clientHeight)
+      // offsetWidth - clientWidth is the reserved scrollbar gutter (0 for
+      // overlay scrollbars, so header and body stay consistent either way).
+      setGutter(el.offsetWidth - el.clientWidth)
+    }
+    const ro = new ResizeObserver(sync)
     ro.observe(el)
-    setViewH(el.clientHeight)
+    sync()
     return () => ro.disconnect()
   }, [])
 
@@ -539,7 +548,7 @@ export function ParamsApp() {
         {leftPane}
 
         <div className="p-tablewrap">
-          <div className="p-thead">
+          <div className="p-thead" style={{ paddingRight: 8 + gutter }}>
             <span>Name</span>
             <span>Value</span>
             <span>Default</span>
@@ -565,11 +574,21 @@ export function ParamsApp() {
                   const v = values.get(name)
                   const rs = readState.get(name)
                   const isSel = selected === name
+                  // Full cell text as a title so a clipped value is still
+                  // reachable on hover; the detail pane shows it on selection.
+                  const valueText = v
+                    ? fmtValue(m, typeof v.value === 'number' ? v.value : null)
+                    : rs === 'loading'
+                      ? '…'
+                      : rs === 'missing'
+                        ? '—'
+                        : '·'
+                  const defaultText = fmtDefault(m)
                   return (
                     <div
                       key={name}
-        className={`p-row ${isSel ? 'sel' : ''}`}
-                      style={{ position: 'absolute', top: (first + i) * ROW_H, height: ROW_H }}
+                      className={`p-row ${isSel ? 'sel' : ''}`}
+                      style={{ top: (first + i) * ROW_H, height: ROW_H }}
                       onClick={() => selectRow(name)}
                     >
                       <span
@@ -582,16 +601,12 @@ export function ParamsApp() {
                         {m.rebootRequired && <span className="p-reboot" title="Reboot required">⟲</span>}
                         {name}
                       </span>
-                      <span className="p-value">
-                        {v
-                          ? fmtValue(m, typeof v.value === 'number' ? v.value : null)
-                          : rs === 'loading'
-                            ? '…'
-                            : rs === 'missing'
-                              ? '—'
-                              : '·'}
+                      <span className="p-value" title={v ? valueText : undefined}>
+                        {valueText}
                       </span>
-                      <span className="p-default">{fmtDefault(m)}</span>
+                      <span className="p-default" title={defaultText || undefined}>
+                        {defaultText}
+                      </span>
                       <span className="p-desc" title={m.longDesc ?? m.shortDesc ?? ''}>
                         {m.shortDesc ?? ''}
                       </span>

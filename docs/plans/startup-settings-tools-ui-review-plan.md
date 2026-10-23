@@ -315,6 +315,20 @@ severity.
 **Strengths:** metadata-first browsing, offline descriptions, search, grouped
 navigation, a detail editor, and a staged-change tray.
 
+**Implementation update, 2026-10-22 — geometry and columns:** the defect had a
+single cause: a virtualized `.p-row` was absolutely positioned with only `top`
+set, so it shrink-to-fit its content and resolved its own `fr`/`minmax` widths
+differently from the full-width header (reproduced: the Value column origin was
+193.6 px off). Rows now pin `left: 0; right: 0`, the header and rows share one
+`--p-param-cols` template, and the header's right padding matches the scroll
+gutter so both content boxes are identical. Value and Default were rebalanced
+from fixed 90/70 px to flexible shares, and their full text is exposed via a
+title (the detail pane already shows it on selection). Verified by
+`check-params.mjs` at 1366 × 768, 1920 × 1080, and 900 × 600, after a search, a
+group switch, and deep scrolling (screenshots in `frontend/screenshots/params/`).
+Remaining 6.2 items: resizable side panes, the two `Custom` controls, keyboard
+row navigation with density-aware row height, and FC status / bounded tray.
+
 **Confirmed layout defect:** virtualized `.p-row` elements are absolutely
 positioned without a common full-width constraint. Their automatic widths vary
 with content, so each row computes different fractional columns even though it
@@ -430,7 +444,7 @@ smaller reviewed patches when execution resumes.
 | 1 | P0 | Move startup lifecycle feedback and Settings access into the shared application shell. | With no project, the endpoint/countdown is visible before auto-connect; Cancel results in zero connection calls; target/teardown feedback and critical alerts are reachable. Settings opens before project selection. |
 | 2a | P1 | Fix Settings draft retention, coordinate parsing, and serial selection consistency as separate small tasks. | Tab changes preserve drafts; blank/invalid coordinates create no area; the displayed serial selection matches the endpoint that would be used. |
 | 2b | P1 | Add configuration persistence feedback and recovery. | Simulated load/save failures are visible; a successful retry survives restart; failed initialization does not silently disable all future persistence. |
-| 3a | P1 | Fix Parameters table geometry. | Each data-column origin differs from its header by at most 1 CSS px at 1366, 1920, and 900 px widths, including after search, group switching, and deep scrolling. |
+| 3a | P1 | **Completed 2026-10-22:** Parameters table geometry fixed (rows pinned full width, shared `--p-param-cols`, scroll-gutter-matched header) and Value/Default rebalanced. | Each data-column origin differs from its header by at most 1 CSS px at 1366, 1920, and 900 px widths, including after search, group switching, and deep scrolling (`check-params.mjs`). |
 | 3b | P1 | **Completed 2026-10-22:** Motor Test sidebar start/alarm controls, bounded workspace, stacked order, consistent state/title, and optional input/log details. | Simulated IPC regression passes at 1024 × 640, 1366 × 768, and 1920 × 1080: plots/capture reachable, stop controls visible, no wide document overflow. Build and app compilation pass; screenshots and manual steps are in the module README. |
 | 4 | P1 | Share theme/Field-mode initialization and live propagation; update density-dependent controls and virtualized rows. | Main, Inspector, Parameters, and Motor Test agree on saved preferences at startup and update within 500 ms after a change; Field-mode targets meet 44 × 44 px without overlap. |
 | 5 | P1/P2 | **Partly completed 2026-10-22:** no-project entry, shared name-only create wizard, and recent remove/delete. Remaining: import on StartPage and recents availability/last-opened metadata. | Create/open work from StartPage; delete validates `project.json` before removing and never deletes an open project. Import from a fresh install and clear recovery for missing/locked/corrupt projects remain open. |
@@ -456,8 +470,11 @@ backends for those actions.
 - [x] Project creation: name-only contract with a default or operator-chosen
   destination; recent removal and typed-name disk deletion. Import from a fresh
   install is still open.
-- [ ] Parameter table: header/body alignment within 1 px; last-row reachability;
-  search/group changes after deep scrolling; Field-mode row-height consistency.
+- [x] Parameter table geometry: header/body column origins within 1 px at
+  1366 × 768, 1920 × 1080, and 900 × 600, after search, group switch, and deep
+  scroll; Value/Default rebalanced (`check-params.mjs`).
+- [ ] Parameter table: last-row reachability and Field-mode row-height
+  consistency.
 - [x] Motor Test: all workspace content reachable; persistent stop controls at
   supported sizes; verified against the integrated working-tree UI on 2026-10-22.
 - [x] Inspector sidebars: resizable/collapsible, layout persisted, and a

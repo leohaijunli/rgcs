@@ -319,11 +319,17 @@ body,
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  /* One column template shared by the header and every row, so the columns
+   * can never drift (WP3a). Value and Default take a flexible share rather
+   * than a fixed 90/70 px, so enum descriptions stop clipping on wide windows;
+   * the minimums still sum to what the 900 px declared window can hold. */
+  --p-param-cols: minmax(150px, 1.1fr) minmax(110px, 1.2fr) minmax(90px, 1fr)
+    minmax(90px, 1.7fr);
 }
 
 .p-thead {
   display: grid;
-  grid-template-columns: minmax(160px, 1.3fr) 90px 70px minmax(120px, 1fr);
+  grid-template-columns: var(--p-param-cols);
   gap: 6px;
   padding: 4px 8px;
   font-size: 10px;
@@ -336,19 +342,27 @@ body,
 
 .p-scroll {
   flex: 1;
-  overflow-y: auto;
+  /* `scroll` (not `auto`) reserves the gutter at all times, so the header's
+   * right padding can match it and the columns stay aligned. */
+  overflow-y: scroll;
   position: relative;
 }
 
 .p-row {
   display: grid;
-  grid-template-columns: minmax(160px, 1.3fr) 90px 70px minmax(120px, 1fr);
+  grid-template-columns: var(--p-param-cols);
   gap: 6px;
   align-items: center;
   padding: 0 8px;
   font-size: 12px;
   cursor: pointer;
   white-space: nowrap;
+  /* A virtualized row is absolutely positioned; without both insets it would
+   * shrink-to-fit its content and resolve its own column widths (WP3a defect:
+   * rows were 518-645 px against a 946 px header). */
+  position: absolute;
+  left: 0;
+  right: 0;
 }
 
 .p-row:hover {
