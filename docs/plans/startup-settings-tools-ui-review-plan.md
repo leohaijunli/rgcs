@@ -326,8 +326,23 @@ from fixed 90/70 px to flexible shares, and their full text is exposed via a
 title (the detail pane already shows it on selection). Verified by
 `check-params.mjs` at 1366 × 768, 1920 × 1080, and 900 × 600, after a search, a
 group switch, and deep scrolling (screenshots in `frontend/screenshots/params/`).
-Remaining 6.2 items: resizable side panes, the two `Custom` controls, keyboard
-row navigation with density-aware row height, and FC status / bounded tray.
+
+**Implementation update, 2026-10-22 — remaining 6.2 items:** the group pane and
+editor are now on their own grid tracks with draggable splitters (pointer and
+ArrowLeft/Right, double-click reset) and collapse to rails, persisted under
+`maggcs.params.layout`, so the table keeps `MIN_CENTER_W` (460 px) at every size.
+The two `Custom` controls are disambiguated: the pane tab reads **My groups**
+(the operator's sets) and the toolbar filter reads **In groups** (membership
+only). The list is a focusable `role="listbox"`: ArrowUp/Down, PageUp/Down and
+Home/End move the selection and scroll it into view, with `aria-activedescendant`
+tracking it; the virtualizer reads the `--p-row-h` variable and observes the
+`field-mode` class, so Field mode enlarges rows to the 44 px touch floor and the
+window now mirrors Field mode at boot. Current FC identity/status is a chip next
+to the title (`Mock` / `No FC` / `PX4 <ver>`, warning-toned on a metadata
+mismatch) replacing the standalone version strip, and the staged-change tray is
+bounded (`max-height: 60px`) and scrollable so every pending entry and the Apply
+button stay reachable. `check-params.mjs` covers all of the above
+(`params-collapsed.png`, `params-staged-tray.png`).
 
 **Confirmed layout defect:** virtualized `.p-row` elements are absolutely
 positioned without a common full-width constraint. Their automatic widths vary
@@ -473,8 +488,10 @@ backends for those actions.
 - [x] Parameter table geometry: header/body column origins within 1 px at
   1366 × 768, 1920 × 1080, and 900 × 600, after search, group switch, and deep
   scroll; Value/Default rebalanced (`check-params.mjs`).
-- [ ] Parameter table: last-row reachability and Field-mode row-height
-  consistency.
+- [x] Parameter table: last-row reachability (keyboard End) and Field-mode
+  row-height consistency (virtual span = rows × row height); resizable/
+  collapsible panes; distinct pane/filter labels; FC status chip; bounded
+  staged tray (`check-params.mjs`; `params-collapsed.png`, `params-staged-tray.png`).
 - [x] Motor Test: all workspace content reachable; persistent stop controls at
   supported sizes; verified against the integrated working-tree UI on 2026-10-22.
 - [x] Inspector sidebars: resizable/collapsible, layout persisted, and a

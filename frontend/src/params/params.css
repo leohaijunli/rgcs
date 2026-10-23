@@ -80,6 +80,30 @@ html.field-mode {
   font-size: 13px;
 }
 
+/* FC identity/status next to the title (Params-6). */
+.p-fc {
+  padding: 1px 6px;
+  border: 1px solid var(--mg-border);
+  border-radius: 999px;
+  font-size: 10px;
+  font-family: var(--mg-font-mono, monospace);
+  white-space: nowrap;
+}
+
+.p-fc-muted {
+  color: var(--mg-muted);
+}
+
+.p-fc-ok {
+  color: var(--mg-ok);
+  border-color: color-mix(in srgb, var(--mg-ok) 50%, var(--mg-border));
+}
+
+.p-fc-warn {
+  color: var(--mg-warn);
+  border-color: color-mix(in srgb, var(--mg-warn) 50%, var(--mg-border));
+}
+
 .p-btn {
   height: 28px;
   padding: 0 10px;
@@ -678,10 +702,14 @@ html.field-mode {
 .p-tray-list {
   display: flex;
   flex-wrap: wrap;
+  align-content: flex-start;
   gap: 4px;
   flex: 1;
   min-width: 0;
-  overflow: hidden;
+  /* Bounded so many staged entries stay reachable by scrolling instead of
+   * clipping (Params-6); the Apply button is a sibling and never moves. */
+  max-height: 60px;
+  overflow-y: auto;
 }
 
 .p-tray-item {

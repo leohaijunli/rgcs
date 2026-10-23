@@ -188,3 +188,9 @@ export const useParamsStore = create<ParamsState>((set, get) => ({
     set({ groups })
   },
 }))
+
+// Dev-only handle for inspecting the app from the DevTools protocol / E2E
+// scripts (same pattern as `window.__mgMission` in stores/mission.ts).
+if (import.meta.env?.DEV && typeof window !== 'undefined') {
+  ;(window as unknown as { __mgParams?: unknown }).__mgParams = useParamsStore
+}

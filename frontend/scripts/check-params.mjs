@@ -231,6 +231,48 @@ try {
     `the virtual span matches rows x row height (${density.innerH.toFixed(0)} vs ${(density.rows * density.rowH).toFixed(0)})`,
   )
 
+  // --- Params-6: FC status next to the title -------------------------------
+  {
+    assert.equal(
+      await page.locator('.p-toolbar .p-title + .p-fc').count(),
+      1,
+      'an FC status chip sits next to the title',
+    )
+    assert.equal(
+      (await page.locator('.p-toolbar .p-fc').textContent())?.trim(),
+      'Mock',
+      'browser mode reports "Mock"',
+    )
+    assert.equal(
+      await page.locator('.p-version-ok').count(),
+      0,
+      'the standalone version strip was folded into the chip',
+    )
+  }
+
+  // --- Params-6: the staged tray stays bounded and reachable ----------------
+  await page.evaluate(() => {
+    const store = window.__mgParams
+    const names = [...store.getState().meta.keys()].slice(0, 40)
+    store.setState({ staged: new Map(names.map((n, i) => [n, i])) })
+  })
+  await page.locator('.p-tray').waitFor()
+  const tray = await page.evaluate(() => {
+    const list = document.querySelector('.p-tray-list')
+    const apply = document.querySelector('.p-tray-apply')
+    return {
+      listScroll: list ? list.scrollHeight : 0,
+      listClient: list ? list.clientHeight : 0,
+      listH: list ? list.getBoundingClientRect().height : 0,
+      applyVisible: apply ? apply.getBoundingClientRect().bottom <= window.innerHeight + 1 : false,
+    }
+  })
+  assert.ok(tray.listH <= 62, `the staged list is bounded (got ${tray.listH.toFixed(0)} px)`)
+  assert.ok(tray.listScroll > tray.listClient, 'many staged entries overflow the bounded list')
+  assert.ok(tray.applyVisible, 'the Apply button stays reachable')
+  await assertNoOverflow('staged tray')
+  if (shots) await page.screenshot({ path: join(shots, 'params-staged-tray.png') })
+
   assert.deepEqual(errors, [])
   console.log('PASS: header/body column origins align within 1 px at all sizes and scroll states')
 } finally {

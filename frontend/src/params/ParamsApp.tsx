@@ -712,6 +712,31 @@ export function ParamsApp() {
     </div>
   )
 
+  /** FC identity/status shown next to the title (Params-6). */
+  const fcStatus = !tauri
+    ? {
+        tone: 'muted' as const,
+        label: 'Mock',
+        title: 'Browser mock — no flight controller',
+      }
+    : fcVersion == null
+      ? {
+          tone: 'warn' as const,
+          label: 'No FC',
+          title: 'No flight controller link yet',
+        }
+      : fcVersion.startsWith(META_VERSION)
+        ? {
+            tone: 'ok' as const,
+            label: `PX4 ${fcVersion}`,
+            title: `Firmware matches the bundled metadata (PX4 ${META_VERSION})`,
+          }
+        : {
+            tone: 'warn' as const,
+            label: `PX4 ${fcVersion}`,
+            title: `Firmware differs from the bundled metadata (PX4 ${META_VERSION}); descriptions may be outdated`,
+          }
+
   const gridStyle = {
     '--p-left': `${leftCollapsed ? RAIL_W : leftW}px`,
     '--p-left-split': leftCollapsed ? '0px' : `${SPLITTER_W}px`,
@@ -723,6 +748,9 @@ export function ParamsApp() {
     <div className="p-grid">
       <header className="p-toolbar">
         <strong className="p-title">Parameters</strong>
+        <span className={`p-fc p-fc-${fcStatus.tone}`} title={fcStatus.title}>
+          {fcStatus.label}
+        </span>
         <button className="p-btn" onClick={() => void pullAll()} disabled={pulling}>
           {pulling
             ? `Pulling ${progress ? `${progress.received}/${progress.total}` : '…'}`
@@ -769,9 +797,6 @@ export function ParamsApp() {
           FC runs PX4 {fcVersion} but the bundled metadata is from PX4 {META_VERSION} —
           descriptions may be outdated; unknown parameters stay editable.
         </div>
-      )}
-      {fcVersion != null && fcVersion.startsWith(META_VERSION) && (
-        <div className="p-version-ok mono">PX4 {fcVersion}</div>
       )}
       {rebootNeeded.length > 0 && (
         <div className="p-reboot-banner">
