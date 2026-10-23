@@ -1,7 +1,7 @@
 # Startup, Settings, and Tools: UI Assessment and Improvement Plan
 
 - **Review date:** 2026-10-22
-- **Status:** Deferred — assessment and planning only; implementation is pending.
+- **Status:** Motor Test UI delivered on 2026-10-22; other surfaces remain deferred.
 - **Scope:** The startup/project-selection page, main-window Settings, the Tools
   menu, and the layouts of the tools it opens.
 - **Related assessment:** [Tools → Logs](logs-ui-review-plan.md).
@@ -304,6 +304,13 @@ between rows and no longer sit under the Value/Default headers.
 
 ### 6.3 Motor Test / Motor Bench
 
+**Implementation update, 2026-10-22:** the Motor Test-only follow-up is complete.
+Unlock/start and Mag alarm now occupy the left sidebar; viewport height and
+stacked scrolling are bounded; inactive input and secondary logging details
+collapse; the header has one test-state label. Motor Test also applies and
+synchronizes theme/Field mode. See the [module notes, checks, and screenshots](../../frontend/src/actuator/README.md).
+The snapshot findings below retain the assessment that motivated this work.
+
 **Strengths in the reviewed working tree:** explicit target identity and stop
 controls in `BenchHeader`; a useful per-motor comparison table; sticky
 Stop/Emergency Stop on narrow layouts; separation of input and serial target.
@@ -378,8 +385,9 @@ Confirm these as design contracts before applying them:
 
 ## 8. Deferred execution plan
 
-All work packages are **pending**. Split packages with multiple behavior changes
-into smaller reviewed patches when execution resumes.
+**WP3b is complete**, together with the Motor Test portion of WP4. Other work
+packages remain pending. Split packages with multiple behavior changes into
+smaller reviewed patches when execution resumes.
 
 | WP | Priority | Work | Acceptance |
 | --- | --- | --- | --- |
@@ -388,7 +396,7 @@ into smaller reviewed patches when execution resumes.
 | 2a | P1 | Fix Settings draft retention, coordinate parsing, and serial selection consistency as separate small tasks. | Tab changes preserve drafts; blank/invalid coordinates create no area; the displayed serial selection matches the endpoint that would be used. |
 | 2b | P1 | Add configuration persistence feedback and recovery. | Simulated load/save failures are visible; a successful retry survives restart; failed initialization does not silently disable all future persistence. |
 | 3a | P1 | Fix Parameters table geometry. | Each data-column origin differs from its header by at most 1 CSS px at 1366, 1920, and 900 px widths, including after search, group switching, and deep scrolling. |
-| 3b | P1 | Recheck and fix Motor Test workspace height/scroll ownership against the latest working tree. | Every plot and logging action is reachable at 1366 × 768 and 1024 × 640; Stop/Emergency Stop remain visible; no document-level clipped content. |
+| 3b | P1 | **Completed 2026-10-22:** Motor Test sidebar start/alarm controls, bounded workspace, stacked order, consistent state/title, and optional input/log details. | Simulated IPC regression passes at 1024 × 640, 1366 × 768, and 1920 × 1080: plots/capture reachable, stop controls visible, no wide document overflow. Build and app compilation pass; screenshots and manual steps are in the module README. |
 | 4 | P1 | Share theme/Field-mode initialization and live propagation; update density-dependent controls and virtualized rows. | Main, Inspector, Parameters, and Motor Test agree on saved preferences at startup and update within 500 ms after a change; Field-mode targets meet 44 × 44 px without overlap. |
 | 5 | P1/P2 | Improve StartPage and shared project-picker workflow: labelled wizard, metadata validation, import, operation feedback, and recents. | A first-time operator can create, open, or import a project from StartPage; invalid metadata is rejected before writing; missing/locked/corrupt projects offer a clear recovery action. |
 | 6 | P1/P2 | Regroup and restyle Settings, including vertical navigation, accessible fields, clearer setting scope, and consistent saved state. | Keyboard-only navigation reaches every control; Connection and Map/simulation sections remain usable at target sizes; setting scope and commit behavior are visible. |
@@ -412,8 +420,8 @@ backends for those actions.
   picker versus failed picker; import reachable from a fresh install.
 - [ ] Parameter table: header/body alignment within 1 px; last-row reachability;
   search/group changes after deep scrolling; Field-mode row-height consistency.
-- [ ] Motor Test: all workspace content reachable; persistent stop controls at
-  supported sizes; recheck after ongoing Motor Test work is integrated.
+- [x] Motor Test: all workspace content reachable; persistent stop controls at
+  supported sizes; verified against the integrated working-tree UI on 2026-10-22.
 - [ ] Shared preference boot and live synchronization across all tool windows.
 - [ ] Tools keyboard behavior and focus restoration; selected/expanded states
   available to assistive technology.

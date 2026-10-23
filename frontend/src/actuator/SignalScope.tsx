@@ -151,6 +151,7 @@ export default function SignalScope({
   const [checked, setChecked] = useState<Set<string>>(() => new Set(initial.checked))
   const [windowS, setWindowS] = useState(initial.windowS)
   const [paused, setPaused] = useState(false)
+  const [appearance, setAppearance] = useState(0)
   const [, setTick] = useState(0)
   const seenRef = useRef<Set<string>>(new Set(initial.seen))
   const checkedRef = useRef(checked)
@@ -158,6 +159,17 @@ export default function SignalScope({
   const pausedAtRef = useRef<number | null>(null)
   const windowRef = useRef(windowS)
   windowRef.current = windowS
+
+  // uPlot resolves its canvas colors at construction. Rebuild only the plots
+  // when the window's theme/density changes, keeping samples and selection.
+  useEffect(() => {
+    const observer = new MutationObserver(() => setAppearance((v) => v + 1))
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme', 'class'],
+    })
+    return () => observer.disconnect()
+  }, [])
 
   // The store outlives this component; tell it what was already offered.
   useEffect(() => {
@@ -252,6 +264,9 @@ export default function SignalScope({
               className="mode-btn scope-btn"
               onClick={onToggleLegend}
               title={legendOpen ? 'Hide the signal list' : 'Show the signal list'}
+              aria-label="Signal list"
+              aria-expanded={legendOpen}
+              aria-controls="motor-signal-list"
             >
               {legendOpen ? '◀ Signals' : 'Signals ▶'}
             </button>
@@ -285,7 +300,7 @@ export default function SignalScope({
           <div className="scope-panes">
             {panes.map((p) => (
               <ScopePane
-                key={p.group}
+                key={`${p.group}:${appearance}`}
                 title={p.title}
                 defs={p.defs}
                 windowRef={windowRef}
@@ -324,7 +339,7 @@ function SignalList({
   extra.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
 
   return (
-    <div className="signal-list">
+    <div className="signal-list" id="motor-signal-list">
       <div className="signal-list-title">Signals</div>
       {LIST_GROUPS.map((g) => {
         const states = g.ids.map((id) => scopeStore.stateOf(id, nowT))

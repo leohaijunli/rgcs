@@ -27,21 +27,24 @@ body,
   font-family: var(--mg-font-sans);
 }
 
-/* Four-region frame (plan §6): header / left control / mid curves / right
- * status. The playback-bar row (48px) returns with Profile mode (A6). */
+/* Bounded workspaces: content scrolls inside its pane instead of growing a
+ * grid row beyond the window's hidden document overflow. */
 .actuator-grid {
   display: grid;
-  grid-template-columns: 260px 1fr 320px;
-  grid-template-rows: 44px 1fr;
+  grid-template-columns: 260px minmax(0, 1fr) 320px;
+  grid-template-rows: minmax(44px, auto) minmax(0, 1fr);
   height: 100%;
+  min-height: 0;
 }
 
 .actuator-header {
   grid-column: 1 / -1;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
-  padding: 0 12px;
+  row-gap: 6px;
+  padding: 4px 12px;
   border-bottom: 1px solid var(--mg-border);
   background: var(--mg-bg-raised);
 }
@@ -50,6 +53,8 @@ body,
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-width: 0;
+  min-height: 0;
   overflow-y: auto;
   padding: 10px;
   border-right: 1px solid var(--mg-border);
@@ -58,6 +63,8 @@ body,
 .actuator-mid {
   position: relative;
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
   padding: 10px;
   display: flex;
   flex-direction: column;
@@ -96,10 +103,84 @@ body,
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-width: 0;
+  min-height: 0;
   overflow-y: auto;
   padding: 10px;
   border-left: 1px solid var(--mg-border);
   font-size: 12px;
+}
+
+.actuator-left > .card,
+.actuator-right > .card {
+  flex-shrink: 0;
+}
+
+.actuator-grid input,
+.actuator-grid select {
+  min-width: 0;
+}
+
+.unlock-btn {
+  width: 100%;
+  min-height: 36px;
+}
+
+.card-heading,
+.section-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.card-heading h3 {
+  margin: 0;
+}
+
+.card-heading .link-btn {
+  min-height: 28px;
+  padding: 3px 8px;
+}
+
+.source-summary {
+  margin-top: 6px;
+  font-size: 11px;
+}
+
+#motor-sitl-details {
+  margin-top: 8px;
+}
+
+.section-toggle {
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 0;
+  border: 0;
+  border-top: 1px solid var(--mg-border);
+  background: transparent;
+  color: var(--mg-ink);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.logger-configuration {
+  margin-top: 8px;
+}
+
+.logger-configuration summary {
+  min-height: 32px;
+  padding: 6px 0;
+  color: var(--mg-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.actuator-grid .estop-note,
+.actuator-grid .inline-failure {
+  overflow-wrap: anywhere;
 }
 
 /* The emergency stop: big, red, always one click — starting is hard,
@@ -164,6 +245,10 @@ body,
 
 .text-error {
   color: var(--mg-error);
+}
+
+.text-warn {
+  color: var(--mg-warn);
 }
 
 /* The loud "test unlocked" banner: visible from anywhere in the window. */
@@ -321,11 +406,7 @@ body,
   gap: 10px;
   align-items: start;
   min-height: 0;
-  /* Stacked above the scope: bound its height so the scope below keeps room;
-   * its own cards scroll when there are many. */
-  flex: 0 1 auto;
-  max-height: 55%;
-  overflow-y: auto;
+  flex: 0 0 auto;
 }
 
 /* Source panels + safety span the full width under the load/source row. */
@@ -429,13 +510,25 @@ body,
 }
 
 .scope-grid {
-  flex: 1;
-  min-height: 240px;
+  flex: 1 0 260px;
+  min-height: 260px;
   display: grid;
-  grid-template-columns: 250px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   border: 1px solid var(--mg-border);
   border-radius: 6px;
   overflow: hidden;
+}
+
+.scope-grid.legend-open {
+  grid-template-columns: 250px minmax(0, 1fr);
+}
+
+.scope-grid > .signal-list {
+  display: none;
+}
+
+.scope-grid.legend-open > .signal-list {
+  display: block;
 }
 
 .signal-list {
@@ -561,6 +654,8 @@ body,
 
 .scope-toolbar {
   display: flex;
+  flex: none;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 4px 8px;
@@ -601,13 +696,16 @@ body,
 .scope-panes {
   flex: 1;
   min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
 }
 
 .scope-pane {
   flex: 1 1 0;
-  min-height: 130px;
+  /* Leave useful drawing space after the axes, title and legend. Extra
+   * panes scroll instead of compressing their curves into a thin strip. */
+  min-height: 176px;
   display: flex;
   flex-direction: column;
   border-bottom: 1px solid var(--mg-border);
@@ -679,22 +777,192 @@ body,
   background: var(--mg-accent, #4c9e5f);
 }
 
-/* ---- Responsive workspace (Task 9) --------------------------------------- */
+/* ---- Motor bench header + tracking table (Task 9a) ---------------------- */
 
-/* Logging details dock at wide sizes; at narrow sizes the card collapses to
- * a summary row and expands on demand. */
-.logging-card .logging-body {
-  display: block;
+.bench-title {
+  font-size: 16px;
+  white-space: nowrap;
 }
-.logging-card .logging-summary {
-  display: none;
+
+.header-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  white-space: nowrap;
 }
+
+.bench-state {
+  font-family: var(--mg-font-mono, monospace);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.header-note {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  font-size: 11px;
+  color: var(--mg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.header-failure {
+  flex: 1 1 220px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--mg-error);
+  font-size: 11px;
+  overflow: hidden;
+}
+
+.header-failure > :first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.header-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.header-actions .estop-btn {
+  margin-left: 0;
+}
+
+.header-btn {
+  flex: none;
+  padding: 0 12px;
+  height: 34px;
+}
+
+.header-btn.stop-tab:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.link-btn {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--mg-border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--mg-ink);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.link-btn:hover {
+  border-color: var(--mg-accent);
+}
+
+/* Comparison table: the flexible plot pane stays below it. */
+.motor-tracking {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  min-height: 0;
+  flex: 0 0 auto;
+}
+
+.tracking-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.tracking-head h3 {
+  margin: 0;
+  flex: none;
+}
+
+.tracking-head .estop-note {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inline-failure {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 4px;
+  color: var(--mg-error);
+  font-size: 11px;
+}
+
+.inline-failure > span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.logging-section {
+  margin-top: 10px;
+}
+
+.motor-table-wrap {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.motor-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.motor-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 3px 6px;
+  border-bottom: 1px solid var(--mg-border);
+  background: var(--mg-bg-raised);
+  color: var(--mg-muted);
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.motor-table td {
+  padding: 3px 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--mg-border) 55%, transparent);
+  white-space: nowrap;
+}
+
+.motor-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.motor-detail td {
+  color: var(--mg-muted);
+  background: var(--mg-bg);
+}
+
+.motor-detail span {
+  margin-right: 14px;
+}
+
+/* ---- Responsive workspace (Task 9) --------------------------------------- */
 
 @media (max-width: 1100px) {
   /* One primary body-scroll region; the header stays fixed so Stop and
    * Emergency Stop are always visible while the rest scrolls. */
   .actuator-grid {
-    display: block;
+    display: flex;
+    flex-direction: column;
     height: 100%;
     overflow-y: auto;
   }
@@ -702,19 +970,54 @@ body,
     position: sticky;
     top: 0;
     z-index: 10;
+    flex-wrap: wrap;
+    min-height: 44px;
+    padding: 6px 10px;
+    row-gap: 6px;
+    flex: none;
+  }
+  .header-failure,
+  .header-note {
+    order: 10;
+    flex-basis: 100%;
+    text-align: left;
+  }
+  .header-actions {
+    margin-left: auto;
   }
   .actuator-left,
   .actuator-mid,
   .actuator-right {
     width: 100%;
+    flex: none;
+    min-height: auto;
+    overflow: visible;
     border: 0;
     border-bottom: 1px solid var(--mg-border);
   }
+  /* The sidebar now owns start controls and the alarm: keep that workflow
+   * ahead of the plots and secondary target/logging details when stacked. */
+  .actuator-left {
+    order: 1;
+  }
+  .actuator-mid {
+    order: 2;
+  }
+  .actuator-right {
+    order: 3;
+  }
   .controls-grid {
     grid-template-columns: 1fr;
+    max-height: none;
+    overflow: visible;
   }
   .controls-grid > .card:nth-child(n + 3) {
     grid-column: auto;
+  }
+  /* The comparison table keeps its own horizontal scroller; it never widens
+   * the page at the supported minimum width. */
+  .motor-tracking {
+    max-height: none;
   }
   .state-strip {
     flex-wrap: wrap;
@@ -722,30 +1025,52 @@ body,
   .actuator-left {
     flex-direction: column;
   }
-  /* Collapsible signal legend: hidden by default, toggled from the toolbar.
-   * The scope plots become the flexible full-width region. */
-  .signal-list {
-    display: none;
+  /* The scope is full-window width in the stack. Its optional signal list
+   * remains beside the plots rather than displacing them below a tall list. */
+  .scope-grid {
+    flex: none;
+    height: 360px;
   }
-  .scope-grid.legend-open .signal-list {
-    display: block;
-  }
-  .scope-grid,
-  .scope-grid.legend-open {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  /* Logging details collapse to a summary row at narrow widths and expand on
-   * demand (expand/collapse toggle in the card header). */
-  .logging-card .logging-body {
-    display: none;
-  }
-  .logging-card .logging-summary {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-  }
-  .logging-card.logging-expanded .logging-body {
-    display: block;
-  }
+}
+
+/* Field mode is scoped to this window; compact charts and secondary labels
+ * use a readable floor while the existing global rule supplies 44 px targets. */
+html.field-mode .actuator-grid .section-title,
+html.field-mode .actuator-grid .estop-note,
+html.field-mode .actuator-grid .source-summary,
+html.field-mode .actuator-grid .header-note,
+html.field-mode .actuator-grid .header-failure,
+html.field-mode .actuator-grid .motor-pwm,
+html.field-mode .actuator-grid .motor-table,
+html.field-mode .actuator-grid .signal-list,
+html.field-mode .actuator-grid .signal-value,
+html.field-mode .actuator-grid .scope-legend-note {
+  font-size: 12px;
+}
+
+html.field-mode .actuator-grid .row,
+html.field-mode .actuator-grid .motor-row,
+html.field-mode .actuator-grid .phrase-input,
+html.field-mode .actuator-grid .mode-btn,
+html.field-mode .actuator-grid .card h3 {
+  font-size: 14px;
+}
+
+html.field-mode .actuator-grid .logger-configuration summary,
+html.field-mode .actuator-grid .signal-row,
+html.field-mode .actuator-grid .signal-group-head {
+  min-height: 44px;
+}
+
+html.field-mode .actuator-grid input[type='checkbox'] {
+  width: 20px;
+  height: 20px;
+  min-width: 20px !important;
+  min-height: 20px !important;
+  flex: none;
+}
+
+html.field-mode .actuator-grid label:has(input[type='checkbox']) {
+  min-height: 44px;
+  cursor: pointer;
 }

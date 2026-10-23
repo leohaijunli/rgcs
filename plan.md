@@ -313,9 +313,9 @@ Custom logger-topic configuration needs explicit preparation: a custom topic fil
 3. **Use a motor comparison table.**
    Keep source PWM, conditioned/expected PWM, target-reported PWM, error and age together. Expand a row for function-to-pin mapping and encoded command value.
 4. **Separate logging controls clearly.**
-   - **PX4 SD capture**
-   - **PC telemetry recording**
-   - **Log retrieval**
+    - **PX4 SD capture**
+    - **PC test record** — optional, when an existing correlated record is available
+    - **Log retrieval**
 5. **Keep Stop and Emergency Stop fixed and visible.**
    Distinguish Starting, Running, Releasing, Finalizing and Recovery Required.
 6. **Make errors durable and actionable.**
@@ -326,8 +326,12 @@ Custom logger-topic configuration needs explicit preparation: a custom topic fil
    - Collapsible signal legend.
    - Logging details docked at wide sizes and expandable at smaller sizes.
    - One primary body-scroll region.
-8. **Generate IPC types from Rust.**
-   Current hand-maintained status/event shapes have drifted. Stop events also lack the named `reason` field expected by the frontend.
+8. **Align motor-bench IPC types with Rust.**
+    Prefer generation scoped to the existing motor, capture and run contracts.
+    If generation requires a broader refactor, a small set of aligned TypeScript
+    declarations is an acceptable simplified delivery. Verify the declarations
+    against Rust-serialized payloads and TypeScript strict checks. Stop events
+    must retain the named `reason` field added by Task 1.
 
 While running, freeze load, routing and mapping changes. Changes made while idle should reset the start confirmation.
 
@@ -336,6 +340,43 @@ While running, freeze load, routing and mapping changes. Changes made while idle
 ## 6. Staged implementation plan
 
 Each row should be a separately approved, verified change.
+
+### Availability and simplified scope
+
+Missing optional information may be skipped or represented explicitly. It must
+not block the remaining UI work or be displayed as confirmed data.
+
+| Unavailable item | Handling |
+|---|---|
+| Firmware release/hash | Display `Unknown`; retain any observed target identity. Firmware-qualified hardware acceptance remains pending. |
+| Reliable command rate, ESC telemetry or optional plot signals | Display `—` or omit the optional metric/plot. Use the existing backend observations without adding a new acquisition pipeline for Task 9. |
+| Mapping, PWM model or fresh output feedback | Show the affected value as unknown/stale. Show expected PWM and tracking error only when their inputs are known and fresh; an identity-model fallback is explicitly unverified for pulse matching. |
+| Correlated PC record or custom logger-topic configuration | Omit the unavailable record/detail from the workspace. Topic/rate validation can wait until a real ULog is available. |
+| Connected 6X, pulse-measurement equipment or real ULog artifacts | Mark the affected bench checks `Deferred — hardware/artifact unavailable`. Software verification and UI work can proceed with clearly labelled fixtures; physical acceptance remains pending. |
+
+The simplified workspace uses existing Source/Target observations, motor
+readouts, capture/run states and stop controls. Advanced plots, expanded
+diagnostics and application-wide type generation are optional follow-ups.
+Existing target/readiness checks, load limits, confirmed motor releases and
+owned-capture confirmation remain part of the motor-test flow.
+
+### Remaining TODOs
+
+- [x] **Task 9a — Minimal responsive workspace:** Source/Target summary, test
+  setup, motor comparison, capture/run status, fixed Stop/ESTOP and durable
+  errors. Freeze load/routing/mapping during a run; idle edits reset start
+  confirmation. Optional fields follow the availability rules above.
+- [ ] **Task 9b — Existing event/status contract alignment:** deliberately
+  deferred by the project owner; the hand-written declarations in
+  `frontend/src/actuator/benchTypes.ts` remain the working contract for now.
+- [x] **Task 9c — UI verification:** screenshots and manual checks at
+  1024×640, 1366×768 and 1920×1080, plus TypeScript strict checking and build.
+  Fixtures must be labelled; unknown/stale values must remain visibly distinct
+  from confirmed values, and stop controls must stay visible.
+- [ ] **Conditional bench verification — Tasks 4/5/6/8:** mapping, ±5 µs physical
+  PWM tracking, SD capture, 20 distinct test artifacts and interruption/recovery.
+  Perform these when the required hardware/artifacts are available and record
+  deferred checks explicitly. They do not block Task 9.
 
 ### Execution status
 
@@ -349,7 +390,7 @@ Each row should be a separately approved, verified change.
 | 6 — Target-shell SD capture control/status | Software complete; bench capture pending | 771 core lib tests pass (1 ignored), including 17 capture state-machine tests (check/existing recording, exact echo marker, unique path, storage, recovery stop, bounded finalization and timeout errors); 106 app lib tests pass (1 ignored) and 4 motor-service integration tests pass, including the mandatory owned-Recording gate; clippy `-D warnings`, `cargo fmt`, frontend `tsc --noEmit` and build clean. Bench repair verified in software: Check no longer fails on an existing recording, Stop is available after failure/existing state, and `SDLOG_MODE`/`SDLOG_BACKEND` are read-only hardware readouts. Physical capture acceptance requires the connected 6X and firmware identification. |
 | 7 — Log-transfer timing, validation and ownership | Software complete | 771 core lib tests pass (1 ignored), including a byte-exact 960 s simulated transfer that keeps the retry budget reset, malformed-chunk rejection, and gap detection; 106 app lib tests pass (1 ignored), including the lag/lifecycle route classifier and replaced-runtime abort; clippy `-D warnings` and `cargo fmt` clean. |
 | 8 — Per-test coordinator + recovery manifest | Software complete; 20-run bench pending | 779 core lib tests pass (1 ignored), including 8 coordinator tests (pre-roll gate, post-roll before stop, abort with motor release, stop timeout, capture failure, interruption); 111 app lib tests pass (1 ignored), including atomic manifest round-trip, safe test ids, still-recording reconciliation and finished-manifest preservation; 4 motor-service + 2 lifecycle integration tests pass; clippy `-D warnings`, `cargo fmt`, frontend `tsc --noEmit` and build clean. The manifest is written at every boundary under `<app_data>/motor-tests/<test_id>/manifest.json`; reconnect reconciles pending runs. The 20-consecutive-artifact acceptance still requires the connected 6X. |
-| 9 — Responsive workspace + generated events | Pending | Implementation will proceed after Task 8. |
+| 9 — Responsive workspace + event contract alignment | Software complete; Task 9b (generated contracts) deferred | Task 9a/9c implemented: fixed header with target/armed/SD/configured-rate chips and durable failures, motor comparison table (expected pulse inverted from the sent command, ±5 µs tolerance), split PX4 SD capture / log retrieval, collapsible logging and signal legend, and one-scroll responsive layouts at 1024×640, 1366×768 and 1920×1080. Verification: `tsc --noEmit`, `vite build`, and `check-motor-controls.mjs` pass (quick/hold starts, header STOP, tracking math, persistent/dismissible errors, preset re-lock, independent capture, log save/delete, three-viewport screenshots). Task 9b is deferred by the owner; bench items remain Deferred until hardware/artifacts are available. |
 
 Task 1 introduces typed transport-only `StopReceipt`/`MotorTestStopError`,
 retains pending releases after failures, and makes both desktop stop commands
@@ -449,7 +490,7 @@ is closed as `reconciled`. A new run is refused while one is active.
 | **6 — P1** | Add target-shell SD capture control/status. | Capture start is confirmed before motor commands; incompatible modes, absent storage and uncertain responses produce explicit errors. |
 | **7 — P1** | Repair log-transfer timing, validation and ownership. | A healthy transfer lasting ≥60 seconds completes byte-exactly; malformed chunks do not panic; replacement leaves no old runtime active. |
 | **8 — P1** | Add the per-test coordinator and recovery manifest. | 20 consecutive disarmed tests create distinct artifacts; every logger stop follows motor release; interrupted runs reconcile correctly. |
-| **9 — P2** | Implement the responsive workspace and generated events. | Screenshots/manual verification at 1024×640, 1366×768 and 1920×1080; stop controls always visible; stale/unknown data never looks confirmed. |
+| **9 — P2** | Implement the simplified responsive workspace and align existing event contracts. | Screenshots/manual verification at 1024×640, 1366×768 and 1920×1080; TypeScript strict check and build pass; existing Rust payloads match frontend contracts; stop controls always visible; stale/unknown data never looks confirmed. |
 
 ### Proposed backend contracts
 
@@ -519,9 +560,16 @@ pub async fn stop_bench_run(
 
 The review numerically checked the compensation model using **20 pulse cases across five range/model/reversal configurations**. The predicted outputs recovered the requested pulse widths within the proposed **1 µs** offline criterion. It also confirmed the bytewise integer examples behind the enable-indicator defect.
 
-Hardware pulse measurements and SD-capture tests remain the acceptance work for implementation.
+Hardware pulse measurements and SD-capture tests remain pending physical
+acceptance. When the required hardware or artifacts are unavailable, record
+these checks as deferred and proceed with the software/UI acceptance above.
 
-**Start with the Stop/ESTOP correction, then the parameter decoding and read-back fix.** For device verification, collect the installed PX4 release/hash, MAIN/AUX wiring and function assignments, and establish whether the reported 1000 µs came from the UI or a pulse-width measurement.
+**Task 9a/9c are software complete; Task 9b is deferred by the project owner.**
+Tasks 1–8 are software complete. For later device verification, collect the
+available PX4 release/hash, MAIN/AUX wiring and function assignments, and
+establish whether the reported 1000 µs came from the UI or a pulse-width
+measurement. Unavailable information stays explicitly unknown rather than
+blocking the UI task.
 
 ### Firmware references
 

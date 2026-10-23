@@ -1,10 +1,10 @@
 // Motor / mag interference test window — A1+A3 (motor-test §5–§6, §8.2),
 // refactored to a source-driven layout (operator request 2026-10-10):
 //
-//   Header: live chips + state banner + EMERGENCY STOP
-//   Left (one workflow): prop load → command source → source panel → safety
-//   Mid: compact state strip + reserved space (GoPro video, curves)
-//   Right: live status
+//   Header: target identity, test state, Stop and Emergency Stop
+//   Left: SITL input, unlock/start controls and magnetic alarm
+//   Mid: load/source settings, motor comparison and realtime curves
+//   Right: serial target and recording/log retrieval
 //
 // One primary action per state: START (hold for full props) dispatches by
 // source — manual sliders or a preset waveform; STOP while running. The
@@ -18,6 +18,18 @@ import { readTextFile } from '@tauri-apps/plugin-fs'
 import type { ParamEntry } from '../generated-types/ParamEntry'
 import type { LogEntryInfo } from '../generated-types/LogEntryInfo'
 import { isTauri } from '../inspector/mock'
+import BenchHeader, { type BenchFailure } from './BenchHeader'
+import {
+  IDLE,
+  MOTOR_COUNT,
+  channelLabel,
+  type ActuatorStatus,
+  type RunStatus,
+  type SdCaptureError,
+  type SdCaptureStatus,
+  type ServoPort,
+} from './benchTypes'
+import MotorTrackingTable from './MotorTrackingTable'
 import SignalScope, { useScopeFeed } from './SignalScope'
 import StartStopButton from './StartStopButton'
 import { scopeStore } from './scopeStore'
@@ -97,174 +109,11 @@ const PROPS_PHRASE = 'START PROPS'
 /** Hold duration that arms Start under full props. */
 const PROPS_HOLD_MS = 3000
 
-/** Motor count (fixed 4 until a vehicle config lands, D9). */
-const MOTOR_COUNT = 4
-
 /** Slider updates are merged at ~30 Hz — never queued (plan §8.1). */
 const SET_VALUES_MIN_INTERVAL_MS = 33
 
 /** One Hz status poll; safety-critical signals (armed!) are low-rate. */
 const STATUS_POLL_MS = 1000
-
-interface ActuatorStatus {
-  connected: boolean
-  fc_alive: boolean
-  armed: boolean
-  /** Raw PX4 custom-mode bitmask; decoded for display via util/px4mode. */
-  custom_mode: number
-  /** PX4 mode pre-decoded in core (ADR-017). */
-  mode_label: string
-  autopilot_px4: boolean
-  endpoint: string | null
-  tick_hz: number
-  session: string
-  /** SITL source link (revised D3). */
-  sitl_connected: boolean
-  sitl_endpoint: string | null
-  /** Node and PWM bank selected for the SITL source. */
-  sitl_source: SitlSourceConfig | null
-  sitl_feed_age_s: number | null
-  /** The motor test's own target link (real PX4, serial). */
-  target_connected: boolean
-  /** The serial target PX4's heartbeat is fresh (not the primary link). */
-  target_fc_alive: boolean
-  target_endpoint: string | null
-  target_system_id: number | null
-  /** COM_MOT_TEST_EN read from the target PX4 (null = unknown). */
-  com_mot_test_en: number | null
-  /** SDLOG_MODE read from the target PX4 (null = unknown), PX4 v1.17:
-   * 0=armed until disarm, 1=boot until disarm, 2=boot until shutdown,
-   * 3=AUX1 switch, 4=first arm until shutdown. */
-  sdlog_mode: number | null
-  /** SDLOG_BACKEND read from the target PX4 (null = unknown); bitmask:
-   * 1=SD card, 2=MAVLink. */
-  sdlog_backend: number | null
-  /** Normalized SITL servo outputs 1–4 (the forward INPUT). */
-  input_values: number[]
-  /** The SITL's raw SERVO_OUTPUT_RAW 1–4 in µs (what input_values came from). */
-  input_pwm: number[]
-  /** Values sent to the FC as ACTUATOR_TEST (the OUTPUT), 0 when idle. */
-  output_values: number[]
-  /** Actual PWM for each motor function in µs, selected from its mapped
-   * MAIN/AUX channel; null = unmapped or no fresh sample. */
-  fc_output_pwm: (number | null)[]
-  /** Motor function → physical output mapping read from PWM_*_FUNCx. */
-  output_map: OutputMap
-  /** Per-motor target PWM model used to compensate ACTUATOR_TEST and
-   * forwarded SITL pulses (endpoints, reversal, THR_MDL_FAC, disabled). */
-  pwm_models: PwmModel[]
-  /** Target-shell SD-file capture state (Task 6). */
-  sd_capture: SdCaptureStatus
-  /** Per-test run coordinator + recovery manifest (Task 8). */
-  run: RunSnapshot
-}
-
-type RunPhase =
-  | 'starting_capture'
-  | 'preroll'
-  | 'motor_ready'
-  | 'motor_running'
-  | 'postroll'
-  | 'stopping_capture'
-  | 'complete'
-  | 'aborted'
-  | 'interrupted'
-  | 'failed'
-
-interface RunStatus {
-  test_id: string
-  phase: RunPhase
-  remote_path: string | null
-  stop_reason: string | null
-  error: { kind: string; [key: string]: unknown } | null
-}
-
-interface RunSnapshot {
-  status: RunStatus | null
-  manifest_path: string | null
-}
-
-type CapturePhase =
-  | 'idle'
-  | 'verifying'
-  | 'ready'
-  | 'starting'
-  | 'recording'
-  | 'existing_recording'
-  | 'stopping'
-  | 'finalizing'
-  | 'complete'
-  | 'failed'
-
-interface SdCaptureError {
-  kind: string
-  [key: string]: unknown
-}
-
-interface SdCaptureStatus {
-  phase: CapturePhase
-  test_id: string | null
-  remote_path: string | null
-  logger: {
-    running: boolean
-    backend: string
-    file_logging: boolean
-    remote_path: string | null
-  } | null
-  sdlog_mode: number | null
-  sdlog_backend: number | null
-  last_error: SdCaptureError | null
-}
-
-interface PwmModel {
-  min_us: number
-  max_us: number
-  reversed: boolean
-  thrust_factor: number
-  disabled: boolean
-}
-
-type ServoPort = 'main' | 'aux'
-
-interface ServoChannel {
-  port: ServoPort
-  channel: number
-}
-
-interface OutputAssignment {
-  motor: number
-  channel: ServoChannel | null
-}
-
-interface MappingIssue {
-  kind: 'unreadable' | 'duplicate'
-  port?: ServoPort
-  channel?: number
-  motor?: number
-  first?: ServoChannel
-  second?: ServoChannel
-}
-
-interface OutputMap {
-  motors: OutputAssignment[]
-  state: 'complete' | 'partial' | 'invalid' | 'unknown'
-  issues: MappingIssue[]
-}
-
-interface SitlSourceConfig {
-  endpoint: string
-  system_id: number
-  component_id: number
-  port: ServoPort
-}
-
-function channelLabel(channel: ServoChannel): string {
-  return `${channel.port === 'main' ? 'MAIN' : 'AUX'}${channel.channel}`
-}
-
-function assignmentFor(map: OutputMap, motor: number): OutputAssignment | undefined {
-  return map.motors.find((assignment) => assignment.motor === motor)
-}
 
 interface SitlSourceFieldsProps {
   endpoint: string
@@ -276,7 +125,10 @@ interface SitlSourceFieldsProps {
   port: ServoPort
   onPort: (value: ServoPort) => void
   connected: boolean
+  /** Routing is frozen while the motor test is sending. */
+  locked: boolean
   error: string | null
+  onDismissError: () => void
   onConnect: () => void
   onDisconnect: () => void
 }
@@ -299,7 +151,7 @@ function SitlSourceFields(props: SitlSourceFieldsProps) {
         placeholder="udpin:0.0.0.0:14540"
         aria-label="SITL endpoint"
         spellCheck={false}
-        disabled={props.connected}
+        disabled={props.connected || props.locked}
       />
       <label className="motor-row" style={{ marginTop: 6 }}>
         <span className="motor-label" style={{ width: 92 }}>System ID</span>
@@ -313,7 +165,7 @@ function SitlSourceFields(props: SitlSourceFieldsProps) {
           value={props.systemId}
           onChange={(e) => props.onSystemId(Number(e.target.value))}
           aria-label="SITL MAVLink system ID"
-          disabled={props.connected}
+          disabled={props.connected || props.locked}
         />
       </label>
       <label className="motor-row">
@@ -328,7 +180,7 @@ function SitlSourceFields(props: SitlSourceFieldsProps) {
           value={props.componentId}
           onChange={(e) => props.onComponentId(Number(e.target.value))}
           aria-label="SITL MAVLink component ID"
-          disabled={props.connected}
+          disabled={props.connected || props.locked}
         />
       </label>
       <label className="motor-row">
@@ -339,22 +191,22 @@ function SitlSourceFields(props: SitlSourceFieldsProps) {
           value={props.port}
           onChange={(e) => props.onPort(e.target.value as ServoPort)}
           aria-label="SITL output bank"
-          disabled={props.connected}
+          disabled={props.connected || props.locked}
         >
           <option value="main">MAIN</option>
           <option value="aux">AUX</option>
         </select>
       </label>
       {props.error && (
-        <div className="estop-note" role="alert" style={{ color: 'var(--mg-error)' }}>
-          {props.error}
-        </div>
+        <InlineError message={props.error} onDismiss={props.onDismissError} />
       )}
       {props.connected ? (
         <button
           className="mode-btn"
           style={{ width: '100%', marginTop: 6 }}
           onClick={props.onDisconnect}
+          disabled={props.locked}
+          title={props.locked ? 'Stop the motor test before changing the source' : undefined}
         >
           Disconnect SITL
         </button>
@@ -363,52 +215,14 @@ function SitlSourceFields(props: SitlSourceFieldsProps) {
           className="mode-btn"
           style={{ width: '100%', marginTop: 6 }}
           onClick={props.onConnect}
-          disabled={!validIds || props.endpoint.trim() === ''}
+          disabled={!validIds || props.endpoint.trim() === '' || props.locked}
+          title={props.locked ? 'Stop the motor test before changing the source' : undefined}
         >
           Connect SITL
         </button>
       )}
     </>
   )
-}
-
-const IDLE: ActuatorStatus = {
-  mode_label: '',
-  connected: false,
-  fc_alive: false,
-  armed: false,
-  custom_mode: 0,
-  autopilot_px4: false,
-  endpoint: null,
-  tick_hz: 10,
-  session: 'idle',
-  sitl_connected: false,
-  sitl_endpoint: null,
-  sitl_source: null,
-  sitl_feed_age_s: null,
-  target_connected: false,
-  target_fc_alive: false,
-  target_endpoint: null,
-  target_system_id: null,
-  com_mot_test_en: null,
-  sdlog_mode: null,
-  sdlog_backend: null,
-  input_values: [],
-  input_pwm: [],
-  output_values: [],
-  fc_output_pwm: [],
-  output_map: { motors: [], state: 'unknown', issues: [] },
-  pwm_models: [],
-  sd_capture: {
-    phase: 'idle',
-    test_id: null,
-    remote_path: null,
-    logger: null,
-    sdlog_mode: null,
-    sdlog_backend: null,
-    last_error: null,
-  },
-  run: { status: null, manifest_path: null },
 }
 
 export function ActuatorApp() {
@@ -424,9 +238,11 @@ export function ActuatorApp() {
   const [unlocked, setUnlocked] = useState(false)
   /** Latched emergency: stays until an explicit reset, never auto-clears. */
   const [emergency, setEmergency] = useState(false)
-  /** Refusal from the backend on the last start attempt (e.g. no serial
-   * target connected) — shown in the header until cleared. */
-  const [startError, setStartError] = useState<string | null>(null)
+  /** Backend refusal or transport failure. Retained in the header until the
+   * operator dismisses it or the same operation succeeds again. */
+  const [failure, setFailure] = useState<BenchFailure | null>(null)
+  /** A start command is in flight (backend readiness/transport). */
+  const [starting, setStarting] = useState(false)
   /** `COM_MOT_TEST_EN` from the parameter cache: true/false, null = unknown
    * (never pulled). false disables motor tests and offers the jump. */
   const [motTestEn, setMotTestEn] = useState<boolean | null>(null)
@@ -469,14 +285,16 @@ export function ActuatorApp() {
   // target PX4 but never writes them.
   const [captureBusy, setCaptureBusy] = useState(false)
   const [captureError, setCaptureError] = useState<string | null>(null)
+  const [captureErrorDismissed, setCaptureErrorDismissed] = useState(false)
   // SD-log list + download (feature 2): `actuator_logs` events.
   const [logEntries, setLogEntries] = useState<LogEntryInfo[]>([])
   const [logsListed, setLogsListed] = useState(false)
   const [logDownloads, setLogDownloads] = useState<Map<number, { fetched: number; total: number; path?: string }>>(new Map())
   const [logsBusy, setLogsBusy] = useState(false)
   const [logsError, setLogsError] = useState<string | null>(null)
-  // Responsive layout (Task 9): collapsible scope legend and expandable
-  // logging details leave the plots as the flexible region at narrow widths.
+  // Presentation-only disclosure state: startup controls and recording actions
+  // stay visible while optional input and retrieval details can be expanded.
+  const [sitlExpanded, setSitlExpanded] = useState(false)
   const [legendOpen, setLegendOpen] = useState(true)
   const [loggingExpanded, setLoggingExpanded] = useState(false)
   const audioCtxRef = useRef<AudioContext | null>(null)
@@ -487,13 +305,21 @@ export function ActuatorApp() {
   const lastSend = useRef(0)
 
   const running = status.session === 'running' || status.session === 'stopping'
+  const releasing = status.session === 'stopping'
+
+  useEffect(() => {
+    setSitlExpanded(source === 'forward')
+  }, [source])
 
   // Emergency stop: one gesture, always available. `Esc` is captured on the
   // window in the capture phase, so it works while focus is inside a slider
   // or text input; Space is deliberately NOT bound (plan 2.2-4).
   const estop = useCallback(() => {
     setEmergency(true)
-    if (tauri) void invoke('actuator_estop').catch(() => {})
+    if (!tauri) return
+    void invoke('actuator_estop').catch((error: unknown) => {
+      setFailure({ operation: 'emergency_stop', message: String(error) })
+    })
   }, [tauri])
 
   useEffect(() => {
@@ -815,6 +641,7 @@ export function ActuatorApp() {
     if (!tauri) return
     setCaptureBusy(true)
     setCaptureError(null)
+    setCaptureErrorDismissed(false)
     try {
       const status = await invoke<SdCaptureStatus>(
         command === 'check'
@@ -950,17 +777,54 @@ export function ActuatorApp() {
     const next = sync ? values.map(() => v) : values.map((x, i) => (i === index ? v : x))
     setValues(next)
     pushValues(next)
+    if (!running) resetConfirmation()
   }
 
-  const changeLoad = (next: Load) => {
-    setLoad(next)
+  /** Any idle change to what will be commanded invalidates the start cover. */
+  const resetConfirmation = () => {
     setUnlocked(false)
     setPhrase('')
   }
 
+  const changeLoad = (next: Load) => {
+    setLoad(next)
+    resetConfirmation()
+  }
+
+  const changeSource = (next: Source) => {
+    setSource(next)
+    resetConfirmation()
+  }
+
+  const changeSitlEndpoint = (value: string) => {
+    setSitlEndpoint(value)
+    resetConfirmation()
+  }
+  const changeSitlSystemId = (value: number) => {
+    setSitlSystemId(value)
+    resetConfirmation()
+  }
+  const changeSitlComponentId = (value: number) => {
+    setSitlComponentId(value)
+    resetConfirmation()
+  }
+  const changeSitlPort = (value: ServoPort) => {
+    setSitlPort(value)
+    resetConfirmation()
+  }
+  const changeTargetEndpoint = (value: string) => {
+    setTargetEndpoint(value)
+    resetConfirmation()
+  }
+  const changeTargetSystemId = (value: number) => {
+    setTargetSystemId(value)
+    setTargetConnectError(null)
+    resetConfirmation()
+  }
+
   const resetEmergency = () => {
     setEmergency(false)
-    setUnlocked(false)
+    resetConfirmation()
     if (tauri) void invoke('actuator_reset_emergency').catch(() => {})
   }
 
@@ -968,8 +832,9 @@ export function ActuatorApp() {
     if (!tauri) return
     try {
       await invoke('actuator_stop')
+      setFailure(null)
     } catch (error) {
-      setStartError(`Stop failed: ${String(error)}`)
+      setFailure({ operation: 'stop', message: String(error) })
     }
   }
 
@@ -985,10 +850,11 @@ export function ActuatorApp() {
   /** The one start action — dispatches by the selected source. */
   const start = async () => {
     if (!tauri || gate !== 'ready' || running) return
-    setStartError(null)
+    setFailure(null)
     // The backend refuses (e.g. "no link — connect the serial PX4 first");
     // surface it instead of silently doing nothing.
     setStopReason(null)
+    setStarting(true)
     try {
       if (source === 'manual') {
         await invoke('actuator_start_manual', { load, values: valuesRef.current })
@@ -1006,12 +872,18 @@ export function ActuatorApp() {
         await invoke('actuator_start_forward', { load })
       }
     } catch (error) {
-      setStartError(typeof error === 'string' ? error : String(error))
+      setFailure({
+        operation: 'start',
+        message: typeof error === 'string' ? error : String(error),
+      })
+    } finally {
+      setStarting(false)
     }
   }
 
   const connectSitl = () => {
     if (!tauri) return
+    resetConfirmation()
     setSitlConnectError(null)
     void invoke('actuator_connect_sitl', {
       source: {
@@ -1026,13 +898,33 @@ export function ActuatorApp() {
   }
   const disconnectSitl = () => {
     if (!tauri) return
+    resetConfirmation()
     setSitlConnectError(null)
     void invoke('actuator_disconnect_sitl').catch((error: unknown) => {
       setSitlConnectError(String(error))
     })
   }
+  const connectTarget = () => {
+    if (!tauri) return
+    resetConfirmation()
+    setTargetConnectError(null)
+    void invoke('actuator_connect_target', {
+      endpoint: targetEndpoint,
+      targetSystemId,
+    }).catch((error: unknown) => {
+      setTargetConnectError(String(error))
+    })
+  }
+  const disconnectTarget = () => {
+    if (!tauri) return
+    resetConfirmation()
+    void invoke('actuator_disconnect_target').catch((error: unknown) => {
+      setTargetConnectError(String(error))
+    })
+  }
   const refreshMapping = () => {
     if (!tauri) return
+    resetConfirmation()
     setMappingError(null)
     void invoke('actuator_refresh_mapping').catch((error: unknown) => {
       setMappingError(String(error))
@@ -1076,67 +968,57 @@ export function ActuatorApp() {
 
   return (
     <div className={`actuator-grid ${magAlarm && alarmEnabled ? 'mag-alarm-flash' : ''}`}>
-      <header className="actuator-header">
-        <strong style={{ fontSize: 13 }}>Motor / Mag Interference Test</strong>
-        <span className="row" style={{ gap: 6 }}>
-          <span className="section-title">FC</span>
-          <span className={`mono ${status.fc_alive ? 'text-ok' : 'text-error'}`}>
-            {status.fc_alive ? 'ONLINE' : 'NO LINK'}
-          </span>
-        </span>
-        <span className="row" style={{ gap: 6 }}>
-          <span className="section-title">ARMED</span>
-          <span className={`mono ${status.armed ? 'text-error' : 'text-ok'}`}>
-            {status.armed ? 'YES' : 'NO'}
-          </span>
-        </span>
-        <span className="row" style={{ gap: 6 }}>
-          <span className="section-title">RATE</span>
-          <span className="mono">{status.tick_hz.toFixed(0)} Hz</span>
-        </span>
-        {emergency ? (
-          <span className="unlock-banner" style={{ color: 'var(--mg-error)' }}>
-            EMERGENCY STOP — RESET REQUIRED
-          </span>
-        ) : startError ? (
-          <span className="unlock-banner" style={{ color: 'var(--mg-error)' }}>
-            {startError}
-          </span>
-        ) : unlocked ? (
-          <span className="unlock-banner">TEST UNLOCKED</span>
-        ) : (
-          <span />
-        )}
-        {emergency && (
-          <button className="estop-btn" onClick={resetEmergency} style={{ marginLeft: 0 }}>
-            RESET
-          </button>
-        )}
-        <button
-          className={`estop-btn ${emergency ? 'latched' : ''}`}
-          onClick={estop}
-          title="Stop all motors immediately (Esc)"
-        >
-          EMERGENCY STOP
-        </button>
-      </header>
+      <BenchHeader
+        status={status}
+        running={running}
+        starting={starting}
+        releasing={releasing}
+        emergency={emergency}
+        unlocked={unlocked}
+        stopReason={stopReason}
+        failure={failure}
+        onStop={stop}
+        onEmergencyStop={estop}
+        onResetEmergency={resetEmergency}
+        onDismissFailure={() => setFailure(null)}
+      />
 
-      {/* Left: the SITL input source (SERVO_OUTPUT_RAW → the forward slot). */}
-      <aside className="actuator-left">
-        <div className="section-title">Input — SITL</div>
-        <div className="card">
-          <h3>SITL source (SERVO_OUTPUT_RAW)</h3>
+      {/* Left: input context, deliberate start controls and magnetic monitoring. */}
+      <aside className="actuator-left" aria-label="Test controls and monitoring">
+        <div className="section-title">Controls & monitoring</div>
+        <div className="card sitl-card">
+          <div className="card-heading">
+            <h3>SITL source</h3>
+            <button
+              className="link-btn"
+              aria-label="SITL source details"
+              aria-expanded={sitlExpanded}
+              aria-controls="motor-sitl-details"
+              onClick={() => setSitlExpanded((v) => !v)}
+            >
+              {sitlExpanded ? 'Hide' : 'Show'}
+            </button>
+          </div>
+          <div className="row source-summary">
+            <span className="estop-note">Input for Forward mode</span>
+            <span className={`mono ${status.sitl_connected ? 'text-ok' : 'text-muted'}`}>
+              {status.sitl_connected ? 'connected' : 'offline'}
+            </span>
+          </div>
+          <div id="motor-sitl-details" hidden={!sitlExpanded}>
           <SitlSourceFields
             endpoint={sitlEndpoint}
-            onEndpoint={setSitlEndpoint}
+            onEndpoint={changeSitlEndpoint}
             systemId={sitlSystemId}
-            onSystemId={setSitlSystemId}
+            onSystemId={changeSitlSystemId}
             componentId={sitlComponentId}
-            onComponentId={setSitlComponentId}
+            onComponentId={changeSitlComponentId}
             port={sitlPort}
-            onPort={setSitlPort}
+            onPort={changeSitlPort}
             connected={status.sitl_connected}
+            locked={running}
             error={sitlConnectError}
+            onDismissError={() => setSitlConnectError(null)}
             onConnect={connectSitl}
             onDisconnect={disconnectSitl}
           />
@@ -1176,39 +1058,142 @@ export function ActuatorApp() {
             Selected SITL SERVO_OUTPUT_RAW port 1–4; % = (µs − 1000) / 1000
             (1000 µs = 0%, 2000 µs = 100%) → the forward slot.
           </div>
+          </div>
+        </div>
+
+        <div className="card test-control-card" data-testid="motor-test-controls">
+          <h3>Test controls</h3>
+          <button
+            className="mode-btn unlock-btn"
+            onClick={() => (emergency ? undefined : setUnlocked((u) => !u))}
+            disabled={emergency || running}
+            aria-pressed={unlocked}
+          >
+            {unlocked ? 'Re-lock test' : 'Unlock test'}
+          </button>
+          {load === 'props' && unlocked && !running && (
+            <input
+              className="phrase-input"
+              placeholder={PROPS_PHRASE}
+              value={phrase}
+              onChange={(e) => setPhrase(e.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+              aria-label="Full-props start confirmation"
+            />
+          )}
+          <StartStopButton
+            running={running}
+            holdMs={load === 'props' ? PROPS_HOLD_MS : 0}
+            onStart={start}
+            onStop={stop}
+            disabled={
+              gate !== 'ready' ||
+              (source === 'forward' && !status.sitl_connected) ||
+              !status.target_connected ||
+              !status.target_fc_alive ||
+              status.armed ||
+              runBlocksStart
+            }
+            title={
+              gate === 'emergency'
+                ? 'Reset the emergency latch first'
+                : gate === 'unlock'
+                  ? 'Unlock the test first'
+                  : gate === 'phrase'
+                    ? `Type ${PROPS_PHRASE} first`
+                    : !status.target_connected
+                      ? 'Connect the serial PX4 first'
+                      : !status.target_fc_alive
+                        ? 'Waiting for the target PX4 heartbeat'
+                        : status.armed
+                          ? 'Disarm the target PX4 first'
+                          : runBlocksStart
+                            ? runHint ?? 'Wait for the active test run'
+                            : source === 'forward' && !status.sitl_connected
+                              ? 'Connect the SITL source first'
+                              : load === 'props'
+                                ? 'Hold for 3 seconds'
+                                : 'Start sending'
+            }
+          />
+          <div className="estop-note" style={{ marginTop: 6 }}>
+            {running
+              ? 'Sending — Esc or the red button stops everything.'
+              : 'No arming required: the test runs while the FC is disarmed.'}
+          </div>
+        </div>
+
+        {/* The alarm observes the total field; its watchdog remains in core. */}
+        <div className={`card mag-alarm-card ${magAlarm && alarmEnabled ? 'mag-alarm-active' : ''}`} data-testid="motor-mag-alarm">
+          <h3>Mag alarm</h3>
+          <label className="row" style={{ marginBottom: 6 }}>
+            <span>Enabled</span>
+            <input
+              type="checkbox"
+              checked={alarmEnabled}
+              onChange={(e) => setAlarmEnabled(e.target.checked)}
+            />
+          </label>
+          <label className="motor-row">
+            <span className="motor-label" style={{ width: 64 }}>Threshold</span>
+            <input
+              className="phrase-input"
+              style={{ flex: 1, margin: 0 }}
+              type="number"
+              min={0}
+              step={100}
+              value={alarmThreshold}
+              onChange={(e) => setAlarmThreshold(Number(e.target.value))}
+              aria-label="Magnetic alarm threshold (nT)"
+            />
+            <span className="mono motor-value">nT</span>
+          </label>
+          <div className="row">
+            <span className="text-muted">Total field</span>
+            <span className="mono">{magTotal != null ? `${magTotal.toFixed(1)} nT` : '—'}</span>
+          </div>
+          <div className="row">
+            <span className="text-muted">State</span>
+            <span
+              className={`mono ${!alarmEnabled ? 'text-muted' : magAlarm ? 'text-error' : magTotal == null ? 'text-muted' : 'text-ok'}`}
+              data-testid="motor-mag-state"
+              role="status"
+            >
+              {!alarmEnabled ? 'Disabled' : magAlarm ? 'ALARM' : magTotal == null ? 'No data' : 'Monitoring'}
+            </span>
+          </div>
+          {tauri && (
+            <div className="row" style={{ marginTop: 6 }}>
+              <span className="text-muted">Calibration</span>
+              {calLoaded ? (
+                <>
+                  <span className="mono text-ok">CAL</span>
+                  <button className="mode-btn" onClick={clearMagCal}>
+                    Clear
+                  </button>
+                </>
+              ) : (
+                <button className="mode-btn" onClick={loadMagCal}>
+                  Load…
+                </button>
+              )}
+            </div>
+          )}
+          {magAlarm && (
+            <button
+              className="mode-btn"
+              style={{ width: '100%', marginTop: 6 }}
+              onClick={acknowledgeAlarm}
+            >
+              Acknowledge (silence)
+            </button>
+          )}
         </div>
       </aside>
 
-      {/* Middle: the command source and safety controls. */}
+      {/* Middle: command setup, motor feedback and the flexible plot workspace. */}
       <main className="actuator-mid">
-        <div className="state-strip">
-          <span
-            className="mono state-word"
-            style={{
-              color: emergency
-                ? 'var(--mg-error)'
-                : running
-                  ? 'var(--mg-ok)'
-                  : 'var(--mg-muted)',
-            }}
-          >
-            {emergency ? 'EMERGENCY' : running ? 'RUNNING' : unlocked ? 'READY' : 'LOCKED'}
-          </span>
-          <span className="estop-note">
-            {running
-              ? `${SOURCES.find((s) => s.id === source)?.label} · ${status.tick_hz.toFixed(0)} Hz · window on top`
-              : stopReason
-                ? `Stopped: ${stopReason} · Esc = emergency stop`
-                : 'Motor commands stopped · Esc = emergency stop'}
-          </span>
-          <span className="view-tabs">
-            {running && (
-              <button className="mode-btn view-tab stop-tab" onClick={stop} title="Stop sending">
-                STOP
-              </button>
-            )}
-          </span>
-        </div>
         <div className="controls-grid">
           <div className="card">
             <h3>Prop load</h3>
@@ -1218,7 +1203,12 @@ export function ActuatorApp() {
                   key={l.id}
                   className={`mode-btn ${load === l.id ? 'active' : ''}`}
                   onClick={() => changeLoad(l.id)}
-                  title="Declared by the operator; there is no sensor to detect it"
+                  disabled={running}
+                  title={
+                    running
+                      ? 'Stop the test before changing the load'
+                      : 'Declared by the operator; there is no sensor to detect it'
+                  }
                 >
                   {l.label}
                 </button>
@@ -1241,7 +1231,7 @@ export function ActuatorApp() {
                   key={s.id}
                   className={`mode-btn ${source === s.id ? 'active' : ''}`}
                   disabled={running}
-                  onClick={() => setSource(s.id)}
+                  onClick={() => changeSource(s.id)}
                   title={running ? 'Stop the test before switching source' : s.hint}
                 >
                   {s.label}
@@ -1292,7 +1282,10 @@ export function ActuatorApp() {
                 <button
                   key={p.id}
                   className={`mode-btn ${preset === p.id ? 'active' : ''}`}
-                  onClick={() => setPreset(p.id)}
+                  onClick={() => {
+                    setPreset(p.id)
+                    resetConfirmation()
+                  }}
                 >
                   {p.label}
                 </button>
@@ -1307,7 +1300,10 @@ export function ActuatorApp() {
                 step={0.01}
                 value={amplitude}
                 disabled={emergency}
-                onChange={(e) => setAmplitude(Number(e.target.value))}
+                onChange={(e) => {
+                  setAmplitude(Number(e.target.value))
+                  resetConfirmation()
+                }}
               />
               <span className="mono motor-value">{(amplitude * 100).toFixed(0)}%</span>
             </label>
@@ -1322,7 +1318,10 @@ export function ActuatorApp() {
                 step={0.1}
                 value={frequency}
                 disabled={emergency}
-                onChange={(e) => setFrequency(Number(e.target.value))}
+                onChange={(e) => {
+                  setFrequency(Number(e.target.value))
+                  resetConfirmation()
+                }}
               />
               <span className="mono motor-value">Hz</span>
             </label>
@@ -1337,7 +1336,10 @@ export function ActuatorApp() {
                 step={0.5}
                 value={duration}
                 disabled={emergency}
-                onChange={(e) => setDuration(Number(e.target.value))}
+                onChange={(e) => {
+                  setDuration(Number(e.target.value))
+                  resetConfirmation()
+                }}
               />
               <span className="mono motor-value">s</span>
             </label>
@@ -1350,21 +1352,7 @@ export function ActuatorApp() {
         {source === 'forward' && (
           <div className="card">
             <h3>Realtime forward</h3>
-            <SitlSourceFields
-              endpoint={sitlEndpoint}
-              onEndpoint={setSitlEndpoint}
-              systemId={sitlSystemId}
-              onSystemId={setSitlSystemId}
-              componentId={sitlComponentId}
-              onComponentId={setSitlComponentId}
-              port={sitlPort}
-              onPort={setSitlPort}
-              connected={status.sitl_connected}
-              error={sitlConnectError}
-              onConnect={connectSitl}
-              onDisconnect={disconnectSitl}
-            />
-            <div className="row" style={{ marginTop: 6 }}>
+            <div className="row">
               <span className="text-muted">Source link</span>
               <span className={`mono ${status.sitl_connected ? 'text-ok' : 'text-error'}`}>
                 {status.sitl_connected ? 'connected' : 'down'}
@@ -1380,74 +1368,20 @@ export function ActuatorApp() {
             </div>
             <div className="estop-note" style={{ marginTop: 4 }}>
               SITL outputs 1–4 from the selected node and bank → motors 1–4.
-              Values pass the same interlocks (slew, cap, disarmed-only) as
-              manual control.
+              Configure the source once in the Source card; values pass the
+              same interlocks (slew, cap, disarmed-only) as manual control.
             </div>
           </div>
         )}
 
-        <div className="card">
-          <h3>Safety</h3>
-          <button
-            className="mode-btn"
-            onClick={() => (emergency ? undefined : setUnlocked((u) => !u))}
-            disabled={emergency || running}
-            style={{ width: '100%' }}
-          >
-            {unlocked ? 'Re-lock test' : 'Unlock test'}
-          </button>
-          {load === 'props' && unlocked && !running && (
-            <input
-              className="phrase-input"
-              placeholder={PROPS_PHRASE}
-              value={phrase}
-              onChange={(e) => setPhrase(e.target.value)}
-              autoComplete="off"
-              spellCheck={false}
-            />
-          )}
-            <StartStopButton
-              running={running}
-              holdMs={load === 'props' ? PROPS_HOLD_MS : 0}
-              onStart={start}
-              onStop={stop}
-              disabled={
-                gate !== 'ready' ||
-                (source === 'forward' && !status.sitl_connected) ||
-                !status.target_connected ||
-                !status.target_fc_alive ||
-                status.armed ||
-                runBlocksStart
-              }
-              title={
-                gate === 'emergency'
-                  ? 'Reset the emergency latch first'
-                  : gate === 'unlock'
-                    ? 'Unlock the test first'
-                    : gate === 'phrase'
-                      ? `Type ${PROPS_PHRASE} first`
-                      : !status.target_connected
-                        ? 'Connect the serial PX4 first'
-                        : !status.target_fc_alive
-                          ? 'Waiting for the target PX4 heartbeat'
-                          : status.armed
-                            ? 'Disarm the target PX4 first'
-                            : runBlocksStart
-                              ? runHint ?? 'Wait for the active test run'
-                              : source === 'forward'
-                                ? 'Connect the SITL source first'
-                                : load === 'props'
-                                  ? 'Hold for 3 seconds'
-                                  : 'Start sending'
-              }
-            />
-          <div className="estop-note" style={{ marginTop: 6 }}>
-            {running
-              ? 'Sending — Esc or the red button stops everything.'
-              : 'No arming required: the test runs while the FC is disarmed.'}
-          </div>
-        </div>
       </div>
+      <MotorTrackingTable
+        status={status}
+        statusFresh={status.target_connected && status.target_fc_alive}
+        source={source}
+        values={values}
+        running={running}
+      />
       <SignalScope
         sitlConnected={status.sitl_connected}
         targetConnected={status.target_connected}
@@ -1466,10 +1400,11 @@ export function ActuatorApp() {
             className="phrase-input"
             style={{ width: '100%', margin: 0 }}
             value={targetEndpoint}
-            onChange={(e) => setTargetEndpoint(e.target.value)}
+            onChange={(e) => changeTargetEndpoint(e.target.value)}
             placeholder="serial:/dev/ttyACM0:115200"
             aria-label="Target PX4 serial endpoint"
             spellCheck={false}
+            disabled={running}
           />
           <label className="motor-row" style={{ marginTop: 6 }}>
             <span className="motor-label" style={{ width: 92 }}>System ID</span>
@@ -1481,27 +1416,27 @@ export function ActuatorApp() {
               max={255}
               step={1}
               value={targetSystemId}
-              onChange={(e) => {
-                setTargetSystemId(Number(e.target.value))
-                setTargetConnectError(null)
-              }}
+              onChange={(e) => changeTargetSystemId(Number(e.target.value))}
               aria-label="Target MAVLink system ID"
-              disabled={status.target_connected}
+              disabled={status.target_connected || running}
             />
           </label>
           <div className="estop-note" style={{ marginTop: 4 }}>
             Routing only — this does not change the vehicle's configured ID.
           </div>
           {targetConnectError && (
-            <div className="estop-note" role="alert" style={{ color: 'var(--mg-error)' }}>
-              {targetConnectError}
-            </div>
+            <InlineError
+              message={targetConnectError}
+              onDismiss={() => setTargetConnectError(null)}
+            />
           )}
           {status.target_connected ? (
             <button
               className="mode-btn"
               style={{ width: '100%', marginTop: 6 }}
-              onClick={() => tauri && void invoke('actuator_disconnect_target').catch(() => {})}
+              onClick={disconnectTarget}
+              disabled={running}
+              title={running ? 'Stop the motor test before changing the target' : undefined}
             >
               Disconnect PX4
             </button>
@@ -1509,16 +1444,14 @@ export function ActuatorApp() {
             <button
               className="mode-btn"
               style={{ width: '100%', marginTop: 6 }}
-              onClick={() => {
-                setTargetConnectError(null)
-                void invoke('actuator_connect_target', {
-                  endpoint: targetEndpoint,
-                  targetSystemId,
-                }).catch((error: unknown) => {
-                  setTargetConnectError(String(error))
-                })
-              }}
-              disabled={!Number.isInteger(targetSystemId) || targetSystemId < 1 || targetSystemId > 255}
+              onClick={connectTarget}
+              disabled={
+                running ||
+                !Number.isInteger(targetSystemId) ||
+                targetSystemId < 1 ||
+                targetSystemId > 255
+              }
+              title={running ? 'Stop the motor test before changing the target' : undefined}
             >
               Connect PX4 (serial)
             </button>
@@ -1638,9 +1571,10 @@ export function ActuatorApp() {
             </div>
           )}
           {mappingError && (
-            <div className="estop-note" role="alert" style={{ color: 'var(--mg-error)' }}>
-              {mappingError}
-            </div>
+            <InlineError
+              message={mappingError}
+              onDismiss={() => setMappingError(null)}
+            />
           )}
           <button
             className="mode-btn"
@@ -1650,79 +1584,16 @@ export function ActuatorApp() {
           >
             Refresh mapping
           </button>
-          <div className="motor-bars" style={{ marginTop: 6 }}>
-            {Array.from({ length: MOTOR_COUNT }, (_, i) => {
-              const v = status.output_values[i] ?? 0
-              const actualUs = status.fc_output_pwm[i]
-              const assignment = assignmentFor(status.output_map, i + 1)
-              const channel = assignment?.channel
-              return (
-                <div key={i} className="motor-bar">
-                  <span
-                    className="mono motor-label"
-                    title={channel ? `Feedback from ${channelLabel(channel)}` : 'No mapped output'}
-                  >
-                    <span>{`M${i + 1}`}</span>
-                    <span style={{ fontSize: 9, color: 'var(--mg-muted)' }}>
-                      {channel ? channelLabel(channel) : 'unmapped'}
-                    </span>
-                  </span>
-                  <div className="bar-track">
-                    <div className="bar-fill output" style={{ width: `${v * 100}%` }} />
-                  </div>
-                  <span className="mono motor-value" title={`${(v * 100).toFixed(1)}%`}>
-                    {(v * 100).toFixed(0)}%
-                  </span>
-                  <span className="mono motor-pwm" title="Mapped PX4 SERVO_OUTPUT_RAW">
-                    {actualUs != null ? `${actualUs} µs` : '—'}
-                  </span>
-                </div>
-              )
-            })}
-          </div>
-          <div className="estop-note" style={{ marginTop: 4 }}>
+          <div className="estop-note" style={{ marginTop: 6 }}>
             Every ACTUATOR_TEST goes out over this serial link to the real PX4.
-            % = the sent command; µs = that motor's mapped physical output (not
-            a linear mapping of the command).
+            Per-motor source, expected and reported pulses are in Motor tracking.
           </div>
         </div>
         {/* On-board SD-card log: read the restart-required SD parameters and
          * control the target's file logger; list/download the FC's SD logs. */}
-        <div className={`card logging-card${loggingExpanded ? ' logging-expanded' : ''}`}>
-          <h3>On-board log</h3>
-          <div className="logging-summary">
-            <span className="estop-note">
-              {sdCapture.phase === 'recording'
-                ? 'Recording'
-                : sdCapture.phase === 'existing_recording'
-                  ? 'Existing recording'
-                  : `${logEntries.length} SD log${logEntries.length === 1 ? '' : 's'}`}
-            </span>
-            <button
-              className="mode-btn"
-              onClick={() => setLoggingExpanded((v) => !v)}
-              title={loggingExpanded ? 'Collapse logging details' : 'Expand logging details'}
-            >
-              {loggingExpanded ? 'Collapse ▲' : 'Expand ▼'}
-            </button>
-          </div>
-          <div className="logging-body">
-          <div className="row">
-            <span className="text-muted">SDLOG_MODE</span>
-            <span className="mono" title="Read from the target PX4; changes require a reboot">
-              {!status.target_connected ? 'no target' : sdlogModeLabel(hardwareMode)}
-            </span>
-          </div>
-          <div className="row">
-            <span className="text-muted">SDLOG_BACKEND</span>
-            <span className="mono" title="Read from the target PX4; changes require a reboot">
-              {!status.target_connected ? 'no target' : sdlogBackendLabel(hardwareBackend)}
-            </span>
-          </div>
-          <div className="estop-note" style={{ marginTop: 4 }}>
-            These values are read-only here and may differ from the running logger
-            until the PX4 reboots. Check logger refreshes them from the hardware.
-          </div>
+        <div className="card logging-card">
+          <h3>Logging</h3>
+          <div className="section-title logging-section">PX4 SD capture</div>
 
           <div className="row" style={{ marginTop: 8 }}>
             <span className="text-muted">SD capture</span>
@@ -1776,10 +1647,14 @@ export function ActuatorApp() {
               Manifest · {status.run.manifest_path}
             </div>
           )}
-          {(captureError || sdCapture.last_error) && (
-            <div className="estop-note" role="alert" style={{ color: 'var(--mg-error)' }}>
-              {captureError || captureErrorLabel(sdCapture.last_error)}
-            </div>
+          {(captureError || (sdCapture.last_error && !captureErrorDismissed)) && (
+            <InlineError
+              message={captureError ?? captureErrorLabel(sdCapture.last_error)}
+              onDismiss={() => {
+                setCaptureError(null)
+                setCaptureErrorDismissed(true)
+              }}
+            />
           )}
           <div className="btn-row" style={{ marginTop: 4 }}>
             <button
@@ -1816,10 +1691,43 @@ export function ActuatorApp() {
             capture or deleting SD logs.
           </div>
 
-          <div className="row" style={{ marginTop: 8 }}>
-            <span className="text-muted">SD logs</span>
-            <span className="mono">{logEntries.length}</span>
-          </div>
+          <details className="logger-configuration">
+            <summary>Logger configuration</summary>
+            <div className="row">
+              <span className="text-muted">SDLOG_MODE</span>
+              <span className="mono" title="Read from the target PX4; changes require a reboot">
+                {!status.target_connected ? 'no target' : sdlogModeLabel(hardwareMode)}
+              </span>
+            </div>
+            <div className="row">
+              <span className="text-muted">SDLOG_BACKEND</span>
+              <span className="mono" title="Read from the target PX4; changes require a reboot">
+                {!status.target_connected ? 'no target' : sdlogBackendLabel(hardwareBackend)}
+              </span>
+            </div>
+            <div className="estop-note" style={{ marginTop: 4 }}>
+              These values are read-only here and may differ from the running logger
+              until the PX4 reboots. Check logger refreshes them from the hardware.
+            </div>
+          </details>
+
+          <button
+            className="section-toggle logging-section"
+            aria-label="Log retrieval"
+            aria-expanded={loggingExpanded}
+            aria-controls="motor-log-retrieval"
+            onClick={() => setLoggingExpanded((v) => !v)}
+          >
+            <span>Log retrieval</span>
+            <span className="mono text-muted">
+              {logsBusy ? 'Working…' : `${logEntries.length} files`}
+              <span aria-hidden="true"> {loggingExpanded ? '▴' : '▾'}</span>
+            </span>
+          </button>
+          {logsError && (
+            <InlineError message={logsError} onDismiss={() => setLogsError(null)} />
+          )}
+          <div id="motor-log-retrieval" hidden={!loggingExpanded}>
           <div className="btn-row" style={{ marginTop: 4 }}>
             <button
               className="mode-btn"
@@ -1849,11 +1757,6 @@ export function ActuatorApp() {
               </button>
             )}
           </div>
-          {logsError && (
-            <div className="estop-note" role="alert" style={{ color: 'var(--mg-error)' }}>
-              {logsError}
-            </div>
-          )}
           <ul className="log-list" style={{ marginTop: 4 }}>
             {logEntries.map((entry) => {
               const dl = logDownloads.get(entry.id)
@@ -1908,72 +1811,9 @@ export function ActuatorApp() {
         </div>
         <div className="card">
           <div className="row">
-            <span className="text-muted">Session</span>
+            <span className="text-muted">Command transport</span>
             <span className="mono">{status.session}</span>
           </div>
-        </div>
-
-        {/* Mag alarm (A4b, plan §9.1): threshold watchdog over the calibrated
-         * total field, with debounce + hysteresis + cooldown in core. */}
-        <div className={`card ${magAlarm ? 'mag-alarm-active' : ''}`}>
-          <h3>Mag alarm</h3>
-          <label className="row" style={{ marginBottom: 6 }}>
-            <span>Enabled</span>
-            <input
-              type="checkbox"
-              checked={alarmEnabled}
-              onChange={(e) => setAlarmEnabled(e.target.checked)}
-            />
-          </label>
-          <label className="motor-row">
-            <span className="motor-label" style={{ width: 52 }}>Thr.</span>
-            <input
-              className="phrase-input"
-              style={{ flex: 1, margin: 0 }}
-              type="number"
-              min={0}
-              step={100}
-              value={alarmThreshold}
-              onChange={(e) => setAlarmThreshold(Number(e.target.value))}
-            />
-            <span className="mono motor-value">nT</span>
-          </label>
-          <div className="row">
-            <span className="text-muted">Total field</span>
-            <span className="mono">{magTotal != null ? `${magTotal.toFixed(1)} nT` : '—'}</span>
-          </div>
-          <div className="row">
-            <span className="text-muted">State</span>
-            <span className={`mono ${magAlarm ? 'text-error' : 'text-ok'}`}>
-              {magAlarm ? 'ALARM' : 'armed'}
-            </span>
-          </div>
-          {tauri && (
-            <div className="row" style={{ marginTop: 6 }}>
-              <span className="text-muted">Calibration</span>
-              {calLoaded ? (
-                <>
-                  <span className="mono text-ok">CAL</span>
-                  <button className="mode-btn" onClick={clearMagCal}>
-                    Clear
-                  </button>
-                </>
-              ) : (
-                <button className="mode-btn" onClick={loadMagCal}>
-                  Load…
-                </button>
-              )}
-            </div>
-          )}
-          {magAlarm && (
-            <button
-              className="mode-btn"
-              style={{ width: '100%', marginTop: 6 }}
-              onClick={acknowledgeAlarm}
-            >
-              Acknowledge (silence)
-            </button>
-          )}
         </div>
 
         <MotTestEnGate
@@ -1992,6 +1832,18 @@ export function ActuatorApp() {
     </div>
   )
 }
+/** Persistent, dismissible inline failure for a panel-local operation. */
+function InlineError({ message, onDismiss }: { message: string; onDismiss: () => void }) {
+  return (
+    <div className="inline-failure" role="alert">
+      <span>{message}</span>
+      <button className="link-btn" onClick={onDismiss} title="Dismiss this error">
+        Dismiss
+      </button>
+    </div>
+  )
+}
+
 /** PM9 gate: when the parameter cache says COM_MOT_TEST_EN=0, motor tests
  * are FC-denied anyway — say so up front and offer the jump to the
  * Parameters window (open-or-focus, same entry the TopBar uses). Unknown

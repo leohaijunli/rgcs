@@ -320,18 +320,37 @@ does not write or change the vehicle's own system-ID parameter; component ID
 remains the PX4 autopilot default (1).
 
 The window is responsive (Task 9): at 1366×768 and wider it keeps the
-three-region layout (input source / controls+plots / output+logging), while at
-1024×640 the regions stack into one primary scroll region with the header
-pinned (Stop and Emergency Stop stay visible). The scope signal legend is
-collapsible from its toolbar, and the logging card collapses to a summary row
-that expands on demand at narrow widths, leaving the plots the flexible
-region.
+three-region layout (input + start/alarm controls / setup + plots /
+output + logging). Each column has a bounded height and scrolls independently.
+At 1024×640 the regions stack into one primary scroll region with the header
+pinned (Stop and Emergency Stop stay visible). The left-column workflow comes
+first: SITL details, unlock/START, then Mag alarm. Inactive SITL details collapse
+by default and open when Forward is selected. Logger configuration and log
+retrieval expand independently of the always-available capture controls.
+The scope signal list can be collapsed at every width, and extra plot panes
+scroll instead of compressing their curves. Motor Test applies saved theme and
+Field mode at startup and follows changes from the main window. See the
+[workspace verification and screenshots](../frontend/src/actuator/README.md).
 
+- **Header and motor tracking**: the fixed header shows the target identity,
+  armed/heartbeat state, SD capture state, START/STOP state and owned failures.
+  One test-state label distinguishes Locked, Unlocked, Starting, Running,
+  Releasing and Emergency; the raw backend session is labelled Command transport.
+  Firmware release and measured command rate are shown as `Unknown`/`—` because
+  this link does not report them; the configured 10 Hz is labelled `cfg`. The
+  Motor tracking table keeps Motor, mapped output, source value, expected pulse,
+  target-reported pulse, Δ and state together. Expected is inverted from the
+  `ACTUATOR_TEST` value actually sent (after safety limits), and `tracking`
+  means the reported pulse is within ±5 µs. Rows expand to show function→pin
+  mapping, range/reversal/THR_MDL_FAC and the encoded command. Missing models
+  or feedback stay `—`, never inferred. Connection, mapping, capture and log
+  errors persist until dismissed.
 - **Safety gate** (risk-scaled, operator-declared prop load): no props /
   flat plate — unlock toggle → Start; full props — unlock → type
-  `START PROPS` → hold Start 3 s. Any load/mode change re-locks. Start also
-  requires a fresh heartbeat from the exact connected target showing PX4 and
-  disarmed; no motor command is sent before that heartbeat arrives.
+  `START PROPS` → hold Start 3 s. Any load/source/preset/target/mapping change
+  or manual motor edit while idle re-locks. Start also requires a fresh
+  heartbeat from the exact connected target showing PX4 and disarmed; no motor
+  command is sent before that heartbeat arrives.
 - **Command sources**: Manual sliders (sync-all, ~30 Hz merge, latest value
   wins); Preset waveforms (step/ramp/square/sine — bounded duration,
   self-stopping); Realtime forward — the FC's motors follow a PX4 SITL's
@@ -383,8 +402,10 @@ region.
   `SDLOG_MODE` and `SDLOG_BACKEND` read-only; both are restart-required, so a
   running logger may not match the stored value. Change them in the Parameters
   window, not per test.
-- **SD-file capture**: the motor-test window owns one target-shell controller
-  per serial PX4. "Check logger" reads `logger status` and reports either Ready,
+- **SD-file capture**: the Logging card separates **PX4 SD capture** (read-only
+  logger parameters, capture status, Check/Start/Stop) from **Log retrieval**
+  (list, download, delete). The motor-test window owns one target-shell
+  controller per serial PX4. "Check logger" reads `logger status` and reports either Ready,
   Recording (this test's own file) or Existing recording (a file already
   running, which is a valid observation rather than a failed check). Start
   sends `logger on` and reports Recording only after PX4 names a new `Log file:`

@@ -121,7 +121,7 @@ pub fn actuator_open(app: AppHandle) -> Result<(), String> {
     }
     let win = WebviewWindowBuilder::new(&app, "actuator", WebviewUrl::App("actuator.html".into()))
         .devtools(true)
-        .title("Motor / Mag Interference Test")
+        .title("Motor test")
         .maximized(true)
         .min_inner_size(1024.0, 640.0)
         .build()
