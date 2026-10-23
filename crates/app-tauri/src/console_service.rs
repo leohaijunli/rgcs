@@ -84,6 +84,27 @@ pub(crate) async fn exec(
         .map_err(|error| error.to_string())
 }
 
+/// Classify the FC shell (NuttShell vs PX4's POSIX `pxh`) under the shell
+/// lock, exactly like [`exec`], so log deletion can refuse a POSIX shell
+/// before a marker exchange would time out on an "Invalid command" reply.
+pub(crate) async fn probe_shell(
+    console: &ConsoleState,
+    app: &AppHandle,
+    state: &AppState,
+) -> Result<crate::px4_shell::ShellKind, String> {
+    let _shell = console.shell_lock.lock().await;
+    console.attach(app, state).await;
+    let connection = state
+        .connection()
+        .ok_or_else(|| "no live link".to_string())?;
+    console.shell_busy.store(true, Ordering::SeqCst);
+    let _busy = BusyGuard(&console.shell_busy);
+    let mut route = connection.subscribe_route(MessageRoute::messages(&[SERIAL_CONTROL_ID]));
+    crate::px4_shell::probe_shell(&connection, 0, 0, &mut route)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 impl ConsoleState {
     /// Ensure a watcher is running on the *current* primary link: rebuild it
     /// only when the link handle changed (or the task died). The old task

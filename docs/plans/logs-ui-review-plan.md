@@ -214,6 +214,16 @@ Implementation notes:
   its reply.
 - Commands: `logs_erase_all`, `logs_delete` (both hold the ops lock);
   `core::logs::parse_logger_status` is exported for the recording check.
+- Both commands first fingerprint the link's shell (`pxh>` vs `nsh>`), because
+  PX4's POSIX SITL shell (`pxh`) has neither `echo` (the exchange marker) nor the
+  NuttShell file tools, so deletion is only defined on a NuttX flight controller.
+  A `pxh` shell is refused with an actionable message instead of the marker
+  exchange timing out.
+- Large-log **download** is part of the same delivery: the `LOG_REQUEST_DATA`
+  window was cut from 32400 to 18000 bytes because PX4 answers with a single
+  burst that drops frames above ~20 KiB on MAVLink/UDP, which had stalled
+  downloads to the 1.2 s retry pace. Verified against PX4 v1.17 SITL: a 2.8 MB
+  log now downloads in ~2 s with zero retransmits.
 - Regression: [`check-logs-delete.mjs`](../../frontend/scripts/check-logs-delete.mjs)
   asserts two confirmations, that declining sends no command, and the exact
   identity passed to the backend. Screenshot: `screenshots/logs/logs-delete.png`.

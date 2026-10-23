@@ -317,6 +317,27 @@ async fn ensure_primary_logger_not_recording(
     Ok(())
 }
 
+/// SD-log deletion drives the FC's NuttShell (`cat`, `rm`, `ls`, `echo`).
+/// PX4's POSIX shell (`pxh`, used by SITL) lacks all of those, so a marker
+/// exchange would only ever time out. Refuse it with an actionable message
+/// first; NuttShell (or an inconclusive probe) falls through to the
+/// logger-recording gate.
+async fn ensure_shell_supports_delete(
+    console: &crate::console_service::ConsoleState,
+    app: &AppHandle,
+    state: &AppState,
+) -> Result<(), String> {
+    if crate::console_service::probe_shell(console, app, state).await?
+        == crate::px4_shell::ShellKind::Pxh
+    {
+        return Err(
+            "SD-log deletion needs a NuttX flight controller; this link's shell is PX4's POSIX shell (SITL)"
+                .into(),
+        );
+    }
+    ensure_primary_logger_not_recording(console, app, state).await
+}
+
 fn publish_primary_log_list<R: Runtime>(
     app: &AppHandle<R>,
     state: &AppState,
@@ -403,7 +424,7 @@ pub async fn logs_erase_all(
     let connection = state
         .connection()
         .ok_or_else(|| "not connected".to_string())?;
-    ensure_primary_logger_not_recording(&console, &app, &state).await?;
+    ensure_shell_supports_delete(&console, &app, &state).await?;
     let mut protocol = LogProtocol::new(
         connection.config().target_system_id,
         connection.config().target_component_id,
@@ -449,7 +470,7 @@ pub async fn logs_delete(
     let connection = state
         .connection()
         .ok_or_else(|| "not connected".to_string())?;
-    ensure_primary_logger_not_recording(&console, &app, &state).await?;
+    ensure_shell_supports_delete(&console, &app, &state).await?;
     let expected = maggcs_core::logs::LogEntryInfo { id, size, time_utc };
     let listing =
         crate::console_service::exec(&console, &app, &state, "cat /fs/microsd/logdata.txt").await?;

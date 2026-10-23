@@ -23,6 +23,28 @@ pub(crate) const LOG_DIRECTORY: &str = "/fs/microsd/log";
 const SHELL_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 const SHELL_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 const SHELL_MAX_OUTPUT: usize = 256 * 1024;
+/// Long enough for one prompt round trip, short enough to keep the
+/// pre-delete shell check snappy.
+const SHELL_PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
+/// PX4 starts the shell on the first command and drops it, so the probe sends
+/// a throwaway line and waits this long before the command that is read back.
+const SHELL_WARMUP: Duration = Duration::from_millis(2000);
+/// A NuttShell comment: both shells ignore it, but the reply still carries the
+/// prompt, which is all the probe needs.
+const SHELL_PROBE_COMMAND: &str = "# maggcs-shell-probe";
+
+/// Which shell PX4 exposes over the MAVLink shell on a link.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ShellKind {
+    /// NuttShell (`nsh`), the NuttX flight-controller shell: has `cat`, `rm`,
+    /// `ls` and `echo`, so the marker exchange and SD-log deletion work.
+    NuttShell,
+    /// PX4's POSIX shell (`pxh`), used by SITL: it has neither `echo` (the
+    /// exchange marker) nor the NuttShell file tools.
+    Pxh,
+    /// No prompt observed within [`SHELL_PROBE_TIMEOUT`].
+    Unknown,
+}
 
 fn shell_flags() -> ::mavlink::common::SerialControlFlag {
     ::mavlink::common::SerialControlFlag::SERIAL_CONTROL_FLAG_RESPOND
@@ -164,6 +186,93 @@ pub(crate) async fn exchange(
             Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                 return Err(SdCaptureError::TargetUnavailable);
             }
+        }
+    }
+}
+
+/// Classify the shell from its prompt text. `clean_line` has already stripped
+/// the newlines, so the prompt token and its echoes concatenate safely.
+pub(crate) fn classify_shell_text(text: &str) -> ShellKind {
+    if text.contains("pxh>") {
+        ShellKind::Pxh
+    } else if text.contains("nsh>") {
+        ShellKind::NuttShell
+    } else {
+        ShellKind::Unknown
+    }
+}
+
+/// Ask the shell to emit a prompt and classify it. Deletion drives NuttShell
+/// file tools, so a POSIX `pxh` link (SITL) is refused here instead of letting
+/// every [`exchange`] time out waiting for a marker `echo` that `pxh` rejects.
+pub(crate) async fn probe_shell(
+    handle: &ConnectionHandle,
+    target_system_id: u8,
+    target_component_id: u8,
+    route: &mut RoutedEvents,
+) -> Result<ShellKind, SdCaptureError> {
+    send_lines(
+        handle,
+        target_system_id,
+        target_component_id,
+        vec![String::new()],
+    )
+    .await?;
+    // Discard the shell's first (dropped-command) reply, then read the reply to
+    // a harmless command, whose prompt identifies the shell.
+    read_shell_text(route, handle, SHELL_WARMUP, false).await?;
+    send_lines(
+        handle,
+        target_system_id,
+        target_component_id,
+        vec![SHELL_PROBE_COMMAND.to_string()],
+    )
+    .await?;
+    let text = read_shell_text(route, handle, SHELL_PROBE_TIMEOUT, true).await?;
+    Ok(classify_shell_text(&text))
+}
+
+/// Read reply chunks into one cleaned string until `window` elapses, or a
+/// shell kind is recognised when `stop_on_kind` is set.
+async fn read_shell_text(
+    route: &mut RoutedEvents,
+    handle: &ConnectionHandle,
+    window: Duration,
+    stop_on_kind: bool,
+) -> Result<String, SdCaptureError> {
+    let deadline = Instant::now() + window;
+    let mut text = String::new();
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(text);
+        }
+        match tokio::time::timeout(remaining, route.recv()).await {
+            Ok(Ok(ConnectionEvent::Message(envelope))) => {
+                let MavMessage::SERIAL_CONTROL(message) = envelope.message else {
+                    continue;
+                };
+                let Some(chunk) = reply(
+                    &message,
+                    handle.config().system_id,
+                    handle.config().component_id,
+                ) else {
+                    continue;
+                };
+                text.push_str(&clean_line(&chunk));
+                if stop_on_kind && classify_shell_text(&text) != ShellKind::Unknown {
+                    return Ok(text);
+                }
+            }
+            Ok(Ok(ConnectionEvent::LinkError(_)))
+            | Ok(Ok(ConnectionEvent::Failed(_)))
+            | Ok(Ok(ConnectionEvent::HeartbeatLost { .. }))
+            | Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                return Err(SdCaptureError::TargetUnavailable);
+            }
+            Ok(Ok(_)) => continue,
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+            Err(_) => return Ok(text),
         }
     }
 }
@@ -334,6 +443,15 @@ mod tests {
             log_path_from_listing(listing, &entry).is_err(),
             "path traversal"
         );
+    }
+
+    #[test]
+    fn shell_kind_is_classified_from_the_prompt() {
+        assert_eq!(classify_shell_text("nsh> "), ShellKind::NuttShell);
+        assert_eq!(classify_shell_text("pxh> "), ShellKind::Pxh);
+        assert_eq!(classify_shell_text(""), ShellKind::Unknown);
+        // A stray "pxh" without the prompt punctuation is not a prompt.
+        assert_eq!(classify_shell_text("pxh shell"), ShellKind::Unknown);
     }
 
     #[test]
