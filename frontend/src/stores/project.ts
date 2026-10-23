@@ -22,6 +22,36 @@ const RECENT_KEY = 'maggcs.recentProjects'
 const LAST_KEY = 'maggcs.lastProject'
 const MAX_RECENT = 5
 
+/** The simplified create form asks for a name only; CRS and vertical datum
+ * use these project defaults. */
+export const DEFAULT_CRS = 'EPSG:4326'
+export const DEFAULT_DATUM = 'cgvd2013'
+
+/** A filesystem-safe folder name for a project (`core::project::is_valid_id`
+ * accepts `A-Za-z0-9._-`). */
+export function slugifyProjectName(name: string): string {
+  const slug = name.trim().replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '')
+  return slug.length > 0 ? slug : 'project'
+}
+
+/** The default projects root: `<app data>/projects`. */
+export async function defaultProjectsDir(): Promise<string> {
+  const { appDataDir, join } = await import('@tauri-apps/api/path')
+  return await join(await appDataDir(), 'projects')
+}
+
+/** A free sibling directory under `root` for `name` (append `-2`, `-3`, …). */
+async function freeProjectDir(root: string, name: string): Promise<string> {
+  const { join } = await import('@tauri-apps/api/path')
+  const { exists } = await import('@tauri-apps/plugin-fs')
+  const base = slugifyProjectName(name)
+  let candidate = await join(root, base)
+  for (let n = 2; await exists(candidate); n += 1) {
+    candidate = await join(root, `${base}-${n}`)
+  }
+  return candidate
+}
+
 export interface RecentProject {
   path: string
   name: string
@@ -61,7 +91,10 @@ interface ProjectState {
   /** In-memory: the operator chose to use the app without opening a project. */
   startDismissed: boolean
   open: (path: string) => Promise<boolean>
-  create: (dir: string, name: string, crs: string, verticalDatum: string) => Promise<boolean>
+  /** Create and open a project. Without `dir` it is created under the default
+   * projects root with a unique folder name; an explicit `dir` is used as the
+   * project directory. */
+  create: (name: string, dir?: string) => Promise<boolean>
   /** Leave the start page with no project open (no disk or IPC change). */
   continueWithoutProject: () => void
   /** Close the project. Refused (false) while the vehicle is armed. */
@@ -102,21 +135,22 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }
   },
 
-  create: async (dir, name, crs, verticalDatum) => {
+  create: async (name, dir) => {
     if (vehicleArmed()) {
       set({ error: 'armed-vehicle' })
       return false
     }
     set({ busy: true, error: null })
     try {
+      const target = dir ?? (await freeProjectDir(await defaultProjectsDir(), name))
       const project = await invoke<Project>('project_create', {
-        path: dir,
+        path: target,
         name,
-        crs,
-        verticalDatum,
+        crs: DEFAULT_CRS,
+        verticalDatum: DEFAULT_DATUM,
       })
-      remember(dir, project.name)
-      set({ project, path: dir, busy: false, startDismissed: false })
+      remember(target, project.name)
+      set({ project, path: target, busy: false, startDismissed: false })
       void get().refreshSurveys()
       return true
     } catch (e) {

@@ -12,22 +12,16 @@ import { open as pickFolder } from '@tauri-apps/plugin-dialog'
 import { isTauri } from '../inspector/mock'
 import { useProjectStore } from '../stores/project'
 import { StatusDot } from '../design-system/components'
-
-const DEFAULT_CRS = 'EPSG:4326'
-const DEFAULT_DATUM = 'cgvd2013'
+import ProjectWizard from './project/ProjectWizard'
 
 export default function StartPage() {
   const { t } = useTranslation()
   const recent = useProjectStore((s) => s.recent)
   const openProject = useProjectStore((s) => s.open)
-  const createProject = useProjectStore((s) => s.create)
   const error = useProjectStore((s) => s.error)
   const busy = useProjectStore((s) => s.busy)
   const continueWithoutProject = useProjectStore((s) => s.continueWithoutProject)
   const [creating, setCreating] = useState(false)
-  const [name, setName] = useState('')
-  const [crs, setCrs] = useState(DEFAULT_CRS)
-  const [datum, setDatum] = useState(DEFAULT_DATUM)
 
   const pickAnd = async (run: (dir: string) => Promise<boolean>) => {
     if (!isTauri()) return
@@ -77,46 +71,10 @@ export default function StartPage() {
           </button>
 
           {creating ? (
-            <div className="space-y-2 rounded border border-line bg-canvas p-2" data-testid="project-wizard">
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder={t('project.namePlaceholder')}
-                className="w-full rounded border border-line bg-panel px-2 py-1 text-xs text-ink"
-                data-testid="project-name"
-              />
-              <input
-                value={crs}
-                onChange={(e) => setCrs(e.target.value)}
-                placeholder={DEFAULT_CRS}
-                aria-label={t('project.crs')}
-                className="w-full rounded border border-line bg-panel px-2 py-1 text-xs text-ink"
-              />
-              <select
-                value={datum}
-                onChange={(e) => setDatum(e.target.value)}
-                aria-label={t('project.datum')}
-                className="w-full rounded border border-line bg-panel px-2 py-1 text-xs text-ink"
-              >
-                <option value="cgvd2013">CGVD2013</option>
-                <option value="egm96">EGM96 (AMSL)</option>
-              </select>
-              <div className="flex gap-2">
-                <button
-                  disabled={busy || name.trim().length === 0}
-                  onClick={() => void pickAnd((dir) => createProject(dir, name.trim(), crs, datum))}
-                  className="flex-1 rounded border border-ok bg-canvas px-2 py-1 text-xs text-ok hover:bg-panel disabled:opacity-50"
-                >
-                  {t('project.create')}
-                </button>
-                <button
-                  onClick={() => setCreating(false)}
-                  className="rounded border border-line px-2 py-1 text-xs text-muted hover:text-ink"
-                >
-                  {t('project.cancel')}
-                </button>
-              </div>
-            </div>
+            <ProjectWizard
+              onCreated={() => setCreating(false)}
+              onCancel={() => setCreating(false)}
+            />
           ) : (
             <button
               disabled={busy}
