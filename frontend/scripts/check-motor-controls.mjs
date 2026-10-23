@@ -262,7 +262,7 @@ try {
   await page.waitForFunction(() => document.querySelector('[data-testid="motor-mag-state"]')?.textContent === 'Disabled')
   assert.equal(await calls('actuator_start_manual'), startsBeforeAlarm, 'alarm controls never issue motor starts')
 
-  // Explicitly labelled, deterministic traces exercise all three plot panes.
+  // Explicitly labelled, deterministic traces exercise all four plot panes.
   await page.evaluate(() => {
     const test = window.__bench
     test.emit('actuator_event', { kind: 'stopped', reason: 'simulated IPC fixture' })
@@ -274,11 +274,12 @@ try {
         { id: 'fc.servo1', t, v: 1500 + 20 * Math.sin(i / 10) },
         { id: 'mag.raw_total', t, v: 50000 + 50 * Math.sin(i / 8) },
         { id: 'esc1.rpm', t, v: 4000 + 300 * Math.sin(i / 12) },
+        { id: 'bat1.current', t, v: 12 + 2 * Math.sin(i / 6) },
       )
     }
     test.emit('actuator_samples', samples)
   })
-  await page.waitForFunction(() => document.querySelectorAll('.scope-pane').length === 3)
+  await page.waitForFunction(() => document.querySelectorAll('.scope-pane').length === 4)
   await page.getByRole('button', { name: 'Log retrieval', exact: true }).click()
 
   const signalList = page.getByRole('button', { name: 'Signal list', exact: true })
@@ -287,6 +288,10 @@ try {
   assert.equal(await page.locator('#motor-signal-list').isVisible(), false, 'signal list collapses on a wide window')
   await signalList.click()
   await page.locator('#motor-signal-list').waitFor({ state: 'visible' })
+  assert.ok(
+    await page.locator('#motor-signal-list', { hasText: 'Battery current' }).count(),
+    'the battery-current signal is listed',
+  )
 
   if (shots) await mkdir(shots, { recursive: true })
   for (const [width, height] of [[1024, 640], [1366, 768], [1920, 1080]]) {

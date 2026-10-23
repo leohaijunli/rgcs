@@ -11,7 +11,8 @@ magnetic monitoring, and manually controlled SD capture/log retrieval.
   SITL details open when Forward is selected and collapse for Manual/Preset;
   the operator can also toggle them explicitly.
 - **Center:** prop load and command source, the selected source's controls,
-  motor tracking, and signal plots.
+  motor tracking, and signal plots (servo commands, total field, ESC, and the
+  total battery current from `BATTERY_STATUS`).
 - **Right:** the serial target, capture/run status and actions, expandable
   read-only logger configuration, and expandable log retrieval.
 

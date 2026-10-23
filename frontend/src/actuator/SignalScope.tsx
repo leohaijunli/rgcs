@@ -4,11 +4,13 @@
 //   - SITL servo 1–4 (µs) and the FC servo 1–4 parsed from the serial link
 //   - the command actually sent to the FC (ACTUATOR_TEST, %)
 //   - total field before / after calibration (nT)
+//   - total battery current from BATTERY_STATUS (A)
 //   - ESC rpm / current / voltage — listed as soon as ESC_STATUS arrives
 //
-// Checked signals are drawn in three stacked panes (commands / field / ESC)
-// that share one rolling time window and one cursor. Colour = motor number,
-// dash = source or quantity, so SITL vs serial for the same motor line up.
+// Checked signals are drawn in stacked panes (commands / field / ESC /
+// battery) that share one rolling time window and one cursor. Colour = motor
+// number, dash = source or quantity, so SITL vs serial for the same motor line
+// up.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import uPlot from 'uplot'
@@ -40,6 +42,7 @@ const PANES: Array<{ group: ScopeGroup; title: string }> = [
   { group: 'cmd', title: 'Servo commands' },
   { group: 'mag', title: 'Total field' },
   { group: 'esc', title: 'ESC' },
+  { group: 'bat', title: 'Battery' },
 ]
 
 // ---------------------------------------------------------------- feed ---
@@ -87,6 +90,7 @@ function startMock(): () => void {
     const raw = 50_000 + 40 * Math.sin(x * 3) + 600 * ramp
     batch.push({ id: 'mag.raw_total', t, v: raw })
     batch.push({ id: 'mag.cal_total', t, v: raw - 2000 - 300 * ramp })
+    batch.push({ id: 'bat1.current', t, v: 12 * ramp * ramp })
     batch.push({ id: 'session.running', t, v: running ? 1 : 0 })
     scopeStore.ingest(batch)
   }, 50)

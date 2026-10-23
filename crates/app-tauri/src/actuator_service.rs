@@ -768,8 +768,9 @@ pub async fn actuator_connect_target(
 }
 
 /// Messages the scope asks the target FC to stream: `(MAVLink id, Hz)` —
-/// `SERVO_OUTPUT_RAW`, `HIGHRES_IMU` (mag), `ESC_STATUS`.
-const TARGET_STREAMS: [(u32, f64); 3] = [(36, 20.0), (105, 50.0), (291, 10.0)];
+/// `SERVO_OUTPUT_RAW`, `HIGHRES_IMU` (mag), `BATTERY_STATUS` (current),
+/// `ESC_STATUS`.
+const TARGET_STREAMS: [(u32, f64); 4] = [(36, 20.0), (105, 50.0), (147, 5.0), (291, 10.0)];
 
 /// Fire-and-forget `MAV_CMD_SET_MESSAGE_INTERVAL` (PX4 accepts it while
 /// disarmed; a FC that lacks the stream simply never sends it).
@@ -1905,9 +1906,10 @@ pub async fn actuator_refresh_mapping(state: State<'_, AppState>) -> Result<Outp
 }
 
 /// Request the streams the motor-test window plots from the FC on `handle`:
-/// `HIGHRES_IMU` (105, the mag field), `ESC_STATUS` (291, ESC current/RPM) and
-/// `SERVO_OUTPUT_RAW` (36, the servo curves) at useful rates. A bare serial
-/// link streams only the default set otherwise, so the curves would stay flat.
+/// `HIGHRES_IMU` (105, the mag field), `BATTERY_STATUS` (147, total current),
+/// `ESC_STATUS` (291, ESC current/RPM) and `SERVO_OUTPUT_RAW` (36, the servo
+/// curves) at useful rates. A bare serial link streams only the default set
+/// otherwise, so the curves would stay flat.
 fn request_motor_test_streams(
     handle: &maggcs_core::mavlink::ConnectionHandle,
     target_system_id: u8,
@@ -1916,6 +1918,7 @@ fn request_motor_test_streams(
     tauri::async_runtime::spawn(async move {
         for (msg_id, interval_us) in [
             (105u32, 100_000u32), // HIGRES_IMU @ 10 Hz (mag total)
+            (147u32, 200_000u32), // BATTERY_STATUS @ 5 Hz (total current)
             (291u32, 100_000u32), // ESC_STATUS @ 10 Hz (current, RPM)
             (36u32, 40_000u32),   // SERVO_OUTPUT_RAW @ 25 Hz (servo curves)
         ] {
@@ -1940,11 +1943,11 @@ fn request_motor_test_streams(
     })
 }
 
-/// Attach the mag/ESC telemetry tap to a link (A4 wiring): subscribes to
-/// `HIGHRES_IMU` (105, mag triple) and `ESC_STATUS` (291), applies the loaded
-/// calibration, drives the alarm state machine, and emits
-/// `actuator_telemetry` events for the window's curves. Called from
-/// `connect` after the link comes up.
+/// Attach the mag/ESC/battery telemetry tap to a link (A4 wiring): subscribes
+/// to `HIGHRES_IMU` (105, mag triple), `BATTERY_STATUS` (147, total current) and
+/// `ESC_STATUS` (291), applies the loaded calibration, drives the alarm state
+/// machine, and emits `actuator_telemetry` events for the window's curves.
+/// Called from `connect` after the link comes up.
 pub fn attach_motor_telemetry(
     app: &AppHandle,
     handle: maggcs_core::mavlink::ConnectionHandle,
@@ -1995,10 +1998,11 @@ fn store_fc_output(
 }
 
 /// The telemetry tap: `HIGHRES_IMU` (105) → calibrated `mag_total` → alarm;
-/// `ESC_STATUS` (291) → the ESC aggregator; `SERVO_OUTPUT_RAW` (36) → the
-/// target-FC servo trace. Emits `actuator_telemetry` (aggregated snapshot)
-/// at ~10 Hz for the alarm/status readout, and pushes every sample (not a
-/// snapshot) to the scope bus.
+/// `ESC_STATUS` (291) → the ESC aggregator; `BATTERY_STATUS` (147) → the total
+/// battery current trace; `SERVO_OUTPUT_RAW` (36) → the target-FC servo trace.
+/// Emits `actuator_telemetry` (aggregated snapshot) at ~10 Hz for the
+/// alarm/status readout, and pushes every sample (not a snapshot) to the scope
+/// bus.
 async fn run_motor_telemetry_tap(
     app: AppHandle,
     handle: maggcs_core::mavlink::ConnectionHandle,
@@ -2007,7 +2011,7 @@ async fn run_motor_telemetry_tap(
     // Only telemetry from the configured target may gate motor-test safety
     // or feed the target's plots and alarm.
     let mut events = handle
-        .subscribe_route(MessageRoute::messages(&[0, 36, 105, 291]).from(target_system_id, 1));
+        .subscribe_route(MessageRoute::messages(&[0, 36, 105, 147, 291]).from(target_system_id, 1));
     let mut last_emit = tokio::time::Instant::now();
     let Some(bus) = app
         .try_state::<AppState>()
@@ -2053,6 +2057,16 @@ async fn run_motor_telemetry_tap(
                             // Transition into Alarm: fire the audio + flash.
                             let _ = app.emit("actuator_alarm", total);
                         }
+                    }
+                    MavMessage::BATTERY_STATUS(bat) => {
+                        // Total battery current (PX4 sends a negative value
+                        // when it does not measure current); the scope shows
+                        // one `bat{k}.current` trace per battery id.
+                        bus.push_all(scope::battery_samples(
+                            bat.id,
+                            now_epoch_s(),
+                            bat.current_battery,
+                        ));
                     }
                     MavMessage::ESC_STATUS(esc) => {
                         telemetry

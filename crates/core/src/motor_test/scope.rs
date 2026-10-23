@@ -18,6 +18,7 @@
 //! | `fwd.cmd1..4`                   | value sent to the FC as ACTUATOR_TEST | %    |
 //! | `fc.servo1..4`                  | real FC `SERVO_OUTPUT_RAW` (serial)   | µs   |
 //! | `mag.raw_total`, `mag.cal_total`| `|B|` before / after calibration      | nT   |
+//! | `bat{k}.current`                | `BATTERY_STATUS` current, k = 1-based | A    |
 //! | `esc{k}.rpm/current/voltage`    | `ESC_STATUS`, k = 1-based             | rpm / A / V |
 
 use std::sync::{Arc, Mutex};
@@ -38,7 +39,6 @@ pub const MAX_PENDING: usize = 20_000;
 
 pub const MAG_RAW_TOTAL_ID: &str = "mag.raw_total";
 pub const MAG_CAL_TOTAL_ID: &str = "mag.cal_total";
-
 /// One scope sample. `t` is host epoch seconds at receive time — the only
 /// clock the SITL link, the serial link and the sender share.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -112,6 +112,23 @@ pub fn mag_samples(t: f64, totals: MagTotals) -> Vec<ScopeSample> {
         out.push(ScopeSample::new(MAG_CAL_TOTAL_ID.into(), t, cal));
     }
     out
+}
+
+/// `bat{k}.current` — one battery's instantaneous current in amperes; `k` is
+/// 1-based from `BATTERY_STATUS.id` (PX4's single battery is `bat1`, and is the
+/// vehicle's total current). `current_ca` is the wire value in centiamps; a
+/// negative value (`-1` = "autopilot does not measure the current") emits no
+/// sample, so the list shows the group as having no data rather than a bogus
+/// trace at `-0.01 A`.
+pub fn battery_samples(id: u8, t: f64, current_ca: i16) -> Vec<ScopeSample> {
+    if current_ca < 0 {
+        return Vec::new();
+    }
+    vec![ScopeSample::new(
+        format!("bat{}.current", u16::from(id) + 1),
+        t,
+        f64::from(current_ca) / 100.0,
+    )]
 }
 
 /// `esc{k}.rpm/current/voltage` for one `ESC_STATUS` frame. `index` is
@@ -211,6 +228,19 @@ mod tests {
         assert_eq!(s.len(), 4);
         assert!((s[0].v - 50.0).abs() < 1e-6);
         assert!((s[3].v - 100.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn battery_current_is_amps_and_numbered_from_one() {
+        let s = battery_samples(0, 1.0, 1234);
+        assert_eq!(ids(&s), vec!["bat1.current"]);
+        assert!((s[0].v - 12.34).abs() < 1e-9);
+        assert_eq!(ids(&battery_samples(1, 1.0, 50)), vec!["bat2.current"]);
+    }
+
+    #[test]
+    fn battery_without_current_measurement_emits_no_signal() {
+        assert!(battery_samples(0, 1.0, -1).is_empty());
     }
 
     #[test]

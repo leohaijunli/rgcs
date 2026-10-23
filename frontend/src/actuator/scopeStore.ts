@@ -8,7 +8,7 @@
 // arrives — which is how "is there an RPM / current signal" gets answered.
 
 /** Which stacked plot pane a signal is drawn in. */
-export type ScopeGroup = 'cmd' | 'mag' | 'esc'
+export type ScopeGroup = 'cmd' | 'mag' | 'esc' | 'bat'
 
 export type ScopeUnit = 'µs' | '%' | 'nT' | 'rpm' | 'A' | 'V'
 
@@ -89,6 +89,15 @@ const DEFS: SignalDef[] = [
     dash: null,
     defaultOn: true,
   },
+  {
+    id: 'bat1.current',
+    group: 'bat',
+    label: 'Battery current 1',
+    unit: 'A',
+    motor: 0,
+    dash: null,
+    defaultOn: true,
+  },
   ...perMotor('esc', '.rpm', 'esc', 'rpm', 'ESC rpm', null, true),
   ...perMotor('esc', '.current', 'esc', 'A', 'ESC current', DASH_CURRENT, true),
   ...perMotor('esc', '.voltage', 'esc', 'V', 'ESC voltage', DASH_VOLT, false),
@@ -96,13 +105,28 @@ const DEFS: SignalDef[] = [
 
 const DEF_BY_ID = new Map(DEFS.map((d) => [d.id, d]))
 
-/** Definition for `id`; ESC 5–8 (and anything else well-formed) is built on
- * demand so a bigger airframe shows up without a code change. */
+/** Definition for `id`; ESC 5–8 and extra battery ids are built on demand so a
+ * bigger airframe / more batteries show up without a code change. */
 export function defOf(id: string): SignalDef | undefined {
   const known = DEF_BY_ID.get(id)
   if (known) return known
   const m = /^esc(\d+)\.(rpm|current|voltage)$/.exec(id)
-  if (!m) return undefined
+  if (!m) {
+    const b = /^bat(\d+)\.current$/.exec(id)
+    if (!b) return undefined
+    const k = Number(b[1])
+    const def: SignalDef = {
+      id,
+      group: 'bat',
+      label: `Battery current ${k}`,
+      unit: 'A',
+      motor: (k - 1) % 4,
+      dash: null,
+      defaultOn: true,
+    }
+    DEF_BY_ID.set(id, def)
+    return def
+  }
   const k = Number(m[1])
   const q = m[2] as 'rpm' | 'current' | 'voltage'
   const def: SignalDef = {
@@ -148,6 +172,13 @@ export const LIST_GROUPS: ListGroup[] = [
     ids: ['mag.raw_total', 'mag.cal_total'],
     emptyHint: (c) =>
       c.targetConnected ? 'Waiting for HIGHRES_IMU…' : 'Connect the PX4 serial link.',
+  },
+  {
+    key: 'bat',
+    title: 'Battery current (BATTERY_STATUS)',
+    ids: ['bat1.current'],
+    emptyHint: (c) =>
+      c.targetConnected ? 'Waiting for BATTERY_STATUS…' : 'Connect the PX4 serial link.',
   },
   {
     key: 'rpm',
