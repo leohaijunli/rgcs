@@ -9,6 +9,13 @@ if ! command -v cargo >/dev/null 2>&1 && [ -x "$HOME/.cargo/bin/cargo" ]; then
   export PATH="$HOME/.cargo/bin:$PATH"
 fi
 
+# A fresh clone has no node_modules, so `tsc` would be missing and the build
+# would fail with "tsc: not found". Install exactly what the lockfile pins.
+if [ ! -d frontend/node_modules ]; then
+  echo "==> installing frontend dependencies"
+  npm --prefix frontend ci
+fi
+
 echo "==> building frontend"
 npm --prefix frontend run build
 
