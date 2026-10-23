@@ -1638,9 +1638,15 @@ export function InspectorApp() {
                       style={{ background: filteredColor(colorOf(signalKey(t.signal), colors)) }}
                     />
                   )}
-                  <span className="mono" onClick={() => setSelected(t.id)}>
+                  <button
+                    type="button"
+                    className="chip-name mono"
+                    aria-pressed={selected === t.id}
+                    title="Select trace"
+                    onClick={() => setSelected(t.id)}
+                  >
                     {signalLabel(t.signal)}
-                  </span>
+                  </button>
                   {hasAnalyzer && (
                     <button className={t.analyzer ? 'active' : ''} onClick={() => toggleFft(t.id)}>
                       FFT
@@ -1879,7 +1885,7 @@ function SignalBrowser({
       const someInGroup = g.entries.some((c) => checked.has(signalKey(c.signal)))
       return (
         <div className="signal-group" key={g.name}>
-          <div className="signal-group-head" onClick={() => toggleGroup(g.name)}>
+          <div className="signal-group-head">
             <input
               type="checkbox"
               className="group-check"
@@ -1888,15 +1894,20 @@ function SignalBrowser({
               ref={(el) => {
                 if (el) el.indeterminate = someInGroup && !allInGroup
               }}
-              onClick={(e) => e.stopPropagation()}
               onChange={() => onToggleMany(g.entries.map((c) => c.signal), !allInGroup)}
             />
-            <span className={isCollapsed ? 'caret caret-closed' : 'caret'} />
+            <button
+              type="button"
+              className="group-toggle"
+              aria-expanded={!isCollapsed}
+              title={isCollapsed ? 'Expand group' : 'Collapse group'}
+              onClick={() => toggleGroup(g.name)}
+            >
+              <span className={isCollapsed ? 'caret caret-closed' : 'caret'} />
               <span>{g.name}</span>
-              <span className="msg">
-                {g.entries.length}
-              </span>
-            </div>
+              <span className="msg">{g.entries.length}</span>
+            </button>
+          </div>
             {!isCollapsed &&
               g.entries.map((c) => {
                 const key = signalKey(c.signal)

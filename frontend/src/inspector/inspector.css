@@ -441,6 +441,22 @@ input[type='range'] {
   background: var(--mg-bg-raised);
 }
 
+.signal-group-head .group-toggle {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
 .signal-group-head .caret {
   width: 0;
   height: 0;
@@ -568,6 +584,15 @@ input[type='range'] {
 
 .plot .trace-chip.selected {
   border-color: var(--mg-accent);
+}
+
+.plot .trace-chip .chip-name {
+  padding: 0;
+  font-size: 11px;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
 }
 
 .plot .trace-chip input[type='color'] {

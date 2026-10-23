@@ -94,6 +94,36 @@ try {
     assert.equal(await page.locator('.replay-strip').count(), 0, 'no replay strip when not replaying')
   }
 
+  // --- Insp-4: signal groups and trace selection are keyboard reachable ----
+  {
+    const toggle = page.locator('.signal-list .group-toggle').first()
+    assert.ok(await toggle.count(), 'each signal group exposes a disclosure button')
+    assert.equal(await toggle.getAttribute('aria-expanded'), 'true', 'groups start expanded')
+    const before = await page.locator('.signal-list label').count()
+    await toggle.focus()
+    await page.keyboard.press('Enter')
+    await page.waitForTimeout(100)
+    assert.equal(await toggle.getAttribute('aria-expanded'), 'false', 'Enter collapses the group')
+    assert.ok(
+      (await page.locator('.signal-list label').count()) < before,
+      'collapsing a group hides its signals',
+    )
+    await page.keyboard.press('Space')
+    await page.waitForTimeout(100)
+    assert.equal(await toggle.getAttribute('aria-expanded'), 'true', 'Space re-expands the group')
+
+    const chipName = page.locator('.plot .trace-chip .chip-name').first()
+    assert.ok(await chipName.count(), 'trace chips expose a focusable selector')
+    await chipName.focus()
+    await page.keyboard.press('Enter')
+    await page.waitForTimeout(100)
+    assert.equal(await chipName.getAttribute('aria-pressed'), 'true', 'Enter selects the trace')
+    assert.ok(
+      (await page.locator('.plot .trace-chip.selected').count()) >= 1,
+      'the selected trace is highlighted',
+    )
+  }
+
   // --- 1366 x 768 ---------------------------------------------------------
   await setSize(1366, 768, '1366x768')
   if (shots) await page.screenshot({ path: join(shots, 'inspector-1366x768.png') })
