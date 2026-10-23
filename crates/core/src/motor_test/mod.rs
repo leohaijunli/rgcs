@@ -159,7 +159,8 @@ impl<S: RpmSource> MotorTestSession<S> {
 
     /// Replace the per-motor PWM models. The caller sends this before every
     /// start, so an idle mapping refresh can never leave stale compensation.
-    /// A missing model falls back to the identity 1000–2000 µs, factor 0.
+    /// A missing model is explicitly marked fallback; the app blocks starts
+    /// until every configured motor has an FC-read range.
     pub fn set_pwm_models(&mut self, models: Vec<PwmModel>) {
         self.pwm_models.clear();
         self.pwm_models
@@ -172,6 +173,25 @@ impl<S: RpmSource> MotorTestSession<S> {
     /// for the window's output readout — `0.0` when idle.
     pub fn output_values(&self) -> Vec<f32> {
         self.last_values.clone()
+    }
+
+    /// Expected physical PWM from this session's last queued commands, using
+    /// the exact models that encoded them. A released/unread motor has no
+    /// active PWM command, including a reversed motor whose active command
+    /// may legitimately be zero at its maximum physical pulse.
+    pub fn pwm_output(&self) -> Vec<Option<f32>> {
+        self.last_demands
+            .iter()
+            .zip(&self.last_values)
+            .zip(&self.pwm_models)
+            .map(|((&demand, &command), model)| {
+                if demand <= 0.0 || model.range_source != pwm::PwmRangeSource::Fc {
+                    None
+                } else {
+                    model.pulse_for_command(command).ok()
+                }
+            })
+            .collect()
     }
 
     /// Operator start (after the app-layer confirmation): begin sending.
@@ -218,31 +238,48 @@ impl<S: RpmSource> MotorTestSession<S> {
         // Read every motor from the same tick snapshot (forward mode must
         // drive all four from one SITL sample).
         let targets = self.source.values(dt);
-        let mut out = Vec::with_capacity(targets.len());
+        let mut any_target = false;
+        let mut frames = Vec::with_capacity(targets.len());
         for (motor, target) in targets.into_iter().enumerate() {
-            if let Some(target) = target {
-                let prev = self.last_demands[motor];
-                let demand = self.interlock.clamp(prev, target);
-                self.last_demands[motor] = demand;
-                let value = self.pwm_models[motor].command_for_fraction(demand);
-                self.last_values[motor] = value;
-                out.push(actuator_test_frame(
+            let Some(target) = target else { continue };
+            any_target = true;
+            let prev = self.last_demands[motor];
+            let demand = self.interlock.clamp(prev, target);
+            self.last_demands[motor] = demand;
+            let value = self.pwm_models[motor].command_for_fraction(demand);
+            self.last_values[motor] = if demand > 0.0 { value } else { 0.0 };
+            // Benign-idle semantics (bench finding 2026-10-23): PX4 keeps a
+            // value-0 ACTUATOR_TEST *active* at the function's `PWM_*_MIN`
+            // pulse (timeout renews every tick), and some ESCs idle-spin at
+            // exactly that pulse. A motor with no demand must not be pinned
+            // there: it is only ever activated while demanded, and gets the
+            // release (`timeout = 0`) exactly once when demand drops to 0.
+            if demand > 0.0 {
+                frames.push(actuator_test_frame(
                     self.interlock.limits().target_sys,
                     self.interlock.limits().target_comp,
                     (motor + 1) as u8,
                     value,
                     COMMAND_TIMEOUT_S,
                 ));
+            } else if prev > 0.0 {
+                frames.push(actuator_test_frame(
+                    self.interlock.limits().target_sys,
+                    self.interlock.limits().target_comp,
+                    (motor + 1) as u8,
+                    0.0,
+                    0.0,
+                ));
             }
         }
-        if out.is_empty() {
+        if !any_target {
             // The source ended (e.g. a preset ran its duration): the motors
             // would idle on stale values until the FC-side timeout — stop
             // explicitly instead.
             self.stop(StopReason::Completed);
             return self.release_frames();
         }
-        out
+        frames
     }
 
     /// A `COMMAND_ACK` for ACTUATOR_TEST arrived.
@@ -428,6 +465,86 @@ mod tests {
     }
 
     #[test]
+    fn pwm_readback_adapts_to_the_target_and_distinguishes_zero_command_from_release() {
+        let mut s = session(&[0.25, 1.0, 0.25, 0.0]);
+        s.set_pwm_models(vec![
+            PwmModel::new(1100, 1900, false, 0.0).expect("M1"),
+            PwmModel::new(1200, 1800, true, 0.0).expect("M2 reversed"),
+            PwmModel::new(1150, 1850, false, 0.5).expect("M3 thrust model"),
+            PwmModel::new(1100, 1900, false, 0.0).expect("M4"),
+        ]);
+        let now = Instant::now();
+        s.interlock_mut().observe_heartbeat(false, now);
+        s.start(now);
+        let frames = s.tick(now);
+        let MavMessage::COMMAND_LONG(command) = &frames[0] else {
+            panic!("command");
+        };
+        assert_eq!(command.param1, 0.25, "wire value remains normalized");
+        let pwm = s.pwm_output();
+        for (actual, expected) in pwm[..3].iter().zip([1300.0, 1800.0, 1325.0]) {
+            assert!((actual.expect("active PWM") - expected).abs() < 1.0);
+        }
+        assert_eq!(
+            s.output_values()[1],
+            0.0,
+            "reversed maximum has a valid active zero command"
+        );
+        assert!(pwm[1].is_some());
+        assert_eq!(pwm[3], None, "an untouched motor has no active PWM");
+
+        s.set_values(vec![0.0; 4]);
+        s.tick(now + std::time::Duration::from_millis(100));
+        assert_eq!(
+            s.pwm_output(),
+            vec![None; 4],
+            "release is not the minimum PWM"
+        );
+        assert_eq!(s.output_values(), vec![0.0; 4]);
+
+        s.set_pwm_models(vec![
+            PwmModel::new(1200, 1800, false, 0.0).expect("new FC range")
+        ]);
+        s.set_values(vec![0.25, 0.0, 0.0, 0.0]);
+        s.start(now);
+        s.tick(now);
+        assert_eq!(
+            s.pwm_output()[0],
+            Some(1350.0),
+            "the new FC range changes the physical command"
+        );
+    }
+
+    #[test]
+    fn idle_motors_are_never_pinned_at_the_minimum_pulse() {
+        let mut s = session(&[0.4, 0.0, 0.0, 0.0]);
+        let now = Instant::now();
+        s.interlock_mut().observe_heartbeat(false, now);
+        s.start(now);
+        let frames = s.tick(now);
+        assert_eq!(
+            frames.len(),
+            1,
+            "only the demanded motor is activated; idle ones stay untouched"
+        );
+        // Drop the only demanded motor to zero: exactly one release frame
+        // (`timeout = 0`), not another 0-value active frame.
+        s.set_values(vec![0.0, 0.0, 0.0, 0.0]);
+        let frames = s.tick(now + std::time::Duration::from_millis(100));
+        assert_eq!(frames.len(), 1, "the drop to zero releases once");
+        let MavMessage::COMMAND_LONG(command) = &frames[0] else {
+            panic!("expected a COMMAND_LONG release frame");
+        };
+        assert_eq!(command.param1, 0.0, "value 0");
+        assert_eq!(command.param2, 0.0, "timeout 0 = release");
+        // Holding at zero demand sends nothing: no min-pulse pinning, and the
+        // empty tick must not be mistaken for a source end.
+        let frames = s.tick(now + std::time::Duration::from_millis(200));
+        assert!(frames.is_empty(), "no idle poke while demand stays 0");
+        assert_eq!(s.state(), SessionState::ManualRunning);
+    }
+
+    #[test]
     fn arming_mid_test_stops_within_one_tick() {
         let mut s = session(&[0.4]);
         let now = Instant::now();
@@ -598,6 +715,61 @@ mod tests {
         );
         let sent = s.output_values();
         assert!((sent[0] - command.param1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn sine_preset_sweeps_the_px4_range_bottom_to_top() {
+        // Acceptance: a designed test signal (Sine here; Square shares the
+        // path) sweeps exactly the PWM range read from the PX4 — trough =
+        // `PWM_*_MINn`, peak = `PWM_*_MAXn` — never beyond it.
+        use super::source::{PresetKind, WaveformPreset};
+        let mut s = MotorTestSession::new(
+            super::source::AnySource::Manual(super::source::ManualSource::new(vec![0.0])),
+            limits(),
+        );
+        let model = PwmModel::new(1100, 1900, false, 0.0).expect("model");
+        s.set_pwm_models(vec![model]);
+        let now = Instant::now();
+        s.interlock_mut().observe_heartbeat(false, now);
+        s.start_preset(
+            WaveformPreset {
+                kind: PresetKind::Sine,
+                amplitude: 1.0,
+                frequency_hz: 1.0,
+                duration_s: 5.0,
+            },
+            now,
+        );
+        let decode_pulse = |frames: Vec<MavMessage>| {
+            let MavMessage::COMMAND_LONG(command) = frames.first().expect("one frame") else {
+                panic!("actuator command");
+            };
+            model.pulse_for_command(command.param1).expect("pulse")
+        };
+        // Sine starts at fraction 0: with idle-release semantics no value-0
+        // frame is emitted — the function is left released instead of being
+        // pinned at the `PWM_*_MIN` pulse (bench finding 2026-10-23). The
+        // sweep then lifts off the minimum and reaches the maximum at the
+        // half-period peak.
+        assert!(
+            s.tick(now).is_empty(),
+            "value-0 demand must not activate the function",
+        );
+        let first_pulse = decode_pulse(s.tick(now + std::time::Duration::from_millis(50)));
+        assert!(
+            first_pulse
+                <= f32::from(model.min_us)
+                    + 0.05 * (f32::from(model.max_us) - f32::from(model.min_us)),
+            "sine rise starts in the bottom 5% of the range, got {first_pulse}"
+        );
+        // Half period later (raised-cosine sine peaks at phase π; slew
+        // budget 10 /s allows the full rise) the sine reaches fraction 1 →
+        // the maximum pulse.
+        let peak = decode_pulse(s.tick(now + std::time::Duration::from_millis(500)));
+        assert!(
+            (peak - f32::from(model.max_us)).abs() <= 1.0,
+            "sine peak = MAX, got {peak}"
+        );
     }
 
     #[test]

@@ -2,7 +2,7 @@
 // Inspector: a signal list with checkboxes on the left, plots on the right.
 //
 //   - SITL servo 1–4 (µs) and the FC servo 1–4 parsed from the serial link
-//   - the command actually sent to the FC (ACTUATOR_TEST, %)
+//   - converted PWM from the sender's ACTUATOR_TEST command (µs)
 //   - total field before / after calibration (nT)
 //   - total battery current from BATTERY_STATUS (A)
 //   - ESC rpm / current / voltage — listed as soon as ESC_STATUS arrives
@@ -83,7 +83,7 @@ function startMock(): () => void {
       const us = 1000 + 1000 * ramp * (0.85 + 0.05 * m)
       batch.push({ id: `sitl.servo${m + 1}`, t, v: us })
       batch.push({ id: `fc.servo${m + 1}`, t: t + 0.01, v: us - 4 })
-      if (running) batch.push({ id: `fwd.cmd${m + 1}`, t, v: ramp * 100 * (0.85 + 0.05 * m) })
+      batch.push({ id: `cmd.pwm${m + 1}`, t, v: running ? 1100 + 800 * ramp * (0.85 + 0.05 * m) : null })
       batch.push({ id: `esc${m + 1}.rpm`, t, v: 9000 * ramp * (0.9 + 0.03 * m) })
       batch.push({ id: `esc${m + 1}.current`, t, v: 12 * ramp * ramp })
     }
@@ -111,8 +111,8 @@ function loadPersisted(): Persisted {
     if (raw) {
       const p = JSON.parse(raw) as Partial<Persisted>
       return {
-        checked: Array.isArray(p.checked) ? p.checked.filter((x) => typeof x === 'string') : [],
-        seen: Array.isArray(p.seen) ? p.seen.filter((x) => typeof x === 'string') : [],
+        checked: Array.isArray(p.checked) ? p.checked.filter((x) => typeof x === 'string').map((x) => x.replace(/^fwd\.cmd([1-4])$/, 'cmd.pwm$1')) : [],
+        seen: Array.isArray(p.seen) ? p.seen.filter((x) => typeof x === 'string').map((x) => x.replace(/^fwd\.cmd([1-4])$/, 'cmd.pwm$1')) : [],
         windowS: WINDOWS_S.includes(p.windowS ?? -1) ? (p.windowS as number) : DEFAULT_WINDOW_S,
       }
     }
@@ -445,6 +445,7 @@ function SignalRow({
     zero: 'Only zeros so far',
     live: 'Receiving',
     stale: 'No sample for more than 2 s',
+    released: 'No active PWM command',
   }
   return (
     <label className={`signal-row ${state === 'none' ? 'dim' : ''}`}>
@@ -463,7 +464,7 @@ function SignalRow({
       <span className="mono signal-name">{def.label}</span>
       <span className={`state-dot ${state}`} title={stateTitle[state]} />
       <span className="mono signal-value">
-        {st ? `${fmtValue(st.last, def)} ${def.unit}` : '—'}
+        {st && Number.isFinite(st.last) ? `${fmtValue(st.last, def)} ${def.unit}` : '—'}
       </span>
     </label>
   )
@@ -532,7 +533,7 @@ function ScopePane({ title, defs, windowRef, pausedAtRef }: PaneProps) {
           stroke: colorOf(d),
           width: 1.5,
           dash: d.dash ?? undefined,
-          spanGaps: true,
+          spanGaps: !d.id.startsWith('cmd.pwm'),
           points: { show: false },
         })),
       ],
@@ -603,9 +604,9 @@ function emptyData(seriesCount: number, windowS: number): uPlot.AlignedData {
 }
 
 /** Merge the pane's rings onto one sorted union time axis (uPlot needs a
- * shared x); a series has `null` where it has no sample at that instant and
- * `spanGaps` joins the points, so slow signals (ESC at 10 Hz) draw as lines
- * next to fast ones (field at 50 Hz). */
+ * shared x). Undefined marks a different signal's timestamp; explicit null
+ * breaks a released PWM command, so interleaved telemetry does not erase
+ * the distinction between sparse sampling and a real release. */
 function buildData(defs: SignalDef[], tRef: number, windowS: number): uPlot.AlignedData {
   const cutoff = tRef - windowS
   const slices = defs.map((d) => {
@@ -630,12 +631,13 @@ function buildData(defs: SignalDef[], tRef: number, windowS: number): uPlot.Alig
   }
 
   const cols = slices.map((s) => {
-    const col: (number | null)[] = new Array(xsAbs.length).fill(null)
+    const col: (number | null | undefined)[] = new Array(xsAbs.length).fill(undefined)
     if (!s) return col
     for (let i = s.i0; i < s.ring.length; i++) {
       const t = s.ring.timeAt(i)
       if (t > tRef) break
-      col[lowerBound(xsAbs, t)] = s.ring.valueAt(i)
+      const value = s.ring.valueAt(i)
+      col[lowerBound(xsAbs, t)] = Number.isFinite(value) ? value : null
     }
     return col
   })

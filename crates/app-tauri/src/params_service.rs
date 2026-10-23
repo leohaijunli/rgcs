@@ -1,7 +1,7 @@
 //! Parameters window service (parameters plan PM3): window lifecycle plus
 //! Tauri command adapters. The `ParamService` protocol task lives in
 //! `core::params::service` (ADR-001); it spawns on the primary link when the
-//! window first connects and survives window close (the cache is read by
+//! link connects and survives window close (the cache is read by
 //! other services too, PM9), with a fresh task per reconnect.
 
 use serde::Serialize;
@@ -22,6 +22,12 @@ use maggcs_core::params::model::{ParamType, ParamValue};
 use maggcs_core::params::service::{ParamEvent, ParamService, SetResult};
 
 use crate::state::AppState;
+
+/// `params_fc_version` retry budget: 2 attempts × 1.2 s settle ≈ 2.5 s
+/// worst case on the saturated serial link, near-instant when the FC has
+/// already answered.
+const FC_VERSION_ATTEMPTS: u32 = 2;
+const FC_VERSION_SETTLE: Duration = Duration::from_millis(1200);
 
 /// Process-wide parameter cache/events adapter. The active service runtime
 /// itself is owned by `ActiveLink` and stops with that link.
@@ -135,7 +141,7 @@ async fn forward_events<R: Runtime>(
     mut rx: tokio::sync::broadcast::Receiver<ParamEvent>,
 ) {
     use maggcs_core::params::service::ParamEvent as E;
-    while let Ok(ev) = rx.recv().await {
+    while let Some(ev) = next_param_event(&mut rx).await {
         let payload = match &ev {
             E::PullStarted { total } => ParamsEvent::PullStarted { total: *total },
             E::Batch(entries) => ParamsEvent::Batch {
@@ -157,6 +163,20 @@ async fn forward_events<R: Runtime>(
             E::FcVersion(v) => ParamsEvent::FcVersion { version: v.clone() },
         };
         let _ = app.emit("params_event", &payload);
+    }
+}
+
+/// Losing older events during a large pull must not permanently disconnect
+/// the window's event forwarder. Continue with the retained events.
+async fn next_param_event(
+    rx: &mut tokio::sync::broadcast::Receiver<ParamEvent>,
+) -> Option<ParamEvent> {
+    loop {
+        match rx.recv().await {
+            Ok(event) => return Some(event),
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+        }
     }
 }
 
@@ -306,17 +326,18 @@ pub async fn params_reboot(state: State<'_, AppState>) -> Result<String, String>
     Ok(crate::command_service::result_name(result).to_string())
 }
 
-/// The FC's firmware version ("" until AUTOPILOT_VERSION arrives). Requests
-/// it as a side effect when empty (the reply lands on `params_event`).
+/// The FC's firmware version (null until AUTOPILOT_VERSION arrives). Waits
+/// for a requested reply when empty; the reply also lands on `params_event`.
 #[tauri::command]
 pub async fn params_fc_version(state: State<'_, AppState>) -> Result<Option<String>, String> {
     let Some(svc) = state.primary_params() else {
         return Ok(None);
     };
-    if svc.fc_version().is_none() {
-        let _ = svc.request_fc_version().await;
-    }
-    Ok(svc.fc_version())
+    // Queueing a request is not receiving its reply. Return the arrived
+    // version, with a bounded wait rather than racing the cache read.
+    Ok(svc
+        .wait_fc_version(FC_VERSION_ATTEMPTS, FC_VERSION_SETTLE)
+        .await)
 }
 
 /// Lazy-load one parameter's current value from the FC (by name). The
@@ -360,6 +381,21 @@ pub fn params_cache_len(state: State<'_, AppState>) -> usize {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[tokio::test]
+    async fn parameter_events_resume_after_a_lagged_receiver() {
+        let (tx, mut rx) = tokio::sync::broadcast::channel(1);
+        tx.send(ParamEvent::FcVersion("old".into()))
+            .expect("first event");
+        tx.send(ParamEvent::FcVersion("1.17.0".into()))
+            .expect("retained event");
+        assert!(matches!(
+            next_param_event(&mut rx).await,
+            Some(ParamEvent::FcVersion(version)) if version == "1.17.0"
+        ));
+        drop(tx);
+        assert!(next_param_event(&mut rx).await.is_none());
+    }
 
     #[tokio::test]
     async fn parameter_runtime_stop_joins_protocol_task() {

@@ -1,13 +1,16 @@
 {
   "name": "maggcs-frontend",
   "private": true,
-  "version": "1.0.2",
+  "version": "1.0.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "check:params": "node scripts/check-params.mjs",
+    "check:params-connection": "node scripts/check-params-connection.mjs",
+    "check:inspector-connection": "node scripts/check-inspector-connection.mjs",
     "build:model": "node scripts/build-uav-model.mjs",
     "check:colors": "bash scripts/check-colors.sh",
     "check:contrast": "node scripts/check-contrast.mjs",

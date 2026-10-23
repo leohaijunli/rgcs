@@ -148,9 +148,15 @@ pub enum MotorTestEvent {
 #[derive(Clone)]
 pub struct MotorTestService {
     cmd_tx: mpsc::Sender<MotorTestCommand>,
+    pwm_rx: tokio::sync::watch::Receiver<Vec<Option<f32>>>,
 }
 
 impl MotorTestService {
+    /// Converted command readback in microseconds, not measured FC feedback.
+    /// None marks a released motor or an unavailable target PWM model.
+    pub fn pwm_output(&self) -> Vec<Option<f32>> {
+        self.pwm_rx.borrow().clone()
+    }
     /// Spawn on a link. The task stops when the handle drops, the link
     /// closes, or the event subscriber goes away. The session starts Idle:
     /// arming observations flow before any Start.
@@ -231,9 +237,12 @@ fn spawn_on_transport(
         limits.clone(),
     );
     let (output_tx, output_rx) = tokio::sync::watch::channel(session.output_values());
+    let (pwm_tx, pwm_rx) = tokio::sync::watch::channel(session.pwm_output());
     let tick = std::time::Duration::from_secs_f64(1.0 / super::DEFAULT_TICK_HZ);
-    tokio::spawn(run(handle, session, cmd_rx, evt_tx, output_tx, tick));
-    (MotorTestService { cmd_tx }, evt_rx, output_rx)
+    tokio::spawn(run(
+        handle, session, cmd_rx, evt_tx, output_tx, pwm_tx, tick,
+    ));
+    (MotorTestService { cmd_tx, pwm_rx }, evt_rx, output_rx)
 }
 
 /// The shell loop. The session is the pure core; this only moves frames.
@@ -243,6 +252,7 @@ async fn run(
     mut cmd_rx: mpsc::Receiver<MotorTestCommand>,
     evt_tx: mpsc::Sender<MotorTestEvent>,
     output_tx: tokio::sync::watch::Sender<Vec<f32>>,
+    pwm_tx: tokio::sync::watch::Sender<Vec<Option<f32>>>,
     tick: std::time::Duration,
 ) {
     // A shared MAVLink bus can carry multiple vehicles. Only the aircraft
@@ -360,6 +370,7 @@ async fn run(
         // The readout is calculated/queued demand for controls, and zero only
         // once release transport writes are confirmed.
         let _ = output_tx.send(session.output_values());
+        let _ = pwm_tx.send(session.pwm_output());
 
         // Resolve the transport receipt before any slow event consumer can
         // block notification. Errors leave release pending for a later retry.
@@ -525,6 +536,71 @@ mod stop_tests {
         assert_eq!(command.param5, motor as f32);
         assert_eq!(command.param2, 0.0);
         reply
+    }
+
+    #[tokio::test]
+    async fn pwm_watch_matches_control_frames_and_clears_after_confirmed_release() {
+        let (transport, mut writes) = transport();
+        let (svc, _events) = started(transport.clone()).await;
+        svc.send(MotorTestCommand::SetPwmModels {
+            models: vec![
+                super::super::pwm::PwmModel::new(1100, 1900, false, 0.0).expect("FC model");
+                4
+            ],
+        })
+        .await
+        .expect("models");
+        transport
+            .events
+            .send(ConnectionEvent::Message(Box::new(
+                crate::mavlink::MessageEnvelope {
+                    header: ::mavlink::MavHeader {
+                        system_id: 42,
+                        component_id: 1,
+                        sequence: 0,
+                    },
+                    message: MavMessage::HEARTBEAT(::mavlink::common::HEARTBEAT_DATA {
+                        base_mode: ::mavlink::common::MavModeFlag::empty(),
+                        ..Default::default()
+                    }),
+                    received_at: Instant::now(),
+                },
+            )))
+            .expect("disarmed heartbeat");
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while svc.pwm_output().first().copied().flatten().is_none() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("PWM published");
+        assert_eq!(svc.pwm_output(), vec![Some(1420.0); 4]);
+        {
+            let frames = transport.controls.lock().expect("control frames");
+            let MavMessage::COMMAND_LONG(frame) = &frames[0] else {
+                panic!("control frame");
+            };
+            assert_eq!(
+                frame.param1, 0.4,
+                "wire stays normalized while readback is PWM"
+            );
+        }
+
+        let stop = tokio::spawn({
+            let svc = svc.clone();
+            async move { svc.stop_and_wait().await }
+        });
+        for motor in 1..=4 {
+            let confirmation = next_release(&mut writes, motor).await;
+            assert_eq!(
+                svc.pwm_output(),
+                vec![Some(1420.0); 4],
+                "no false release gap before confirmed writes"
+            );
+            confirmation.send(Ok(())).expect("confirm release");
+        }
+        stop.await.expect("stop task").expect("confirmed stop");
+        assert_eq!(svc.pwm_output(), vec![None; 4]);
     }
 
     #[tokio::test]

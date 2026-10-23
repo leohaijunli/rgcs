@@ -124,7 +124,7 @@ pub enum LinkState {
 
 /// Desktop/headless bridge: a snapshot of the MAVLink link status emitted
 /// to the frontend alongside telemetry.
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export)]
 pub struct LinkStatus {
     pub link_state: LinkState,

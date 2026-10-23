@@ -13,11 +13,35 @@ import { listen } from '@tauri-apps/api/event'
 import { ChevronsLeft, ChevronsRight } from 'lucide-react'
 import { isTauri } from '../inspector/mock'
 import type { ParamEntry } from '../generated-types/ParamEntry'
+import type { ParamValue } from '../generated-types/ParamValue'
+import type { LinkStatus } from '../generated-types/LinkStatus'
 import AppLogo from '../components/AppLogo'
 import { useParamsStore, type ParamMeta, type ParamsIpcEvent } from './store'
 
-/** The bundled metadata's target PX4 version (regenerate → bump). */
-const META_VERSION = '1.17.0'
+/** Refresh link state and retry an unanswered version request without reloading. */
+const CONNECTION_POLL_MS = 1000
+
+interface MetadataManifest {
+  schemaVersion: 1
+  firmwareVersion: string
+  target: string
+  parameterCount: number
+  sourceUrl: string
+  sourceJsonSha256: string
+  catalogSha256: string
+}
+
+/** MAVLink parameter integers are at most 32 bits and remain exact as JS numbers.
+ * Tauri serializes the tagged Rust value as {int: number} or {real: number};
+ * ts-rs represents the Rust i64 as bigint, so Number also handles that type. */
+function valueNumber(value: ParamValue): number | null {
+  const n = 'int' in value ? Number(value.int) : value.real
+  return Number.isFinite(n) ? n : null
+}
+
+function isConnected(link: LinkStatus | null): boolean {
+  return link?.link_state === 'connected' && link.fc_alive
+}
 
 /** Enum option lookup: the description of value `v`, if the metadata has one. */
 function enumDesc(
@@ -177,8 +201,7 @@ function PaneRail({ side, title, onOpen }: { side: 'left' | 'right'; title: stri
 export function ParamsApp() {
   const tauri = isTauri()
   const store = useParamsStore
-  const meta = store((s) => s.meta)
-  const metaGroups = store((s) => s.metaGroups)
+  const bundledMeta = store((s) => s.meta)
   const groups = store((s) => s.groups)
   const values = store((s) => s.values)
   const fcVersion = store((s) => s.fcVersion)
@@ -187,6 +210,18 @@ export function ParamsApp() {
   const staged = store((s) => s.staged)
 
   const [selected, setSelected] = useState<string | null>(null)
+  const selectedRef = useRef(selected)
+  selectedRef.current = selected
+  const selectedValue = selected ? values.get(selected) : undefined
+  const selectedNumber = selectedValue ? valueNumber(selectedValue.value) : null
+  const [link, setLink] = useState<LinkStatus | null>(null)
+  const [hadFc, setHadFc] = useState(false)
+  const [connectionEpoch, setConnectionEpoch] = useState(0)
+  const connectionEpochRef = useRef(0)
+  const onlineRef = useRef(false)
+  const readQueueRef = useRef<Promise<void>>(Promise.resolve())
+  const connected = tauri && isConnected(link)
+  const [metadataManifest, setMetadataManifest] = useState<MetadataManifest | null>(null)
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
   const [activeGroup, setActiveGroup] = useState<string | null>(null)
@@ -199,6 +234,7 @@ export function ParamsApp() {
   const [readState, setReadState] = useState<
     Map<string, 'loading' | 'done' | 'missing'>
   >(new Map())
+  const readStateRef = useRef(readState)
   /** Right-click menu on a row name: { name, x, y }. */
   const [ctxMenu, setCtxMenu] = useState<{ name: string; x: number; y: number } | null>(null)
   /** The detail editor draft (string so the input stays controllable). */
@@ -218,6 +254,33 @@ export function ParamsApp() {
   /** Live data-row height, read from `--p-row-h` (Params-5): Field mode
    * enlarges it, and the virtualizer must track that, not a fixed 26. */
   const [rowH, setRowH] = useState(ROW_H)
+
+  // FC-reported parameters remain discoverable even when their module is not
+  // represented in the bundled board catalog (e.g. custom firmware).
+  const meta = useMemo(() => {
+    const merged = new Map(bundledMeta)
+    for (const entry of values.values()) {
+      if (!merged.has(entry.name)) {
+        merged.set(entry.name, {
+          name: entry.name,
+          type: entry.ptype === 'real32' ? 'Float32' : 'Int32',
+          group: 'Reported by FC',
+          shortDesc: 'Reported by FC; no bundled metadata',
+        })
+      }
+    }
+    return merged
+  }, [bundledMeta, values])
+  const metaGroups = useMemo(() => {
+    const result = new Map<string, string[]>()
+    for (const entry of meta.values()) {
+      const group = entry.group ?? 'Uncategorized'
+      const members = result.get(group) ?? []
+      members.push(entry.name)
+      result.set(group, members)
+    }
+    return result
+  }, [meta])
 
   /** Pane geometry (Params-3): resizable/collapsible group pane + editor. */
   const initialLayout = useMemo(readLayout, [])
@@ -270,11 +333,21 @@ export function ParamsApp() {
     let disposed = false
     void (async () => {
       try {
-        const res = await fetch('/param-meta/parameters.json')
+        const [res, manifestRes] = await Promise.all([
+          fetch('/param-meta/parameters.json'),
+          fetch('/param-meta/manifest.json'),
+        ])
+        if (!res.ok || !manifestRes.ok) throw new Error('Bundled catalog is unavailable')
         const list = (await res.json()) as ParamMeta[]
-        if (!disposed) store.getState().setMeta(list)
+        const manifest = (await manifestRes.json()) as MetadataManifest
+        if (!Array.isArray(list) || manifest.schemaVersion !== 1 || manifest.parameterCount !== list.length)
+          throw new Error('Bundled catalog and manifest do not match')
+        if (!disposed) {
+          store.getState().setMeta(list)
+          setMetadataManifest(manifest)
+        }
       } catch (e) {
-        setNotice(`Metadata failed to load: ${String(e)}`)
+        if (!disposed) setNotice(`Metadata failed to load: ${String(e)}`)
       }
     })()
     return () => {
@@ -283,64 +356,149 @@ export function ParamsApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Ask the FC for its firmware version (mismatch notice below).
+  // Subscribe before reading the initial state. A window may open before a
+  // link exists, or stay open through repeated reconnects on the same port.
   useEffect(() => {
     if (!tauri) return
-    void invoke<{ fcVersion: string | null }>('params_fc_version' as never)
-      .then((r) => {
-        if (r?.fcVersion) store.setState({ fcVersion: r.fcVersion })
-      })
-      .catch(() => {})
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tauri])
-
-  // IPC events: pull batches/progress + external changes.
-  useEffect(() => {
-    if (!tauri) return
+    store.getState().resetConnection()
+    readStateRef.current = new Map()
+    setReadState(readStateRef.current)
+    readQueueRef.current = Promise.resolve()
     let disposed = false
-    let un: (() => void) | undefined
+    let unLink: (() => void) | undefined
+    let unParams: (() => void) | undefined
+    let timer: ReturnType<typeof setInterval> | undefined
+    let currentLink: LinkStatus | null = null
+    let eventSequence = 0
+    let polling = false
+    let versionEpoch: number | null = null
+
+    const fetchVersion = async () => {
+      const epoch = connectionEpochRef.current
+      if (disposed || !isConnected(currentLink) || store.getState().fcVersion != null || versionEpoch === epoch)
+        return
+      versionEpoch = epoch
+      try {
+        // Rust returns Option<String>, not an object containing fcVersion.
+        const version = await invoke<string | null>('params_fc_version')
+        if (!disposed && epoch === connectionEpochRef.current && isConnected(currentLink)) {
+          store.setState({ fcVersion: version })
+        }
+      } catch {
+        // The primary parameter runtime may still be attaching after a link
+        // transition. The next poll retries while the heartbeat remains live.
+      } finally {
+        if (versionEpoch === epoch) versionEpoch = null
+      }
+    }
+
+    const updateLink = (next: LinkStatus | null) => {
+      if (disposed) return
+      const changed = currentLink?.endpoint !== next?.endpoint
+        || currentLink?.link_state !== next?.link_state
+        || currentLink?.fc_alive !== next?.fc_alive
+      if (!changed) return
+      currentLink = next
+      onlineRef.current = isConnected(next)
+      connectionEpochRef.current += 1
+      store.getState().resetConnection()
+      readStateRef.current = new Map()
+      setReadState(readStateRef.current)
+      readQueueRef.current = Promise.resolve()
+      setLink(next)
+      setConnectionEpoch(connectionEpochRef.current)
+      if (onlineRef.current) {
+        setHadFc(true)
+        setNotice(null)
+        void fetchVersion()
+      }
+    }
+
+    const poll = async () => {
+      if (disposed || polling) return
+      polling = true
+      const sequence = eventSequence
+      try {
+        const next = await invoke<LinkStatus | null>('link_status')
+        // A slower snapshot must not undo a newer live link event.
+        if (sequence === eventSequence) updateLink(next)
+        await fetchVersion()
+      } catch {
+        // Retry on the next tick; explicit link events still update the page.
+      } finally {
+        polling = false
+      }
+    }
+
     void (async () => {
       try {
-        un = await listen<ParamsIpcEvent>('params_event', (e) => {
-          if (disposed) return
+        unLink = await listen<LinkStatus>('link', (e) => {
+          eventSequence += 1
+          updateLink(e.payload)
+        })
+        if (disposed) { unLink(); return }
+        unParams = await listen<ParamsIpcEvent>('params_event', (e) => {
+          if (disposed || !onlineRef.current) return
           store.getState().onEvent(e.payload)
         })
+        if (disposed) { unParams(); return }
+        await poll()
+        if (!disposed) timer = setInterval(() => void poll(), CONNECTION_POLL_MS)
       } catch {
-        /* no events in browser mode */
+        if (!disposed) timer = setInterval(() => void poll(), CONNECTION_POLL_MS)
       }
     })()
     return () => {
       disposed = true
-      un?.()
+      onlineRef.current = false
+      connectionEpochRef.current += 1
+      if (timer) clearInterval(timer)
+      unLink?.()
+      unParams?.()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tauri])
 
   // Reset the draft whenever the selection changes.
   useEffect(() => {
-    const v = selected ? values.get(selected) : undefined
-    setDraft(v ? JSON.stringify(v.value) : '')
+    setDraft(selectedNumber != null ? String(selectedNumber) : '')
     setDraftError(null)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected])
+  }, [selected, selectedNumber])
 
-  // Lazy value fetch on selection.
-  const selectRow = (name: string) => {
-    setSelected(name)
-    if (!tauri) return
-    if (values.has(name) || readState.get(name) === 'loading') return
-    setReadState((prev) => new Map(prev).set(name, 'loading'))
-    void (async () => {
+  // Serialize row reads: the protocol permits one parameter transaction at a
+  // time. A reconnect invalidates both queued work and delayed old replies.
+  const readParameter = useCallback((name: string) => {
+    if (!tauri || !onlineRef.current) return
+    if (store.getState().values.has(name) || readStateRef.current.get(name) === 'loading') return
+    const epoch = connectionEpochRef.current
+    readStateRef.current = new Map(readStateRef.current).set(name, 'loading')
+    setReadState(readStateRef.current)
+    const request = async () => {
+      if (epoch !== connectionEpochRef.current || !onlineRef.current) return
       try {
         const entry = await invoke<ParamEntry | null>('params_read', { name })
-        setReadState((prev) => new Map(prev).set(name, entry ? 'done' : 'missing'))
+        if (epoch !== connectionEpochRef.current || !onlineRef.current) return
+        readStateRef.current = new Map(readStateRef.current).set(name, entry ? 'done' : 'missing')
+        setReadState(readStateRef.current)
         if (entry) store.setState((s) => ({ values: new Map(s.values).set(name, entry) }))
       } catch (e) {
-        setReadState((prev) => new Map(prev).set(name, 'missing'))
+        if (epoch !== connectionEpochRef.current || !onlineRef.current) return
+        readStateRef.current = new Map(readStateRef.current).set(name, 'missing')
+        setReadState(readStateRef.current)
         setNotice(String(e))
       }
-    })()
+    }
+    readQueueRef.current = readQueueRef.current.then(request, request)
+  }, [tauri])
+
+  const selectRow = (name: string) => {
+    setSelected(name)
+    readParameter(name)
   }
+
+  useEffect(() => {
+    if (selectedRef.current) readParameter(selectedRef.current)
+  }, [connectionEpoch, readParameter])
 
   /** Validate the draft against the metadata; returns the numeric value or
    * an error string. */
@@ -378,12 +536,17 @@ export function ParamsApp() {
   }
 
   const applyStaged = async () => {
-    if (!tauri || staged.size === 0) return
+    if (!connected || staged.size === 0) return
+    const epoch = connectionEpochRef.current
     setApplying(true)
     setNotice(null)
     const errors: string[] = []
     const done: string[] = []
     for (const [name, v] of staged) {
+      if (!onlineRef.current || epoch !== connectionEpochRef.current) {
+        errors.push('Connection changed — remaining staged values were not applied')
+        break
+      }
       try {
         const m = meta.get(name)
         // The pulled ParamEntry is the authoritative type (u8…real32 — the
@@ -417,7 +580,7 @@ export function ParamsApp() {
   }
 
   const rebootFc = async () => {
-    if (!tauri) return
+    if (!connected) return
     setRebooting(true)
     try {
       const result = await invoke<string>('params_reboot')
@@ -435,7 +598,7 @@ export function ParamsApp() {
   }
 
   const pullAll = async () => {
-    if (!tauri) return
+    if (!connected) return
     setNotice(null)
     try {
       await invoke('params_pull')
@@ -445,7 +608,12 @@ export function ParamsApp() {
   }
   const cancelPull = async () => {
     if (!tauri) return
-    await invoke('params_cancel').catch(() => {})
+    try {
+      await invoke('params_cancel')
+      store.setState({ pulling: false, progress: null })
+    } catch (e) {
+      setNotice(String(e))
+    }
   }
 
   /** The filtered, sorted rows for the table. */
@@ -526,10 +694,9 @@ export function ParamsApp() {
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = 0
     setScrollTop(0)
-  }, [activeGroup, groupPane])
+  }, [activeGroup, groupPane, query, filter])
 
   const selectedMeta = selected ? meta.get(selected) : undefined
-  const selectedValue = selected ? values.get(selected) : undefined
 
   /** Keyboard navigation over the virtualized list (Params-5). */
   const selectedIndex = selected ? rows.indexOf(selected) : -1
@@ -720,22 +887,24 @@ export function ParamsApp() {
         label: 'Mock',
         title: 'Browser mock — no flight controller',
       }
-    : fcVersion == null
+    : !connected
       ? {
           tone: 'warn' as const,
-          label: 'No FC',
-          title: 'No flight controller link yet',
+          label: hadFc ? 'FC disconnected' : 'No FC',
+          title: hadFc ? 'FC heartbeat lost; the page will recover when the link returns' : 'No live flight controller heartbeat yet',
         }
-      : fcVersion.startsWith(META_VERSION)
-        ? {
+      : fcVersion == null
+        ? { tone: 'warn' as const, label: 'FC connected', title: 'Waiting for AUTOPILOT_VERSION' }
+        : fcVersion === metadataManifest?.firmwareVersion
+          ? {
             tone: 'ok' as const,
             label: `PX4 ${fcVersion}`,
-            title: `Firmware matches the bundled metadata (PX4 ${META_VERSION})`,
+            title: `Catalog version matches PX4 ${fcVersion}; catalog target: ${metadataManifest.target}`,
           }
-        : {
+          : {
             tone: 'warn' as const,
             label: `PX4 ${fcVersion}`,
-            title: `Firmware differs from the bundled metadata (PX4 ${META_VERSION}); descriptions may be outdated`,
+            title: `Catalog: PX4 ${metadataManifest?.firmwareVersion ?? 'unknown'} (${metadataManifest?.target ?? 'unknown'}); descriptions may differ`,
           }
 
   const gridStyle = {
@@ -756,7 +925,7 @@ export function ParamsApp() {
         <span className={`p-fc p-fc-${fcStatus.tone}`} title={fcStatus.title}>
           {fcStatus.label}
         </span>
-        <button className="p-btn" onClick={() => void pullAll()} disabled={pulling}>
+        <button className="p-btn" onClick={() => void pullAll()} disabled={!connected || pulling}>
           {pulling
             ? `Pulling ${progress ? `${progress.received}/${progress.total}` : '…'}`
             : 'Pull all'}
@@ -797,10 +966,10 @@ export function ParamsApp() {
         </span>
       </header>
 
-      {fcVersion != null && !fcVersion.startsWith(META_VERSION) && (
+      {fcVersion != null && metadataManifest != null && fcVersion !== metadataManifest.firmwareVersion && (
         <div className="p-version-note">
-          FC runs PX4 {fcVersion} but the bundled metadata is from PX4 {META_VERSION} —
-          descriptions may be outdated; unknown parameters stay editable.
+          FC runs PX4 {fcVersion}; the bundled catalog is PX4 {metadataManifest.firmwareVersion}
+          {' '}({metadataManifest.target}). Descriptions may differ; FC-reported parameters remain available.
         </div>
       )}
       {rebootNeeded.length > 0 && (
@@ -812,7 +981,7 @@ export function ParamsApp() {
             <button
               className="p-btn p-reboot-go"
               onClick={() => void rebootFc()}
-              disabled={rebooting || !tauri}
+              disabled={rebooting || !connected}
             >
               {rebooting ? 'Rebooting…' : 'Reboot FC'}
             </button>
@@ -865,6 +1034,11 @@ export function ParamsApp() {
                   : query
                     ? `No match for "${query}" — clear the search.`
                     : 'No parameters in this group.'}
+                {connected && /^[A-Z][A-Z0-9_]{0,15}$/i.test(query.trim()) && !meta.has(query.trim().toUpperCase()) && (
+                  <button className="p-btn" onClick={() => selectRow(query.trim().toUpperCase())}>
+                    Read {query.trim().toUpperCase()} from FC
+                  </button>
+                )}
               </div>
             ) : (
               <div
@@ -878,8 +1052,8 @@ export function ParamsApp() {
                   const isSel = selected === name
                   // Full cell text as a title so a clipped value is still
                   // reachable on hover; the detail pane shows it on selection.
-                  const valueText = v
-                    ? fmtValue(m, typeof v.value === 'number' ? v.value : null)
+                   const valueText = v
+                     ? fmtValue(m, valueNumber(v.value))
                     : rs === 'loading'
                       ? '…'
                       : rs === 'missing'
@@ -957,11 +1131,11 @@ export function ParamsApp() {
                 <div>
                   <dt>Value</dt>
                   <dd>
-                    {selectedValue
-                      ? fmtValue(selectedMeta, typeof selectedValue.value === 'number' ? selectedValue.value : null)
-                      : readState.get(selected) === 'loading'
-                        ? 'Fetching…'
-                        : 'Select a row to fetch'}
+                     {selectedValue
+                       ? fmtValue(selectedMeta, valueNumber(selectedValue.value))
+                       : readState.get(selected) === 'loading'
+                         ? 'Fetching…'
+                         : connected ? 'Not available; click the row to retry' : 'Waiting for FC reconnect'}
                   </dd>
                 </div>
                 {selectedMeta?.units && (
@@ -1048,7 +1222,7 @@ export function ParamsApp() {
                 <button
                   className="p-btn"
                   onClick={stageDraft}
-                  disabled={!tauri || draft === ''}
+                   disabled={!connected || draft === ''}
                   title="Stage the new value (applied from the tray below)"
                 >
                   Stage
@@ -1110,7 +1284,7 @@ export function ParamsApp() {
           <button
             className="p-btn p-tray-apply"
             onClick={() => void applyStaged()}
-            disabled={applying || !tauri}
+            disabled={applying || !connected}
           >
             {applying ? 'Applying…' : `Apply ${staged.size}`}
           </button>

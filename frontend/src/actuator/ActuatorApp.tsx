@@ -953,6 +953,11 @@ export function ActuatorApp() {
       run.phase,
     )
   const runLabel = run ? run.phase.replaceAll('_', ' ') : 'no run'
+  // Motors whose PWM range was NOT read from the PX4 (fallback) block the start.
+  const fallbackMotors = Array.from({ length: MOTOR_COUNT }, (_, index) =>
+    status.pwm_models[index]?.range_source !== 'fc' ? index + 1 : 0,
+  )
+    .filter((motor) => motor !== 0)
   const runHint =
     run?.phase === 'preroll'
       ? 'Recording — waiting for the 1 s pre-roll before START.'
@@ -1093,7 +1098,8 @@ export function ActuatorApp() {
               !status.target_connected ||
               !status.target_fc_alive ||
               status.armed ||
-              runBlocksStart
+              runBlocksStart ||
+              fallbackMotors.length > 0
             }
             title={
               gate === 'emergency'
@@ -1108,7 +1114,9 @@ export function ActuatorApp() {
                         ? 'Waiting for the target PX4 heartbeat'
                         : status.armed
                           ? 'Disarm the target PX4 first'
-                          : runBlocksStart
+                          : fallbackMotors.length > 0
+                            ? `PWM range not read from the PX4 for M${fallbackMotors.join(', M')} — refresh the mapping first`
+                            : runBlocksStart
                             ? runHint ?? 'Wait for the active test run'
                             : source === 'forward' && !status.sitl_connected
                               ? 'Connect the SITL source first'

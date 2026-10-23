@@ -25,30 +25,6 @@ interface MotorTrackingTableProps {
   running: boolean
 }
 
-/** Invert the uncompensated ACTUATOR_TEST value back to a physical pulse.
- * Mirrors `PwmModel::pulse_for_command` in core; null when the model or the
- * command cannot produce a physical output. */
-function expectedPulse(model: PwmModel | undefined, command: number | undefined): number | null {
-  if (!model || command == null) return null
-  const span = model.max_us - model.min_us
-  if (!(model.min_us < model.max_us) || span <= 0) return null
-  if (!Number.isFinite(command) || command < 0 || command > 1) return null
-  const a = model.thrust_factor
-  if (!Number.isFinite(a) || a < 0 || a > 1) return null
-  let x: number
-  if (a === 0) {
-    x = command
-  } else {
-    const linear = 1 - a
-    const discriminant = linear * linear + 4 * a * command
-    if (discriminant < 0) return null
-    x = (-linear + Math.sqrt(discriminant)) / (2 * a)
-  }
-  const fraction = model.reversed ? 1 - x : x
-  const pulse = model.min_us + fraction * span
-  return Number.isFinite(pulse) ? pulse : null
-}
-
 function sourceValue(
   status: ActuatorStatus,
   source: BenchSource,
@@ -71,14 +47,16 @@ function stateFor(
   model: PwmModel | undefined,
   mapped: boolean,
   reported: number | null,
+  expected: number | null,
   delta: number | null,
 ): { text: string; tone: string } {
   if (!status.target_connected) return { text: 'no target', tone: 'text-muted' }
   if (!fresh) return { text: 'stale link', tone: 'text-error' }
   if (!mapped) return { text: 'unmapped', tone: 'text-warn' }
   if (!model) return { text: 'no model', tone: 'text-muted' }
-  if (model.disabled) return { text: 'disabled', tone: 'text-warn' }
+  if (model.range_source !== 'fc') return { text: 'range unread', tone: 'text-warn' }
   if (!running) return { text: 'idle', tone: 'text-muted' }
+  if (expected == null) return { text: 'released', tone: 'text-muted' }
   if (reported == null) return { text: 'no feedback', tone: 'text-warn' }
   if (delta != null && Math.abs(delta) <= TRACKING_TOLERANCE_US) {
     return { text: 'tracking', tone: 'text-ok' }
@@ -104,8 +82,8 @@ export default function MotorTrackingTable(props: MotorTrackingTableProps) {
       <div className="tracking-head">
         <h3>Motor tracking</h3>
         <span className="estop-note">
-          Expected is inverted from the sent command; safety limits may reduce
-          demand before encoding.
+          Command PWM is converted by the sender using the PX4 range, after
+          safety limits and compensation. ACTUATOR_TEST itself uses 0–1.
         </span>
       </div>
       <div className="motor-table-wrap">
@@ -114,8 +92,9 @@ export default function MotorTrackingTable(props: MotorTrackingTableProps) {
             <tr>
               <th>Motor</th>
               <th>Output</th>
+              <th>PWM range (PX4)</th>
               <th>Source</th>
-              <th>Expected</th>
+              <th>Command PWM</th>
               <th>Reported</th>
               <th>Δ</th>
               <th>State</th>
@@ -130,7 +109,7 @@ export default function MotorTrackingTable(props: MotorTrackingTableProps) {
               const model = status.pwm_models[index]
               const command = status.output_values[index]
               const expected =
-                running && channel && model ? expectedPulse(model, command) : null
+                running && channel ? status.output_pwm?.[index] ?? null : null
               const rawReported = status.fc_output_pwm[index]
               const reported = statusFresh && rawReported != null ? rawReported : null
               const delta =
@@ -142,6 +121,7 @@ export default function MotorTrackingTable(props: MotorTrackingTableProps) {
                 model,
                 channel != null,
                 reported,
+                expected,
                 delta,
               )
               const open = expanded.has(motor)
@@ -152,8 +132,13 @@ export default function MotorTrackingTable(props: MotorTrackingTableProps) {
                     <td className="mono">
                       {channel ? channelLabel(channel) : 'unmapped'}
                     </td>
+                    <td className={`mono ${model?.range_source === 'fc' ? '' : 'text-warn'}`} data-testid={`motor-range-${motor}`}>
+                      {channel && model?.range_source === 'fc'
+                        ? `${model.min_us}–${model.max_us} µs`
+                        : 'Not read'}
+                    </td>
                     <td className="mono">{sourceValue(status, source, values, index)}</td>
-                    <td className="mono" title="Physical pulse expected from the last sent command">
+                    <td className="mono" data-testid={`motor-command-pwm-${motor}`} title="PWM converted from the sender's queued ACTUATOR_TEST command; not measured feedback">
                       {expected != null ? `${expected.toFixed(0)} µs` : '—'}
                     </td>
                     <td className="mono">
@@ -178,7 +163,7 @@ export default function MotorTrackingTable(props: MotorTrackingTableProps) {
                   </tr>
                   {open && (
                     <tr className="motor-detail" key={`${motor}-detail`}>
-                      <td colSpan={8}>
+                      <td colSpan={9}>
                         <span>
                           Function Motor{motor} →{' '}
                           {channel ? channelLabel(channel) : 'no mapped output'}
@@ -187,7 +172,20 @@ export default function MotorTrackingTable(props: MotorTrackingTableProps) {
                           Range{' '}
                           {model
                             ? `${model.min_us}–${model.max_us} µs`
-                            : 'unknown'}
+                            : 'unknown'}{' '}
+                          {model ? (
+                            <em
+                              className={
+                                model.range_source === 'fallback'
+                                  ? 'text-error'
+                                  : undefined
+                              }
+                            >
+                              {model.range_source === 'fc'
+                                ? '(from PX4)'
+                                : '(fallback, not read)'}
+                            </em>
+                          ) : null}
                         </span>
                         <span>
                           Reversed {model ? (model.reversed ? 'yes' : 'no') : '—'}
@@ -197,7 +195,7 @@ export default function MotorTrackingTable(props: MotorTrackingTableProps) {
                           {model ? model.thrust_factor.toFixed(2) : '—'}
                         </span>
                         <span>
-                          ACTUATOR_TEST{' '}
+                          ACTUATOR_TEST normalized (0–1){' '}
                           {running && command != null ? command.toFixed(6) : '—'}
                         </span>
                       </td>
@@ -209,6 +207,19 @@ export default function MotorTrackingTable(props: MotorTrackingTableProps) {
           </tbody>
         </table>
       </div>
+      {status.pwm_models.some((model) => model.range_source === 'fallback') ? (
+        <div className="estop-note text-error">
+          PWM range not read from the PX4 for{' '}
+          {status.pwm_models
+            .map((model, index) =>
+              model.range_source === 'fallback' ? `M${index + 1}` : null,
+            )
+            .filter((motor) => motor != null)
+            .join(', ')}{' '}
+          — fallback 1100–1900 µs applies and starting is blocked. Refresh
+          after checking the serial link and PWM_MAIN/AUX_MINn/MAXn.
+        </div>
+      ) : null}
       {status.output_map.state === 'invalid' || status.output_map.issues.length > 0 ? (
         <div className="estop-note text-error">
           Mapping has {status.output_map.issues.length} issue

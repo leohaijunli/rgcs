@@ -4,6 +4,8 @@
 
 import { create } from 'zustand'
 import type { ParamEntry } from '../generated-types/ParamEntry'
+import type { ParamType } from '../generated-types/ParamType'
+import type { ParamValue } from '../generated-types/ParamValue'
 
 /** PX4 metadata entry (tools/param-meta schema). */
 export interface ParamMeta {
@@ -80,7 +82,7 @@ interface ParamsState {
   metaGroups: Map<string, string[]>
   /** User-defined groups (persisted). */
   groups: ParamGroup[]
-  /** FC firmware version from AUTOPILOT_VERSION ("" until it arrives). */
+  /** FC firmware version from AUTOPILOT_VERSION (null until it arrives). */
   fcVersion: string | null
   /** Staged changes (name → new value); PM6 applies them. */
   staged: Map<string, number | string>
@@ -88,6 +90,7 @@ interface ParamsState {
   setMeta: (list: ParamMeta[]) => void
   onEvent: (ev: ParamsIpcEvent) => void
   clearValues: () => void
+  resetConnection: () => void
 
   addGroup: (name: string, note: string) => void
   renameGroup: (id: string, name: string) => void
@@ -104,7 +107,7 @@ export type ParamsIpcEvent =
   | { kind: 'batch'; entries: ParamEntry[] }
   | { kind: 'progress'; received: number; total: number }
   | { kind: 'pull_done'; received: number; total: number }
-  | { kind: 'external_change'; name: string; value: unknown; ptype: string }
+  | { kind: 'external_change'; name: string; value: ParamValue; ptype: ParamType }
   | { kind: 'fc_version'; version: string }
 
 export const useParamsStore = create<ParamsState>((set, get) => ({
@@ -144,7 +147,7 @@ export const useParamsStore = create<ParamsState>((set, get) => ({
     } else if (ev.kind === 'external_change') {
       const values = new Map(get().values)
       const existing = values.get(ev.name)
-      if (existing) values.set(ev.name, existing)
+      if (existing) values.set(ev.name, { ...existing, value: ev.value, ptype: ev.ptype })
       set({ values })
     } else if (ev.kind === 'fc_version') {
       set({ fcVersion: ev.version })
@@ -152,6 +155,7 @@ export const useParamsStore = create<ParamsState>((set, get) => ({
   },
 
   clearValues: () => set({ values: new Map(), progress: null, pulling: false }),
+  resetConnection: () => set({ values: new Map(), progress: null, pulling: false, fcVersion: null }),
 
   addGroup: (name, note) => {
     const groups = [...get().groups, { id: newGroupId(), name, note, members: [] }]

@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "firmwareVersion": "1.17.0",
+  "target": "px4_fmu-v6x_default",
+  "parameterCount": 1912,
+  "sourceUrl": "https://px4-travis.s3.amazonaws.com/Firmware/v1.17.0/px4_fmu-v6x_default/parameters.json.xz",
+  "sourceJsonSha256": "edd9a8fe0107b6f0560b80261ad49d1820605a0518d2b303a33cd2914379aadf",
+  "catalogSha256": "8973abdcc317c74786a397dbfae8582a8340796842c9d7869669ab589b02634e"
+}

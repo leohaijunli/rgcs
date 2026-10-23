@@ -40,6 +40,7 @@ node scripts/check-startpage.mjs 'http://localhost:5199/?start&nomap' screenshot
 node scripts/check-field-mode.mjs http://localhost:5199/ /tmp/opencode/field-shots
 node scripts/check-inspector.mjs http://localhost:5199/inspector.html screenshots/inspector
 node scripts/check-params.mjs http://localhost:5199/params.html screenshots/params
+node scripts/check-params-connection.mjs http://localhost:5199/params.html screenshots/params/connection
 node scripts/check-motor-controls.mjs http://localhost:5199/actuator.html screenshots/motor-test
 node scripts/check-logs-delete.mjs 'http://localhost:5199/?nomap' screenshots/logs
 ```
@@ -57,6 +58,11 @@ These checks use browser mocks or isolated IPC stubs. Acceptance includes:
 - Inspector at 800 × 480, Parameters at 900 × 600, and Motor test at
   1024 × 640, as well as both desktop sizes. Header/logo bounds were also
   measured in dark, light, and night-red themes.
+- Parameters: the firmware-version IPC contract, tagged numeric values,
+  hardware-specific catalog entries, search virtualization, same-endpoint
+  reconnect recovery and rejection of delayed old replies. See the
+  [module verification](src/params/README.md) for read-only serial acceptance
+  and native desktop review steps.
 
 ### Screenshots
 

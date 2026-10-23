@@ -37,14 +37,15 @@ await page.addInitScript(() => {
     com_mot_test_en: 1, sdlog_mode: 0, sdlog_backend: 1,
     parameter_restart_pending: false, input_values: [], input_pwm: [],
     output_values: [],
+    output_pwm: [],
     fc_output_pwm: [1500, 1503, 1740, null],
     input_values: [0.4, 0.5, 0.6, 0.7],
     input_pwm: [1400, 1500, 1600, 1700],
     pwm_models: [
-      { min_us: 1000, max_us: 2000, reversed: false, thrust_factor: 0, disabled: false },
-      { min_us: 1000, max_us: 2000, reversed: false, thrust_factor: 0, disabled: false },
-      { min_us: 1000, max_us: 2000, reversed: true, thrust_factor: 0, disabled: false },
-      { min_us: 1000, max_us: 2000, reversed: false, thrust_factor: 0, disabled: false },
+      { min_us: 1100, max_us: 1900, reversed: false, thrust_factor: 0, disabled: false, range_source: 'fc' },
+      { min_us: 1000, max_us: 2000, reversed: false, thrust_factor: 0, disabled: false, range_source: 'fc' },
+      { min_us: 1000, max_us: 2000, reversed: true, thrust_factor: 0, disabled: false, range_source: 'fc' },
+      { min_us: 1000, max_us: 2000, reversed: false, thrust_factor: 0, disabled: false, range_source: 'fc' },
     ],
     output_map: {
       motors: [
@@ -104,12 +105,14 @@ await page.addInitScript(() => {
         if (test.startError) throw new Error(test.startError)
         status.session = 'running'
         status.output_values = [0.5, 0.5, 0.25, 0]
+        status.output_pwm = [1500, 1500, 1750, null]
         test.emit('actuator_event', { kind: 'state', state: 'manual_running' })
         return
       }
       if (command === 'actuator_stop') {
         status.session = 'idle'
         status.output_values = []
+        status.output_pwm = []
         test.emit('actuator_event', { kind: 'stopped', reason: 'command' })
         return
       }
@@ -150,6 +153,12 @@ try {
   await page.waitForFunction(() => document.getElementById('motor-sitl-details')?.hidden === true)
   assert.equal(await calls('actuator_start_forward'), 0, 'changing the displayed source never starts a test')
   await page.getByRole('button', { name: 'Unlock test', exact: true }).click()
+  const fcModels = await page.evaluate(() => structuredClone(window.__bench.status.pwm_models))
+  await page.evaluate(() => { window.__bench.status.pwm_models = [] })
+  await page.waitForFunction(() => document.querySelector('button.start-btn')?.disabled === true)
+  assert.equal(await page.getByTestId('motor-range-1').textContent(), 'Not read', 'missing models are not presented as FC ranges')
+  await page.evaluate((models) => { window.__bench.status.pwm_models = models }, fcModels)
+  await page.waitForFunction(() => document.querySelector('button.start-btn')?.disabled === false)
   for (const label of ['No props', 'Flat plate']) {
     if (label === 'Flat plate') {
       await page.getByRole('button', { name: label, exact: true }).click()
@@ -165,11 +174,12 @@ try {
     if (label === 'No props') {
       await page.getByText('tracking', { exact: true }).first().waitFor()
       const rows = page.locator('.motor-table tbody tr')
-      assert.equal(await rows.nth(0).locator('td').nth(3).textContent(), '1500 µs', 'M1 expected pulse from the sent command')
-      assert.equal(await rows.nth(0).locator('td').nth(5).textContent(), '0 µs', 'M1 tracks')
-      assert.equal(await rows.nth(2).locator('td').nth(3).textContent(), '1750 µs', 'M3 inverted model expected pulse')
-      assert.equal(await rows.nth(2).locator('td').nth(6).textContent(), 'mismatch', 'M3 outside ±5 µs')
-      assert.equal(await rows.nth(3).locator('td').nth(6).textContent(), 'no feedback', 'M4 has no reported pulse')
+      assert.equal(await page.getByTestId('motor-range-1').textContent(), '1100–1900 µs', 'the FC-read range is visible without expanding details')
+      assert.equal(await page.getByTestId('motor-command-pwm-1').textContent(), '1500 µs', 'M1 converted pulse from the sender')
+      assert.equal(await rows.nth(0).locator('td').nth(6).textContent(), '0 µs', 'M1 tracks')
+      assert.equal(await page.getByTestId('motor-command-pwm-3').textContent(), '1750 µs', 'M3 inverted model expected pulse')
+      assert.equal(await rows.nth(2).locator('td').nth(7).textContent(), 'mismatch', 'M3 outside ±5 µs')
+      assert.equal(await rows.nth(3).locator('td').nth(7).textContent(), 'released', 'M4 has no active PWM command')
     }
     if (label === 'Flat plate') {
       await page.locator('.actuator-header .stop-tab').click()
@@ -272,6 +282,7 @@ try {
       const t = now - 20 + i / 10
       samples.push(
         { id: 'fc.servo1', t, v: 1500 + 20 * Math.sin(i / 10) },
+        { id: 'cmd.pwm1', t, v: 1500 + 20 * Math.sin(i / 10) },
         { id: 'mag.raw_total', t, v: 50000 + 50 * Math.sin(i / 8) },
         { id: 'esc1.rpm', t, v: 4000 + 300 * Math.sin(i / 12) },
         { id: 'bat1.current', t, v: 12 + 2 * Math.sin(i / 6) },
@@ -280,6 +291,16 @@ try {
     test.emit('actuator_samples', samples)
   })
   await page.waitForFunction(() => document.querySelectorAll('.scope-pane').length === 4)
+  const pwmTrace = page.locator('.signal-row', { hasText: 'Command PWM M 1' })
+  await pwmTrace.waitFor()
+  assert.ok((await pwmTrace.locator('.signal-value').innerText()).includes('µs'), 'command plot uses PWM units')
+  await page.evaluate(() => window.__bench.emit('actuator_samples', [
+    { id: 'cmd.pwm1', t: Date.now() / 1000, v: null },
+  ]))
+  await page.waitForFunction(() => [...document.querySelectorAll('.signal-row')].some((row) =>
+    row.textContent.includes('Command PWM M 1') && row.querySelector('.state-dot.released'),
+  ))
+  assert.equal(await pwmTrace.locator('.signal-value').innerText(), '—', 'release leaves a gap, not a made-up 0 or minimum PWM')
   await page.getByRole('button', { name: 'Log retrieval', exact: true }).click()
 
   const signalList = page.getByRole('button', { name: 'Signal list', exact: true })

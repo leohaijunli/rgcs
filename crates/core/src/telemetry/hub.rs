@@ -162,6 +162,11 @@ async fn pump(
     // Latched from `ConnectionEvent::Connected` so heartbeat transitions keep
     // reporting the endpoint the UI is connected to.
     let mut endpoint = String::new();
+    // The last published liveness (bench finding 2026-10-23): a serial
+    // transport error (FC unplugged) breaks the connection loop before the
+    // heartbeat watchdog inside it can fire, so the pump must publish the
+    // loss itself or the UI keeps a stale "online".
+    let mut alive = false;
     // Event-driven: inbound frames are consumed as soon as they arrive and
     // snapshots are throttled to `hz` by a ticker, instead of polling the bus
     // with `try_recv` + `sleep` (issues.md #19). The first tick fires
@@ -197,6 +202,7 @@ async fn pump(
                     }
                 }
                 Ok(ConnectionEvent::HeartbeatRestored) => {
+                    alive = true;
                     let _ = link_tx.send(LinkStatus::alive(endpoint.clone()));
                 }
                 Ok(ConnectionEvent::TargetDiscovered { .. }) => {
@@ -204,12 +210,14 @@ async fn pump(
                     // liveness transition; nothing to update here (auto-discovery).
                 }
                 Ok(ConnectionEvent::HeartbeatLost { .. }) => {
+                    alive = false;
                     let _ = link_tx.send(LinkStatus::lost(endpoint.clone()));
                 }
                 Ok(ConnectionEvent::Connected {
                     endpoint: connected,
                 }) => {
                     endpoint = connected.to_address_string();
+                    alive = false;
                     let _ = link_tx.send(LinkStatus {
                         link_state: LinkState::Connected,
                         endpoint: endpoint.clone(),
@@ -217,6 +225,13 @@ async fn pump(
                     });
                 }
                 Ok(ConnectionEvent::LinkError(f)) => {
+                    // A transport error (device unplugged) tears the tracked
+                    // link down: the watchdog-owned heartbeat timeout can no
+                    // longer fire from the doomed connection loop.
+                    if alive {
+                        alive = false;
+                        let _ = link_tx.send(LinkStatus::lost(endpoint.clone()));
+                    }
                     let _ = error_tx.send(TelemetryError {
                         kind: f.kind,
                         message: f.message,
@@ -468,6 +483,47 @@ mod tests {
         .expect("target heartbeat never reached the snapshot");
 
         assert_eq!(heartbeat.custom_mode, 0x0004_0000);
+        hub.shutdown();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn link_error_while_alive_publishes_the_heartbeat_loss() {
+        // Serial unplug (bench finding 2026-10-23): the read side errors and
+        // the connection loop restarts before its heartbeat watchdog can fire
+        // HeartbeatLost, so the pump must tear the published "alive" down on
+        // the transport error itself.
+        let (events_tx, events_rx) = broadcast::channel(16);
+        let hub = TelemetryHub::spawn(events_rx, 100, VehicleId::new(1, 1));
+        let mut link_rx = hub.subscribe_link();
+
+        events_tx
+            .send(ConnectionEvent::HeartbeatRestored)
+            .expect("send restore");
+        tokio::time::timeout(Duration::from_secs(2), link_rx.changed())
+            .await
+            .expect("alive status timed out")
+            .expect("status changed");
+        assert!(link_rx.borrow().fc_alive, "the FC heartbeat was restored");
+
+        events_tx
+            .send(link_error_event("device removed"))
+            .expect("send link error");
+        tokio::time::timeout(Duration::from_secs(2), link_rx.changed())
+            .await
+            .expect("lost status timed out")
+            .expect("status changed");
+        assert!(
+            !link_rx.borrow().fc_alive,
+            "the transport error must unpublish the alive FC"
+        );
+
+        // A link error while never alive does not fake a liveness flip.
+        let stale = link_rx.borrow().clone();
+        events_tx
+            .send(link_error_event("second failure"))
+            .expect("send second error");
+        // The error channel still delivers it, but the link status stays.
+        assert_eq!(&*link_rx.borrow(), &stale, "no replay of the loss");
         hub.shutdown();
     }
 

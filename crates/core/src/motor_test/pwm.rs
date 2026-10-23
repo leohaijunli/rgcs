@@ -12,6 +12,25 @@
 /// PWM endpoints accepted from `PWM_*_MINn` / `PWM_*_MAXn`.
 pub const PWM_US_MAX: u16 = 3000;
 
+/// Fallback PWM range used when the mapped channel's `PWM_*_MINn`/`MAXn`
+/// could not be read (or the motor is unmapped). This must never be applied
+/// silently: the model carries [`PwmRangeSource::Fallback`] and the start
+/// path refuses to launch on it.
+pub const FALLBACK_MIN_US: u16 = 1100;
+pub const FALLBACK_MAX_US: u16 = 1900;
+
+/// Where a model's PWM range came from: read from the PX4, or the operator
+/// fallback (which disallows starting until the mapping is refreshed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PwmRangeSource {
+    /// `PWM_*_MINn`/`MAXn` were read from the FC this session targets.
+    Fc,
+    /// Not read (unreadable parameters or an unmapped motor); the fallback
+    /// range applies and starting is blocked at the app boundary.
+    Fallback,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
 pub enum PwmModelError {
     #[error("PWM range must be 0…3000 µs with min < max")]
@@ -29,19 +48,22 @@ pub struct PwmModel {
     pub max_us: u16,
     pub reversed: bool,
     pub thrust_factor: f32,
-    /// `PWM_*_DISn` is set; conversion is still defined, but PX4 may not drive
-    /// the connector.
+    /// Legacy flag recording a nonzero `PWM_*_DISn` disarmed pulse. This is
+    /// not evidence that the active motor function is disabled.
     pub disabled: bool,
+    /// Whether the range was read from the FC or is the fallback default.
+    pub range_source: PwmRangeSource,
 }
 
 impl Default for PwmModel {
     fn default() -> Self {
         Self {
-            min_us: 1000,
-            max_us: 2000,
+            min_us: FALLBACK_MIN_US,
+            max_us: FALLBACK_MAX_US,
             reversed: false,
             thrust_factor: 0.0,
             disabled: false,
+            range_source: PwmRangeSource::Fallback,
         }
     }
 }
@@ -66,6 +88,7 @@ impl PwmModel {
             reversed,
             thrust_factor,
             disabled: false,
+            range_source: PwmRangeSource::Fc,
         })
     }
 
@@ -219,6 +242,29 @@ mod tests {
             model.command_for_pulse(2001.0),
             Err(PwmModelError::UnreachablePulse)
         );
+    }
+
+    #[test]
+    fn fallback_default_is_1100_1900_and_explicitly_marked() {
+        let model = PwmModel::default();
+        assert_eq!(model.min_us, FALLBACK_MIN_US);
+        assert_eq!(model.max_us, FALLBACK_MAX_US);
+        assert_eq!(model.range_source, PwmRangeSource::Fallback);
+        // A fallback model still encodes its range fraction exactly.
+        let mid = model.command_for_pulse(1500.0).expect("mid pulse");
+        assert!(
+            (model.pulse_for_command(mid).expect("mid round trip") - 1500.0).abs() <= 1.0,
+            "fallback round trip: {mid} -> {}",
+            model.pulse_for_command(mid).expect("mid round trip")
+        );
+    }
+
+    #[test]
+    fn a_constructor_model_comes_from_the_fc() {
+        let model = PwmModel::new(1150, 1850, false, 0.0).expect("model");
+        assert_eq!(model.range_source, PwmRangeSource::Fc);
+        // with_disabled only flips the flag; the source marker is kept.
+        assert_eq!(model.with_disabled(true).range_source, PwmRangeSource::Fc);
     }
 
     #[test]

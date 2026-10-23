@@ -104,6 +104,9 @@ jobs:
   windows-build:
     name: Build Windows installer (NSIS/MSI)
     needs: [rust-check, deny, frontend]
+    # A failed check must remain visible, but must not silently skip the
+    # requested installer build. Artifacts still go to a draft release.
+    if: ${{ always() && !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: windows-latest
     permissions:
       contents: write
@@ -150,6 +153,7 @@ jobs:
   ubuntu-build:
     name: Build Ubuntu installer (AppImage/deb)
     needs: [rust-check, deny, frontend]
+    if: ${{ always() && !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -35,6 +35,8 @@ const BATCH_LEN: usize = 100;
 /// Per-send echo timeout (retried by the session budget).
 const SET_TIMEOUT: Duration = Duration::from_secs(1);
 pub const TRANSACTION_TIMEOUT: Duration = Duration::from_secs(5);
+/// Poll period while waiting for `AUTOPILOT_VERSION` to land.
+const FC_VERSION_POLL: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 #[ts(export)]
@@ -157,7 +159,7 @@ pub struct ParamService {
     fc_version: FcVersion,
 }
 
-/// The FC's reported AUTOPILOT_VERSION (shared slot, set once on request).
+/// The FC's reported AUTOPILOT_VERSION, invalidated when the link is lost.
 #[derive(Clone, Default)]
 pub struct FcVersion {
     inner: Arc<StdMutex<Option<String>>>,
@@ -167,6 +169,11 @@ impl FcVersion {
     fn set(&self, v: String) {
         if let Ok(mut g) = self.inner.lock() {
             *g = Some(v);
+        }
+    }
+    fn clear(&self) {
+        if let Ok(mut version) = self.inner.lock() {
+            *version = None;
         }
     }
     pub fn get(&self) -> Option<String> {
@@ -221,7 +228,7 @@ impl ParamService {
         )
     }
 
-    /// The FC's firmware version ("" until AUTOPILOT_VERSION arrives).
+    /// The FC's firmware version (None until AUTOPILOT_VERSION arrives).
     pub fn fc_version(&self) -> Option<String> {
         self.fc_version.get()
     }
@@ -259,6 +266,30 @@ impl ParamService {
             return Err(ParamError::NotConnected);
         }
         Ok(())
+    }
+
+    /// Request `AUTOPILOT_VERSION` and wait for the answer to land.
+    ///
+    /// Replies arrive asynchronously, including after the caller has queued
+    /// its request. Each attempt waits up to `settle` for the slot to fill and
+    /// re-requests between attempts; a cached version returns instantly.
+    pub async fn wait_fc_version(&self, attempts: u32, settle: Duration) -> Option<String> {
+        for _ in 0..attempts {
+            if let Some(version) = self.fc_version() {
+                return Some(version);
+            }
+            if self.request_fc_version().await.is_err() {
+                return self.fc_version();
+            }
+            let deadline = Instant::now() + settle;
+            while Instant::now() < deadline {
+                tokio::time::sleep(FC_VERSION_POLL).await;
+                if let Some(version) = self.fc_version() {
+                    return Some(version);
+                }
+            }
+        }
+        self.fc_version()
     }
 
     /// Read one parameter by name (lazy load); resolves with the FC's value.
@@ -425,6 +456,14 @@ impl ParamCache {
         self.len() == 0
     }
 
+    /// Snapshot of every cached parameter name (param UI & diagnostics).
+    pub fn names(&self) -> Vec<String> {
+        self.entries
+            .lock()
+            .map(|guard| guard.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
     fn update(&self, entry: ParamEntry) {
         if let Ok(mut guard) = self.entries.lock() {
             guard.insert(entry.name.clone(), (entry, Instant::now()));
@@ -494,6 +533,8 @@ async fn run(
                     },
                     Command::Cancel => {
                         session.cancel();
+                        flush_batch(&mut batch, &mut batch_names, &evt_tx);
+                        last_progress = None;
                         quiet_deadline = None;
                         set_deadline = None;
                         read_deadline = None;
@@ -648,9 +689,20 @@ async fn run(
                             }
                         }
                     }
-                    Ok(ConnectionEvent::LinkError(_)) | Ok(ConnectionEvent::Connected { .. }) | Ok(ConnectionEvent::Failed(_)) => {
-                        session.cancel();
+                    Ok(ConnectionEvent::LinkError(_))
+                    | Ok(ConnectionEvent::Connected { .. })
+                    | Ok(ConnectionEvent::HeartbeatLost { .. })
+                    | Ok(ConnectionEvent::Failed(_)) => {
+                        // The worker reuses this event bus across serial
+                        // reconnects. Discard every old-session observation,
+                        // including a partial batch/progress and firmware
+                        // identity, while keeping this protocol task alive.
+                        session = ParamSession::default();
                         cache.clear();
+                        fc_version.clear();
+                        batch.clear();
+                        batch_names.clear();
+                        last_progress = None;
                         pending_set_reply.reject(ParamError::NotConnected);
                         if let Some((_, reply)) = pending_read_reply.take() { let _ = reply.send(Err(ParamError::NotConnected)); }
                         set_deadline = None; read_deadline = None; quiet_deadline = None;

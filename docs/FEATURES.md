@@ -317,14 +317,22 @@ Separate window; three panes: PX4 groups + operator **custom groups**
 a virtualized parameter table in the middle, and the editor/detail panel on
 the right.
 
-- **Metadata-first**: the bundled PX4 v1.17 metadata (units, enum values,
+- **Metadata-first**: the official PX4 v1.17.0 `px4_fmu-v6x_default` catalog
+  (1912 parameters, including `USB_MAV_MODE`; units, enum values,
   descriptions, reboot flags) renders the full list without a link; the FC
   value of the selected row is fetched lazily. "Pull all" stays explicit for
   snapshot/diff workflows, and a lost list request self-heals (re-issued
   within the retry budget).
 - **Version guard**: the FC's `AUTOPILOT_VERSION` is checked against the
-  bundled 1.17.0 metadata — mismatches show a notice (descriptions may be
-  outdated).
+  bundled metadata manifest (version, target, source and hashes). A live FC
+  waiting for its version is distinguished from a disconnected FC; version
+  mismatches show a notice. FC-reported parameters without metadata remain
+  available, including an exact-name read from an empty search result.
+- **Recovery**: a window opened before the FC connects and a window retained
+  through disconnect/reconnect both refresh automatically. Old values and
+  queued reads are invalidated; the selected row is re-read, and delayed
+  replies from the old connection cannot overwrite the new state. Search
+  changes reset the virtualized scroll position.
 - **Editing**: inline type-aware editor (enum dropdowns show
   `value · description`; numbers carry units), Stage → staging tray →
   Apply with echo confirmation.
@@ -332,6 +340,8 @@ the right.
   the banner lists them with a Reboot FC button
   (`MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN`) that reports the FC's real verdict
   — SITL denies it (a NuttX-only code path), the UI says so.
+
+See [Parameters verification and screenshots](../frontend/src/params/README.md).
 
 ## Motor / mag interference test (Tools ▸)
 
@@ -394,8 +404,14 @@ Field mode at startup and follows changes from the main window. See the
   range and are compensated before encoding; forwarded SITL pulses are
   converted through the same target model, so a reversed or narrow-range
   output still reproduces the requested pulse. The right panel shows the
-  endpoints, reversal, thrust factor and disabled state; missing or invalid
-  parameters fall back to the identity 1000–2000 µs model.
+  endpoints, reversal and thrust factor. The tracking table always shows
+  each motor's FC-read range. Missing/invalid ranges are explicitly marked
+  fallback and block starting until refreshed.
+- **Command PWM curves**: the sender converts its queued, compensated
+  ACTUATOR_TEST values into µs using the same target models. Command PWM is
+  displayed and plotted separately from measured servo feedback; release is
+  a curve gap, not a synthetic zero or minimum pulse. The MAVLink wire value
+  remains normalized as required by the protocol.
 - **Sending**: `MAV_CMD_ACTUATOR_TEST` at 10 Hz addressed to the configured
   target system ID; only that system's heartbeat/ACK and target telemetry are
   used for the safety gate and plots. A session is bound to its connection
@@ -466,6 +482,11 @@ Separate window; raw signal tap over MAVLink or a ULog replay
 average, detrend) and FFT — all executed in Rust. Angles are displayed in
 degrees; the trace palette is token-based and theme-aware. Workspaces
 (plots/traces/colors) persist locally.
+
+The header's **Live link** status requires a live primary FC heartbeat.
+After FC loss it shows **FC disconnected** and zero live message rate even
+while the transport handle is retained for reconnect. ULog replay is an
+independent source. See [Inspector verification](../frontend/src/inspector/README.md).
 
 **Mag calibration:** load a calibration JSON (Overflow ▸ *Load mag
 calibration…*); the Rust session then derives the calibrated total field

@@ -38,6 +38,38 @@ Magnetic monitoring displays **Disabled**, **No data**, **Monitoring**, or
 existing watchdog handlers. SD capture actions stay visible when secondary log
 details are collapsed.
 
+## FC PWM range and converted commands
+
+The tracking table always displays each mapped motor's **PWM range (PX4)**
+in microseconds. Unread ranges show **Not read** and block START. Refresh
+mapping reads the channel's min/max again.
+
+`ACTUATOR_TEST.param1` stays normalized as required by MAVLink. The sender
+converts its queued, post-safety-limit command back to physical PWM using
+the same min/max, reversal and thrust model that encoded it. **Command PWM**
+is displayed and plotted in **µs**, separately from measured FC servo feedback.
+For example, 25% of 1100–1900 is 1300 µs; 25% of 1200–1800 is 1350 µs.
+
+No active command is represented by a curve gap, not a fabricated zero or
+minimum pulse. An active normalized-zero command for a reversed motor remains
+distinguishable from release. Full STOP readback clears after confirmed release
+writes. `PWM_*_DISn` describes disarmed output separately from active min/max;
+it is not a channel-disable flag.
+
+Verified on 2026-10-23 with 80 core motor-test tests and the isolated IPC check
+at 1024 × 640, 1366 × 768 and 1920 × 1080. The check covers the visible FC range,
+microsecond command trace, release gap and existing controls/layout behavior:
+
+```bash
+PLAYWRIGHT_MODULE=/path/to/playwright node scripts/check-motor-controls.mjs \
+  http://127.0.0.1:1420/actuator.html screenshots/motor-pwm
+```
+
+[PWM workspace screenshot](../../screenshots/motor-pwm/motor-controls-1366x768.png).
+For native review, refresh the serial target's mapping and check each min/max;
+during an explicitly authorized disarmed bench test, check Command PWM and
+its µs curve, then STOP and confirm the gap.
+
 ## Display preferences
 
 `main.tsx` applies the saved theme and Field mode before rendering and listens

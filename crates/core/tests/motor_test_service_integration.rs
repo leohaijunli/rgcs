@@ -136,6 +136,20 @@ async fn harness_for_system_id(target_system_id: u8) -> Harness {
         }
 
         let (svc, evt, _output) = MotorTestService::spawn(handle.clone(), limits(target_system_id));
+        // An active test requires nonzero demand. Zero sliders now correctly
+        // leave motors released instead of continuously commanding PWM_MIN.
+        svc.send(MotorTestCommand::SetPwmModels {
+            models: vec![
+                maggcs_core::motor_test::pwm::PwmModel::new(1100, 1900, false, 0.0)
+                    .expect("fake FC model");
+                4
+            ],
+        })
+        .await
+        .expect("FC models");
+        svc.send(MotorTestCommand::SetValues(vec![0.4; 4]))
+            .await
+            .expect("test demand");
         return Harness {
             handle,
             svc,
@@ -168,14 +182,19 @@ async fn next_actuator_frame(
             return None;
         }
         let p = peer.lock().await;
-        match timeout(remaining, p.recv()).await {
+        // Do not starve the heartbeat sender while waiting for a frame.
+        match timeout(remaining.min(Duration::from_millis(50)), p.recv()).await {
             Ok(Ok((_, MavMessage::COMMAND_LONG(c))))
                 if c.command == ::mavlink::common::MavCmd::MAV_CMD_ACTUATOR_TEST =>
             {
                 return Some(c)
             }
             Ok(Ok(_)) => continue,
-            _ => return None,
+            Err(_) => {
+                drop(p);
+                tokio::task::yield_now().await;
+            }
+            Ok(Err(_)) => return None,
         }
     }
 }

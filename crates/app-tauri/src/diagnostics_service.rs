@@ -253,11 +253,12 @@ mod tests {
 
     #[test]
     fn the_bundle_copies_config_log_and_alerts() {
-        // The command needs a Tauri AppHandle; the folder/summary logic the
-        // bundle shares with the command is exercised via the panic test's
-        // logger plus this direct copy check against a fake log dir.
+        // Use an isolated log fixture: init_file_logger is process-global,
+        // and the concurrent panic test removes its own temporary directory.
+        // The real logger/panic hook is exercised by that test instead.
         let dir = tmp_dir("bundle");
-        let log_path = init_file_logger(&dir);
+        let log_path = dir.join("maggcs.log");
+        append_line(&log_path, &format!("maggcs v{VERSION} — logging started"));
         append_line(&log_path, "hello diagnostics");
         let dest = dir.join("bundle");
         fs::create_dir_all(&dest).expect("mkdir");

@@ -665,7 +665,7 @@ dependencies = [
 
 [[package]]
 name = "dem-prep"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -2001,7 +2001,7 @@ dependencies = [
 
 [[package]]
 name = "maggcs-app"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "maggcs-core",
  "mavlink",
@@ -2022,7 +2022,7 @@ dependencies = [
 
 [[package]]
 name = "maggcs-core"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "fs2",
  "futures",

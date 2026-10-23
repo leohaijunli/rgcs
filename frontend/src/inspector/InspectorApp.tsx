@@ -61,6 +61,7 @@ interface InspectorStatus {
   dropped: number
   connected: boolean
   tap_running: boolean
+  replay_active: boolean
 }
 
 /** Rust `ReplayStatus` (inspector_service.rs): ULog playback state. */
@@ -936,7 +937,7 @@ export function InspectorApp() {
         } catch {
           /* replay status is optional */
         }
-        if (s.tap_running) {
+        if (s.tap_running && (s.connected || s.replay_active)) {
           const now = Date.now()
           // A backend stats reset (messages counting down) means a link swap or
           // window re-registration: the Rust tap/catalog were cleared, so the
@@ -1352,7 +1353,7 @@ export function InspectorApp() {
         }
       : status?.connected
         ? { tone: 'ok', label: 'Live link', title: 'Live MAVLink telemetry' }
-        : { tone: 'warn', label: 'No link', title: 'No flight controller link' }
+        : { tone: 'warn', label: 'FC disconnected', title: 'No live FC heartbeat; waiting for reconnection' }
   const statusText = !tauri
     ? 'synthetic telemetry'
     : replay?.active

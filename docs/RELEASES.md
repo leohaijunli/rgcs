@@ -3,8 +3,8 @@
 ## Release workflow
 
 `.github/workflows/ci.yml` runs when a `v*` tag is pushed. A branch push alone
-does not build new installers. Each Windows/Ubuntu installer job depends on
-all three check jobs succeeding:
+does not build new installers. Each Windows/Ubuntu installer job waits for
+the three check jobs to finish:
 
 - Rust formatting, Clippy, workspace tests, and committed ts-rs binding sync.
 - `cargo deny`: dependency advisories, licenses, bans, and sources.
@@ -12,12 +12,30 @@ all three check jobs succeeding:
   and production build.
 
 The installer jobs append their files to the same draft GitHub release.
+For `v*` tags, an explicit `always() && !cancelled()` job condition attempts
+the installer builds even if a prerequisite check fails. Check failures remain
+red and must be resolved before publishing the draft; a cancelled workflow is
+not resumed. Missing installer files fail artifact upload rather than silently
+succeeding. This avoids the implicit `success()` condition skipping both
+packaging jobs after a check failure.
 Actions artifacts contain only the finished installers. Windows builds
 explicitly select `nsis,msi`; Ubuntu builds select `appimage,deb`.
 
 When preparing a release tag, keep the Cargo workspace version, Tauri config
 version, and frontend package/lockfile versions equal to the tag without its
-`v` prefix. The fixes below ship as `v1.0.2`, with installer version `1.0.2`.
+`v` prefix. The current patch release is `v1.0.3`, with installer version `1.0.3`.
+
+### v1.0.3 desktop fixes
+
+- Correct parameter version/value IPC parsing, reconnect recovery and a pinned
+  PX4 1.17.0 fmu-v6x metadata catalog including `USB_MAV_MODE`.
+- Report serial transport failure as FC loss; Inspector distinguishes a
+  retained reconnecting handle from a live target heartbeat.
+- Display per-motor FC PWM min/max, block unread ranges, plot sender-converted
+  command PWM in microseconds and leave a gap on release. Idle motors no longer
+  receive continuously active minimum-output test commands.
+- Isolate the diagnostics log fixture so concurrent tests do not race its
+  process-global logger or delete each other's temporary log directory.
 
 ## Check failures diagnosed on 2026-10-23
 

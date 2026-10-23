@@ -99,7 +99,7 @@ pub struct InspectorStatus {
     pub messages: u64,
     pub samples: u64,
     pub dropped: u64,
-    /// True when a primary link exists (the tap can stream).
+    /// True when the primary target FC heartbeat is alive on its transport.
     pub connected: bool,
     /// True while a tap task is attached to a link.
     pub tap_running: bool,
@@ -239,7 +239,8 @@ impl AppState {
         *inspector.frame.lock() = None;
     }
 
-    /// Whether a tap is attached and a link is present (for the status bar).
+    /// Tap attachment and live FC availability are independent: a retained
+    /// reconnecting handle is not evidence that the FC is still online.
     pub fn inspector_status(&self) -> InspectorStatus {
         let inspector = self.inspector();
         let stats = inspector.stats.lock().expect("stats lock");
@@ -247,7 +248,11 @@ impl AppState {
             messages: stats.messages,
             samples: stats.samples,
             dropped: stats.dropped,
-            connected: self.connection().is_some(),
+            connected: self.hub().is_some_and(|hub| {
+                let receiver = hub.subscribe_link();
+                let link = receiver.borrow();
+                link.fc_alive && link.link_state == maggcs_core::mavlink::LinkState::Connected
+            }),
             tap_running: inspector.tap.lock().is_some(),
             replay_active: inspector.replay.lock().is_some(),
         }
@@ -641,4 +646,96 @@ pub fn inspector_use_live(state: State<'_, AppState>) -> Result<(), String> {
 #[tauri::command]
 pub fn inspector_source(state: State<'_, AppState>) -> Result<String, String> {
     Ok(state.inspector_source())
+}
+
+#[cfg(test)]
+mod connection_status_tests {
+    use super::*;
+    use crate::state::{ActiveLink, LinkId};
+    use maggcs_core::commands::CommandService;
+    use maggcs_core::mavlink::connection::spawn_connection;
+    use maggcs_core::mavlink::{
+        ConnectionConfig, ConnectionEvent, Endpoint, LinkErrorKind, LinkFailure,
+    };
+    use maggcs_core::mission::service::{MissionIds, MissionService};
+    use maggcs_core::telemetry::{hub::TelemetryHub, VehicleId};
+
+    #[tokio::test]
+    async fn retained_transport_does_not_keep_inspector_live_after_fc_loss() {
+        let (handle, _transport_events, first) = spawn_connection(ConnectionConfig {
+            endpoint: Endpoint::UdpListener {
+                addr: "127.0.0.1:0".parse().expect("address"),
+            },
+            ..Default::default()
+        })
+        .await
+        .expect("connection");
+        first.await.expect("worker reply").expect("bound");
+        let (events, receiver) = tokio::sync::broadcast::channel(16);
+        let hub = TelemetryHub::spawn(receiver, 10, VehicleId::new(1, 1));
+        let mut link = hub.subscribe_link();
+        let (mission, _) = MissionService::spawn(
+            handle.clone(),
+            MissionIds {
+                self_system: 250,
+                self_component: 250,
+                target_system: 1,
+                target_component: 1,
+            },
+        );
+        let (command, _) = CommandService::spawn(handle.clone(), 1, 1);
+        let state = AppState::default();
+        state.set_primary_link(ActiveLink {
+            id: LinkId::next(),
+            connection: handle.clone(),
+            hub: hub.clone(),
+            mission,
+            command,
+            logs: None,
+            params: None,
+            rtk: None,
+        });
+        assert!(
+            !state.inspector_status().connected,
+            "a transport alone is not a live FC"
+        );
+        events
+            .send(ConnectionEvent::HeartbeatRestored)
+            .expect("alive");
+        tokio::time::timeout(Duration::from_secs(2), link.changed())
+            .await
+            .expect("alive deadline")
+            .expect("alive event");
+        assert!(state.inspector_status().connected);
+
+        events
+            .send(ConnectionEvent::LinkError(LinkFailure {
+                kind: LinkErrorKind::Io,
+                message: "serial device removed".into(),
+            }))
+            .expect("transport failure");
+        tokio::time::timeout(Duration::from_secs(2), link.changed())
+            .await
+            .expect("loss deadline")
+            .expect("loss event");
+        assert!(
+            state.connection().is_some(),
+            "handle is retained for reconnect"
+        );
+        assert!(
+            !state.inspector_status().connected,
+            "inspector must not keep saying Live link"
+        );
+
+        events
+            .send(ConnectionEvent::HeartbeatRestored)
+            .expect("restored");
+        tokio::time::timeout(Duration::from_secs(2), link.changed())
+            .await
+            .expect("restore deadline")
+            .expect("restore event");
+        assert!(state.inspector_status().connected);
+        hub.shutdown();
+        handle.shutdown().await;
+    }
 }

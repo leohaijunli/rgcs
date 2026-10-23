@@ -45,6 +45,9 @@ export interface ActuatorStatus {
   input_pwm: number[]
   /** Values sent to the FC as ACTUATOR_TEST (the OUTPUT), 0 when idle. */
   output_values: number[]
+  /** Converted PWM from the sender's actual model, not measured feedback.
+   * null marks no active command for that motor. */
+  output_pwm: (number | null)[]
   /** Actual PWM for each motor function in µs, selected from its mapped
    * MAIN/AUX channel; null = unmapped or no fresh sample. */
   fc_output_pwm: (number | null)[]
@@ -116,12 +119,15 @@ export interface SdCaptureStatus {
   last_error: SdCaptureError | null
 }
 
+export type PwmRangeSource = 'fc' | 'fallback'
+
 export interface PwmModel {
   min_us: number
   max_us: number
   reversed: boolean
   thrust_factor: number
   disabled: boolean
+  range_source: PwmRangeSource
 }
 
 export type ServoPort = 'main' | 'aux'
@@ -191,6 +197,7 @@ export const IDLE: ActuatorStatus = {
   input_values: [],
   input_pwm: [],
   output_values: [],
+  output_pwm: [],
   fc_output_pwm: [],
   output_map: { motors: [], state: 'unknown', issues: [] },
   pwm_models: [],

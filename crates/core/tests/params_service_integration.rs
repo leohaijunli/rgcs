@@ -3,6 +3,10 @@
 //! duplication and reordering; the service must converge to the full set via
 //! its fill rounds, and a `PARAM_SET` echo resolves the set request.
 
+use std::sync::{
+    atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering},
+    Arc,
+};
 use std::time::Duration;
 
 use ::mavlink::common::{MavParamType, PARAM_VALUE_DATA};
@@ -297,5 +301,413 @@ async fn shutdown_joins_the_protocol_task_with_live_handles() {
         .expect("protocol task did not exit after shutdown")
         .expect("protocol task panicked");
     drop(live_clone);
+    handle.shutdown().await;
+}
+
+/// On the saturated serial link the `AUTOPILOT_VERSION` reply lands long
+/// after the request (bench finding 2026-10-23): `wait_fc_version` must wait
+/// it out and converge, instead of the single-fire-and-forget request racing
+/// the page paint and leaving the params window stuck on "No FC".
+#[tokio::test]
+async fn fc_version_wait_converges_on_a_saturated_link() {
+    let port = free_udp_port();
+    let (handle, mut rx, first_result) = spawn_connection(config_for_port(port))
+        .await
+        .expect("spawn");
+    match timeout(Duration::from_secs(3), first_result).await {
+        Ok(Ok(Ok(()))) => {}
+        _ => panic!("listener never came up"),
+    }
+    let mut peer = ::mavlink::connect_async::<MavMessage>(&format!("udpout:127.0.0.1:{port}"))
+        .await
+        .expect("peer");
+    peer.set_protocol_version(::mavlink::MavlinkVersion::V2);
+    peer.send(&FC_HEADER, &fc_param(0, 1))
+        .await
+        .expect("bootstrap");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match timeout(remaining, rx.recv()).await {
+            Ok(Ok(ConnectionEvent::Message(_))) => break,
+            Ok(Ok(_)) => {}
+            _ => panic!("bootstrap frame never reached the worker"),
+        }
+    }
+
+    // Delayed version responder: 600 ms after the request — later than the
+    // poll paint, inside one settle window.
+    tokio::spawn(async move {
+        loop {
+            match timeout(Duration::from_secs(5), peer.recv()).await {
+                Ok(Ok((_, MavMessage::COMMAND_LONG(cmd)))) => {
+                    // MAV_CMD_REQUEST_MESSAGE with param1 = 148.
+                    if cmd.command == ::mavlink::common::MavCmd::MAV_CMD_REQUEST_MESSAGE
+                        && cmd.param1 == 148.0
+                    {
+                        tokio::time::sleep(Duration::from_millis(600)).await;
+                        peer.send(
+                            &FC_HEADER,
+                            &MavMessage::AUTOPILOT_VERSION(
+                                ::mavlink::common::AUTOPILOT_VERSION_DATA {
+                                    capabilities: ::mavlink::common::MavProtocolCapability::empty(),
+                                    uid: 0,
+                                    // 1.17.0
+                                    flight_sw_version: (1 << 24) | (17 << 16),
+                                    middleware_sw_version: 0,
+                                    os_sw_version: 0,
+                                    board_version: 0,
+                                    vendor_id: 0,
+                                    product_id: 0,
+                                    flight_custom_version: [0; 8],
+                                    middleware_custom_version: [0; 8],
+                                    os_custom_version: [0; 8],
+                                    uid2: [0; 18],
+                                },
+                            ),
+                        )
+                        .await
+                        .expect("version reply");
+                    }
+                }
+                Ok(Ok(_)) => {}
+                _ => break,
+            }
+        }
+    });
+
+    let (svc, _evt) = ParamService::spawn(handle.clone(), 1, 1);
+    let started = std::time::Instant::now();
+    let version = svc.wait_fc_version(2, Duration::from_millis(1500)).await;
+    let elapsed = started.elapsed();
+    assert_eq!(
+        version.as_deref(),
+        Some("1.17.0"),
+        "the delayed reply must land inside the accept window"
+    );
+    assert!(
+        elapsed >= Duration::from_millis(550),
+        "the wait must actually wait for the reply, took {elapsed:?}"
+    );
+    assert!(
+        elapsed <= Duration::from_secs(2),
+        "the wait must not retry past the first arrival, took {elapsed:?}"
+    );
+
+    // A settled slot answers instantly from now on.
+    let started = std::time::Instant::now();
+    let again = svc.wait_fc_version(2, Duration::from_millis(1500)).await;
+    assert_eq!(again.as_deref(), Some("1.17.0"));
+    assert!(
+        started.elapsed() < Duration::from_millis(100),
+        "the known version must return instantly"
+    );
+
+    handle.shutdown().await;
+}
+
+/// Reuse one protocol task through a transport restart and a heartbeat loss.
+/// Pending reads must fail promptly, old values/identity must be invalidated,
+/// and subsequent requests must reach the recovered FC rather than stay Busy.
+#[tokio::test]
+async fn reads_and_firmware_recover_after_reconnect_and_heartbeat_loss() {
+    let port = free_udp_port();
+    let mut config = config_for_port(port);
+    config.heartbeat_timeout = Duration::from_millis(600);
+    let (handle, mut events, first) = spawn_connection(config).await.expect("spawn");
+    timeout(Duration::from_secs(3), first)
+        .await
+        .expect("bind timeout")
+        .expect("worker reply")
+        .expect("bound");
+    let mut peer = ::mavlink::connect_async::<MavMessage>(&format!("udpout:127.0.0.1:{port}"))
+        .await
+        .expect("peer");
+    peer.set_protocol_version(::mavlink::MavlinkVersion::V2);
+
+    let firmware = Arc::new(AtomicU32::new((1 << 24) | (17 << 16)));
+    let value = Arc::new(AtomicI64::new(0));
+    let heartbeats = Arc::new(AtomicBool::new(true));
+    let (seen_tx, mut seen_rx) = tokio::sync::mpsc::channel(8);
+    let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let responder_firmware = Arc::clone(&firmware);
+    let responder_value = Arc::clone(&value);
+    let responder_heartbeats = Arc::clone(&heartbeats);
+    let responder = tokio::spawn(async move {
+        let heartbeat = MavMessage::HEARTBEAT(::mavlink::common::HEARTBEAT_DATA {
+            autopilot: ::mavlink::common::MavAutopilot::MAV_AUTOPILOT_PX4,
+            mavtype: ::mavlink::common::MavType::MAV_TYPE_QUADROTOR,
+            ..Default::default()
+        });
+        let mut tick = tokio::time::interval(Duration::from_millis(100));
+        loop {
+            tokio::select! {
+                _ = &mut stop_rx => break,
+                _ = tick.tick() => {
+                    if responder_heartbeats.load(Ordering::SeqCst) {
+                        peer.send(&FC_HEADER, &heartbeat).await.expect("heartbeat");
+                    }
+                }
+                inbound = peer.recv() => {
+                    let (_, message) = inbound.expect("GCS request");
+                    match message {
+                        MavMessage::COMMAND_LONG(command)
+                            if command.command == ::mavlink::common::MavCmd::MAV_CMD_REQUEST_MESSAGE
+                                && command.param1 == 148.0 => {
+                            peer.send(&FC_HEADER, &MavMessage::AUTOPILOT_VERSION(
+                                ::mavlink::common::AUTOPILOT_VERSION_DATA {
+                                    flight_sw_version: responder_firmware.load(Ordering::SeqCst),
+                                    ..Default::default()
+                                }
+                            )).await.expect("version");
+                        }
+                        MavMessage::PARAM_REQUEST_READ(read) => {
+                            let name = maggcs_core::params::codec::decode_param_id(&read.param_id);
+                            if name == "USB_MAV_MODE" {
+                                let raw = maggcs_core::params::codec::encode(
+                                    ParamValue::Int(responder_value.load(Ordering::SeqCst)),
+                                    maggcs_core::params::codec::IntEncoding::ByteConcat,
+                                );
+                                peer.send(&FC_HEADER, &fc_echo(&read.param_id, raw, 2, 0))
+                                    .await.expect("parameter reply");
+                            } else if name == "PENDING_TEST" {
+                                let _ = seen_tx.send(()).await;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    });
+
+    timeout(Duration::from_secs(3), async {
+        loop {
+            if matches!(
+                events.recv().await.expect("initial event"),
+                ConnectionEvent::HeartbeatRestored
+            ) {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("FC bootstrap");
+    let (service, _parameter_events, task) = ParamService::spawn_with_task(handle.clone(), 1, 1);
+    assert_eq!(
+        service
+            .wait_fc_version(2, Duration::from_secs(1))
+            .await
+            .as_deref(),
+        Some("1.17.0")
+    );
+    assert_eq!(
+        service
+            .read("USB_MAV_MODE")
+            .await
+            .expect("initial value")
+            .value,
+        ParamValue::Int(0)
+    );
+
+    let pending_service = service.clone();
+    let pending = tokio::spawn(async move { pending_service.read("PENDING_TEST").await });
+    timeout(Duration::from_secs(2), seen_rx.recv())
+        .await
+        .expect("read started")
+        .expect("read request");
+    firmware.store((1 << 24) | (17 << 16) | (1 << 8), Ordering::SeqCst);
+    value.store(5, Ordering::SeqCst);
+    let mut restarted = handle.subscribe();
+    handle.reconnect().await.expect("restart transport");
+    timeout(Duration::from_secs(3), async {
+        loop {
+            if matches!(
+                restarted.recv().await.expect("restart event"),
+                ConnectionEvent::Connected { .. }
+            ) {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("transport recovered");
+    assert_eq!(
+        timeout(Duration::from_secs(1), pending)
+            .await
+            .expect("pending read cancelled")
+            .expect("read task"),
+        Err(ParamError::NotConnected)
+    );
+    assert!(
+        service.cache().is_empty(),
+        "old values invalidated before a new request"
+    );
+    assert!(service.fc_version().is_none(), "old firmware invalidated");
+    assert_eq!(
+        service
+            .wait_fc_version(3, Duration::from_secs(1))
+            .await
+            .as_deref(),
+        Some("1.17.1")
+    );
+    assert_eq!(
+        service
+            .read("USB_MAV_MODE")
+            .await
+            .expect("read after restart")
+            .value,
+        ParamValue::Int(5)
+    );
+
+    let mut lost_events = handle.subscribe();
+    heartbeats.store(false, Ordering::SeqCst);
+    timeout(Duration::from_secs(3), async {
+        loop {
+            if matches!(
+                lost_events.recv().await.expect("loss event"),
+                ConnectionEvent::HeartbeatLost { .. }
+            ) {
+                break;
+            }
+        }
+        while service.fc_version().is_some() || !service.cache().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("heartbeat loss clears observations");
+    value.store(2, Ordering::SeqCst);
+    heartbeats.store(true, Ordering::SeqCst);
+    assert_eq!(
+        service
+            .wait_fc_version(3, Duration::from_secs(1))
+            .await
+            .as_deref(),
+        Some("1.17.1")
+    );
+    assert_eq!(
+        service
+            .read("USB_MAV_MODE")
+            .await
+            .expect("read after heartbeat recovery")
+            .value,
+        ParamValue::Int(2)
+    );
+
+    service.shutdown().await;
+    timeout(Duration::from_secs(1), task)
+        .await
+        .expect("protocol stopped")
+        .expect("protocol task");
+    let _ = stop_tx.send(());
+    responder.await.expect("responder task");
+    handle.shutdown().await;
+}
+
+/// Read-only hardware acceptance: reopen the same serial port twice while
+/// retaining one parameter service. No parameter value or motor is commanded.
+#[tokio::test]
+#[ignore = "real FC: MAGGCS_BENCH=1 MAGGCS_BENCH_UART=/dev/ttyACM0 cargo test -p maggcs-core --test params_service_integration serial_parameter_reads_survive_reopening -- --ignored --nocapture"]
+async fn serial_parameter_reads_survive_reopening() {
+    assert_eq!(
+        std::env::var("MAGGCS_BENCH").as_deref(),
+        Ok("1"),
+        "set MAGGCS_BENCH=1"
+    );
+    let port = std::path::PathBuf::from(
+        std::env::var("MAGGCS_BENCH_UART").unwrap_or_else(|_| "/dev/ttyACM0".into()),
+    );
+    let config = ConnectionConfig {
+        endpoint: Endpoint::Serial {
+            port,
+            baudrate: 115200,
+        },
+        system_id: 250,
+        component_id: 250,
+        target_system_id: 1,
+        target_component_id: 1,
+        ..Default::default()
+    };
+    let (handle, mut events, first) = spawn_connection(config).await.expect("serial connection");
+    timeout(Duration::from_secs(10), first)
+        .await
+        .expect("serial open deadline")
+        .expect("worker reply")
+        .expect("serial opened");
+    timeout(Duration::from_secs(10), async {
+        loop {
+            if matches!(
+                events.recv().await.expect("serial events"),
+                ConnectionEvent::HeartbeatRestored
+            ) {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("PX4 heartbeat");
+    let (service, _events, task) = ParamService::spawn_with_task(handle.clone(), 1, 1);
+    let version = service
+        .wait_fc_version(3, Duration::from_secs(2))
+        .await
+        .expect("firmware version");
+    let baseline = service
+        .read("USB_MAV_MODE")
+        .await
+        .expect("initial USB_MAV_MODE");
+    println!(
+        "serial baseline: PX4 {version}, {}={:?} ({:?})",
+        baseline.name, baseline.value, baseline.ptype
+    );
+    assert_eq!(baseline.ptype, ParamType::I32);
+
+    for cycle in 1..=2 {
+        let mut lifecycle = handle.subscribe();
+        let started = std::time::Instant::now();
+        handle.reconnect().await.expect("close and reopen serial");
+        timeout(Duration::from_secs(10), async {
+            loop {
+                if matches!(
+                    lifecycle.recv().await.expect("reconnect events"),
+                    ConnectionEvent::HeartbeatRestored
+                ) {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("heartbeat recovered after reopening");
+        service
+            .request_fc_version()
+            .await
+            .expect("request current firmware");
+        let recovered_version = service
+            .wait_fc_version(3, Duration::from_secs(2))
+            .await
+            .expect("recovered version");
+        let entry = service
+            .read("USB_MAV_MODE")
+            .await
+            .expect("read on reopened serial port");
+        println!(
+            "serial reopen {cycle}: PX4 {recovered_version}, {}={:?}, elapsed={:?}",
+            entry.name,
+            entry.value,
+            started.elapsed()
+        );
+        assert_eq!(
+            entry.value, baseline.value,
+            "read-only test preserves the FC value"
+        );
+        assert_eq!(entry.ptype, baseline.ptype);
+        assert_eq!(recovered_version, version);
+    }
+
+    service.shutdown().await;
+    timeout(Duration::from_secs(2), task)
+        .await
+        .expect("protocol stopped")
+        .expect("protocol task");
     handle.shutdown().await;
 }

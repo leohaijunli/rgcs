@@ -15,7 +15,7 @@
 //! | id                              | meaning                               | unit |
 //! |---------------------------------|---------------------------------------|------|
 //! | `sitl.servo1..4`                | SITL `SERVO_OUTPUT_RAW` main outputs  | µs   |
-//! | `fwd.cmd1..4`                   | value sent to the FC as ACTUATOR_TEST | %    |
+//! | `cmd.pwm1..4`                   | converted ACTUATOR_TEST command      | µs   |
 //! | `fc.servo1..4`                  | real FC `SERVO_OUTPUT_RAW` (serial)   | µs   |
 //! | `mag.raw_total`, `mag.cal_total`| `|B|` before / after calibration      | nT   |
 //! | `bat{k}.current`                | `BATTERY_STATUS` current, k = 1-based | A    |
@@ -63,14 +63,21 @@ pub fn servo_samples(prefix: &str, t: f64, pwm: [u16; SERVO_COUNT]) -> Vec<Scope
         .collect()
 }
 
-/// `fwd.cmd{n}` samples: the values the sender actually put on the wire
-/// (post clamp/slew), 0..1 → percent.
-pub fn command_samples(t: f64, values: &[f32]) -> Vec<ScopeSample> {
-    values
+/// `cmd.pwm{n}` samples: physical PWM converted by the sender from its queued
+/// ACTUATOR_TEST commands. None is serialized as null to break the plot on
+/// release; it must not be invented as a zero or minimum physical pulse.
+pub fn command_samples(t: f64, pwm_us: &[Option<f32>]) -> Vec<ScopeSample> {
+    pwm_us
         .iter()
         .take(SERVO_COUNT)
         .enumerate()
-        .map(|(i, &v)| ScopeSample::new(format!("fwd.cmd{}", i + 1), t, f64::from(v) * 100.0))
+        .map(|(i, &v)| {
+            ScopeSample::new(
+                format!("cmd.pwm{}", i + 1),
+                t,
+                v.map(f64::from).unwrap_or(f64::NAN),
+            )
+        })
         .collect()
 }
 
@@ -223,11 +230,18 @@ mod tests {
     }
 
     #[test]
-    fn command_samples_are_percent_and_capped_at_four() {
-        let s = command_samples(0.0, &[0.5, 0.25, 0.0, 1.0, 0.9]);
+    fn command_samples_are_microseconds_with_release_gaps() {
+        let s = command_samples(
+            0.0,
+            &[Some(1500.0), Some(1300.0), None, Some(1900.0), Some(1600.0)],
+        );
         assert_eq!(s.len(), 4);
-        assert!((s[0].v - 50.0).abs() < 1e-6);
-        assert!((s[3].v - 100.0).abs() < 1e-6);
+        assert_eq!(s[0].id, "cmd.pwm1");
+        assert_eq!(s[0].v, 1500.0);
+        assert_eq!(s[3].v, 1900.0);
+        assert!(s[2].v.is_nan());
+        let json = serde_json::to_value(&s).expect("scope JSON");
+        assert!(json[2]["v"].is_null(), "release is a gap on the wire");
     }
 
     #[test]

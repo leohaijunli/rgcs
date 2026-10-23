@@ -69,7 +69,7 @@ function perMotor(
 
 const DEFS: SignalDef[] = [
   ...perMotor('sitl.servo', '', 'cmd', 'µs', 'SITL servo', null, true),
-  ...perMotor('fwd.cmd', '', 'cmd', '%', 'Sent cmd', DASH_CMD, false),
+  ...perMotor('cmd.pwm', '', 'cmd', 'µs', 'Command PWM M', DASH_CMD, true),
   ...perMotor('fc.servo', '', 'cmd', 'µs', 'FC servo', DASH_FC, true),
   {
     id: 'mag.raw_total',
@@ -162,8 +162,8 @@ export const LIST_GROUPS: ListGroup[] = [
   },
   {
     key: 'cmd',
-    title: 'Sent to FC (ACTUATOR_TEST)',
-    ids: ids('fwd.cmd'),
+    title: 'Command PWM (converted ACTUATOR_TEST, µs)',
+    ids: ids('cmd.pwm'),
     emptyHint: () => 'Appears while a test is sending.',
   },
   {
@@ -265,7 +265,7 @@ export interface SignalStat {
   everNonZero: boolean
 }
 
-export type SignalState = 'none' | 'zero' | 'live' | 'stale'
+export type SignalState = 'none' | 'zero' | 'live' | 'stale' | 'released'
 
 /** Seconds without a sample before a seen signal counts as stale. */
 export const STALE_S = 2
@@ -283,7 +283,7 @@ export interface RunInterval {
 export interface IncomingSample {
   id: string
   t: number
-  v: number
+  v: number | null
 }
 
 export class ScopeStore {
@@ -302,18 +302,22 @@ export class ScopeStore {
     for (const s of batch) {
       if (!Number.isFinite(s.t)) continue
       if (s.id === RUN_ID) {
-        this.markRun(s.v > 0.5, s.t)
+        this.markRun((s.v ?? 0) > 0.5, s.t)
         continue
       }
-      if (!Number.isFinite(s.v) || !defOf(s.id)) continue
+      const release = s.v === null && /^cmd\.pwm[1-4]$/.test(s.id)
+      if ((!release && !Number.isFinite(s.v)) || !defOf(s.id)) continue
       let ring = this.rings.get(s.id)
+      // A motor never commanded should not get a fictitious PWM trace.
+      if (release && !ring) continue
       if (!ring) {
         ring = new ScopeRing(RING_CAP)
         this.rings.set(s.id, ring)
       }
       const n = ring.length
       if (n > 0 && s.t < ring.timeAt(n - 1)) continue
-      ring.push(s.t, s.v)
+      const value = s.v ?? NaN
+      ring.push(s.t, value)
       if (s.t > this.newestT) this.newestT = s.t
 
       let st = this.stats.get(s.id)
@@ -329,8 +333,8 @@ export class ScopeStore {
         st.lastT = s.t
       }
       st.count++
-      st.last = s.v
-      if (s.v !== 0) st.everNonZero = true
+      st.last = value
+      if (Number.isFinite(value) && value !== 0) st.everNonZero = true
 
       if (!this.offered.has(s.id)) {
         this.offered.add(s.id)
@@ -366,6 +370,7 @@ export class ScopeStore {
   stateOf(id: string, nowT: number): SignalState {
     const st = this.stats.get(id)
     if (!st) return 'none'
+    if (!Number.isFinite(st.last)) return 'released'
     if (nowT - st.lastT > STALE_S) return 'stale'
     return st.everNonZero ? 'live' : 'zero'
   }

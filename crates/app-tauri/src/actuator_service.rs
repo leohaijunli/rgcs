@@ -97,6 +97,9 @@ pub struct ActuatorStatus {
     pub input_pwm: Vec<u16>,
     /// Values actually sent to the FC as ACTUATOR_TEST (the OUTPUT), 0 when idle.
     pub output_values: Vec<f32>,
+    /// Converted queued command PWM in µs; None when a motor is released.
+    /// These are predictions from the sender's models, not FC measurements.
+    pub output_pwm: Vec<Option<f32>>,
     /// The target FC's actual PWM for each motor function in µs, selected from
     /// the mapped MAIN/AUX channel. `None` = unmapped or no sample yet.
     pub fc_output_pwm: Vec<Option<u16>>,
@@ -216,6 +219,7 @@ fn prepare_start(state: &AppState, load: MotorTestLoad) -> Result<PreparedStart,
             pwm_models,
         )
     };
+    refuse_unread_pwm_ranges(&pwm_models)?;
     ensure_target_disarmed(state, target)?;
     Ok(PreparedStart {
         handle,
@@ -270,6 +274,38 @@ pub(crate) fn ensure_target_disarmed(
         return Err("target is armed — disarm it before starting".into());
     }
     Ok(())
+}
+
+/// Refuse a start while any motor's PWM range could not be read from the FC
+/// (the fallback 1100–1900 would look real but is not). The operator must
+/// refresh the mapping until every launched motor reports its FC range.
+fn refuse_unread_pwm_ranges(models: &[PwmModel]) -> Result<(), String> {
+    if models.len() != usize::from(MOTOR_TEST_MOTOR_COUNT) {
+        return Err(format!(
+            "PWM ranges incomplete: expected {MOTOR_TEST_MOTOR_COUNT} FC-read motor models, got {} — refresh the mapping first",
+            models.len()
+        ));
+    }
+    let unread = models
+        .iter()
+        .enumerate()
+        .filter(|(_, model)| {
+            model.range_source == maggcs_core::motor_test::pwm::PwmRangeSource::Fallback
+        })
+        .map(|(index, _)| index + 1)
+        .collect::<Vec<_>>();
+    if unread.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "PWM range not read from the PX4 for motor(s) {} — refresh the mapping first \
+         (check the serial link and PWM_MAIN/AUX_MINn/MAXn)",
+        unread
+            .iter()
+            .map(|motor| format!("M{motor}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
 }
 
 /// Refuse a new start while the existing session is not idle. A failed
@@ -1709,12 +1745,12 @@ impl AppState {
             .and_then(|link| link.slot.lock().ok().map(|st| st.raw_pwm.clone()))
             .unwrap_or_default();
         // The OUTPUT: the values the session sent to the FC as ACTUATOR_TEST.
-        let output_values = self
+        let (output_values, output_pwm) = self
             .motor_test
             .running
             .lock()
             .as_ref()
-            .map(|r| (*r.output.borrow()).clone())
+            .map(|r| ((*r.output.borrow()).clone(), r.svc.pwm_output()))
             .unwrap_or_default();
         // The target FC's actual SERVO_OUTPUT_RAW (what PX4 drives), captured
         // by the serial telemetry tap, separately per bank.
@@ -1812,6 +1848,7 @@ impl AppState {
             input_values,
             input_pwm,
             output_values,
+            output_pwm,
             com_mot_test_en,
             sdlog_mode,
             sdlog_backend,
@@ -1863,13 +1900,20 @@ async fn read_int_param(params: &ParamService, name: &str) -> Option<i32> {
     }
 }
 
+/// Build one model from the raw `PWM_*_` parameter reads. Unmapped motors or
+/// missing/invalid endpoints fall back explicitly (PwmRangeSource::Fallback
+/// plus the 1100–1900 default) — never silently to a plausible-looking range.
 fn pwm_model_from_raw(
     min: Option<i32>,
     max: Option<i32>,
     reversed: bool,
     disabled: bool,
     thrust_factor: f32,
+    mapped: bool,
 ) -> PwmModel {
+    if !mapped {
+        return PwmModel::default();
+    }
     min.zip(max)
         .and_then(|(min, max)| {
             Some(PwmModel::new(
@@ -1885,9 +1929,8 @@ fn pwm_model_from_raw(
 }
 
 /// Read the mapped channel's `PWM_*_MIN/MAX/REV/DISn` plus the global
-/// `THR_MDL_FAC` and build one model per motor. Unmapped motors use the
-/// identity model; missing/invalid parameters fall back to identity rather
-/// than silently applying a half-read range.
+/// `THR_MDL_FAC` and build one model per motor. Missing/invalid ranges and
+/// unmapped motors are marked fallback; the start gate rejects them.
 async fn read_pwm_models(params: &ParamService, map: &OutputMap) -> Vec<PwmModel> {
     let factor = match params.read("THR_MDL_FAC").await.map(|entry| entry.value) {
         Ok(ParamValue::Real(value)) => value,
@@ -1915,7 +1958,10 @@ async fn read_pwm_models(params: &ParamService, map: &OutputMap) -> Vec<PwmModel
         let disabled = read_int_param(params, &format!("{prefix}_DIS{n}"))
             .await
             .is_some_and(|value| value != 0);
-        models.push(pwm_model_from_raw(min, max, reversed, disabled, factor));
+        let mapped = map.channel_for(motor).is_some();
+        models.push(pwm_model_from_raw(
+            min, max, reversed, disabled, factor, mapped,
+        ));
     }
     models
 }
@@ -2244,8 +2290,7 @@ fn start_scope_flusher(app: &AppHandle) {
         let mut tick = tokio::time::interval(SCOPE_FLUSH);
         // After a stall, do not fire a burst of catch-up ticks.
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        // True while the last command sample was non-zero, so the fall back
-        // to 0 after STOP is recorded once and then the trace goes quiet.
+        // Emit the final release gap once after the last active PWM command.
         let mut cmd_active = false;
         // Keep re-asking the target PX4 for the scope streams: the one-shot
         // request at connect can be lost (busy, link settling), and the
@@ -2275,16 +2320,16 @@ fn start_scope_flusher(app: &AppHandle) {
                 return;
             };
             let mut batch = state.motor_test.scope.drain();
-            let values = state
+            let pwm_us = state
                 .motor_test
                 .running
                 .lock()
                 .as_ref()
-                .map(|r| (*r.output.borrow()).clone());
-            if let Some(values) = values {
-                let live = values.iter().any(|v| *v > 0.0);
+                .map(|r| r.svc.pwm_output());
+            if let Some(pwm_us) = pwm_us {
+                let live = pwm_us.iter().any(Option::is_some);
                 if live || cmd_active {
-                    batch.extend(scope::command_samples(now_epoch_s(), &values));
+                    batch.extend(scope::command_samples(now_epoch_s(), &pwm_us));
                 }
                 cmd_active = live;
             } else {
@@ -2597,6 +2642,11 @@ mod start_readiness_tests {
             .expect("start must be refused")
     }
 
+    /// Models that look like they were read from the FC (the start gate passes).
+    fn fc_models() -> Vec<PwmModel> {
+        vec![PwmModel::new(1100, 1900, false, 0.0).expect("model"); 4]
+    }
+
     async fn install_target(state: &AppState, system_id: u8) -> ConnectionHandle {
         let probe = std::net::UdpSocket::bind("127.0.0.1:0").expect("reserve UDP port");
         let port = probe.local_addr().expect("probe address").port();
@@ -2627,10 +2677,7 @@ mod start_readiness_tests {
                 params,
                 restart_pending: Default::default(),
                 output_map: std::sync::Arc::new(parking_lot::Mutex::new(OutputMap::unknown(4))),
-                pwm_models: std::sync::Arc::new(parking_lot::Mutex::new(vec![
-                    PwmModel::default();
-                    4
-                ])),
+                pwm_models: std::sync::Arc::new(parking_lot::Mutex::new(fc_models())),
             },
             runtime: AuxiliaryLinkRuntime::new(runtime_handle, []),
         });
@@ -2728,11 +2775,11 @@ mod start_readiness_tests {
             .expect("model")
             .with_disabled(true);
         if let Some(runtime) = state.motor_test.target.lock().as_mut() {
-            *runtime.target.pwm_models.lock() = vec![custom_model];
+            *runtime.target.pwm_models.lock() = vec![custom_model; 4];
         }
         mark_capture_recording(&state);
         let prepared = prepare_start(&state, MotorTestLoad::Props).expect("ready target");
-        assert_eq!(prepared.pwm_models, vec![custom_model]);
+        assert_eq!(prepared.pwm_models, vec![custom_model; 4]);
         assert_eq!(prepared.target.connection_id, handle.handle_id());
         assert_eq!(prepared.target.target_system_id, 1);
         assert_eq!(prepared.target.target_component_id, 1);
@@ -2772,6 +2819,39 @@ mod start_readiness_tests {
             );
         }
 
+        let target = state.motor_test.target.lock().take();
+        if let Some(target) = target {
+            target.stop().await;
+        }
+        *state.motor_test.telemetry.lock() = None;
+    }
+
+    /// Acceptance: a start is refused while any motor's PWM range could not
+    /// be read from the FC (the explicit fallback) — the operator must
+    /// refresh the mapping first.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unread_pwm_ranges_refuse_a_start() {
+        let state = AppState::default();
+        install_target(&state, 1).await;
+        install_telemetry(&state, Some(heartbeat(1, false)), Some(Duration::ZERO));
+        {
+            let runtime = state.motor_test.target.lock();
+            *runtime.as_ref().expect("target").target.pwm_models.lock() =
+                vec![PwmModel::default(); 4];
+        }
+        let error = refusal(&state, MotorTestLoad::None);
+        assert!(
+            error.contains("M1, M2, M3, M4") && error.contains("refresh the mapping"),
+            "the error lists the unread motors: {error}"
+        );
+        {
+            let runtime = state.motor_test.target.lock();
+            *runtime.as_ref().expect("target").target.pwm_models.lock() = fc_models();
+        }
+        assert!(
+            prepare_start(&state, MotorTestLoad::None).is_ok(),
+            "FC-read ranges pass again"
+        );
         let target = state.motor_test.target.lock().take();
         if let Some(target) = target {
             target.stop().await;
@@ -2836,20 +2916,45 @@ mod status_deadlock_tests {
     /// poll must complete promptly, even with no target connected.
     #[test]
     fn pwm_model_from_raw_reads_endpoints_and_flags() {
-        let model = super::pwm_model_from_raw(Some(1100), Some(1900), true, true, 0.5);
+        let model = super::pwm_model_from_raw(Some(1100), Some(1900), true, true, 0.5, true);
         assert_eq!(model.min_us, 1100);
         assert_eq!(model.max_us, 1900);
         assert!(model.reversed);
         assert!(model.disabled);
         assert!((model.thrust_factor - 0.5).abs() < 1e-6);
+        assert_eq!(
+            model.range_source,
+            maggcs_core::motor_test::pwm::PwmRangeSource::Fc
+        );
     }
 
     #[test]
     fn pwm_model_from_raw_falls_back_to_identity_on_bad_values() {
-        let model = super::pwm_model_from_raw(Some(2000), Some(1000), false, false, 0.0);
+        let expected = PwmModel::default();
+        let model = super::pwm_model_from_raw(Some(2000), Some(1000), false, false, 0.0, true);
+        assert_eq!(model, expected);
+        let model = super::pwm_model_from_raw(None, Some(1900), false, false, 0.0, true);
+        assert_eq!(model, expected);
+    }
+
+    #[test]
+    fn an_unmapped_motor_gets_the_explicit_fallback_model() {
+        let model = super::pwm_model_from_raw(None, None, false, false, 0.0, false);
         assert_eq!(model, PwmModel::default());
-        let model = super::pwm_model_from_raw(None, Some(1900), false, false, 0.0);
-        assert_eq!(model, PwmModel::default());
+        assert_eq!(
+            model.range_source,
+            maggcs_core::motor_test::pwm::PwmRangeSource::Fallback
+        );
+        assert_eq!(model.min_us, 1100);
+        assert_eq!(model.max_us, 1900);
+    }
+
+    #[test]
+    fn missing_motor_models_cannot_pass_the_fc_range_gate() {
+        assert!(super::refuse_unread_pwm_ranges(&[]).is_err());
+        let model = PwmModel::new(1100, 1900, false, 0.0).expect("model");
+        assert!(super::refuse_unread_pwm_ranges(&[model; 3]).is_err());
+        assert!(super::refuse_unread_pwm_ranges(&[model; 4]).is_ok());
     }
 
     #[test]
@@ -2951,5 +3056,711 @@ mod sitl_mapping_tests {
 
         assert_eq!(outputs[0].expect("main sample").pwm[0], 1);
         assert_eq!(outputs[1].expect("aux sample").pwm[0], 11);
+    }
+}
+#[cfg(test)]
+mod serial_bench_tests {
+    //! Real-PX4 bench runs, `#[ignore]`d by default. The propeller must be
+    //! removed and the operator must consciously enable them:
+    //!   MAGGCS_BENCH=1 MAGGCS_BENCH_UART=/dev/ttyACM0 \
+    //!   cargo test -p maggcs-app serial_bench -- --ignored --test-threads=1
+    //!
+    //! Risk analysis (repo rule 5): the bench runs disarmed with the
+    //! propeller removed; starts only pass the FC-read PWM-range gate; the
+    //! demand stays inside `limits_for_load(None)`; every run ends with a
+    //! confirmed full release pass (`StopAndWait` receipt `Idle`).
+
+    use std::path::PathBuf;
+    use std::time::Instant;
+
+    use maggcs_core::mavlink::connection::{spawn_connection, ConnectionConfig, ConnectionHandle};
+    use maggcs_core::mavlink::router::MessageRoute;
+    use maggcs_core::mavlink::{ConnectionEvent, Endpoint, MavMessage};
+    use maggcs_core::motor_test::mapping::OutputMap;
+    use maggcs_core::motor_test::pwm::PwmModel;
+    use maggcs_core::motor_test::{
+        MotorTestCommand, MotorTestEvent, MotorTestService, SessionState,
+    };
+
+    use crate::motor_test_state::{limits_for_load, MotorTestLoad};
+
+    use super::{refuse_unread_pwm_ranges, MOTOR_TEST_MOTOR_COUNT};
+
+    /// Shared (t, value) buffers for the log/curve samplers.
+    type MagCurve = std::sync::Arc<parking_lot::Mutex<Vec<(f64, f64)>>>;
+    type ServoCurve = std::sync::Arc<parking_lot::Mutex<Vec<(f64, [f32; 4])>>>;
+
+    /// Target PX4 identity on the bench serial link.
+    const BENCH_SYSTEM_ID: u8 = 1;
+    const BENCH_COMPONENT_ID: u8 = 1;
+    const BENCH_GCS_SYSTEM_ID: u8 = 250;
+    const BENCH_GCS_COMPONENT_ID: u8 = 250;
+    const BENCH_UART: &str = "/dev/ttyACM0";
+    const BENCH_BAUD: u32 = 115200;
+    /// MAVLink message id of `HIGHRES_IMU` (mag triple, ~50 Hz default here).
+    const MAG_MESSAGE_ID: u32 = 105;
+    /// MAVLink message id of `SERVO_OUTPUT_RAW` (port 0 = MAIN 1-8 pulses).
+    const SERVO_MESSAGE_ID: u32 = 36;
+    /// Sine coefficient: the raised cosine peaks at twice this fraction.
+    const BENCH_AMPLITUDE: f32 = 0.2;
+    const BENCH_SINE_HZ: f32 = 0.5;
+    const BENCH_SPIN_S: f64 = 30.0;
+    /// MAG stream rate for the flight plot.
+    const MAG_STREAM_HZ: f64 = 50.0;
+    const BENCH_PREROLL_S: f64 = 3.0;
+    const LINK_TIMEOUT_S: u64 = 10;
+    /// Sine update rate of the bench driver (the UI throttles similarly).
+    const SINE_UPDATE_MS: u64 = 50;
+    const BENCH_OUT_DIR: &str = "/tmp/opencode";
+
+    fn bench_uart() -> PathBuf {
+        std::env::var("MAGGCS_BENCH_UART")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(BENCH_UART))
+    }
+
+    fn bench_enabled() -> bool {
+        std::env::var("MAGGCS_BENCH").is_ok_and(|value| value == "1")
+    }
+
+    async fn connect_bench() -> ConnectionHandle {
+        let config = ConnectionConfig {
+            endpoint: Endpoint::Serial {
+                port: bench_uart(),
+                baudrate: BENCH_BAUD,
+            },
+            system_id: BENCH_GCS_SYSTEM_ID,
+            component_id: BENCH_GCS_COMPONENT_ID,
+            target_system_id: BENCH_SYSTEM_ID,
+            target_component_id: BENCH_COMPONENT_ID,
+            ..Default::default()
+        };
+        let (handle, _events, first) = spawn_connection(config).await.expect("spawn bench link");
+        tokio::time::timeout(std::time::Duration::from_secs(LINK_TIMEOUT_S), first)
+            .await
+            .expect("link startup timed out")
+            .expect("first connection result")
+            .expect("link opened");
+        handle
+    }
+
+    async fn mot_test_enabled(params: &maggcs_core::params::ParamService) -> i32 {
+        params
+            .read("COM_MOT_TEST_EN")
+            .await
+            .map(|entry| entry.value)
+            .map(|value| match value {
+                maggcs_core::params::ParamValue::Int(value) => {
+                    i32::try_from(value).unwrap_or_default()
+                }
+                _ => -2,
+            })
+            .unwrap_or_default()
+    }
+
+    async fn ensure_mot_test_en(params: &maggcs_core::params::ParamService) {
+        let value = mot_test_enabled(params).await;
+        assert_eq!(
+            value, 1,
+            "COM_MOT_TEST_EN must be 1 on the bench FC (got {value}); \
+             enable it or every ACTUATOR_TEST is denied"
+        );
+    }
+
+    /// Read the Motor 1–4 configuration and print it: `FUNCx` → MAIN/AUX +
+    /// channel, then MIN/MAX/REV/DIS + range source of the mapped output.
+    async fn read_configuration(
+        params: &maggcs_core::params::ParamService,
+    ) -> (OutputMap, Vec<PwmModel>) {
+        ensure_mot_test_en(params).await;
+        let map = super::read_output_map(params).await;
+        println!("output map: {map:?}");
+        let models = super::read_pwm_models(params, &map).await;
+        for (motor, model) in models.iter().enumerate() {
+            println!(
+                "M{}: {}–{} µs reversed={} disabled={} range_source={:?}",
+                motor + 1,
+                model.min_us,
+                model.max_us,
+                model.reversed,
+                model.disabled,
+                model.range_source
+            );
+        }
+        (map, models)
+    }
+
+    /// Stream-rate diagnostic: which message ids the bench FC streams.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "bench diagnostics: MAGGCS_BENCH=1 cargo test -p maggcs-app -- --ignored"]
+    async fn bench_list_streamed_messages() {
+        if !bench_enabled() {
+            panic!("set MAGGCS_BENCH=1 to run");
+        }
+        let handle = connect_bench().await;
+        for msg_id in [291u32, 292u32] {
+            super::request_message_interval(&handle, BENCH_SYSTEM_ID, msg_id, 10.0).await;
+        }
+        let mut events = handle.subscribe_route(MessageRoute::all());
+        let deadline = Instant::now() + std::time::Duration::from_secs(6);
+        let mut counts: std::collections::BTreeMap<String, u32> = Default::default();
+        while Instant::now() < deadline {
+            if let Ok(Ok(ConnectionEvent::Message(env))) =
+                tokio::time::timeout(std::time::Duration::from_millis(500), events.recv()).await
+            {
+                let name = format!("{:?}", env.message)
+                    .split('(')
+                    .next()
+                    .unwrap_or("?")
+                    .to_string();
+                *counts.entry(name).or_default() += 1;
+            }
+        }
+        let mut names: Vec<String> = counts.into_keys().collect();
+        names.sort();
+        println!("streamed messages: {names:?}");
+        handle.shutdown().await;
+    }
+
+    /// Harness state for the mag curve: the sampler task is abort-joinable
+    /// and the curve is shared with the test.
+    struct MagBench {
+        handle: ConnectionHandle,
+        curve: MagCurve,
+        sampler: tauri::async_runtime::JoinHandle<()>,
+    }
+
+    impl MagBench {
+        /// Abort and join the sampler, return the curve; loggers first, the
+        /// link shutdown is owned by the last cleanup call.
+        async fn stop(self) -> Vec<(f64, f64)> {
+            self.sampler.abort();
+            let _ = self.sampler.await;
+            self.handle.shutdown().await;
+            self.curve.lock().clone()
+        }
+    }
+
+    /// Record `(run-relative seconds, [MAIN1..MAIN4 pulse µs])` per
+    /// `SERVO_OUTPUT_RAW` frame — the FC-view of every channel's commanded
+    /// pulse (no ESC telemetry exists on this bench).
+    struct ServoBench {
+        curve: ServoCurve,
+        sampler: tauri::async_runtime::JoinHandle<()>,
+    }
+
+    impl ServoBench {
+        /// Abort and join the sampler, return the curve (no link shutdown).
+        async fn stop(self) -> Vec<(f64, [f32; 4])> {
+            self.sampler.abort();
+            let _ = self.sampler.await;
+            self.curve.lock().clone()
+        }
+    }
+
+    /// Record `(run-relative seconds, total field nT)` per HIGHRES_IMU frame.
+    fn spawn_mag_sampler(handle: ConnectionHandle, t0: Instant) -> MagBench {
+        let curve = std::sync::Arc::new(parking_lot::Mutex::new(Vec::<(f64, f64)>::new()));
+        let sink = curve.clone();
+        let mut events = handle.subscribe_route(
+            MessageRoute::messages(&[MAG_MESSAGE_ID]).from(BENCH_SYSTEM_ID, BENCH_COMPONENT_ID),
+        );
+        let sampler = tauri::async_runtime::spawn(async move {
+            let started = t0;
+            loop {
+                match events.recv().await {
+                    Ok(ConnectionEvent::Message(env)) => {
+                        if let MavMessage::HIGHRES_IMU(imu) = &env.message {
+                            // Same conversion + norm as the motor-test scope
+                            // (raw pass-through, gauss → nanotesla).
+                            let g = maggcs_core::signals::GAUSS_TO_NANOTESLA;
+                            let raw_nt = [
+                                f64::from(imu.xmag) * g,
+                                f64::from(imu.ymag) * g,
+                                f64::from(imu.zmag) * g,
+                            ];
+                            let total = (raw_nt[0] * raw_nt[0]
+                                + raw_nt[1] * raw_nt[1]
+                                + raw_nt[2] * raw_nt[2])
+                                .sqrt();
+                            sink.lock().push((started.elapsed().as_secs_f64(), total));
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => break,
+                }
+            }
+        });
+        MagBench {
+            handle,
+            curve,
+            sampler,
+        }
+    }
+
+    /// Record the MAIN1..4 pulses (`servo1_raw..servo4_raw` of port 0).
+    fn spawn_servo_sampler(handle: ConnectionHandle, t0: Instant) -> ServoBench {
+        let curve = std::sync::Arc::new(parking_lot::Mutex::new(Vec::<(f64, [f32; 4])>::new()));
+        let sink = curve.clone();
+        let mut events = handle.subscribe_route(
+            MessageRoute::messages(&[SERVO_MESSAGE_ID]).from(BENCH_SYSTEM_ID, BENCH_COMPONENT_ID),
+        );
+        let sampler = tauri::async_runtime::spawn(async move {
+            loop {
+                match events.recv().await {
+                    Ok(ConnectionEvent::Message(env)) => {
+                        if let MavMessage::SERVO_OUTPUT_RAW(servo) = &env.message {
+                            if servo.port == 0 {
+                                let pulses = [
+                                    f32::from(servo.servo1_raw),
+                                    f32::from(servo.servo2_raw),
+                                    f32::from(servo.servo3_raw),
+                                    f32::from(servo.servo4_raw),
+                                ];
+                                sink.lock().push((t0.elapsed().as_secs_f64(), pulses));
+                            }
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => break,
+                }
+            }
+        });
+        ServoBench { curve, sampler }
+    }
+
+    fn write_servo_csv(path: &PathBuf, curve: &[(f64, [f32; 4])]) {
+        use std::io::Write;
+        let mut file = std::fs::File::create(path).expect("create CSV");
+        writeln!(file, "t_s,main1_us,main2_us,main3_us,main4_us").expect("header");
+        for (t, pulses) in curve {
+            writeln!(
+                file,
+                "{t:.3},{:.0},{:.0},{:.0},{:.0}",
+                pulses[0], pulses[1], pulses[2], pulses[3]
+            )
+            .expect("row");
+        }
+    }
+
+    fn write_curve_csv(path: &PathBuf, curve: &[(f64, f64)]) {
+        use std::io::Write;
+        let mut file = std::fs::File::create(path).expect("create CSV");
+        writeln!(file, "t_s,mag_total_nt").expect("header");
+        for (t, total) in curve {
+            writeln!(file, "{t:.3},{total:.1}").expect("row");
+        }
+    }
+
+    /// Spin Motor 1 inside the FC-read range, then stop and release.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "benches the real PX4 on serial: MAGGCS_BENCH=1 MAGGCS_BENCH_UART=/dev/ttyACM0"]
+    async fn bench_reads_configuration_and_spins_motor_one() {
+        if !bench_enabled() {
+            panic!("set MAGGCS_BENCH=1 (propeller removed, FC disarmed) to run");
+        }
+        let handle = connect_bench().await;
+        let (params, _param_events) = maggcs_core::params::ParamService::spawn(
+            handle.clone(),
+            BENCH_SYSTEM_ID,
+            BENCH_COMPONENT_ID,
+        );
+        let (map, models) = read_configuration(&params).await;
+        assert!(map.channel_for(1).is_some(), "Motor 1 must be mapped");
+        refuse_unread_pwm_ranges(&models).expect("every launched motor needs an FC-read range");
+
+        let limits = limits_for_load(MotorTestLoad::None, BENCH_SYSTEM_ID);
+        let (service, mut events, output) = MotorTestService::spawn(handle.clone(), limits);
+        service
+            .send(MotorTestCommand::SetPwmModels { models })
+            .await
+            .expect("models accepted");
+        let mut values = vec![0.0; usize::from(MOTOR_TEST_MOTOR_COUNT)];
+        values[0] = BENCH_AMPLITUDE;
+        service
+            .send(MotorTestCommand::SetValues(values.clone()))
+            .await
+            .expect("slider values accepted");
+        service
+            .send(MotorTestCommand::StartManual)
+            .await
+            .expect("start accepted");
+
+        let spin_until = Instant::now() + std::time::Duration::from_secs_f64(BENCH_SPIN_S);
+        while Instant::now() < spin_until {
+            if let Ok(Some(event)) = tokio::time::timeout(
+                spin_until.saturating_duration_since(Instant::now()),
+                events.recv(),
+            )
+            .await
+            {
+                match event {
+                    MotorTestEvent::Stopped(reason) => panic!("stopped during spin: {reason:?}"),
+                    MotorTestEvent::ReleaseFailed(error) => panic!("release failed: {error:?}"),
+                    MotorTestEvent::StateChanged(state) => println!("state: {state:?}"),
+                }
+            } else {
+                break;
+            }
+        }
+        let sent = output.borrow().clone();
+        assert!(
+            sent.first().copied().unwrap_or(0.0) > 0.0,
+            "ACTUATOR_TEST commands must flow while spinning"
+        );
+
+        let receipt = service
+            .stop_and_wait()
+            .await
+            .expect("stop within the deadline");
+        println!("stop receipt: {receipt:?}");
+        assert_eq!(receipt.state, SessionState::Idle);
+        let stopped = tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
+            .await
+            .expect("stopped event within the deadline")
+            .expect("events alive");
+        assert!(
+            matches!(stopped, MotorTestEvent::Stopped(_)),
+            "waiting for Stopped, got {stopped:?}"
+        );
+        handle.shutdown().await;
+    }
+
+    /// Latest-value-wins 20 Hz sine updates, Motor 1 and 3 in phase,
+    /// Motors 2 and 4 held at 0.
+    async fn drive_sine(
+        service: &MotorTestService,
+        phase_start: Instant,
+        until: Instant,
+    ) -> Vec<(f64, f64)> {
+        let mut recorded = Vec::<(f64, f64)>::new();
+        let period = std::time::Duration::from_millis(SINE_UPDATE_MS);
+        let mut next = phase_start;
+        while Instant::now() < until {
+            let until_next = next.saturating_duration_since(Instant::now());
+            tokio::time::sleep(until_next).await;
+            let t = next.duration_since(phase_start).as_secs_f32();
+            // 0 → twice the coefficient, preserving the original bench run.
+            let demand =
+                BENCH_AMPLITUDE * (1.0 - (2.0 * std::f32::consts::PI * BENCH_SINE_HZ * t).cos());
+            let mut values = vec![0.0; usize::from(MOTOR_TEST_MOTOR_COUNT)];
+            values[0] = demand;
+            values[2] = demand;
+            service
+                .send(MotorTestCommand::SetValues(values))
+                .await
+                .expect("slider values accepted during the sine run");
+            recorded.push((f64::from(t), f64::from(demand)));
+            next += period;
+        }
+        recorded
+    }
+
+    /// Acceptance: sine on Motor 1 **and** Motor 3 for 30 s with the whole
+    /// total-magnetic-field curve recorded to CSV (bench, propeller removed).
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "benches the real PX4 on serial: MAGGCS_BENCH=1 MAGGCS_BENCH_UART=/dev/ttyACM0"]
+    async fn bench_sine_on_motors_1_and_3_records_mag_field() {
+        if !bench_enabled() {
+            panic!("set MAGGCS_BENCH=1 (propeller removed, FC disarmed) to run");
+        }
+        let handle = connect_bench().await;
+        request_mag_stream(&handle).await;
+        let t0 = Instant::now();
+        let bench = spawn_mag_sampler(handle.clone(), t0);
+        // Servo recorder before the config reads: it runs through the whole
+        // test and its samples share the mag curve time base.
+        let servo = spawn_servo_sampler(handle.clone(), t0);
+
+        let (params, _param_events) = maggcs_core::params::ParamService::spawn(
+            handle.clone(),
+            BENCH_SYSTEM_ID,
+            BENCH_COMPONENT_ID,
+        );
+        let (map, models) = read_configuration(&params).await;
+        assert!(
+            map.channel_for(1).is_some() && map.channel_for(3).is_some(),
+            "Motor 1 and Motor 3 must both be mapped"
+        );
+        refuse_unread_pwm_ranges(&models).expect("every launched motor needs an FC-read range");
+        for motor in 1..=MOTOR_TEST_MOTOR_COUNT {
+            let channel = map.channel_for(motor).expect("mapped bench motor");
+            assert!(
+                channel.port == maggcs_core::motor_test::mapping::ServoPort::Main
+                    && channel.channel <= 4,
+                "this recorder requires motors mapped to MAIN1..4"
+            );
+        }
+        let analysis_models = models.clone();
+        let mut dis = [0u16; 4];
+        for channel in 1..=4u8 {
+            let pulse = super::read_int_param(&params, &format!("PWM_MAIN_DIS{channel}")).await;
+            dis[usize::from(channel - 1)] = pulse.unwrap_or_default().try_into().unwrap_or(0);
+        }
+        println!("PWM_MAIN_DIS1..4 = {dis:?}");
+
+        let limits = limits_for_load(MotorTestLoad::None, BENCH_SYSTEM_ID);
+        let (service, mut events, output) = MotorTestService::spawn(handle.clone(), limits);
+        service
+            .send(MotorTestCommand::SetPwmModels { models })
+            .await
+            .expect("models accepted");
+
+        // Idle initial values, then start: the sine loop owns the values after.
+        let idle = vec![0.0; usize::from(MOTOR_TEST_MOTOR_COUNT)];
+        service
+            .send(MotorTestCommand::SetValues(idle.clone()))
+            .await
+            .expect("idle values accepted");
+        service
+            .send(MotorTestCommand::StartManual)
+            .await
+            .expect("start accepted");
+        // Pre-roll sample window (baseline field, motors released).
+        tokio::time::sleep(std::time::Duration::from_secs_f64(BENCH_PREROLL_S)).await;
+        assert!(
+            matches!(
+                events.recv().await,
+                Some(MotorTestEvent::StateChanged(SessionState::ManualRunning))
+            ),
+            "session must be running before the sine drive"
+        );
+
+        // 30 s sine on M1 + M3.
+        let spin_started = Instant::now();
+        let record = drive_sine(
+            &service,
+            spin_started,
+            spin_started + std::time::Duration::from_secs_f64(BENCH_SPIN_S),
+        )
+        .await;
+        let spin_finished = Instant::now();
+        let sent = output.borrow().clone();
+
+        // Stop: confirmed full release pass.
+        let receipt = service
+            .stop_and_wait()
+            .await
+            .expect("stop within the deadline");
+        println!("stop receipt: {receipt:?}");
+        assert_eq!(receipt.state, SessionState::Idle);
+        assert!(
+            record.iter().any(|(_, value)| *value > 0.0),
+            "sine drove a nonzero demand"
+        );
+        assert!(
+            sent.get(1) == Some(&0.0) && sent.get(3) == Some(&0.0),
+            "M2 and M4 stayed undemanded"
+        );
+
+        // Post-roll field samples settle before the sampler stops.
+        tokio::time::sleep(std::time::Duration::from_secs_f64(BENCH_PREROLL_S)).await;
+        let servo_curve = servo.stop().await;
+        let curve = bench.stop().await;
+
+        // Curve sanity: enough samples covering the whole process.
+        let minimum_samples =
+            usize::try_from((MAG_STREAM_HZ * (BENCH_SPIN_S + 2.0 * BENCH_PREROLL_S)) as u64)
+                .unwrap();
+        assert!(
+            curve.len() >= minimum_samples,
+            "the mag curve must cover the run: {} samples < {minimum_samples}",
+            curve.len()
+        );
+        let last = curve.last().expect("curve").0;
+        assert!(
+            last >= BENCH_PREROLL_S * 2.0 + BENCH_SPIN_S,
+            "the curve must span pre-roll, spin and post-roll: last t = {last}"
+        );
+        let out_path = PathBuf::from(BENCH_OUT_DIR).join("bench_sine_mag.csv");
+        write_curve_csv(&out_path, &curve);
+        let spin_start_s = spin_started.duration_since(t0).as_secs_f64();
+        let spin_end_s = spin_finished.duration_since(t0).as_secs_f64();
+        let timing_path = PathBuf::from(BENCH_OUT_DIR).join("bench_sine_timing.csv");
+        {
+            use std::io::Write;
+            let mut timing = std::fs::File::create(timing_path).expect("timing CSV");
+            writeln!(timing, "phase,t_s").expect("timing header");
+            writeln!(timing, "spin_start,{spin_start_s:.3}").expect("start marker");
+            writeln!(timing, "spin_end,{spin_end_s:.3}").expect("end marker");
+        }
+        let baseline: Vec<_> = curve
+            .iter()
+            .filter(|(t, _)| *t >= spin_start_s - BENCH_PREROLL_S && *t < spin_start_s)
+            .collect();
+        let baseline_mean =
+            baseline.iter().map(|(_, v)| v).sum::<f64>() / f64::from(baseline.len().max(1) as u32);
+        println!(
+            "mag curve: {} samples → {} (baseline ≈ {baseline_mean:.0} nT)",
+            curve.len(),
+            out_path.display()
+        );
+        println!("sine updates recorded: {}", record.len());
+
+        // Servo analysis: MAIN1=M2, MAIN2=M4, MAIN3=M3, MAIN4=M1.
+        let servo_path = PathBuf::from(BENCH_OUT_DIR).join("bench_sine_servo.csv");
+        write_servo_csv(&servo_path, &servo_curve);
+        let window_start = spin_start_s + 1.0;
+        let window_end = spin_end_s - 1.0;
+        let in_window: Vec<&(f64, [f32; 4])> = servo_curve
+            .iter()
+            .filter(|(t, _)| *t >= window_start && *t <= window_end)
+            .collect();
+        assert!(
+            !in_window.is_empty(),
+            "SERVO_OUTPUT_RAW frames must cover the spin window"
+        );
+        let mut spans = [[f32::INFINITY, f32::NEG_INFINITY]; 4];
+        for (_, pulses) in &in_window {
+            for (ch, pulse) in pulses.iter().enumerate() {
+                spans[ch][0] = spans[ch][0].min(*pulse);
+                spans[ch][1] = spans[ch][1].max(*pulse);
+            }
+        }
+        println!(
+            "spin window MAIN pulses (µs): 1={:?} 2={:?} 3={:?} 4={:?}",
+            spans[0], spans[1], spans[2], spans[3]
+        );
+        // M2 (MAIN1) and M4 (MAIN2) were demanded 0 the whole run: pinned at
+        // `PWM_MAIN_MIN` 1100 (the idle-spin mechanism) must not occur; a
+        // real release shows the DIS pulse or stays below the function min.
+        for motor in [2u8, 4u8] {
+            let ch = usize::from(map.channel_for(motor).expect("mapped").channel - 1);
+            let dis_pulse = dis[ch];
+            let [lo, hi] = spans[ch];
+            let released = hi < f32::from(analysis_models[usize::from(motor - 1)].min_us)
+                || (lo == f32::from(dis_pulse) && hi == f32::from(dis_pulse));
+            assert!(
+                released,
+                "M{motor} must stay released (DIS {dis_pulse} µs), observed {lo}..{hi} µs"
+            );
+        }
+        // The benchmark's raised cosine peaks at twice BENCH_AMPLITUDE.
+        for motor in [1u8, 3u8] {
+            let ch = usize::from(map.channel_for(motor).expect("mapped").channel - 1);
+            let model = analysis_models[usize::from(motor - 1)];
+            let [lo, hi] = spans[ch];
+            let range_hi = f32::from(model.min_us) + 2.0 * BENCH_AMPLITUDE * model.span_us();
+            assert!(
+                lo <= f32::from(model.min_us) + 0.05 * model.span_us()
+                    && hi >= range_hi - 0.05 * model.span_us() && hi <= range_hi + 5.0,
+                "M{motor} must sweep the configured sine band, observed {lo}..{hi} µs (peak ≈ {range_hi:.0})"
+            );
+        }
+        println!(
+            "servo curve: {} samples → {}",
+            servo_curve.len(),
+            servo_path.display()
+        );
+
+        handle.shutdown().await;
+    }
+
+    /// Diagnostic (bench finding 2026-10-23): does the real FC answer
+    /// `MAV_CMD_REQUEST_MESSAGE` (148) with `AUTOPILOT_VERSION` on the
+    /// saturated serial link?
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "bench diagnostics: MAGGCS_BENCH=1 cargo test -p maggcs-app --ignored"]
+    async fn bench_autopilot_version_diag() {
+        if !bench_enabled() {
+            panic!("set MAGGCS_BENCH=1 to run");
+        }
+        let handle = connect_bench().await;
+        let mut events = handle.subscribe_route(MessageRoute::all());
+        super::request_message_interval(&handle, BENCH_SYSTEM_ID, 148u32, 0.5).await;
+        let deadline = Instant::now() + std::time::Duration::from_secs(6);
+        while Instant::now() < deadline {
+            if let Ok(Ok(ConnectionEvent::Message(env))) =
+                tokio::time::timeout(std::time::Duration::from_millis(500), events.recv()).await
+            {
+                match env.message {
+                    MavMessage::AUTOPILOT_VERSION(v) => {
+                        let f = v.flight_sw_version;
+                        println!(
+                            "AUTOPILOT_VERSION: {}.{}.{} capabilities={:#x}",
+                            (f >> 24) & 0xFF,
+                            (f >> 16) & 0xFF,
+                            (f >> 8) & 0xFF,
+                            v.capabilities.bits()
+                        );
+                    }
+                    MavMessage::COMMAND_LONG(cmd)
+                        if cmd.command == ::mavlink::common::MavCmd::MAV_CMD_REQUEST_MESSAGE =>
+                    {
+                        println!("echoed REQUEST_MESSAGE: {}", cmd.param1);
+                    }
+                    MavMessage::COMMAND_ACK(ack) => {
+                        println!("ACK: command={:?} result={:?}", ack.command, ack.result);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        handle.shutdown().await;
+    }
+
+    /// Diagnostic (bench finding 2026-10-23): replicates the app's params
+    /// runtime path on the real serial FC — `spawn_with_task` + the bounded
+    /// `wait_fc_version` — to prove the convergence (or expose the break).
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "bench diagnostics: MAGGCS_BENCH=1 cargo test -p maggcs-app --ignored"]
+    async fn bench_params_fc_version_converges() {
+        if !bench_enabled() {
+            panic!("set MAGGCS_BENCH=1 to run");
+        }
+        let handle = connect_bench().await;
+        let (svc, mut evt, task) =
+            maggcs_core::params::ParamService::spawn_with_task(handle.clone(), 1, 1);
+        let started = Instant::now();
+        let version = svc
+            .wait_fc_version(2, std::time::Duration::from_millis(1200))
+            .await;
+        println!(
+            "wait_fc_version -> {version:?} after {:.1?}",
+            started.elapsed()
+        );
+        if let Ok(Ok(ev)) =
+            tokio::time::timeout(std::time::Duration::from_millis(200), evt.recv()).await
+        {
+            println!("event: {ev:?}");
+        }
+        drop(svc);
+        task.abort();
+        handle.shutdown().await;
+        assert!(
+            version.is_some(),
+            "wait_fc_version must converge on the real serial FC"
+        );
+    }
+
+    /// Diagnostic (bench finding 2026-10-23): does the real PX4 1.17.0 FC
+    /// expose `USB_MAV_MODE`? Single lazy reads for the suspected names.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "bench diagnostics: MAGGCS_BENCH=1 cargo test -p maggcs-app --ignored"]
+    async fn bench_read_usb_mav_mode_variants() {
+        if !bench_enabled() {
+            panic!("set MAGGCS_BENCH=1 to run");
+        }
+        let handle = connect_bench().await;
+        let (params, _param_events) =
+            maggcs_core::params::ParamService::spawn(handle.clone(), 1, 1);
+        for name in ["USB_MAV_MODE", "SYS_USB_MAV_MODE"] {
+            let entry = params.read(name).await;
+            match entry {
+                Ok(e) => println!("param {name}: value={:?} type={:?}", e.value, e.ptype),
+                Err(err) => println!("param {name}: NOT READ ({err:?})"),
+            }
+        }
+        drop(params);
+        handle.shutdown().await;
+    }
+
+    /// Request the mag stream rate for the curve (the FC already streams
+    /// HIGHRES_IMU, but the rate must be ≥ half the accepted minimum).
+    async fn request_mag_stream(handle: &ConnectionHandle) {
+        super::request_message_interval(handle, BENCH_SYSTEM_ID, MAG_MESSAGE_ID, MAG_STREAM_HZ)
+            .await;
     }
 }
