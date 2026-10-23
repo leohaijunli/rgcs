@@ -19,10 +19,12 @@ body,
    * collapsed pane is replaced by its rail and the splitter track collapses. */
   grid-template-columns: var(--insp-left, 220px) var(--insp-left-split, 4px) 1fr
     var(--insp-right-split, 4px) var(--insp-right, 240px);
-  /* Rows: header, toolbar, replay strip (when replaying), notice (when set),
-   * then the workspace as the flex track. The optional rows are empty (0 px)
-   * when absent, so they never push the panes into implicit rows (Insp-3). */
+  /* Rows: header, toolbar, replay strip (when replaying), then the workspace
+   * as the flex track. The optional replay row is empty (0 px) when absent, so
+   * it never pushes the panes into implicit rows (Insp-3). The notice is an
+   * overlay, not a track (Insp-5). */
   grid-template-rows: auto auto auto auto 1fr;
+  position: relative;
   height: 100%;
   min-width: 0;
 }
@@ -305,16 +307,85 @@ input[type='range'] {
   padding: 14px;
 }
 
+/* Conditional notice (Insp-5). It is an overlay, not a grid track, so showing
+ * it never displaces the plot workspace; the color and role convey severity. */
 .inspector-notice {
-  grid-column: 1 / -1;
-  grid-row: 4;
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(520px, calc(100% - 24px));
+  transform: translateX(-50%);
   background: var(--mg-bg-raised);
-  color: var(--mg-error);
-  border: 1px solid var(--mg-error);
+  color: var(--mg-ink);
+  border: 1px solid var(--mg-border);
+  border-left-width: 3px;
   border-radius: 4px;
-  margin: 6px 8px 0;
-  padding: 5px 8px;
+  padding: 6px 8px;
   font-size: 12px;
+}
+
+.inspector-notice.info {
+  border-left-color: var(--mg-accent);
+}
+
+.inspector-notice.success {
+  border-left-color: var(--mg-ok);
+}
+
+.inspector-notice.warn {
+  border-left-color: var(--mg-warn);
+}
+
+.inspector-notice.error {
+  border-left-color: var(--mg-error);
+}
+
+.notice-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--mg-muted);
+}
+
+.inspector-notice.info .notice-dot {
+  background: var(--mg-accent);
+}
+
+.inspector-notice.success .notice-dot {
+  background: var(--mg-ok);
+}
+
+.inspector-notice.warn .notice-dot {
+  background: var(--mg-warn);
+}
+
+.inspector-notice.error .notice-dot {
+  background: var(--mg-error);
+}
+
+.notice-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.notice-close {
+  flex: none;
+  padding: 0 2px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--mg-muted);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.notice-close:hover {
+  color: var(--mg-ink);
 }
 
 /* Draggable sidebar divider (plan §6.1); the ::after widens the grab target

@@ -124,6 +124,37 @@ try {
     )
   }
 
+  // --- Insp-5: notice severity levels never displace the workspace ---------
+  {
+    const gridBefore = await page.locator('.plot-grid').boundingBox()
+    for (const [severity, role] of [
+      ['info', 'status'],
+      ['success', 'status'],
+      ['warn', 'alert'],
+      ['error', 'alert'],
+    ]) {
+      await page.evaluate((s) => window.__mgInspector.showNotice(`${s} message`, s), severity)
+      await page.waitForTimeout(50)
+      const notice = page.locator('.inspector-notice')
+      assert.ok(await notice.count(), `a ${severity} notice is shown`)
+      assert.ok(
+        (await notice.getAttribute('class')).includes(severity),
+        `the ${severity} notice carries its severity class`,
+      )
+      assert.equal(await notice.getAttribute('role'), role, `the ${severity} notice uses role=${role}`)
+      const gridAfter = await page.locator('.plot-grid').boundingBox()
+      assert.ok(
+        Math.abs(gridAfter.y - gridBefore.y) < 1 &&
+          Math.abs(gridAfter.height - gridBefore.height) < 1,
+        `a ${severity} notice does not displace the workspace`,
+      )
+    }
+    if (shots) await page.screenshot({ path: join(shots, 'inspector-notice-1366x768.png') })
+    await page.locator('.inspector-notice .notice-close').click()
+    await page.waitForTimeout(50)
+    assert.equal(await page.locator('.inspector-notice').count(), 0, 'the notice can be dismissed')
+  }
+
   // --- 1366 x 768 ---------------------------------------------------------
   await setSize(1366, 768, '1366x768')
   if (shots) await page.screenshot({ path: join(shots, 'inspector-1366x768.png') })

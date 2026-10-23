@@ -125,6 +125,9 @@ interface LayoutPrefs {
   rightCollapsed: boolean
 }
 
+/** Conditional notice levels (Insp-5): success/info differ from warn/error. */
+type NoticeSeverity = 'info' | 'success' | 'warn' | 'error'
+
 const LAYOUT_KEY = 'maggcs.inspector.layout'
 /** A pane never narrows past this, so its header/search stay usable. */
 const MIN_PANE_W = 160
@@ -484,7 +487,7 @@ export function InspectorApp() {
    * resumes on stabilized data (operator: wait ~2 s, then read). */
   const settlingUntilRef = useRef(0)
   const [settling, setSettling] = useState(false)
-  const [notice, setNotice] = useState<string | null>(null)
+  const [notice, setNotice] = useState<{ text: string; severity: NoticeSeverity } | null>(null)
   /** Plot currently highlighted as a drag-and-drop target (P7). */
   const [dropPlot, setDropPlot] = useState<string | null>(null)
   /** Overflow menu (export / save / load) open state. */
@@ -504,13 +507,24 @@ export function InspectorApp() {
   const [seekPreview, setSeekPreview] = useState<number | null>(null)
 
   const noticeAt = useRef(0)
-  const showNotice = useCallback((msg: string) => {
+  const showNotice = useCallback((text: string, severity: NoticeSeverity = 'info') => {
     noticeAt.current = Date.now()
-    setNotice(msg)
+    setNotice({ text, severity })
     setTimeout(() => {
       if (Date.now() - noticeAt.current >= 4000) setNotice(null)
     }, 4000)
   }, [])
+
+  // Dev-only handle so E2E checks can drive notices in browser mock mode
+  // (same pattern as `window.__mgParams` in params/store.ts).
+  useEffect(() => {
+    if (import.meta.env?.DEV) {
+      ;(window as unknown as { __mgInspector?: unknown }).__mgInspector = { showNotice }
+    }
+    return () => {
+      if (import.meta.env?.DEV) delete (window as unknown as { __mgInspector?: unknown }).__mgInspector
+    }
+  }, [showNotice])
 
   /** Open a `.ulg` and switch the source to replay (plan decision B). */
   const openUlog = useCallback(async () => {
@@ -531,9 +545,10 @@ export function InspectorApp() {
       })
       showNotice(
         `Replaying ${info.name} · ${(info.duration_ms / 1000).toFixed(1)} s · ${info.topics.length} topics`,
+        'success',
       )
     } catch (e) {
-      showNotice(String(e))
+      showNotice(String(e), 'error')
     }
   }, [showNotice])
 
@@ -548,7 +563,7 @@ export function InspectorApp() {
       try {
         setReplay(await invoke<ReplayStatus>('inspector_replay', args))
       } catch (e) {
-        showNotice(String(e))
+        showNotice(String(e), 'error')
       }
     },
     [showNotice],
@@ -559,7 +574,7 @@ export function InspectorApp() {
     try {
       await invoke('inspector_use_live')
     } catch (e) {
-      showNotice(String(e))
+      showNotice(String(e), 'error')
     }
     setReplay(null)
     setSeekPreview(null)
@@ -857,7 +872,7 @@ export function InspectorApp() {
       try {
         await invoke('inspector_connect', { channel })
       } catch (e) {
-        showNotice(String(e))
+        showNotice(String(e), 'error')
       }
       try {
         const cat = await invoke<CatalogEntry[]>('inspector_catalog')
@@ -876,7 +891,7 @@ export function InspectorApp() {
           }
         }
       } catch (e) {
-        showNotice(String(e))
+        showNotice(String(e), 'error')
       }
     })()
     return () => {
@@ -892,7 +907,7 @@ export function InspectorApp() {
   useEffect(() => {
     if (!tauri) return
     const traces = plots.flatMap((p) => p.traces)
-    void invoke('inspector_set_traces', { traces }).catch((e) => showNotice(String(e)))
+    void invoke('inspector_set_traces', { traces }).catch((e) => showNotice(String(e), 'error'))
   }, [plots, tauri])
 
   // Drop buffers/spectra for traces that no longer exist.
@@ -1233,9 +1248,9 @@ export function InspectorApp() {
       await invoke('set_mag_calibration', { json: text })
       localStorage.setItem('maggcs.magCal', text)
       setCalLoaded(true)
-      showNotice('Mag calibration applied — total field is now calibrated')
+      showNotice('Mag calibration applied — total field is now calibrated', 'success')
     } catch (e) {
-      showNotice(String(e))
+      showNotice(String(e), 'error')
     }
   }
 
@@ -1245,9 +1260,9 @@ export function InspectorApp() {
       await invoke('set_mag_calibration', { json: null })
       localStorage.removeItem('maggcs.magCal')
       setCalLoaded(false)
-      showNotice('Mag calibration cleared')
+      showNotice('Mag calibration cleared', 'success')
     } catch (e) {
-      showNotice(String(e))
+      showNotice(String(e), 'error')
     }
   }
 
@@ -1536,7 +1551,24 @@ export function InspectorApp() {
           </button>
         </div>
       )}
-      {notice && <div className="inspector-notice">{notice}</div>}
+      {notice && (
+        <div
+          className={`inspector-notice ${notice.severity}`}
+          role={notice.severity === 'warn' || notice.severity === 'error' ? 'alert' : 'status'}
+        >
+          <span className="notice-dot" aria-hidden="true" />
+          <span className="notice-text">{notice.text}</span>
+          <button
+            type="button"
+            className="notice-close"
+            title="Dismiss"
+            aria-label="Dismiss notice"
+            onClick={() => setNotice(null)}
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {leftCollapsed ? (
         <PaneRail side="left" title="Show signal list" onOpen={() => setLeftCollapsed(false)} />

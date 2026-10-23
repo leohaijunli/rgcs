@@ -290,9 +290,22 @@ The grid uses explicit `header / notice / workspace` rows, so a notice no
 longer pushes the panes into implicit rows, and each pane is clamped so the
 center keeps ≥ 240 px at every window size. Verified at 800 × 480, 1366 × 768,
 and 1920 × 1080 (`check-inspector.mjs`; screenshots in
-`frontend/screenshots/inspector/`). Remaining 6.1 items: plot height/columns,
-toolbar/replay grouping, title placement, keyboard reachability, and notice
-severity.
+`frontend/screenshots/inspector/`).
+
+**Implementation update, 2026-10-22 — remaining 6.1 items:** a single plot now
+fills the workspace height (`.plot .chart { flex: 1 }` with a 160 px floor) and
+the allowed column count adapts to width (`MIN_PLOT_W = 280` → 1–3 columns;
+wider presets are disabled). The tool title, a source chip (`Mock` / `Live link`
+/ `No link` / `Replay · <file>`) and the rate/dropped status moved into a common
+header row; the toolbar is grouped into labelled clusters (Playback, Source,
+Plots, Workspace) and replay controls live in a dedicated strip that only
+appears while replaying. Signal groups now expose a real disclosure button and
+each trace chip an `aria-pressed` name button, so both are keyboard reachable.
+Notices are severity-toned (`info` / `success` / `warn` / `error`, with
+`status` / `alert` roles) and float as an overlay rather than occupying a grid
+row, so a notice never displaces the workspace. `check-inspector.mjs` covers all
+of the above (`frontend/screenshots/inspector/`, including
+`inspector-notice-1366x768.png`).
 
 **Improvements:**
 
@@ -465,7 +478,7 @@ smaller reviewed patches when execution resumes.
 | 5 | P1/P2 | **Partly completed 2026-10-22:** no-project entry, shared name-only create wizard, and recent remove/delete. Remaining: import on StartPage and recents availability/last-opened metadata. | Create/open work from StartPage; delete validates `project.json` before removing and never deletes an open project. Import from a fresh install and clear recovery for missing/locked/corrupt projects remain open. |
 | 6 | P1/P2 | Regroup and restyle Settings, including vertical navigation, accessible fields, clearer setting scope, and consistent saved state. | Keyboard-only navigation reaches every control; Connection and Map/simulation sections remain usable at target sizes; setting scope and commit behavior are visible. |
 | 7 | P1/P2 | Improve Tools menu grouping/keyboard behavior, then unify About and diagnostics feedback in separate tasks. | Arrow keys/Enter/Escape work; focus returns to the trigger; window/task states are distinguishable; diagnostics completion exposes its result; About versions/content agree. |
-| 8 | P2 | **Partly completed 2026-10-22:** Inspector sidebars are resizable/collapsible and the workspace row is bounded. Remaining: toolbar/replay layout, title placement, plot sizing, and notice severity. Follow the separate Logs plan for that surface. | At 800 × 480 and both desktop sizes, primary controls and selected plots remain usable; long replay names and notices do not break the workspace. |
+| 8 | P2 | **Completed 2026-10-22:** Inspector sidebars resizable/collapsible, plot fills height with width-capped columns, common header (title/source/status), grouped toolbar with a replay strip, keyboard-reachable signal groups and trace selection, and severity-toned overlay notices. Logs handled by its own plan. | At 800 × 480 and both desktop sizes, primary controls and selected plots remain usable; long replay names and notices do not break the workspace (`check-inspector.mjs`). |
 
 If a follow-up task changes privileged USB installation, serial output, or
 device configuration, perform the repository-required failure/wrong-device
@@ -497,6 +510,12 @@ backends for those actions.
 - [x] Inspector sidebars: resizable/collapsible, layout persisted, and a
   ≥ 240 px workspace at 800 × 480, 1366 × 768, and 1920 × 1080
   (`check-inspector.mjs`; screenshots in `frontend/screenshots/inspector/`).
+- [x] Inspector workspace: one plot fills the height, columns cap at the
+  available width (3 at 1920, 1 at 800), the header carries title/source/status,
+  the toolbar is grouped with a dedicated replay strip, signal groups and trace
+  selection are keyboard reachable, and notices are severity-toned overlays that
+  do not displace the workspace (`check-inspector.mjs`;
+  `inspector-notice-1366x768.png`).
 - [ ] Shared preference boot and live synchronization across all tool windows.
 - [ ] Tools keyboard behavior and focus restoration; selected/expanded states
   available to assistive technology.
