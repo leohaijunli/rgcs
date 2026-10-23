@@ -58,8 +58,12 @@ interface ProjectState {
   /** Error for the panel: a message, or the `armed-vehicle` code. */
   error: string | null
   busy: boolean
+  /** In-memory: the operator chose to use the app without opening a project. */
+  startDismissed: boolean
   open: (path: string) => Promise<boolean>
   create: (dir: string, name: string, crs: string, verticalDatum: string) => Promise<boolean>
+  /** Leave the start page with no project open (no disk or IPC change). */
+  continueWithoutProject: () => void
   /** Close the project. Refused (false) while the vehicle is armed. */
   close: () => Promise<boolean>
   refreshSurveys: () => Promise<void>
@@ -76,6 +80,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   surveys: [],
   error: null,
   busy: false,
+  startDismissed: false,
+
+  continueWithoutProject: () => set({ startDismissed: true, error: null }),
 
   open: async (path) => {
     if (vehicleArmed()) {
@@ -86,7 +93,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     try {
       const project = await invoke<Project>('project_open', { path })
       remember(path, project.name)
-      set({ project, path, busy: false })
+      set({ project, path, busy: false, startDismissed: false })
       void get().refreshSurveys()
       return true
     } catch (e) {
@@ -109,7 +116,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         verticalDatum,
       })
       remember(dir, project.name)
-      set({ project, path: dir, busy: false })
+      set({ project, path: dir, busy: false, startDismissed: false })
       void get().refreshSurveys()
       return true
     } catch (e) {
@@ -126,7 +133,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set({ busy: true, error: null })
     try {
       await invoke('project_close')
-      set({ project: null, path: null, surveys: [], busy: false })
+      set({ project: null, path: null, surveys: [], busy: false, startDismissed: false })
       return true
     } catch (e) {
       set({ error: String(e), busy: false })

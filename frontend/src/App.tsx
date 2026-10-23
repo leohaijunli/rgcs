@@ -48,6 +48,21 @@ function usePlanHistoryShortcuts(): void {
   }, [])
 }
 
+/** Connection/lifecycle surfaces shared by the start page and the workspace:
+ * the telemetry bridge runs in both, so auto-connect, target-change, alert,
+ * heartbeat and error feedback must be mounted in both (finding S1). */
+function LifecycleOverlays() {
+  return (
+    <>
+      <HeartbeatBanner />
+      <AutoConnectDialog />
+      <TargetChangeDialog />
+      <AlertLayer />
+      <ErrorBanner />
+    </>
+  )
+}
+
 export default function App() {
   useTelemetryBridge()
   usePlanHistoryShortcuts()
@@ -61,8 +76,10 @@ export default function App() {
   // mock has no Tauri APIs behind it, so it keeps the main UI (dev + the
   // screenshot harness) unless `?start` previews the page.
   const project = useProjectStore((s) => s.project)
+  const startDismissed = useProjectStore((s) => s.startDismissed)
   const showStart =
     project === null &&
+    !startDismissed &&
     (isTauri() || new URLSearchParams(window.location.search).has('start'))
 
   // Headless-harness escape (`?nomap`): the Cesium WebGL renderer crashes the
@@ -75,7 +92,12 @@ export default function App() {
   const hideMap = noMap || detachedMap.detached
 
   if (showStart) {
-    return <StartPage />
+    return (
+      <>
+        <StartPage />
+        <LifecycleOverlays />
+      </>
+    )
   }
 
   return (
@@ -110,12 +132,8 @@ export default function App() {
             )}
             <MockBanner />
             <Hud />
-            <HeartbeatBanner />
-            <AutoConnectDialog />
-            <TargetChangeDialog />
+            <LifecycleOverlays />
             <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
-            <AlertLayer />
-            <ErrorBanner />
           </div>
           <ProfileDrawer defaultOpen={detachedMap.detached} />
         </main>

@@ -341,6 +341,7 @@ export default {
   start: {
     subtitle: 'Select a project to continue',
     recent: 'Recent projects',
+    continueWithoutProject: 'Continue without a project',
   },
   about: {
     menu: 'About MagGCS',

@@ -23,6 +23,7 @@ export default function StartPage() {
   const createProject = useProjectStore((s) => s.create)
   const error = useProjectStore((s) => s.error)
   const busy = useProjectStore((s) => s.busy)
+  const continueWithoutProject = useProjectStore((s) => s.continueWithoutProject)
   const [creating, setCreating] = useState(false)
   const [name, setName] = useState('')
   const [crs, setCrs] = useState(DEFAULT_CRS)
@@ -127,6 +128,14 @@ export default function StartPage() {
             </button>
           )}
         </div>
+
+        <button
+          disabled={busy}
+          onClick={continueWithoutProject}
+          className="mt-3 w-full rounded border border-line px-2 py-1.5 text-xs text-muted hover:bg-panel hover:text-ink disabled:opacity-50"
+        >
+          {t('start.continueWithoutProject')}
+        </button>
       </div>
     </div>
   )
