@@ -63,6 +63,7 @@ pub fn run() {
             project_service::project_create,
             project_service::project_open,
             project_service::project_close,
+            project_service::project_delete,
             project_service::project_status,
             project_service::project_save,
             project_service::project_list_surveys,

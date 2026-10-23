@@ -121,6 +121,26 @@ pub fn project_close(state: State<'_, AppState>) -> Result<bool, String> {
     Ok(guard.take().is_some())
 }
 
+/// Delete a project directory from disk after validating that it is one.
+///
+/// Destructive: this removes the whole project tree. It is refused while a
+/// project is open (close it first) and the frontend additionally refuses
+/// while the vehicle is armed (A1). The path comes from the recent list.
+///
+/// # Errors
+///
+/// A stringified error when a project is open, the directory is not a MagGCS
+/// project, or removal fails.
+#[tauri::command]
+pub fn project_delete(state: State<'_, AppState>, path: String) -> Result<(), String> {
+    let guard = state.project.lock();
+    if guard.is_some() {
+        return Err("close the open project before deleting".into());
+    }
+    drop(guard);
+    ProjectStore::delete(std::path::Path::new(&path)).map_err(err)
+}
+
 /// The open project's manifest, or `None` when no project is open.
 #[tauri::command]
 pub fn project_status(state: State<'_, AppState>) -> Result<Option<Project>, String> {

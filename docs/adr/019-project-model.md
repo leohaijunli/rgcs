@@ -107,3 +107,27 @@ Implementation notes:
   never breaks in between.
 - **Lock**: `fs2` advisory exclusive lock on `<root>/.lock`, held by the store
   for its whole lifetime; `AppState.project` keeps the single open store.
+
+## Addendum (2026-10-22): creation location, optional project, and deletion
+
+1. **The project is optional at runtime.** StartPage offers *Continue without a
+   project*; the workspace runs with no project open, and the TopBar's
+   `No project` pill reopens the project picker. Closing a project returns to
+   StartPage. Nothing outside `core::project` requires an open project.
+
+2. **Create form asks for a name only.** `ProjectWizard` is shared by StartPage
+   and `ProjectHome`. CRS and vertical datum use the defaults `EPSG:4326` /
+   `cgvd2013`; the operator never edits them at creation. By default the project
+   is created at `<app data>/projects/<slug-of-name>` (a free `-2`, `-3`, …
+   suffix on collision), with an explicit *Change location…* for any other
+   directory. `project_create` keeps its `(path, name, crs, vertical_datum)`
+   signature; the frontend supplies the constants and resolves the path.
+
+3. **Deletion is explicit and validated.** `ProjectStore::delete(root)` validates
+   that `<root>/project.json` parses as a `Project` and refuses a path without a
+   final component (a filesystem root); a missing/invalid manifest is
+   `ProjectError::NotAProject`. `project_delete` is refused while a project is
+   open, and the frontend additionally refuses while the vehicle is armed (A1).
+   Recents offer two distinct actions: *Remove from list* (localStorage only,
+   never touches disk) and *Delete from disk* (typed project-name confirmation).
+   Removal is `remove_dir_all` and irreversible — there is no trash integration.

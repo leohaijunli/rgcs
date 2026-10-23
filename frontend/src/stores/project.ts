@@ -67,10 +67,21 @@ function readRecent(): RecentProject[] {
   }
 }
 
-function remember(path: string, name: string): void {
-  const next = [{ path, name }, ...readRecent().filter((r) => r.path !== path)].slice(0, MAX_RECENT)
+function writeRecent(next: RecentProject[]): void {
   localStorage.setItem(RECENT_KEY, JSON.stringify(next))
+}
+
+function remember(path: string, name: string): void {
+  writeRecent([{ path, name }, ...readRecent().filter((r) => r.path !== path)].slice(0, MAX_RECENT))
   localStorage.setItem(LAST_KEY, path)
+}
+
+/** Drop `path` from the recent list and the remembered last project. */
+function forget(path: string): RecentProject[] {
+  const next = readRecent().filter((r) => r.path !== path)
+  writeRecent(next)
+  if (localStorage.getItem(LAST_KEY) === path) localStorage.removeItem(LAST_KEY)
+  return next
 }
 
 /** The vehicle's armed state — the A1 gate for project switch/close. */
@@ -104,7 +115,13 @@ interface ProjectState {
   saveSurvey: (survey: Survey) => Promise<boolean>
   /** Reopen the most recent project at boot ("restart returns to it"). */
   reopenLast: () => Promise<void>
-  recent: () => RecentProject[]
+  /** The recent-project list (persisted in `localStorage`). */
+  recents: RecentProject[]
+  /** Forget a recent entry without touching disk. */
+  removeRecent: (path: string) => void
+  /** Delete a project directory from disk, then drop its recent entry.
+   * Refused while the vehicle is armed (A1) or the project is open. */
+  deleteFromDisk: (path: string) => Promise<boolean>
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
@@ -114,6 +131,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   error: null,
   busy: false,
   startDismissed: false,
+  recents: readRecent(),
 
   continueWithoutProject: () => set({ startDismissed: true, error: null }),
 
@@ -126,7 +144,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     try {
       const project = await invoke<Project>('project_open', { path })
       remember(path, project.name)
-      set({ project, path, busy: false, startDismissed: false })
+      set({ project, path, busy: false, startDismissed: false, recents: readRecent() })
       void get().refreshSurveys()
       return true
     } catch (e) {
@@ -150,7 +168,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         verticalDatum: DEFAULT_DATUM,
       })
       remember(target, project.name)
-      set({ project, path: target, busy: false, startDismissed: false })
+      set({ project, path: target, busy: false, startDismissed: false, recents: readRecent() })
       void get().refreshSurveys()
       return true
     } catch (e) {
@@ -209,7 +227,29 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     await get().open(last)
   },
 
-  recent: readRecent,
+  removeRecent: (path) => {
+    set({ recents: forget(path), error: null })
+  },
+
+  deleteFromDisk: async (path) => {
+    if (vehicleArmed()) {
+      set({ error: 'armed-vehicle' })
+      return false
+    }
+    if (get().path === path) {
+      set({ error: 'close the open project before deleting it' })
+      return false
+    }
+    set({ busy: true, error: null })
+    try {
+      await invoke('project_delete', { path })
+      set({ recents: forget(path), busy: false })
+      return true
+    } catch (e) {
+      set({ error: String(e), busy: false })
+      return false
+    }
+  },
 }))
 
 // Dev-only handle for the browser harness: the forced start page (PJ3) gates

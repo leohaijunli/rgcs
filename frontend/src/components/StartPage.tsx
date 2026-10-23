@@ -11,12 +11,11 @@ import { useTranslation } from 'react-i18next'
 import { open as pickFolder } from '@tauri-apps/plugin-dialog'
 import { isTauri } from '../inspector/mock'
 import { useProjectStore } from '../stores/project'
-import { StatusDot } from '../design-system/components'
 import ProjectWizard from './project/ProjectWizard'
+import RecentProjectList from './project/RecentProjectList'
 
 export default function StartPage() {
   const { t } = useTranslation()
-  const recent = useProjectStore((s) => s.recent)
   const openProject = useProjectStore((s) => s.open)
   const error = useProjectStore((s) => s.error)
   const busy = useProjectStore((s) => s.busy)
@@ -45,21 +44,7 @@ export default function StartPage() {
         <div className="space-y-2 rounded border border-line bg-panel p-3">
           <div className="text-xs font-medium text-ink">{t('start.recent')}</div>
           <div className="space-y-1">
-            {recent().map((r) => (
-              <button
-                key={r.path}
-                disabled={busy}
-                onClick={() => void openProject(r.path)}
-                className="flex w-full items-center gap-2 rounded border border-line bg-canvas px-2 py-1.5 text-left text-xs hover:bg-panel disabled:opacity-50"
-                title={r.path}
-              >
-                <StatusDot tone="muted" />
-                <span className="min-w-0 flex-1 truncate text-ink">{r.name}</span>
-              </button>
-            ))}
-            {recent().length === 0 && (
-              <div className="text-[11px] text-muted">{t('project.noRecent')}</div>
-            )}
+            <RecentProjectList />
           </div>
 
           <button

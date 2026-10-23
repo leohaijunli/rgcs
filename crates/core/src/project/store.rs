@@ -126,6 +126,34 @@ impl ProjectStore {
         Self::acquire(root, project)
     }
 
+    /// Delete a project directory from disk after validating that it is one.
+    ///
+    /// Destructive and irreversible. It refuses a path without a final
+    /// component (a filesystem root) and any directory whose `project.json` is
+    /// missing or invalid. It does not take the advisory lock — callers must
+    /// ensure no store is open on `root` first.
+    ///
+    /// # Errors
+    ///
+    /// [`ProjectError::NotAProject`] when `root` has no valid `project.json`;
+    /// [`ProjectError::Corrupt`] when the manifest does not parse;
+    /// [`ProjectError::Io`] when removal fails.
+    pub fn delete(root: &Path) -> Result<(), ProjectError> {
+        let manifest = root.join(PROJECT_FILE_NAME);
+        if root.file_name().is_none() || !manifest.is_file() {
+            return Err(ProjectError::NotAProject(root.to_path_buf()));
+        }
+        let text = fs::read_to_string(&manifest).map_err(|e| ProjectError::Io {
+            path: manifest,
+            source: e,
+        })?;
+        Project::from_json(&text)?;
+        fs::remove_dir_all(root).map_err(|e| ProjectError::Io {
+            path: root.to_path_buf(),
+            source: e,
+        })
+    }
+
     /// The loaded (and migrated) manifest.
     #[must_use]
     pub fn project(&self) -> &Project {
@@ -540,6 +568,43 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn delete_removes_only_a_validated_project() {
+        let root = temp_root("delete");
+        let store = ProjectStore::create(&root, demo_project()).expect("create");
+        drop(store);
+
+        // A plain directory without a manifest is refused and left alone.
+        let plain = temp_root("delete-plain");
+        fs::create_dir_all(&plain).expect("mkdir");
+        assert!(matches!(
+            ProjectStore::delete(&plain),
+            Err(ProjectError::NotAProject(_))
+        ));
+        assert!(plain.is_dir(), "the refused directory is untouched");
+        let _ = fs::remove_dir_all(&plain);
+
+        // A directory whose manifest does not parse is refused too.
+        let corrupt = temp_root("delete-corrupt");
+        fs::create_dir_all(&corrupt).expect("mkdir");
+        fs::write(corrupt.join(PROJECT_FILE_NAME), b"{ not json").expect("write");
+        assert!(matches!(
+            ProjectStore::delete(&corrupt),
+            Err(ProjectError::Corrupt { .. })
+        ));
+        assert!(corrupt.is_dir(), "the corrupt project is untouched");
+        let _ = fs::remove_dir_all(&corrupt);
+
+        // A filesystem root is never a project.
+        assert!(matches!(
+            ProjectStore::delete(Path::new("/")),
+            Err(ProjectError::NotAProject(_))
+        ));
+
+        ProjectStore::delete(&root).expect("delete");
+        assert!(!root.exists());
     }
 
     #[test]

@@ -1,7 +1,8 @@
 # Startup, Settings, and Tools: UI Assessment and Improvement Plan
 
 - **Review date:** 2026-10-22
-- **Status:** Motor Test UI delivered on 2026-10-22; other surfaces remain deferred.
+- **Status:** Motor Test and StartPage deliveries landed on 2026-10-22; the
+  remaining Settings/Tools surfaces stay deferred.
 - **Scope:** The startup/project-selection page, main-window Settings, the Tools
   menu, and the layouts of the tools it opens.
 - **Related assessment:** [Tools → Logs](logs-ui-review-plan.md).
@@ -11,6 +12,27 @@
 The startup surface reviewed here is `StartPage`, the project's entry screen.
 Its current purpose is selecting or creating a project. The assessment does not
 assume an account-authentication workflow.
+
+**Implementation update (2026-10-22): StartPage delivery.** Startup is no longer
+a hard project gate:
+
+- **S1 resolved:** the telemetry lifecycle surfaces (auto-connect, target
+  change, alerts, heartbeat, errors) are a shared `LifecycleOverlays` mounted by
+  both StartPage and the workspace, so the auto-connect timer now has visible
+  cancellation UI on the start page.
+- **No-project entry:** a *Continue without a project* action opens the
+  workspace with `project === null`; closing a project returns to StartPage.
+  The TopBar's `No project` pill still opens the project picker.
+- **Create form simplified:** the wizard asks only for a name. CRS/datum use the
+  project defaults and the project is created under `<app data>/projects` with a
+  unique folder name, with an optional *Change location…*. StartPage and
+  ProjectHome share one `ProjectWizard`, removing the duplicated form (S4's
+  labelled-metadata recommendation is superseded by this simplified contract).
+- **Project deletion:** recents gain *Remove from list* (localStorage only) and
+  *Delete from disk* (typed project-name confirmation). The backend validates
+  `project.json` before removing the tree and refuses an open project.
+- **S3 (import) and S6 (availability/last-opened) remain open** — import is still
+  ProjectHome-only; recents show no availability or last-opened metadata.
 
 ## 1. Executive assessment
 
@@ -398,7 +420,7 @@ smaller reviewed patches when execution resumes.
 | 3a | P1 | Fix Parameters table geometry. | Each data-column origin differs from its header by at most 1 CSS px at 1366, 1920, and 900 px widths, including after search, group switching, and deep scrolling. |
 | 3b | P1 | **Completed 2026-10-22:** Motor Test sidebar start/alarm controls, bounded workspace, stacked order, consistent state/title, and optional input/log details. | Simulated IPC regression passes at 1024 × 640, 1366 × 768, and 1920 × 1080: plots/capture reachable, stop controls visible, no wide document overflow. Build and app compilation pass; screenshots and manual steps are in the module README. |
 | 4 | P1 | Share theme/Field-mode initialization and live propagation; update density-dependent controls and virtualized rows. | Main, Inspector, Parameters, and Motor Test agree on saved preferences at startup and update within 500 ms after a change; Field-mode targets meet 44 × 44 px without overlap. |
-| 5 | P1/P2 | Improve StartPage and shared project-picker workflow: labelled wizard, metadata validation, import, operation feedback, and recents. | A first-time operator can create, open, or import a project from StartPage; invalid metadata is rejected before writing; missing/locked/corrupt projects offer a clear recovery action. |
+| 5 | P1/P2 | **Partly completed 2026-10-22:** no-project entry, shared name-only create wizard, and recent remove/delete. Remaining: import on StartPage and recents availability/last-opened metadata. | Create/open work from StartPage; delete validates `project.json` before removing and never deletes an open project. Import from a fresh install and clear recovery for missing/locked/corrupt projects remain open. |
 | 6 | P1/P2 | Regroup and restyle Settings, including vertical navigation, accessible fields, clearer setting scope, and consistent saved state. | Keyboard-only navigation reaches every control; Connection and Map/simulation sections remain usable at target sizes; setting scope and commit behavior are visible. |
 | 7 | P1/P2 | Improve Tools menu grouping/keyboard behavior, then unify About and diagnostics feedback in separate tasks. | Arrow keys/Enter/Escape work; focus returns to the trigger; window/task states are distinguishable; diagnostics completion exposes its result; About versions/content agree. |
 | 8 | P2 | Refine Inspector sidebars, toolbar/replay layout, and plot sizing. Follow the separate Logs plan for that surface. | At 800 × 480 and both desktop sizes, primary controls and selected plots remain usable; long replay names and notices do not break the workspace. |
@@ -412,12 +434,15 @@ backends for those actions.
 
 ### Automated or measurable checks
 
-- [ ] No-project startup: visible auto-connect countdown, cancellation, target
-  confirmation, teardown refusal, and alert presentation.
+- [x] No-project startup: lifecycle overlays now mount on StartPage, so the
+  auto-connect countdown, cancellation, target confirmation, and alerts are
+  present; the no-project workspace is entered through *Continue without a
+  project* (`check-startpage.mjs`).
 - [ ] Settings: draft retention, invalid/blank coordinate rejection, unavailable
   serial selection, and persistence failure/retry.
-- [ ] Project creation: required name/CRS/datum/destination contract; cancelled
-  picker versus failed picker; import reachable from a fresh install.
+- [x] Project creation: name-only contract with a default or operator-chosen
+  destination; recent removal and typed-name disk deletion. Import from a fresh
+  install is still open.
 - [ ] Parameter table: header/body alignment within 1 px; last-row reachability;
   search/group changes after deep scrolling; Field-mode row-height consistency.
 - [x] Motor Test: all workspace content reachable; persistent stop controls at
@@ -428,8 +453,10 @@ backends for those actions.
 - [ ] Diagnostics busy/success/failure feedback and shared About information.
 
 The existing `check-startup.mjs` injects an open mock project before checking
-startup dialogs. Add a genuine **no-project** fixture so it covers the issue
-identified here instead of bypassing StartPage.
+startup dialogs. `check-startpage.mjs` now provides the genuine **no-project**
+fixture: it previews StartPage with `?start`, exercises the name-only wizard,
+recent remove/delete, and entering the workspace with *Continue without a
+project*, using an isolated IPC stub (no files touched).
 
 ### Screenshot and manual scenarios
 

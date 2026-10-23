@@ -15,6 +15,7 @@ import { open as pickFolder, save as pickSave } from '@tauri-apps/plugin-dialog'
 import { isTauri } from '../../inspector/mock'
 import { useProjectStore } from '../../stores/project'
 import ProjectWizard from '../project/ProjectWizard'
+import RecentProjectList from '../project/RecentProjectList'
 import { StatusDot } from '../../design-system/components'
 import type { Session } from '../../generated-types/Session'
 import type { Survey } from '../../generated-types/Survey'
@@ -80,7 +81,7 @@ export default function ProjectHome({ open, onOpenChange }: { open: boolean; onO
   const busy = useProjectStore((s) => s.busy)
   const openProject = useProjectStore((s) => s.open)
   const closeProject = useProjectStore((s) => s.close)
-  const recent = useProjectStore((s) => s.recent)
+  const recents = useProjectStore((s) => s.recents)
   const [creating, setCreating] = useState(false)
 
   const pickAnd = async (run: (dir: string) => Promise<boolean>) => {
@@ -118,7 +119,7 @@ export default function ProjectHome({ open, onOpenChange }: { open: boolean; onO
     const { invoke } = await import('@tauri-apps/api/core')
     const zip = await pickFile()
     if (typeof zip !== 'string') return
-    const first = recent()[0]?.path
+    const first = recents[0]?.path
     const projectsRoot = first ? first.split(/[\\/]/).slice(0, -1).join('/') : null
     if (!projectsRoot) {
       setExportNote('Import needs a known project folder first — open one project, then import.')
@@ -171,19 +172,7 @@ export default function ProjectHome({ open, onOpenChange }: { open: boolean; onO
           {project === null ? (
             <div className="space-y-3" data-testid="project-picker">
               <div className="space-y-1">
-                {recent().map((r) => (
-                  <button
-                    key={r.path}
-                    disabled={busy}
-                    onClick={() => void openProject(r.path)}
-                    className="flex w-full items-center gap-2 rounded border border-line bg-canvas px-2 py-1.5 text-left text-xs hover:bg-panel disabled:opacity-50"
-                    title={r.path}
-                  >
-                    <FolderOpen size={13} className="shrink-0 text-muted" />
-                    <span className="min-w-0 flex-1 truncate text-ink">{r.name}</span>
-                  </button>
-                ))}
-                {recent().length === 0 && <div className="text-[11px] text-muted">{t('project.noRecent')}</div>}
+                <RecentProjectList />
               </div>
 
               <button

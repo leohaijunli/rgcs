@@ -34,4 +34,7 @@ pub enum ProjectError {
     /// An id is not a filesystem-safe slug (see `is_valid_id`).
     #[error("invalid id {0:?} (use A-Za-z0-9._-)")]
     InvalidId(String),
+    /// The directory is not a MagGCS project (no valid `project.json`).
+    #[error("not a MagGCS project directory: {0}")]
+    NotAProject(PathBuf),
 }
