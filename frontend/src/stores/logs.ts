@@ -22,6 +22,8 @@ interface LogsState {
   requestList: () => Promise<void>
   download: (id: number, size: number) => Promise<void>
   cancel: () => Promise<void>
+  eraseAll: () => Promise<void>
+  remove: (id: number, size: number, timeUtc: number) => Promise<void>
 }
 
 export interface LogsEventPayload {
@@ -104,6 +106,32 @@ export const useLogsStore = create<LogsState>((set, get) => ({
       /* not connected */
     }
     set({ busy: false })
+  },
+
+  // Two confirmations are the caller's responsibility; these run the command
+  // unconditionally and adopt the FC's refreshed, renumbered list.
+  eraseAll: async () => {
+    set({ busy: true, error: null })
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      const entries = await invoke<LogEntryInfo[]>('logs_erase_all')
+      set({ entries, downloads: new Map(), busy: false })
+    } catch (err) {
+      set({ busy: false, error: String(err) })
+    }
+  },
+
+  remove: async (id, size, timeUtc) => {
+    set({ busy: true, error: null })
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      const entries = await invoke<LogEntryInfo[]>('logs_delete', { id, size, timeUtc })
+      const downloads = new Map(get().downloads)
+      downloads.delete(id)
+      set({ entries, downloads, busy: false })
+    } catch (err) {
+      set({ busy: false, error: String(err) })
+    }
   },
 }))
 

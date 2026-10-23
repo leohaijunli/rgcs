@@ -700,7 +700,7 @@ fn command_failed(output: &str) -> bool {
         || lower.contains("failed")
 }
 
-fn parse_logger_status(output: &str) -> Result<LoggerStatus, SdCaptureError> {
+pub fn parse_logger_status(output: &str) -> Result<LoggerStatus, SdCaptureError> {
     let mut running = false;
     let mut backend = LoggerBackend::Unknown;
     let mut file_logging = false;

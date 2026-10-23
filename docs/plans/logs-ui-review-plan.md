@@ -1,7 +1,8 @@
 # Tools → Logs: Assessment and Improvement Plan
 
 - **Review date:** 2026-10-22
-- **Status:** Deferred — assessment recorded; implementation has not started.
+- **Status:** In progress — assessment recorded; primary-link log deletion
+  delivered; reliability and layout work still pending.
 - **Scope:** The main window's Tools → Logs dialog, including FC log retrieval,
   its frontend state, and the embedded MAVLink console.
 - **Execution:** Resume this plan later, one small task at a time. Present the
@@ -187,6 +188,35 @@ Log #21   46% · 8.6 / 18.6 MiB · 120 KiB/s · 01:25 left
 flight duration, and mission name require additional parsing or association.
 Do not display inferred values as FC-provided metadata. A richer metadata view
 can be considered after retrieval and appropriate ULog/project integration.
+
+## 6a. Delivered: primary-link SD-log deletion
+
+Parity with the motor-test window: the Tools → Logs dialog can now delete SD
+logs on the primary link's FC, each behind **two** confirmations.
+
+- **Delete all** sends MAVLink `LOG_ERASE` and confirms an empty
+  `/fs/microsd/log` over NuttShell (`ls -R`) before reporting success.
+- **Delete one** maps the MAVLink log id to a path via `logdata.txt`
+  (`time_utc`/`size` identity re-checked), removes it, and verifies the file is
+  gone. The list is then re-requested so ids renumber exactly as PX4 assigns
+  them.
+- Both refuse while the logger is recording, and both return the refreshed list.
+
+Implementation notes:
+
+- New shared [`px4_shell`](../../crates/app-tauri/src/px4_shell.rs) module owns
+  the `SERIAL_CONTROL` framing, the marker-delimited request/response, the safe
+  `logdata.txt` path mapping, and the SD-directory parser (extracted from the
+  motor-test capture service and reused by both callers).
+- The primary link's NuttShell is shared with the MAVLink console. `ConsoleState`
+  now holds a shell lock and a suppression flag: a deletion exchange takes the
+  lock, the console waits, and the watcher stops echoing while the exchange reads
+  its reply.
+- Commands: `logs_erase_all`, `logs_delete` (both hold the ops lock);
+  `core::logs::parse_logger_status` is exported for the recording check.
+- Regression: [`check-logs-delete.mjs`](../../frontend/scripts/check-logs-delete.mjs)
+  asserts two confirmations, that declining sends no command, and the exact
+  identity passed to the backend. Screenshot: `screenshots/logs/logs-delete.png`.
 
 ## 7. Deferred implementation plan
 

@@ -22,6 +22,7 @@ mod mission_service;
 mod motor_test_state;
 mod params_service;
 mod project_service;
+mod px4_shell;
 mod recorder_service;
 mod rtk_service;
 mod run_service;
@@ -107,6 +108,8 @@ pub fn run() {
             logs_service::logs_request_list,
             logs_service::logs_download,
             logs_service::logs_cancel,
+            logs_service::logs_erase_all,
+            logs_service::logs_delete,
             terrain_service::terrain_select,
             terrain_service::terrain3d_cancel,
             terrain_service::terrain_sample,

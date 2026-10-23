@@ -295,6 +295,194 @@ pub async fn logs_cancel(state: State<'_, AppState>) -> Result<(), String> {
         .map_err(|_| "service stopped".to_string())
 }
 
+// ---------------------------------------------------------------------------
+// SD-log deletion (primary link). Both commands confirm over the primary
+// link's NuttShell, sharing the MAVLink console's exclusive shell.
+// ---------------------------------------------------------------------------
+
+/// Refuse SD-log deletion while the FC logger is writing. A fresh observation
+/// is required because a cached state can be stale after a reconnect.
+async fn ensure_primary_logger_not_recording(
+    console: &crate::console_service::ConsoleState,
+    app: &AppHandle,
+    state: &AppState,
+) -> Result<(), String> {
+    let output = crate::console_service::exec(console, app, state, "logger status").await?;
+    let status = maggcs_core::logs::parse_logger_status(&output).map_err(|e| e.to_string())?;
+    if status.file_logging {
+        return Err(
+            "the FC logger is recording; stop logging on the FC before deleting logs".into(),
+        );
+    }
+    Ok(())
+}
+
+fn publish_primary_log_list<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    entries: Vec<maggcs_core::logs::LogEntryInfo>,
+) {
+    *state.logs.last_list.lock().expect("logs list lock") = Some(entries.clone());
+    *state.logs.last_error.lock().expect("logs err lock") = None;
+    let _ = app.emit("logs_event", &LogsEventPayload::List { entries });
+}
+
+/// Request the primary link's log list and wait for a completed `List` event.
+/// `Ok(None)` means the FC stayed silent (flat `num_logs == 0`), so the caller
+/// must verify emptiness over the shell instead.
+async fn primary_refresh_list(
+    connection: &ConnectionHandle,
+) -> Result<Option<Vec<maggcs_core::logs::LogEntryInfo>>, String> {
+    let mut route = connection.subscribe_log_messages();
+    let mut protocol = LogProtocol::new(
+        connection.config().target_system_id,
+        connection.config().target_component_id,
+    );
+    for frame in protocol.begin_list() {
+        connection
+            .send_confirmed(frame)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(None);
+        }
+        match tokio::time::timeout(remaining, route.recv()).await {
+            Err(_) => return Ok(None),
+            Ok(Ok(ConnectionEvent::Message(envelope))) => {
+                match protocol.handle(&envelope.message, Instant::now()) {
+                    Ok((events, frames)) => {
+                        for frame in frames {
+                            let _ = connection.send(frame).await;
+                        }
+                        for event in events {
+                            if let LogEvent::List { entries } = event {
+                                return Ok(Some(entries));
+                            }
+                        }
+                    }
+                    Err(error) => return Err(error.to_string()),
+                }
+            }
+            Ok(Ok(_)) => continue,
+            Ok(Err(_)) => return Err("log list failed: the connection closed".into()),
+        }
+    }
+}
+
+/// Shell-verify the SD log directory is empty after a delete that left no
+/// protocol list.
+async fn confirm_directory_empty(
+    console: &crate::console_service::ConsoleState,
+    app: &AppHandle,
+    state: &AppState,
+) -> Result<bool, String> {
+    let output = crate::console_service::exec(
+        console,
+        app,
+        state,
+        &format!("ls -R {}", crate::px4_shell::LOG_DIRECTORY),
+    )
+    .await?;
+    crate::px4_shell::parse_empty_log_directory(&output)
+}
+
+/// Permanently delete every SD log on the primary link's FC. The UI performs
+/// two confirmations; this command additionally requires a fresh observation
+/// that the logger is not recording, then confirms the empty directory.
+#[tauri::command]
+pub async fn logs_erase_all(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    console: State<'_, Arc<crate::console_service::ConsoleState>>,
+) -> Result<Vec<maggcs_core::logs::LogEntryInfo>, String> {
+    let _ops = state.ops().lock().await;
+    let connection = state
+        .connection()
+        .ok_or_else(|| "not connected".to_string())?;
+    ensure_primary_logger_not_recording(&console, &app, &state).await?;
+    let mut protocol = LogProtocol::new(
+        connection.config().target_system_id,
+        connection.config().target_component_id,
+    );
+    for frame in protocol.begin_erase() {
+        connection
+            .send_confirmed(frame)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if confirm_directory_empty(&console, &app, &state).await? {
+            publish_primary_log_list(&app, &state, Vec::new());
+            tracing::info!("all SD logs deleted and empty directory confirmed");
+            return Ok(Vec::new());
+        }
+        if Instant::now() >= deadline {
+            let entries = primary_refresh_list(&connection).await?.unwrap_or_default();
+            publish_primary_log_list(&app, &state, entries);
+            return Err(
+                "the FC has not confirmed deletion of every SD log; inspect the refreshed list"
+                    .into(),
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+/// Permanently delete one SD log by id on the primary link's FC. The id comes
+/// from the current list; `logdata.txt` (id order) maps it to a safe path, and
+/// the entry's identity is re-checked before removal.
+#[tauri::command]
+pub async fn logs_delete(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    console: State<'_, Arc<crate::console_service::ConsoleState>>,
+    id: u16,
+    size: u32,
+    time_utc: u32,
+) -> Result<Vec<maggcs_core::logs::LogEntryInfo>, String> {
+    let _ops = state.ops().lock().await;
+    let connection = state
+        .connection()
+        .ok_or_else(|| "not connected".to_string())?;
+    ensure_primary_logger_not_recording(&console, &app, &state).await?;
+    let expected = maggcs_core::logs::LogEntryInfo { id, size, time_utc };
+    let listing =
+        crate::console_service::exec(&console, &app, &state, "cat /fs/microsd/logdata.txt").await?;
+    let path = crate::px4_shell::log_path_from_listing(&listing, &expected)?;
+    let output =
+        crate::console_service::exec(&console, &app, &state, &format!("rm {path}")).await?;
+    if let Some(error) = crate::px4_shell::command_error(&output) {
+        return Err(format!("SD log deletion failed: {error}"));
+    }
+    let output =
+        crate::console_service::exec(&console, &app, &state, &format!("ls -l {path}")).await?;
+    if !output.lines().any(|line| {
+        line.starts_with("nsh: ls: stat failed:") && line.contains("No such file or directory")
+    }) {
+        return Err("the FC has not confirmed the SD log was removed; refresh the list".into());
+    }
+    // Re-list so ids renumber exactly as PX4 assigns them after a deletion.
+    let entries = match primary_refresh_list(&connection).await? {
+        Some(entries) => entries,
+        None => {
+            if confirm_directory_empty(&console, &app, &state).await? {
+                Vec::new()
+            } else {
+                return Err(
+                    "the FC did not return the refreshed log list; refresh the list".into(),
+                );
+            }
+        }
+    };
+    publish_primary_log_list(&app, &state, entries.clone());
+    Ok(entries)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

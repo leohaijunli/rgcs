@@ -8,6 +8,7 @@
 //! watcher forwards to the frontend as `console_output` events (each frame
 //! is a raw chunk; the UI reassembles lines).
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter};
@@ -44,13 +45,50 @@ pub struct ConsoleWatcher {
 #[derive(Default)]
 pub struct ConsoleState {
     watcher: Mutex<Option<ConsoleWatcher>>,
+    /// Serializes shell ownership between the interactive console and the
+    /// request/response deletions, which both use the FC's single NuttShell.
+    shell_lock: Mutex<()>,
+    /// Set while a request/response command owns the shell, so the watcher
+    /// does not echo its exchange output into the console transcript.
+    shell_busy: Arc<AtomicBool>,
+}
+
+/// Clears the suppressing flag when a request/response command finishes.
+struct BusyGuard<'a>(&'a AtomicBool);
+
+impl Drop for BusyGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Run one command through the FC's NuttShell and return its output, holding
+/// the shell exclusively: the interactive console waits, and its watcher stops
+/// echoing while the exchange reads the reply. Used by log deletion.
+pub(crate) async fn exec(
+    console: &ConsoleState,
+    app: &AppHandle,
+    state: &AppState,
+    command: &str,
+) -> Result<String, String> {
+    let _shell = console.shell_lock.lock().await;
+    console.attach(app, state).await;
+    let connection = state
+        .connection()
+        .ok_or_else(|| "no live link".to_string())?;
+    console.shell_busy.store(true, Ordering::SeqCst);
+    let _busy = BusyGuard(&console.shell_busy);
+    let mut route = connection.subscribe_route(MessageRoute::messages(&[SERIAL_CONTROL_ID]));
+    crate::px4_shell::exchange(&connection, 0, 0, &mut route, command)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 impl ConsoleState {
     /// Ensure a watcher is running on the *current* primary link: rebuild it
     /// only when the link handle changed (or the task died). The old task
     /// exits on its own when its event bus closes (link swap / disconnect).
-    async fn attach(self: &Arc<Self>, app: &AppHandle, state: &AppState) {
+    async fn attach(&self, app: &AppHandle, state: &AppState) {
         let Some(connection) = state.connection() else {
             self.detach().await;
             return;
@@ -68,11 +106,15 @@ impl ConsoleState {
         self.detach().await;
         let app = app.clone();
         let conn = connection.clone();
+        let busy = Arc::clone(&self.shell_busy);
         let task = tauri::async_runtime::spawn(async move {
             let mut events = conn.subscribe_route(MessageRoute::messages(&[SERIAL_CONTROL_ID]));
             loop {
                 match events.recv().await {
                     Ok(ConnectionEvent::Message(env)) => {
+                        if busy.load(Ordering::SeqCst) {
+                            continue;
+                        }
                         if let MavMessage::SERIAL_CONTROL(msg) = env.message {
                             let count = msg.count.min(70) as usize;
                             if count == 0 {
@@ -137,6 +179,7 @@ pub async fn console_send(
     console: tauri::State<'_, Arc<ConsoleState>>,
     command: String,
 ) -> Result<(), String> {
+    let _shell = console.shell_lock.lock().await;
     console.attach(&app, &state).await;
     let connection = state
         .connection()
@@ -156,6 +199,7 @@ pub async fn console_close(
     state: tauri::State<'_, AppState>,
     console: tauri::State<'_, Arc<ConsoleState>>,
 ) -> Result<(), String> {
+    let _shell = console.shell_lock.lock().await;
     let connection = state
         .connection()
         .ok_or_else(|| "no live link".to_string())?;

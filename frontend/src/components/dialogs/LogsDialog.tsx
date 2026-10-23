@@ -9,6 +9,7 @@ import { useTranslation } from 'react-i18next'
 import { useLinkStore } from '../../stores/link'
 import { startLogsWatcher, useLogsStore } from '../../stores/logs'
 import { CONSOLE_PRESETS, useConsoleStore } from '../../stores/console'
+import type { LogEntryInfo } from '../../generated-types/LogEntryInfo'
 
 /** Modal shell for the FC logs panel (same skin as the Settings dialog). */
 export default function LogsDialog({
@@ -57,6 +58,8 @@ function LogsPanel() {
   const requestList = useLogsStore((s) => s.requestList)
   const download = useLogsStore((s) => s.download)
   const cancel = useLogsStore((s) => s.cancel)
+  const eraseAll = useLogsStore((s) => s.eraseAll)
+  const remove = useLogsStore((s) => s.remove)
 
   // Idempotent watcher start (the shell events are cheap; the store only
   // updates on `logs_event`).
@@ -65,6 +68,21 @@ function LogsPanel() {
   }, [])
 
   const fcAlive = link?.fc_alive === true
+
+  // Both destructive actions require two explicit confirmations; declining
+  // either sends no command to the FC.
+  const eraseAllLogs = async () => {
+    if (!window.confirm(t('settings.logs.confirmEraseAll'))) return
+    if (!window.confirm(t('settings.logs.confirmEraseAllLast'))) return
+    await eraseAll()
+  }
+
+  const removeLog = async (entry: LogEntryInfo) => {
+    const size = (entry.size / 1024 / 1024).toFixed(1)
+    if (!window.confirm(t('settings.logs.confirmDelete', { id: entry.id, size }))) return
+    if (!window.confirm(t('settings.logs.confirmDeleteLast', { id: entry.id }))) return
+    await remove(entry.id, entry.size, entry.time_utc)
+  }
 
   return (
     <div className="space-y-3 text-sm">
@@ -84,9 +102,14 @@ function LogsPanel() {
             {t('settings.logs.cancel')}
           </button>
         )}
-        <span className="text-xs text-muted">
-          {t('settings.logs.hint')}
-        </span>
+        <button
+          onClick={() => void eraseAllLogs()}
+          disabled={!fcAlive || busy || entries.length === 0}
+          className="touch-target h-9 rounded border border-line bg-canvas px-3 text-xs text-error hover:bg-panel disabled:opacity-50"
+        >
+          {t('settings.logs.deleteAll')}
+        </button>
+        <span className="text-xs text-muted">{t('settings.logs.hint')}</span>
       </div>
       {error && <div className="text-xs text-error">{error}</div>}
       {!fcAlive && <div className="text-xs text-muted">{t('link.noLink')}</div>}
@@ -115,6 +138,13 @@ function LogsPanel() {
                     {t('settings.logs.download')}
                   </button>
                 )}
+                <button
+                  onClick={() => void removeLog(entry)}
+                  disabled={busy}
+                  className="rounded border border-line bg-canvas px-2 py-0.5 text-[11px] text-error hover:bg-panel disabled:opacity-50"
+                >
+                  {t('settings.logs.delete')}
+                </button>
               </div>
               {dl && !dl.path && (
                 <div className="mt-1 h-1 rounded bg-panel">

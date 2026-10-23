@@ -21,9 +21,21 @@ use super::error::LogError;
 pub const LOG_DATA_CHUNK: u32 = 90;
 /// Bytes requested per `LOG_REQUEST_DATA`. PX4 streams the whole requested
 /// window as consecutive `LOG_DATA` frames instead of requiring one round trip
-/// per 90-byte chunk; keep it below PX4's 256 KiB burst limit and comfortably
-/// inside the connection's 4096-frame event buffer.
-pub const LOG_DOWNLOAD_WINDOW: u32 = LOG_DATA_CHUNK * 360;
+/// per 90-byte chunk; keep it comfortably inside the connection's 4096-frame
+/// event buffer *and* below the burst-loss cliff of lossy links.
+///
+/// PX4 answers one request with a single burst. On a flow-controlled serial
+/// link the whole window survives, but over MAVLink/UDP the burst overruns the
+/// transport above ~20 KiB: measured on PX4 v1.17 SITL, windows of 18000 and
+/// 20250 bytes streamed cleanly (a 2.8 MB log in ~2 s, zero retransmits) while
+/// 21150+ bytes dropped frames. A dropped frame leaves a gap, so the client
+/// waits for `REQUEST_TIMEOUT` before retrying from the tail — collapsing
+/// throughput to ~20 KiB/s and making large logs appear to hang. 18000
+/// (200 x 90) keeps a safe margin below that cliff without sacrificing speed.
+pub const LOG_DOWNLOAD_WINDOW: u32 = LOG_DATA_CHUNK * 200;
+// Enforce the burst-loss margin at compile time so a future bump cannot
+// silently reintroduce the UDP stall this window was sized to avoid.
+const _: () = assert!(LOG_DOWNLOAD_WINDOW < 20_000);
 /// Give up on a request after this long without a reply.
 const REQUEST_TIMEOUT: Duration = Duration::from_millis(1200);
 /// Max re-requests of one chunk/list page before failing.
