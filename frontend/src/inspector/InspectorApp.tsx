@@ -1324,165 +1324,58 @@ export function InspectorApp() {
   const maxPlotCols = clamp(Math.floor(centerW / MIN_PLOT_W), 1, 3)
   const effectiveCols = Math.min(layoutCols, maxPlotCols)
 
+  /** Source identity for the common header (Insp-3/T4): mock, a ULog replay,
+   * or the live link — each explicitly distinct from primary telemetry. */
+  const sourceChip = !tauri
+    ? { tone: 'muted', label: 'Mock', title: 'Browser mock — synthetic telemetry' }
+    : replay?.active
+      ? {
+          tone: 'accent',
+          label: `Replay · ${replay.name}`,
+          title: 'UGL replay (not live telemetry)',
+        }
+      : status?.connected
+        ? { tone: 'ok', label: 'Live link', title: 'Live MAVLink telemetry' }
+        : { tone: 'warn', label: 'No link', title: 'No flight controller link' }
+  const statusText = !tauri
+    ? 'synthetic telemetry'
+    : replay?.active
+      ? ''
+      : status
+        ? `${status.tap_running ? (settling ? 'settling…' : `${rate.toFixed(0)} msg/s`) : '—'} · dropped ${status.dropped}`
+        : ''
+
   return (
     <div className="inspector-grid" style={gridStyle}>
+      <div className="tool-header">
+        <strong className="tool-title">Signal Inspector</strong>
+        <span className={`source-chip ${sourceChip.tone}`} title={sourceChip.title}>
+          {sourceChip.label}
+        </span>
+        {statusText && <span className="tool-status">{statusText}</span>}
+      </div>
+
       <div className="toolbar">
-        <button
-          className={`icon-btn ${paused ? 'active' : ''}`}
-          title={paused ? 'Resume' : 'Pause'}
-          aria-label={paused ? 'Resume' : 'Pause'}
-          onClick={() => setPaused(!paused)}
-        >
-          {paused ? <Play size={16} /> : <Pause size={16} />}
-        </button>
-        <select value={windowSec} title="Time window" onChange={(e) => setWindowSec(Number(e.target.value))}>
-          <option value={10}>10 s</option>
-          <option value={30}>30 s</option>
-          <option value={60}>60 s</option>
-        </select>
-        <select
-          value={layoutCols}
-          title={
-            maxPlotCols < layoutCols
-              ? `Plot grid layout (capped to ${maxPlotCols} at this width)`
-              : 'Plot grid layout'
-          }
-          onChange={(e) => setLayoutCols(Number(e.target.value))}
-        >
-          {[1, 2, 3].map((c) => (
-            <option key={c} value={c} disabled={c > maxPlotCols}>
-              {c}×1
-            </option>
-          ))}
-        </select>
-        <span className="toolbar-sep" />
-        <button
-          className={`icon-btn ${axisLink ? 'active' : ''}`}
-          title="Link plot cursors"
-          aria-label="Link plot cursors"
-          onClick={() => setAxisLink(!axisLink)}
-        >
-          <Link2 size={16} />
-        </button>
-        <button
-          className={`icon-btn ${measure ? 'active' : ''}`}
-          title="Measure Δt / Δy (click a plot to pin)"
-          aria-label="Measure cursors"
-          onClick={() => setMeasure(!measure)}
-        >
-          <Ruler size={16} />
-        </button>
-        <button
-          className={`icon-btn ${follow ? 'active' : ''}`}
-          title="Follow the newest data (drag-zoom a plot to pause it)"
-          aria-label="Follow newest data"
-          onClick={() => {
-            setFollow(true)
-            markDirty()
-          }}
-        >
-          <ChevronsRight size={16} />
-        </button>
-        <button className="icon-btn" title="Fit plot(s) to data" aria-label="Fit to data" onClick={fitAll}>
-          <Maximize2 size={16} />
-        </button>
-        <span className="toolbar-sep" />
-        <button className="icon-btn" title="New plot" aria-label="New plot" onClick={addPlot}>
-          <Plus size={16} />
-        </button>
-        <button className="icon-btn" title="Clear data" aria-label="Clear data" onClick={clearAll}>
-          <Eraser size={16} />
-        </button>
-        <div className="toolbar-menu" onMouseLeave={() => setMenuOpen(false)}>
+        <div className="tool-group" role="group" aria-label="Playback">
+          <span className="group-label">Playback</span>
           <button
-            className={`icon-btn ${menuOpen ? 'active' : ''}`}
-            title="More"
-            aria-label="More"
-            onClick={() => setMenuOpen((o) => !o)}
+            className={`icon-btn ${paused ? 'active' : ''}`}
+            title={paused ? 'Resume' : 'Pause'}
+            aria-label={paused ? 'Resume' : 'Pause'}
+            onClick={() => setPaused(!paused)}
           >
-            <MoreHorizontal size={16} />
+            {paused ? <Play size={16} /> : <Pause size={16} />}
           </button>
-          {menuOpen && (
-            <div className="toolbar-menu-pop">
-              <button onClick={() => { exportCsv(); setMenuOpen(false) }}>Export CSV</button>
-              <button onClick={() => { saveWorkspace(); setMenuOpen(false) }}>Save workspace</button>
-              <button onClick={() => { loadWorkspace(!tauri); setMenuOpen(false) }}>Load workspace</button>
-              {tauri && (
-                <>
-                  <button onClick={() => { void loadCal(); setMenuOpen(false) }}>
-                    Load mag calibration…
-                  </button>
-                  {calLoaded && (
-                    <button onClick={() => { void clearCal(); setMenuOpen(false) }}>
-                      Clear mag calibration
-                    </button>
-                  )}
-                </>
-              )}
-            </div>
-          )}
         </div>
-        {calLoaded && (
-          <span className="cal-chip" title="Mag calibration active: total field is Rust-side A·(m−b) calibrated">
-            CAL
-          </span>
-        )}
-        {tauri && replay?.active && (
-          <>
-            <span className="toolbar-sep" />
-            <button
-              className="icon-btn"
-              title={replay.playing ? 'Pause replay' : 'Play replay'}
-              aria-label={replay.playing ? 'Pause replay' : 'Play replay'}
-              onClick={() => void replayControl({ play: !replay.playing })}
-            >
-              {replay.playing ? <Pause size={16} /> : <Play size={16} />}
-            </button>
-            <span className="replay-name" title={replay.name ?? ''}>
-              {replay.name}
-            </span>
-            <input
-              className="replay-seek"
-              type="range"
-              min={0}
-              max={Math.max(1, Math.round(replay.duration_ms))}
-              step={1}
-              value={Math.round(seekPreview ?? replay.position_ms)}
-              title="Seek"
-              aria-label="Seek replay"
-              onChange={(e) => setSeekPreview(Number(e.target.value))}
-              onMouseUp={commitSeek}
-              onKeyUp={commitSeek}
-            />
-            <span className="replay-time">
-              {fmtClock((seekPreview ?? replay.position_ms) / 1000)} / {fmtClock(replay.duration_ms / 1000)}
-            </span>
-            <select
-              className="replay-speed"
-              value={replay.speed}
-              title="Replay speed"
-              aria-label="Replay speed"
-              onChange={(e) => void replayControl({ speed: Number(e.target.value) })}
-            >
-              {REPLAY_SPEEDS.map((sp) => (
-                <option key={sp} value={sp}>
-                  {sp}×
-                </option>
-              ))}
-            </select>
-            <button
-              className="icon-btn"
-              title="Back to live"
-              aria-label="Back to live"
-              onClick={() => void useLive()}
-            >
-              <Radio size={16} />
-            </button>
-          </>
-        )}
-        {tauri && !replay?.active && (
-          <>
-            <span className="toolbar-sep" />
+
+        <div className="tool-group" role="group" aria-label="Source">
+          <span className="group-label">Source</span>
+          <select value={windowSec} title="Time window" onChange={(e) => setWindowSec(Number(e.target.value))}>
+            <option value={10}>10 s</option>
+            <option value={30}>30 s</option>
+            <option value={60}>60 s</option>
+          </select>
+          {tauri && !replay?.active && (
             <button
               className="icon-btn"
               title="Open ULog for replay"
@@ -1491,35 +1384,158 @@ export function InspectorApp() {
             >
               <FolderOpen size={16} />
             </button>
-          </>
-        )}
-        <span style={{ marginLeft: 'auto', color: 'var(--mg-ink)', fontSize: 11 }}>
-          {tauri && status && (
-            <>
-              {replay?.active ? (
-                <>
-                  <span style={{ color: 'var(--mg-ok)' }}>● replay</span>
-                  {' · '}
-                  {replay.name} · {(replay.position_ms / 1000).toFixed(1)} s /{' '}
-                  {(replay.duration_ms / 1000).toFixed(1)} s
-                </>
-              ) : (
-                <>
-                  {status.connected ? <span style={{ color: 'var(--mg-ok)' }}>● link</span> : <span style={{ color: 'var(--mg-warn)' }}>● no link</span>}
-                  {' · '}
-                  {status.tap_running
-                    ? settling
-                      ? 'settling…'
-                      : `${rate.toFixed(0)} msg/s`
-                    : '—'}{' '}
-                  · dropped {status.dropped}
-                </>
-              )}
-            </>
           )}
-          {'  '}Signal Inspector{tauri ? '' : ' · mock'}
-        </span>
+        </div>
+
+        <div className="tool-group" role="group" aria-label="Plots">
+          <span className="group-label">Plots</span>
+          <select
+            value={layoutCols}
+            title={
+              maxPlotCols < layoutCols
+                ? `Plot grid layout (capped to ${maxPlotCols} at this width)`
+                : 'Plot grid layout'
+            }
+            onChange={(e) => setLayoutCols(Number(e.target.value))}
+          >
+            {[1, 2, 3].map((c) => (
+              <option key={c} value={c} disabled={c > maxPlotCols}>
+                {c}×1
+              </option>
+            ))}
+          </select>
+          <button
+            className={`icon-btn ${axisLink ? 'active' : ''}`}
+            title="Link plot cursors"
+            aria-label="Link plot cursors"
+            onClick={() => setAxisLink(!axisLink)}
+          >
+            <Link2 size={16} />
+          </button>
+          <button
+            className={`icon-btn ${measure ? 'active' : ''}`}
+            title="Measure Δt / Δy (click a plot to pin)"
+            aria-label="Measure cursors"
+            onClick={() => setMeasure(!measure)}
+          >
+            <Ruler size={16} />
+          </button>
+          <button
+            className={`icon-btn ${follow ? 'active' : ''}`}
+            title="Follow the newest data (drag-zoom a plot to pause it)"
+            aria-label="Follow newest data"
+            onClick={() => {
+              setFollow(true)
+              markDirty()
+            }}
+          >
+            <ChevronsRight size={16} />
+          </button>
+          <button className="icon-btn" title="Fit plot(s) to data" aria-label="Fit to data" onClick={fitAll}>
+            <Maximize2 size={16} />
+          </button>
+          <button className="icon-btn" title="New plot" aria-label="New plot" onClick={addPlot}>
+            <Plus size={16} />
+          </button>
+          <button className="icon-btn" title="Clear data" aria-label="Clear data" onClick={clearAll}>
+            <Eraser size={16} />
+          </button>
+        </div>
+
+        <div className="tool-group" role="group" aria-label="Workspace">
+          <span className="group-label">Workspace</span>
+          <div className="toolbar-menu" onMouseLeave={() => setMenuOpen(false)}>
+            <button
+              className={`icon-btn ${menuOpen ? 'active' : ''}`}
+              title="More"
+              aria-label="More"
+              onClick={() => setMenuOpen((o) => !o)}
+            >
+              <MoreHorizontal size={16} />
+            </button>
+            {menuOpen && (
+              <div className="toolbar-menu-pop">
+                <button onClick={() => { exportCsv(); setMenuOpen(false) }}>Export CSV</button>
+                <button onClick={() => { saveWorkspace(); setMenuOpen(false) }}>Save workspace</button>
+                <button onClick={() => { loadWorkspace(!tauri); setMenuOpen(false) }}>Load workspace</button>
+                {tauri && (
+                  <>
+                    <button onClick={() => { void loadCal(); setMenuOpen(false) }}>
+                      Load mag calibration…
+                    </button>
+                    {calLoaded && (
+                      <button onClick={() => { void clearCal(); setMenuOpen(false) }}>
+                        Clear mag calibration
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+          {calLoaded && (
+            <span className="cal-chip" title="Mag calibration active: total field is Rust-side A·(m−b) calibrated">
+              CAL
+            </span>
+          )}
+        </div>
       </div>
+
+      {tauri && replay?.active && (
+        <div className="replay-strip">
+          <span className="replay-tag" title="UGL replay — not live telemetry">
+            Replay
+          </span>
+          <button
+            className="icon-btn"
+            title={replay.playing ? 'Pause replay' : 'Play replay'}
+            aria-label={replay.playing ? 'Pause replay' : 'Play replay'}
+            onClick={() => void replayControl({ play: !replay.playing })}
+          >
+            {replay.playing ? <Pause size={16} /> : <Play size={16} />}
+          </button>
+          <span className="replay-name" title={replay.name ?? ''}>
+            {replay.name}
+          </span>
+          <input
+            className="replay-seek"
+            type="range"
+            min={0}
+            max={Math.max(1, Math.round(replay.duration_ms))}
+            step={1}
+            value={Math.round(seekPreview ?? replay.position_ms)}
+            title="Seek"
+            aria-label="Seek replay"
+            onChange={(e) => setSeekPreview(Number(e.target.value))}
+            onMouseUp={commitSeek}
+            onKeyUp={commitSeek}
+          />
+          <span className="replay-time">
+            {fmtClock((seekPreview ?? replay.position_ms) / 1000)} / {fmtClock(replay.duration_ms / 1000)}
+          </span>
+          <select
+            className="replay-speed"
+            value={replay.speed}
+            title="Replay speed"
+            aria-label="Replay speed"
+            onChange={(e) => void replayControl({ speed: Number(e.target.value) })}
+          >
+            {REPLAY_SPEEDS.map((sp) => (
+              <option key={sp} value={sp}>
+                {sp}×
+              </option>
+            ))}
+          </select>
+          <button
+            className="icon-btn"
+            title="Back to live"
+            aria-label="Back to live"
+            onClick={() => void useLive()}
+          >
+            <Radio size={16} />
+          </button>
+        </div>
+      )}
       {notice && <div className="inspector-notice">{notice}</div>}
 
       {leftCollapsed ? (

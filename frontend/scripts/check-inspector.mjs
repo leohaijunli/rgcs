@@ -66,6 +66,34 @@ try {
   await page.waitForTimeout(300)
   if (shots) await mkdir(shots, { recursive: true })
 
+  // --- Insp-3: common header + grouped toolbar + dedicated replay strip ----
+  {
+    assert.equal(
+      (await page.locator('.tool-header .tool-title').textContent())?.trim(),
+      'Signal Inspector',
+      'the tool title sits in the common header',
+    )
+    assert.equal(
+      (await page.locator('.tool-header .source-chip').textContent())?.trim(),
+      'Mock',
+      'the header source chip identifies the mock source',
+    )
+    assert.equal(
+      (await page.locator('.tool-header .tool-status').textContent())?.trim(),
+      'synthetic telemetry',
+      'status text sits in the header, not the toolbar',
+    )
+    const groups = await page.$$eval('.toolbar .tool-group', (els) =>
+      els.map((e) => e.getAttribute('aria-label')),
+    )
+    assert.deepEqual(
+      groups,
+      ['Playback', 'Source', 'Plots', 'Workspace'],
+      `toolbar controls are grouped (got ${groups.join(', ')})`,
+    )
+    assert.equal(await page.locator('.replay-strip').count(), 0, 'no replay strip when not replaying')
+  }
+
   // --- 1366 x 768 ---------------------------------------------------------
   await setSize(1366, 768, '1366x768')
   if (shots) await page.screenshot({ path: join(shots, 'inspector-1366x768.png') })

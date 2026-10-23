@@ -19,24 +19,123 @@ body,
    * collapsed pane is replaced by its rail and the splitter track collapses. */
   grid-template-columns: var(--insp-left, 220px) var(--insp-left-split, 4px) 1fr
     var(--insp-right-split, 4px) var(--insp-right, 240px);
-  /* Row 1 header, row 2 the (optional, auto-height) notice, row 3 workspace.
-   * Row 3 is the flex track, so a notice only reduces it — it never pushes the
-   * panes into implicit rows and breaks the workspace. */
-  grid-template-rows: 40px auto 1fr;
+  /* Rows: header, toolbar, replay strip (when replaying), notice (when set),
+   * then the workspace as the flex track. The optional rows are empty (0 px)
+   * when absent, so they never push the panes into implicit rows (Insp-3). */
+  grid-template-rows: auto auto auto auto 1fr;
   height: 100%;
   min-width: 0;
 }
 
-.toolbar {
+/* Common header position: tool title + source identity + status (Insp-3/T4). */
+.tool-header {
   grid-column: 1 / -1;
   grid-row: 1;
   display: flex;
   align-items: center;
   gap: 8px;
+  min-height: 30px;
   padding: 0 10px;
   border-bottom: 1px solid var(--mg-border);
   background: var(--mg-bg-raised);
   font-size: 12px;
+}
+
+.tool-title {
+  font-size: 13px;
+}
+
+.source-chip {
+  padding: 1px 6px;
+  border: 1px solid var(--mg-border);
+  border-radius: 999px;
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+}
+
+.source-chip.muted {
+  color: var(--mg-muted);
+}
+
+.source-chip.ok {
+  color: var(--mg-ok);
+  border-color: color-mix(in srgb, var(--mg-ok) 50%, var(--mg-border));
+}
+
+.source-chip.warn {
+  color: var(--mg-warn);
+  border-color: color-mix(in srgb, var(--mg-warn) 50%, var(--mg-border));
+}
+
+.source-chip.accent {
+  color: var(--mg-accent);
+  border-color: color-mix(in srgb, var(--mg-accent) 50%, var(--mg-border));
+}
+
+.tool-status {
+  margin-left: auto;
+  color: var(--mg-muted);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toolbar {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--mg-border);
+  background: var(--mg-bg-raised);
+  font-size: 12px;
+}
+
+/* A labelled cluster of related controls (Insp-3): source / playback / plots /
+ * workspace. The left rule separates clusters without extra spacer elements. */
+.tool-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tool-group + .tool-group {
+  padding-left: 10px;
+  border-left: 1px solid var(--mg-border);
+}
+
+.group-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--mg-muted);
+}
+
+/* Dedicated replay strip (Insp-3): the file, seek, clock and speed live here
+ * instead of lengthening the toolbar and repeating the name in the status. */
+.replay-strip {
+  grid-column: 1 / -1;
+  grid-row: 3;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 10px;
+  border-bottom: 1px solid var(--mg-border);
+  background: color-mix(in srgb, var(--mg-accent) 10%, var(--mg-bg-raised));
+  font-size: 12px;
+}
+
+.replay-tag {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--mg-accent);
 }
 
 .toolbar button,
@@ -208,7 +307,7 @@ input[type='range'] {
 
 .inspector-notice {
   grid-column: 1 / -1;
-  grid-row: 2;
+  grid-row: 4;
   background: var(--mg-bg-raised);
   color: var(--mg-error);
   border: 1px solid var(--mg-error);
@@ -221,7 +320,7 @@ input[type='range'] {
 /* Draggable sidebar divider (plan §6.1); the ::after widens the grab target
  * beyond the 4 px track without taking layout space. */
 .pane-splitter {
-  grid-row: 3;
+  grid-row: 5;
   align-self: stretch;
   position: relative;
   width: 100%;
@@ -250,7 +349,7 @@ input[type='range'] {
 
 /* Collapsed-sidebar rail: a slim strip whose button reopens the pane. */
 .pane-rail {
-  grid-row: 3;
+  grid-row: 5;
   display: flex;
   justify-content: center;
   padding-top: 8px;
@@ -288,7 +387,7 @@ input[type='range'] {
 
 .signal-list {
   grid-column: 1;
-  grid-row: 3;
+  grid-row: 5;
   overflow: auto;
   border-right: 1px solid var(--mg-border);
   padding: 8px;
@@ -420,7 +519,7 @@ input[type='range'] {
 
 .plot-grid {
   grid-column: 3;
-  grid-row: 3;
+  grid-row: 5;
   overflow: auto;
   padding: 8px;
   display: grid;
@@ -503,7 +602,7 @@ input[type='range'] {
 
 .properties {
   grid-column: 5;
-  grid-row: 3;
+  grid-row: 5;
   overflow: auto;
   border-left: 1px solid var(--mg-border);
   padding: 10px;
