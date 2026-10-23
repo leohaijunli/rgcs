@@ -1,6 +1,8 @@
 export default {
   app: {
-    title: 'MagGCS',
+    title: 'Q-Mag',
+    tagline: 'GROUND STATION',
+    company: 'Quaternion Aerospace',
   },
   nav: {
     prepare: 'Prepare',
@@ -8,6 +10,19 @@ export default {
     preflight: 'Preflight',
     fly: 'Fly',
     review: 'Review',
+  },
+  workflow: {
+    title: 'Workflow',
+    currentStage: 'Workflow: {{stage}} ({{step}} of {{total}})',
+    previous: 'Previous',
+    next: 'Next',
+    descriptions: {
+      prepare: 'Connect devices and prepare survey data',
+      plan: 'Build and synchronize the mission',
+      preflight: 'Review vehicle readiness and checks',
+      fly: 'Monitor telemetry and flight commands',
+      review: 'Inspect recordings and flight results',
+    },
   },
   topbar: {
     more: 'More',
@@ -17,11 +32,13 @@ export default {
   },
   tools: {
     popover: 'Tools',
+    inspectorShortcut: 'Inspector',
     motorTest: 'Motor test',
     parameters: 'Parameters',
     logs: 'Logs',
     diagnostics: 'Export diagnostics',
     sending: 'sending',
+    windowOpen: 'Window open',
   },
 
   mapWindow: {
@@ -29,7 +46,6 @@ export default {
     detachedHere: 'The map is open in its own window.',
     noMap: 'The map is unavailable.',
     bringBack: 'Bring map back',
-    popOut: 'Pop out map',
   },
   shortcuts: {
     title: 'Keyboard shortcuts',
@@ -106,13 +122,13 @@ export default {
   // main-window close refusal notification.
   teardown: {
     disconnect: 'Disconnect from the vehicle?',
-    quit: 'Shut down MagGCS?',
+    quit: 'Shut down Q-Mag?',
     cancel: 'Cancel',
     confirm: 'Confirm',
     working: 'Working…',
     refused: 'Refused: {{reason}}',
     refusedHint: 'Land and disarm first, then retry. The window will remain open.',
-    closeRefused: 'Cannot close MagGCS while {{reason}}. Land and disarm first, then try again.',
+    closeRefused: 'Cannot close Q-Mag while {{reason}}. Land and disarm first, then try again.',
     unsaved_one: '{{count}} waypoint is not on the flight controller yet.',
     unsaved_other: '{{count}} waypoints are not on the flight controller yet.',
     typeKeyword: 'Type {{keyword}} to confirm',
@@ -344,9 +360,9 @@ export default {
     continueWithoutProject: 'Continue without a project',
   },
   about: {
-    menu: 'About MagGCS',
+    menu: 'About Q-Mag',
     title: 'About',
-    copyright: '© 2026 MagGCS Contributors',
+    copyright: '© 2026 Q-Mag Contributors',
     license: 'Licensed under the Apache License, Version 2.0.',
     attribution:
       'Elevation data: NRCan CanElevation (HRDEM), © Department of Natural Resources Canada. All rights reserved.',

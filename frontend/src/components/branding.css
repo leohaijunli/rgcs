@@ -1,0 +1,107 @@
+.app-logo {
+  display: block;
+  flex: none;
+  overflow: hidden;
+  color: var(--mg-ink);
+}
+
+.app-logo-full {
+  width: 240px;
+  max-width: 100%;
+  aspect-ratio: 260 / 128;
+}
+
+.app-logo-wordmark {
+  width: 86px;
+  height: 32px;
+}
+
+.app-logo-mark {
+  width: 32px;
+  height: 32px;
+}
+
+.app-logo-accent {
+  fill: var(--mg-brand-accent);
+}
+
+.app-logo-subtitle {
+  fill: var(--mg-muted);
+}
+
+.company-logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 240px;
+  max-width: 100%;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--mg-brand-surface);
+}
+
+.company-logo img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.company-logo .company-logo-light {
+  display: none;
+}
+
+html[data-theme='light'] .company-logo-dark {
+  display: none;
+}
+
+html[data-theme='light'] .company-logo-light {
+  display: block;
+}
+
+.start-app-logo {
+  width: 224px;
+  margin: 0 auto;
+}
+
+.start-company-logo {
+  width: 208px;
+}
+
+.about-app-logo {
+  width: 176px;
+}
+
+/* A small brand anchor before each tool title, separated from source/status.
+ * The compact mark keeps dense toolbars within their declared minimum size. */
+.tool-header-brand {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  padding-right: 8px;
+  border-right: 1px solid var(--mg-border);
+}
+
+.tool-header-brand .app-logo-wordmark {
+  width: 65px;
+  height: 24px;
+}
+
+.tool-header-brand .app-logo-mark {
+  display: none;
+  width: 24px;
+  height: 24px;
+}
+
+.tool-header-brand.is-compact .app-logo-mark {
+  display: block;
+}
+
+@media (max-width: 1366px) {
+  .tool-header-brand .app-logo-wordmark {
+    display: none;
+  }
+
+  .tool-header-brand .app-logo-mark {
+    display: block;
+  }
+}

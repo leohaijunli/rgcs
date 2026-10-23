@@ -21,6 +21,7 @@ page.on('pageerror', (error) => errors.push(String(error)))
 const RECENT = { path: '/tmp/opencode/ProjA', name: 'ProjA' }
 await page.addInitScript((recent) => {
   localStorage.setItem('maggcs.recentProjects', JSON.stringify([recent]))
+  localStorage.setItem('maggcs.autoconnect', 'false')
   window.__calls = []
   window.__TAURI_INTERNALS__ = {
     transformCallback: () => 1,
@@ -96,13 +97,41 @@ try {
   await page.getByTestId('project-pill').waitFor()
   assert.equal(await page.getByTestId('start-page').count(), 0, 'start page is dismissed')
   assert.equal(
-    await page.getByTestId('project-pill').textContent(),
+    await page.getByTestId('project-name').textContent(),
     'No project',
     'the workspace runs with no project',
   )
 
+  // Branding plus five recent projects must not push the form above the
+  // viewport at the desktop minimum, even with 44 px Field-mode controls.
+  const compact = await browser.newPage({ viewport: { width: 1024, height: 700 } })
+  compact.on('pageerror', (error) => errors.push(String(error)))
+  await compact.addInitScript(() => {
+    localStorage.setItem('maggcs.autoconnect', 'false')
+    localStorage.setItem('maggcs.fieldMode', 'true')
+    localStorage.setItem('maggcs.theme', 'light')
+    localStorage.setItem('maggcs.recentProjects', JSON.stringify(
+      Array.from({ length: 5 }, (_, i) => ({ name: `Survey ${i + 1}`, path: `/tmp/opencode/survey-${i + 1}` })),
+    ))
+  })
+  const preview = new URL(url)
+  preview.searchParams.set('start', '')
+  preview.searchParams.set('nomap', '')
+  await compact.goto(preview.href, { waitUntil: 'networkidle' })
+  await compact.getByRole('button', { name: 'New project', exact: true }).click()
+  await compact.getByTestId('start-page').evaluate((root) => { root.scrollTop = 0 })
+  const logo = await compact.getByTestId('start-page').getByTestId('app-logo').boundingBox()
+  assert.ok(logo && logo.y >= 0, 'the start-page logo is not clipped above the viewport')
+  const enterWorkspace = compact.getByRole('button', { name: 'Continue without a project', exact: true })
+  await enterWorkspace.scrollIntoViewIfNeeded()
+  const continueBox = await enterWorkspace.boundingBox()
+  // Browser scrolling rounds to whole pixels while the text layout is fractional.
+  assert.ok(continueBox && continueBox.y >= -1 && continueBox.y + continueBox.height <= 701, 'the no-project entry stays reachable below a long create form')
+  if (shots) await compact.screenshot({ path: join(shots, 'start-field-light.png') })
+  await compact.close()
+
   assert.deepEqual(errors, [])
-  console.log('PASS: name-only wizard, recent remove/delete, and no-project entry')
+  console.log('PASS: name-only wizard, recent remove/delete, no-project entry, and minimum-size Field-mode reachability')
 } finally {
   await browser.close()
 }

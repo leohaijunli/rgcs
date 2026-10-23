@@ -1,7 +1,30 @@
-# MagGCS — Feature Guide
+# Q-Mag — Feature Guide
 
 2026-10-10 · What each view/window does and how to operate it. Architecture
 in [ARCHITECTURE.md](ARCHITECTURE.md); open work in [issues.md](../issues.md).
+
+## Application shell and tool headers
+
+- The application is **Q-Mag**. The title/project entry, tools, Settings,
+  workflow selector, and vehicle status share one compact top bar.
+- **Workflow** shows the current stage as `n/5`. Open it to choose Prepare,
+  Plan, Preflight, Fly, or Review, or use Previous/Next. Arrow keys and
+  Home/End move focus; Enter selects and Escape closes the menu.
+- At widths of at least 1600 px, Inspector and Motor test have inline
+  shortcuts. At smaller widths they are available in **Tools**, alongside
+  Parameters, Logs, and Export diagnostics. The map pop-out entry is removed.
+- The top bar uses the Q-Mag wordmark above 1366 px and its **Q** mark at
+  narrower widths. Inspector, Motor test, and Parameters use the same pattern
+  before their titles; Logs and Settings use a compact Q in the dialog header.
+- StartPage and **Settings → About** show the full application logo and
+  Quaternion Aerospace company logo. About contains the runtime version,
+  license, and elevation-data attribution. Company artwork follows the
+  resolved theme.
+- The start page scrolls when recent projects and the create form exceed the
+  available height, including in Field mode.
+
+Screenshots and manual review steps are in the
+[frontend README](../frontend/README.md).
 
 ## Connection
 

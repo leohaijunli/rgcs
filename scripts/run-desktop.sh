@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the frontend + desktop app and launch MagGCS on the current display.
+# Build the frontend + desktop app and launch Q-Mag on the current display.
 # Usage: scripts/run-desktop.sh   (from the repository root or from scripts/)
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -18,5 +18,5 @@ npm --prefix frontend run build
 echo "==> building desktop app + dem-prep (release)"
 cargo build --release -p maggcs-app -p dem-prep
 
-echo "==> launching MagGCS on ${DISPLAY:-:0}"
+echo "==> launching Q-Mag on ${DISPLAY:-:0}"
 exec ./target/release/maggcs-app

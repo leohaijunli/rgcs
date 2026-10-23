@@ -11,6 +11,8 @@ import { useTranslation } from 'react-i18next'
 import { open as pickFolder } from '@tauri-apps/plugin-dialog'
 import { isTauri } from '../inspector/mock'
 import { useProjectStore } from '../stores/project'
+import AppLogo from './AppLogo'
+import CompanyLogo from './CompanyLogo'
 import ProjectWizard from './project/ProjectWizard'
 import RecentProjectList from './project/RecentProjectList'
 
@@ -31,10 +33,10 @@ export default function StartPage() {
   const armed = error === 'armed-vehicle'
 
   return (
-    <div className="flex h-screen flex-col items-center justify-center bg-canvas px-4" data-testid="start-page">
-      <div className="w-[360px]">
+    <div className="flex h-screen flex-col items-center overflow-y-auto bg-canvas px-4 py-6" data-testid="start-page">
+      <div className="my-auto w-full max-w-[360px] shrink-0">
         <div className="mb-4 text-center">
-          <div className="text-2xl font-semibold tracking-wide text-accent">{t('app.title')}</div>
+          <AppLogo className="start-app-logo" />
           <div className="mt-1 text-xs text-muted">{t('start.subtitle')}</div>
         </div>
 
@@ -79,6 +81,9 @@ export default function StartPage() {
         >
           {t('start.continueWithoutProject')}
         </button>
+        <div className="mt-5 text-center">
+          <CompanyLogo className="start-company-logo" />
+        </div>
       </div>
     </div>
   )

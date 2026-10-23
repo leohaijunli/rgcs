@@ -157,7 +157,7 @@ try {
   if (shots) await mkdir(shots, { recursive: true })
 
   await page.getByTestId('tools-open').click()
-  await page.getByRole('button', { name: 'Logs', exact: true }).click()
+  await page.getByTestId('tool-logs').click()
   await page.getByRole('dialog').waitFor()
   await emitList()
   if (shots) await page.screenshot({ path: join(shots, 'logs-delete.png') })

@@ -1,4 +1,4 @@
-# MagGCS — System Architecture
+# Q-Mag — System Architecture
 
 2026-10-10 · Companion reading: ADR index at the bottom; feature-level
 documentation in [FEATURES.md](FEATURES.md); open work in

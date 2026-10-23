@@ -28,6 +28,14 @@ await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 })
 await page.waitForSelector('[data-testid="tools-open"]', { timeout: 30000 })
 
 // 1. The five stages all open and each leaves the expected surface visible.
+// The workflow nav is a wizard popover: open it, pick the stage.
+async function openStage(stage) {
+  await page.click('[data-testid="workflow-open"]')
+  await page.waitForSelector('[data-testid="workflow-panel"]', { timeout: 5000 })
+  await page.click(`[data-testid="workflow-stage-${stage}"]`)
+  await page.waitForTimeout(250)
+}
+
 const STAGES = [
   ['prepare', 'prepare-panel'],
   ['plan', null], // the plan steps render by their step cards, not a testid
@@ -36,8 +44,7 @@ const STAGES = [
   ['review', 'review-panel'],
 ]
 for (const [stage, panelId] of STAGES) {
-  await page.getByRole('button', { name: new RegExp(`^${stage}`, 'i') }).first().click()
-  await page.waitForTimeout(250)
+  await openStage(stage)
   if (panelId) {
     const visible = await page.isVisible(`[data-testid="${panelId}"]`)
     report(`stage ${stage} opens its panel`, visible)
@@ -48,7 +55,7 @@ for (const [stage, panelId] of STAGES) {
 
 // 2. The Preflight tab shows the readiness badge slot (no link → no badge,
 // but the panel says so instead of crashing).
-await page.getByRole('button', { name: /preflight/i }).first().click()
+await openStage('preflight')
 await page.waitForTimeout(400)
 const preflightHint = await page.isVisible('[data-testid="preflight-stage-panel"]')
 report('preflight panel renders without a link', preflightHint)
@@ -60,10 +67,10 @@ const projectDialog = await page.isVisible('[data-testid="project-home"]')
 report('project pill opens the project home', projectDialog)
 await page.keyboard.press('Escape')
 
-// 4. About: Tools ▸ About shows version + copyright + attribution.
-await page.click('[data-testid="tools-open"]')
-await page.waitForTimeout(200)
-await page.click('[data-testid="about-open"]')
+// 4. About: Settings ▸ About shows version + copyright + attribution.
+await page.click('[data-testid="settings-open"]')
+await page.waitForTimeout(300)
+await page.getByRole('tab', { name: /about/i }).click()
 await page.waitForTimeout(300)
 const aboutBody = await page.textContent('[data-testid="about-body"]')
 report(
@@ -77,7 +84,7 @@ await page.keyboard.press('Escape')
 
 // 5. The drape parameters section exists in terrain mode with the required
 // clearance field (the plan's no-default rule, visible to the operator).
-await page.getByRole('button', { name: /^plan/i }).first().click()
+await openStage('plan')
 await page.waitForTimeout(300)
 await page.getByRole('button', { name: /Terrain \(AGL\)/i }).first().click()
 await page.waitForTimeout(200)

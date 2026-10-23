@@ -1,0 +1,363 @@
+.main-topbar {
+  --topbar-control-h: 32px;
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  height: var(--mg-topbar-h);
+  padding: 0 12px;
+  border-bottom: 1px solid var(--mg-border);
+  background: var(--mg-bg-raised);
+}
+
+.main-topbar button {
+  white-space: nowrap;
+}
+
+.topbar-app-group,
+.topbar-app-menu {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.topbar-app-group {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.topbar-app-menu {
+  flex: none;
+  padding-left: 4px;
+  border-left: 1px solid var(--mg-border);
+}
+
+.topbar-project {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 130px;
+  max-width: 244px;
+  height: var(--topbar-control-h);
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.topbar-project:hover {
+  background: var(--mg-bg);
+  border-color: var(--mg-border);
+}
+
+.topbar-brand {
+  display: flex;
+  align-items: center;
+  flex: none;
+}
+
+.topbar-brand .topbar-logo-mark {
+  display: none;
+}
+
+.topbar-project-separator {
+  color: var(--mg-muted);
+}
+
+.topbar-project-name {
+  min-width: 0;
+  max-width: 120px;
+  overflow: hidden;
+  color: var(--mg-ink);
+  font-size: 12px;
+  text-overflow: ellipsis;
+}
+
+.topbar-project > svg {
+  flex: none;
+  color: var(--mg-muted);
+}
+
+.topbar-vehicle,
+.topbar-utilities {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+
+.topbar-utilities {
+  margin-left: auto;
+}
+
+.topbar-age {
+  max-width: 90px;
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.main-topbar [data-testid='tools-open'] {
+  height: var(--topbar-control-h);
+  padding: 0 8px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.topbar-tools-label {
+  font-size: 12px;
+}
+
+.topbar-tool-launchers {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+
+.topbar-tool-shortcut {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--topbar-control-h);
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--mg-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.topbar-tool-shortcut:hover {
+  background: var(--mg-bg);
+  color: var(--mg-ink);
+}
+
+.topbar-tools-menu {
+  z-index: 60;
+  width: min(248px, calc(100vw - 24px));
+  padding: 6px;
+  border: 1px solid var(--mg-border);
+  border-radius: 6px;
+  background: var(--mg-bg-raised);
+  color: var(--mg-ink);
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--mg-bg) 70%, transparent);
+}
+
+.topbar-tools-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: transparent;
+  text-align: left;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.topbar-tools-menu button:hover {
+  background: var(--mg-bg);
+}
+
+.workflow-trigger {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--mg-border);
+  border-radius: 5px;
+  background: var(--mg-bg);
+  color: var(--mg-ink);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.workflow-trigger:hover {
+  border-color: var(--mg-accent);
+}
+
+.workflow-progress {
+  padding-right: 8px;
+  border-right: 1px solid var(--mg-border);
+  color: var(--mg-accent);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.workflow-current-label {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.workflow-badge {
+  color: var(--mg-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.workflow-panel {
+  z-index: 60;
+  width: min(320px, calc(100vw - 24px));
+  padding: 8px;
+  border: 1px solid var(--mg-border);
+  border-radius: 8px;
+  background: var(--mg-bg-raised);
+  color: var(--mg-ink);
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--mg-bg) 70%, transparent);
+}
+
+.workflow-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px 8px;
+  font-size: 13px;
+}
+
+.workflow-heading > span {
+  color: var(--mg-muted);
+  font-size: 11px;
+}
+
+.workflow-steps {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workflow-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 6px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--mg-ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.workflow-step:hover,
+.workflow-step.current {
+  border-color: var(--mg-border);
+  background: var(--mg-bg);
+}
+
+.workflow-step-number {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--mg-border);
+  border-radius: 50%;
+  color: var(--mg-muted);
+  font-size: 12px;
+}
+
+.workflow-step.current .workflow-step-number {
+  border-color: var(--mg-accent);
+  background: var(--mg-accent);
+  color: var(--mg-accent-ink);
+}
+
+.workflow-step-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.workflow-step-label {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.workflow-step-description {
+  color: var(--mg-muted);
+  font-size: 11px;
+}
+
+.workflow-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--mg-border);
+}
+
+.workflow-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 80px;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--mg-border);
+  border-radius: 4px;
+  background: var(--mg-bg);
+  color: var(--mg-ink);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.workflow-actions button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+@media (max-width: 1366px) {
+  .topbar-project {
+    min-width: 0;
+  }
+
+  .topbar-brand .topbar-logo-wordmark {
+    display: none;
+  }
+
+  .topbar-brand .topbar-logo-mark {
+    display: block;
+  }
+}
+
+@media (max-width: 1100px) {
+  .main-topbar {
+    gap: 6px;
+    padding: 0 8px;
+  }
+
+  .topbar-project {
+    min-width: 0;
+  }
+
+  .topbar-project-name,
+  .topbar-project-separator,
+  .topbar-tools-label {
+    display: none;
+  }
+}
+
+html.field-mode .main-topbar {
+  --topbar-control-h: 44px;
+}
+
+html.field-mode .workflow-trigger {
+  height: 44px;
+}

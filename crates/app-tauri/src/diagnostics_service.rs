@@ -164,7 +164,7 @@ pub fn diagnostics_export(
     }
     // 5. A readme so the bundle explains itself in the field.
     let readme = format!(
-        "MagGCS diagnostics bundle v{VERSION}\nexported: {} \ncontents: log files, config.json (no secrets), alerts.json, session.json (if recording)\n",
+        "Q-Mag diagnostics bundle v{VERSION}\nexported: {} \ncontents: log files, config.json (no secrets), alerts.json, session.json (if recording)\n",
         chrono_header(),
     );
     fs::write(folder.join("README.txt"), readme).map_err(|e| e.to_string())?;

@@ -28,8 +28,9 @@ import { useTelemetryStore } from '../../stores/telemetry'
 import { useUiStore } from '../../stores/ui'
 import type { ThemePref } from '../../design-system/theme'
 import { hasInboundPackets, lastPacketAgeMs, linkLevel, linkLevelTone } from '../../util/linkLevel'
+import AboutContent from './AboutContent'
+import AppLogo from '../AppLogo'
 
-const APP_VERSION = '0.1.0'
 const KINDS: EndpointKind[] = ['udpin', 'udpout', 'tcpin', 'tcpout', 'serial']
 
 export type SettingsTab = 'connection' | 'vehicle' | 'appearance' | 'devices' | 'about'
@@ -58,7 +59,6 @@ export default function SettingsDialog({
   const fieldMode = useUiStore((s) => s.fieldMode)
   const setFieldMode = useUiStore((s) => s.setFieldMode)
   const setTheme = useUiStore((s) => s.setTheme)
-  const link = useLinkStore((s) => s.link)
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -67,7 +67,12 @@ export default function SettingsDialog({
         {/* Fixed height: switching tabs must not resize the dialog (task 0.7). */}
         <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex h-[min(85vh,560px)] w-[min(94vw,680px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-line bg-panel shadow-2xl">
           <div className="flex items-center justify-between border-b border-line px-4 py-3">
-            <Dialog.Title className="text-sm font-medium text-ink">{t('settings.menu')}</Dialog.Title>
+            <div className="flex items-center gap-2">
+              <span className="tool-header-brand is-compact">
+                <AppLogo variant="mark" />
+              </span>
+              <Dialog.Title className="text-sm font-medium text-ink">{t('settings.menu')}</Dialog.Title>
+            </div>
             <Dialog.Close asChild>
               <button
                 aria-label="close"
@@ -80,6 +85,7 @@ export default function SettingsDialog({
 
           <Tabs.Root
             value={tab}
+            orientation="vertical"
             onValueChange={(v) => onTabChange(v as SettingsTab)}
             className="flex min-h-0 flex-1"
           >
@@ -109,7 +115,7 @@ export default function SettingsDialog({
                 <DevicesTab />
               </Tabs.Content>
               <Tabs.Content value="about">
-                <AboutTab link={link} />
+                <AboutContent />
               </Tabs.Content>
             </div>
           </Tabs.Root>
@@ -672,17 +678,6 @@ function DevicesTab() {
           )}
         </>
       )}
-    </div>
-  )
-}
-
-function AboutTab({ link }: { link: ReturnType<typeof useLinkStore.getState>['link'] }) {
-  const { t } = useTranslation()
-  return (
-    <div className="space-y-1 text-sm text-muted">
-      <div>MagGCS v{APP_VERSION}</div>
-      <div>{t('settings.about.license')}</div>
-      <div className="mono text-xs">{link?.endpoint || '—'}</div>
     </div>
   )
 }

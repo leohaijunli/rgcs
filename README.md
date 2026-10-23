@@ -1,4 +1,4 @@
-# MagGCS
+# Q-Mag
 
 Open-source ground control station running side-by-side with QGroundControl,
 for survey / geophysics drone operations (multirotor first).

@@ -34,6 +34,7 @@ import type { Plot } from '../generated-types/Plot'
 import type { SignalId } from '../generated-types/SignalId'
 import type { SpectrumFrame } from '../generated-types/SpectrumFrame'
 import type { Trace } from '../generated-types/Trace'
+import AppLogo from '../components/AppLogo'
 import { Ring } from './ring'
 
 /** Rust `TraceFrame` (inspector_service.rs): columnar, so the SignalId is not
@@ -1363,6 +1364,10 @@ export function InspectorApp() {
   return (
     <div className="inspector-grid" style={gridStyle}>
       <div className="tool-header">
+        <span className="tool-header-brand">
+          <AppLogo variant="wordmark" />
+          <AppLogo variant="mark" />
+        </span>
         <strong className="tool-title">Signal Inspector</strong>
         <span className={`source-chip ${sourceChip.tone}`} title={sourceChip.title}>
           {sourceChip.label}

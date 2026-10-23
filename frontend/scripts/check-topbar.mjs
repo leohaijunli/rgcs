@@ -2,7 +2,8 @@
 // acceptance §7.4): at 1280 and 1920 the status group (Armed / Mode / Link)
 // is complete and never occluded, every control meets the 32px normal-mode
 // floor, and the narrow layout folds the low-priority health chips into
-// "More" instead of dropping the status group.
+// "More" instead of dropping the status group. Also exercises the workflow
+// and Tools menus, the Q-Mag branding, and the application's minimum width.
 //   node check-topbar.mjs <viteUrl> <shotsDir>
 import { chromium } from 'playwright'
 import { mkdir } from 'node:fs/promises'
@@ -23,16 +24,6 @@ const check = (ok, label) => {
   if (!ok) failed += 1
 }
 
-let page = null
-async function waitUntil(fn, timeoutMs, stepMs = 100) {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    if (await fn()) return true
-    if (Date.now() >= deadline) return false
-    await page.waitForTimeout(stepMs)
-  }
-}
-
 const browser = await chromium.launch({ headless: true, args: ['--disable-gpu', '--disable-dev-shm-usage'] })
 const pageErrors = []
 
@@ -43,6 +34,7 @@ async function boot(width, height) {
     if (m.type() === 'error') pageErrors.push(m.text())
   })
   await p.addInitScript(() => {
+    localStorage.setItem('maggcs.autoconnect', 'false')
     const handlers = {}
     let fired = 0
     const deliver = (event, payload) => {
@@ -123,6 +115,8 @@ async function boot(width, height) {
         if (cmd.startsWith('plugin:event|')) return null
         if (cmd === 'alert_snapshot') return []
         if (cmd === 'enumerate_devices') return []
+        if (cmd === 'tools_status') return []
+        if (cmd === 'plugin:app|version') return '0.1.0'
         if (cmd === 'link_status' || cmd === 'connect' || cmd === 'link_error') return null
         if (cmd === 'flight_mode_table') {
           return [
@@ -150,13 +144,12 @@ async function boot(width, height) {
     setInterval(() => window.__mockTelemetry(Date.now()), 300)
   })
 
-// L8: confirm the (first) target change and let the auto-connect window
-// expire — otherwise the startup dialogs gate every later click.
-await p.waitForSelector('[data-testid="autoconnect-dialog"]', { state: 'detached', timeout: 15000 }).catch(() => {})
-const targetConfirm = p.locator('[data-testid="target-change-confirm"]')
-await targetConfirm.waitFor({ state: 'visible', timeout: 8000 }).catch(() => {})
-if ((await targetConfirm.count()) > 0) await targetConfirm.click()
-await p.waitForSelector('[data-testid="target-change-dialog"]', { state: 'detached', timeout: 5000 }).catch(() => {})
+  // L8: confirm the (first) target change before exercising the toolbar.
+  await p.waitForSelector('[data-testid="autoconnect-dialog"]', { state: 'detached', timeout: 15000 }).catch(() => {})
+  const targetConfirm = p.locator('[data-testid="target-change-confirm"]')
+  await targetConfirm.waitFor({ state: 'visible', timeout: 8000 }).catch(() => {})
+  if ((await targetConfirm.count()) > 0) await targetConfirm.click()
+  await p.waitForSelector('[data-testid="target-change-dialog"]', { state: 'detached', timeout: 5000 }).catch(() => {})
 
   await mkdir(shotsDir, { recursive: true })
   await waitUntilOn(p, async () => (await p.locator('[data-testid="topbar-status"]').count()) === 1, 20000)
@@ -189,7 +182,6 @@ function within(b, width, height) {
   const W = 1920
   const H = 1080
   const p = await boot(W, H)
-  page = p
 
   const status = await box(p, '[data-testid="topbar-status"]')
   check(within(status, W, H), `status group is fully inside the 1920 viewport`)
@@ -200,6 +192,11 @@ function within(b, width, height) {
   check(await visible(p, '[data-testid="rtk-pill"]'), 'wide: RTK pill is inline')
   check(await visible(p, '[data-testid="batt-pill"]'), 'wide: battery pill is inline')
   check(!(await visible(p, '[data-testid="topbar-more"]')), 'wide: no More fold is shown')
+  check(await p.title() === 'Q-Mag', 'the application title is Q-Mag')
+  check(await visible(p, '.topbar-logo-wordmark'), 'wide: the Q-Mag wordmark is visible')
+  check(!(await visible(p, '.topbar-logo-mark')), 'wide: the compact Q mark is hidden')
+  check(await visible(p, '[data-testid="inspector-shortcut"]'), 'wide: Inspector is an inline shortcut')
+  check(await visible(p, '[data-testid="motor-test-shortcut"]'), 'wide: Motor test is an inline shortcut')
 
   // The status group must not be occluded by the groups to its right.
   const rtl = await box(p, '[data-testid="rtl-always"]')
@@ -209,6 +206,73 @@ function within(b, width, height) {
   )
 
   await p.screenshot({ path: join(shotsDir, 'topbar-1920.png') })
+
+  // A real keyboard walkthrough: opening focuses the current stage, arrows
+  // move focus, and selecting/advancing a stage returns to the trigger.
+  const workflow = p.getByTestId('workflow-open')
+  await workflow.focus()
+  await p.keyboard.press('ArrowDown')
+  await p.getByTestId('workflow-panel').waitFor()
+  const currentStage = await workflow.getAttribute('data-stage')
+  check(await p.getByTestId(`workflow-stage-${currentStage}`).evaluate((el) => el === document.activeElement), 'workflow opening focuses the current stage')
+  await p.keyboard.press('Home')
+  check(await p.getByTestId('workflow-stage-prepare').evaluate((el) => el === document.activeElement), 'workflow Home focuses Prepare')
+  await p.keyboard.press('ArrowDown')
+  check(await p.getByTestId('workflow-stage-plan').evaluate((el) => el === document.activeElement), 'workflow ArrowDown focuses Plan')
+  await p.keyboard.press('End')
+  await p.keyboard.press('Enter')
+  await p.getByTestId('workflow-panel').waitFor({ state: 'detached' })
+  check(await workflow.getAttribute('data-stage') === 'review', 'workflow Enter selects Review')
+  check(await workflow.evaluate((el) => el === document.activeElement), 'workflow selection restores trigger focus')
+  await workflow.click()
+  check(await p.getByTestId('workflow-next').isDisabled(), 'the last workflow stage disables Next')
+  await p.getByTestId('workflow-previous').click()
+  check(await workflow.getAttribute('data-stage') === 'fly', 'Previous selects Fly')
+  await workflow.click()
+  await p.screenshot({ path: join(shotsDir, 'workflow-1920.png') })
+  await p.getByTestId('workflow-stage-prepare').click()
+  await workflow.click()
+  check(await p.getByTestId('workflow-previous').isDisabled(), 'the first workflow stage disables Previous')
+  await p.getByTestId('workflow-next').click()
+  check(await workflow.getAttribute('data-stage') === 'plan', 'Next selects Plan')
+
+  const tools = p.getByTestId('tools-open')
+  await tools.focus()
+  await p.keyboard.press('ArrowDown')
+  await p.getByTestId('tools-menu').waitFor()
+  check(await p.getByTestId('tool-params').evaluate((el) => el === document.activeElement), 'Tools ArrowDown focuses the first item')
+  check(await tools.getAttribute('aria-expanded') === 'true', 'Tools exposes its expanded state')
+  check(await p.getByTestId('map-popout').count() === 0 && await p.getByRole('menuitem', { name: /pop out map/i }).count() === 0, 'Tools has no Pop out map entry')
+  check(await p.getByTestId('tool-inspector').count() === 0 && await p.getByTestId('tool-actuator').count() === 0, 'wide: inline tools are not duplicated in the menu')
+  await p.screenshot({ path: join(shotsDir, 'tools-1920.png') })
+  await p.keyboard.press('End')
+  check(await p.getByTestId('diagnostics-export').evaluate((el) => el === document.activeElement), 'Tools End focuses Export diagnostics')
+  await p.keyboard.press('ArrowDown')
+  check(await p.getByTestId('tool-params').evaluate((el) => el === document.activeElement), 'Tools arrows wrap to the first item')
+  await p.keyboard.press('Escape')
+  await p.getByTestId('tools-menu').waitFor({ state: 'detached' })
+  check(await tools.evaluate((el) => el === document.activeElement), 'Tools Escape restores trigger focus')
+
+  await p.getByTestId('settings-open').click()
+  await p.getByRole('tab', { name: 'About', exact: true }).click()
+  const about = p.getByTestId('about-body')
+  check(await about.isVisible() && (await about.textContent()).includes('Q-Mag'), 'Settings About identifies Q-Mag')
+  check(await about.getByTestId('company-logo-dark').isVisible(), 'About shows the company logo in dark theme')
+  check(await about.getByTestId('company-logo-dark').evaluate((el) => el.complete && el.naturalWidth > 0), 'the dark company asset loads')
+  await p.screenshot({ path: join(shotsDir, 'about-dark.png') })
+  await p.getByRole('tab', { name: 'Appearance', exact: true }).click()
+  await p.getByRole('button', { name: 'Light', exact: true }).click()
+  await p.getByRole('tab', { name: 'About', exact: true }).click()
+  check(await about.getByTestId('company-logo-light').isVisible() && !(await about.getByTestId('company-logo-dark').isVisible()), 'About switches to the light company logo live')
+  check(await about.getByTestId('company-logo-light').evaluate((el) => el.complete && el.naturalWidth > 0), 'the light company asset loads')
+  await p.screenshot({ path: join(shotsDir, 'about-light.png') })
+  await p.keyboard.press('Escape')
+  await p.screenshot({ path: join(shotsDir, 'topbar-light-1920.png') })
+  await p.getByTestId('settings-open').click()
+  await p.getByRole('tab', { name: 'Appearance', exact: true }).click()
+  await p.getByRole('button', { name: 'Night red', exact: true }).click()
+  await p.keyboard.press('Escape')
+  await p.screenshot({ path: join(shotsDir, 'topbar-night-red-1920.png') })
   await p.close()
 }
 
@@ -217,7 +281,6 @@ function within(b, width, height) {
   const W = 1280
   const H = 800
   const p = await boot(W, H)
-  page = p
 
   const status = await box(p, '[data-testid="topbar-status"]')
   check(within(status, W, H), `status group is fully inside the 1280 viewport`)
@@ -229,6 +292,8 @@ function within(b, width, height) {
 
   check(await visible(p, '[data-testid="topbar-more"]'), 'narrow: the health chips fold into More')
   check(!(await visible(p, '[data-testid="rtk-pill"]')), 'narrow: RTK is folded away')
+  check(await visible(p, '.topbar-logo-mark') && !(await visible(p, '.topbar-logo-wordmark')), 'narrow: the topbar shows only the Q mark')
+  check(!(await visible(p, '[data-testid="inspector-shortcut"]')), 'narrow: the inline tool shortcuts fold away')
 
   // The More fold exposes the chips it took away.
   await p.locator('[data-testid="topbar-more"]').click()
@@ -246,6 +311,21 @@ function within(b, width, height) {
   check(within(settings, W, H), 'settings button is fully inside the 1280 viewport')
 
   await p.screenshot({ path: join(shotsDir, 'topbar-1280.png') })
+  await p.getByTestId('tools-open').click()
+  check(await visible(p, '[data-testid="tool-inspector"]') && await visible(p, '[data-testid="tool-actuator"]'), 'narrow: Tools exposes Inspector and Motor test')
+  check(await p.getByTestId('map-popout').count() === 0, 'narrow: Tools has no map pop-out')
+  await p.screenshot({ path: join(shotsDir, 'tools-1280.png') })
+  await p.keyboard.press('Escape')
+
+  // The Tauri minimum is 1024 px. Critical status and both safety actions
+  // must still fit when the compact title and hidden project name apply.
+  await p.setViewportSize({ width: 1024, height: 800 })
+  await p.waitForTimeout(200)
+  const controls = ['project-pill', 'workflow-open', 'flight-menu', 'mode-menu', 'rtl-always', 'hold-always', 'topbar-more', 'settings-open', 'alert-open']
+  for (const id of controls) {
+    check(within(await box(p, `[data-testid="${id}"]`), 1024, 800), `minimum width: ${id} stays inside the viewport`)
+  }
+  await p.screenshot({ path: join(shotsDir, 'topbar-1024.png') })
   await p.close()
 }
 
@@ -254,8 +334,9 @@ function within(b, width, height) {
   const W = 1440
   const H = 900
   const p = await boot(W, H)
-  page = p
   const targets = [
+    'project-pill',
+    'workflow-open',
     'rtl-always',
     'hold-always',
     'flight-menu',

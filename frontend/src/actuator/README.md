@@ -5,7 +5,7 @@ magnetic monitoring, and manually controlled SD capture/log retrieval.
 
 ## Layout
 
-- **Header:** target identity, FC state, configured rate, one test-state label,
+- **Header:** Q-Mag logo and tool title, target identity, FC state, configured rate, one test-state label,
   durable operation failures, Stop, and Emergency Stop.
 - **Left:** SITL input details, unlock/start controls, and the magnetic alarm.
   SITL details open when Forward is selected and collapse for Manual/Preset;
@@ -19,6 +19,9 @@ magnetic monitoring, and manually controlled SD capture/log retrieval.
 Wide windows use a bounded three-column grid. Each column can scroll without
 growing the document past the viewport. At widths up to 1100 px the columns
 stack, with left-side start/alarm controls first and a sticky stop header.
+The shared application wordmark becomes a compact Q at ≤1366 px, preceding
+the Motor test title without displacing the stop actions. Updated header
+screenshots and the layout regression passed on 2026-10-23.
 
 The scope signal list can be toggled at every width. Plot panes have a minimum
 height that leaves room for axes and legends; additional panes scroll rather

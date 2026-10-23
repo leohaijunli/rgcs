@@ -13,6 +13,7 @@ import { listen } from '@tauri-apps/api/event'
 import { ChevronsLeft, ChevronsRight } from 'lucide-react'
 import { isTauri } from '../inspector/mock'
 import type { ParamEntry } from '../generated-types/ParamEntry'
+import AppLogo from '../components/AppLogo'
 import { useParamsStore, type ParamMeta, type ParamsIpcEvent } from './store'
 
 /** The bundled metadata's target PX4 version (regenerate → bump). */
@@ -747,6 +748,10 @@ export function ParamsApp() {
   return (
     <div className="p-grid">
       <header className="p-toolbar">
+        <span className="tool-header-brand">
+          <AppLogo variant="wordmark" />
+          <AppLogo variant="mark" />
+        </span>
         <strong className="p-title">Parameters</strong>
         <span className={`p-fc p-fc-${fcStatus.tone}`} title={fcStatus.title}>
           {fcStatus.label}

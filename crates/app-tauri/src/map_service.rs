@@ -29,7 +29,7 @@ pub fn map_open(app: AppHandle) -> Result<(), String> {
         return Ok(());
     }
     let win = WebviewWindowBuilder::new(&app, MAP_LABEL, WebviewUrl::App("map.html".into()))
-        .title("MagGCS — Map")
+        .title("Q-Mag — Map")
         .inner_size(1280.0, 860.0)
         .min_inner_size(640.0, 400.0)
         .build()

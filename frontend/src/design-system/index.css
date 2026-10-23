@@ -24,6 +24,8 @@
   --mg-warn: #eab308;
   --mg-error: #ef4444;
   --mg-mag: #c084fc;
+  --mg-brand-accent: #1d9e75;
+  --mg-brand-surface: #ffffff;
 
   /* instrument cluster */
   --mg-sky: #1d5f9e;
@@ -125,6 +127,8 @@
   --mg-warn: #d99548;
   --mg-error: #ff3d33;
   --mg-mag: #ff8fb0;
+  --mg-brand-accent: var(--mg-accent);
+  --mg-brand-surface: #ffb9ad;
 
   /* instrument cluster */
   --mg-sky: #7a2f28;

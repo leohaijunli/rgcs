@@ -10,6 +10,7 @@ import { useLinkStore } from '../../stores/link'
 import { startLogsWatcher, useLogsStore } from '../../stores/logs'
 import { CONSOLE_PRESETS, useConsoleStore } from '../../stores/console'
 import type { LogEntryInfo } from '../../generated-types/LogEntryInfo'
+import AppLogo from '../AppLogo'
 
 /** Modal shell for the FC logs panel (same skin as the Settings dialog). */
 export default function LogsDialog({
@@ -26,7 +27,12 @@ export default function LogsDialog({
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/50" />
         <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex h-[min(94vh,900px)] w-[min(96vw,960px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-line bg-panel shadow-2xl">
           <div className="flex items-center justify-between border-b border-line px-4 py-3">
-            <Dialog.Title className="text-sm font-medium text-ink">{t('tools.logs')}</Dialog.Title>
+            <div className="flex items-center gap-2">
+              <span className="tool-header-brand is-compact">
+                <AppLogo variant="mark" />
+              </span>
+              <Dialog.Title className="text-sm font-medium text-ink">{t('tools.logs')}</Dialog.Title>
+            </div>
             <Dialog.Close asChild>
               <button
                 aria-label="close"

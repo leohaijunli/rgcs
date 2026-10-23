@@ -117,7 +117,7 @@ function Gallery() {
       >
         <div>
           <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--mg-accent)' }}>
-            MagGCS design-system
+            Q-Mag design-system
           </div>
           <div style={{ fontSize: 11, color: 'var(--mg-muted)' }}>
             UI2 gallery — primitives + tokens, both themes

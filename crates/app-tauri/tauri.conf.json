@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "MagGCS",
+  "productName": "Q-Mag",
   "version": "0.1.0",
   "identifier": "io.maggcs.desktop",
   "build": {
@@ -11,7 +11,7 @@
   "app": {
     "windows": [
       {
-        "title": "MagGCS",
+        "title": "Q-Mag",
         "width": 1280,
         "height": 800,
         "minWidth": 1024,

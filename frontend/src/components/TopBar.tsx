@@ -1,5 +1,5 @@
 import {
-  BadgeInfo,
+  Activity,
   BatteryMedium,
   ChevronDown,
   FileDown,
@@ -12,9 +12,10 @@ import {
   ShieldOff,
   SlidersHorizontal,
   PackageOpen,
-  ExternalLink,
+  Wrench,
 } from 'lucide-react'
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import * as Popover from '@radix-ui/react-popover'
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { invoke } from '@tauri-apps/api/core'
 import { useTelemetryStore } from '../stores/telemetry'
@@ -26,12 +27,11 @@ import { FIELD_STALE_MS, useHeartbeatAge } from '../hooks/useDataAge'
 import { useIsNarrow } from '../hooks/useIsNarrow'
 import { getSafetyConfig } from '../desktop/appConfig'
 import type { Severity } from '../generated-types/Severity'
-import { IconButton, StatusDot, Tabs } from '../design-system/components'
-import { useUiStore, type View } from '../stores/ui'
+import { IconButton, StatusDot } from '../design-system/components'
+import { useUiStore } from '../stores/ui'
 import { checklistBadge } from './panels/preflight/PreflightStagePanel'
 import { fetchChecklist } from '../stores/preflight'
 import { isTauri } from '../inspector/mock'
-import AboutDialog from './dialogs/AboutDialog'
 import ProjectHome from './dialogs/ProjectHome'
 import SettingsDialog, { type SettingsTab } from './dialogs/SettingsDialog'
 import LogsDialog from './dialogs/LogsDialog'
@@ -41,8 +41,9 @@ import ModePopover from './ModePopover'
 import FlightMenu from './FlightMenu'
 import SafetyCommands from './SafetyCommands'
 import AlertCenter from './AlertCenter'
-
-const VIEWS: View[] = ['prepare', 'plan', 'preflight', 'fly', 'review']
+import AppLogo from './AppLogo'
+import WorkflowNav from './WorkflowNav'
+import './topbar.css'
 
 /** Polling cadence for the Preflight tab's readiness badge. The engine is
  * pure, so this is cheap; errors (not connected) just clear the badge. */
@@ -53,6 +54,9 @@ const BADGE_POLL_MS = 2_000
  * single source (§7.1 "fix the 44 vs 32 mismatch"), and §7.4's floor for the
  * normal (non-field) mode is 32px. */
 const CONTROL = 'h-8'
+/** Full tool shortcuts fit beside inline health at desktop-wide sizes. */
+const QUICK_TOOLS_MIN_WIDTH_PX = 1600
+const TOOL_STATUS_POLL_MS = 1000
 
 /** Badge colour per severity — tokens only, and the number carries the
  * meaning as well as the colour (design principle: never colour alone). */
@@ -230,7 +234,6 @@ export default function TopBar() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('connection')
   const [projectOpen, setProjectOpen] = useState(false)
-  const [aboutOpen, setAboutOpen] = useState(false)
   const [rtkDrawerOpen, setRtkDrawerOpen] = useState(false)
   const [logsOpen, setLogsOpen] = useState(false)
   const [logDrawerOpen, setLogDrawerOpen] = useState(false)
@@ -333,48 +336,50 @@ export default function TopBar() {
     staleSeconds !== null ? t('link.staleSince', { s: staleSeconds }) : t('link.noLink')
 
   return (
-    <header className="flex h-12 shrink-0 items-center gap-3 border-b border-line bg-panel px-3">
-      {/* Everything left of the right cluster lives in one shrinkable,
-       * overflow-hidden wrapper (issues O8): at 1280 a long project name used
-       * to push the settings button off-screen. The name and the status text
-       * truncate first; the right cluster and the icon buttons never shrink. */}
-      {/* `overflow-hidden`: when the left content exceeds its share, the tabs
-       * must clip INSIDE this box rather than slide under the right cluster —
-       * a status pill painting over the last tab intercepted its clicks
-       * (found 2026-10-21). The right cluster never shrinks and stays whole. */}
-      <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
-        <div className="flex shrink-0 items-baseline gap-2">
-          <span className="text-lg font-semibold tracking-wide text-accent">{t('app.title')}</span>
-        </div>
-
-        {/* The open project (PJ3): a pill that opens the project home; the
-         * measurement type shows in the survey list (one registered kind). */}
+    <header className="main-topbar" data-testid="main-topbar">
+      <div className="topbar-app-group" data-testid="topbar-app">
+        {/* One title/context entry, with the application menus beside it. */}
         <button
           data-testid="project-pill"
           onClick={() => setProjectOpen(true)}
-          title={project?.crs ?? t('project.title')}
-          className={`flex ${CONTROL} min-w-0 max-w-[120px] items-center gap-1.5 rounded border px-2.5 text-xs 2xl:max-w-[180px] ${
-            project ? 'border-line bg-canvas text-ink hover:bg-panel' : 'border-dashed border-line text-muted hover:text-ink'
-          }`}
+          title={`${t('app.title')} · ${project ? `${project.name} · ${project.crs}` : t('project.title')}`}
+          aria-label={`${t('app.title')} · ${project ? `${t('project.title')}: ${project.name}` : t('project.noProject')}`}
+          className="topbar-project"
         >
-          <span className="truncate">{project ? project.name : t('project.noProject')}</span>
+          <span className="topbar-brand">
+            <AppLogo variant="wordmark" className="topbar-logo-wordmark" />
+            <AppLogo variant="mark" className="topbar-logo-mark" />
+          </span>
+          <span className="topbar-project-separator" aria-hidden="true">/</span>
+          <span className="topbar-project-name" data-testid="project-name">
+            {project ? project.name : t('project.noProject')}
+          </span>
+          <ChevronDown size={12} aria-hidden="true" />
         </button>
-
-        <Tabs
-          items={VIEWS.map((v) => ({
-            id: v,
-            label:
-              v === 'preflight' && badge !== null ? `${t(`nav.${v}`)} ${badge}` : t(`nav.${v}`),
-          }))}
-          active={view}
-          onChange={setView}
-          className="shrink-0 text-sm [&>button]:px-3 [&>button]:py-1.5"
-        />
+        <div className="topbar-app-menu">
+          <ToolsPopover
+            onInspector={openInspector}
+            onMotorTest={openMotorTest}
+            onParams={openParams}
+            onLogs={() => setLogsOpen(true)}
+          />
+          <IconButton
+            title={t('settings.menu')}
+            size={32}
+            data-testid="settings-open"
+            onClick={() => setSettingsOpen(true)}
+          >
+            <Settings size={16} />
+          </IconButton>
+        </div>
       </div>
 
-      <div className="ml-auto flex shrink-0 items-center gap-2">
+      <WorkflowNav view={view} badge={badge} onChange={setView} />
+      <GroupDivider />
+
+      <div className="topbar-vehicle">
         {stale && (
-          <span data-testid="link-stale-age" className="text-[10px] text-warn">
+          <span data-testid="link-stale-age" title={staleText} className="topbar-age text-warn">
             {staleText}
           </span>
         )}
@@ -419,14 +424,8 @@ export default function TopBar() {
 
         <GroupDivider />
 
-        {/* Tools group (U2). */}
-        <ToolsPopover
-          onInspector={openInspector}
-          onMotorTest={openMotorTest}
-          onParams={openParams}
-          onLogs={() => setLogsOpen(true)}
-          onAbout={() => setAboutOpen(true)}
-        />
+      </div>
+      <div className="topbar-utilities">
         {/* One badge for every window's alert count (A3): severity-coloured
          * number that opens the alert center. */}
         <span className="relative">
@@ -452,25 +451,8 @@ export default function TopBar() {
             </span>
           )}
         </span>
-        <IconButton
-          title={t('mapWindow.popOut')}
-          size={32}
-          data-testid="map-popout"
-          onClick={() => void invoke('map_open').catch(() => {})}
-        >
-          <ExternalLink size={15} />
-        </IconButton>
-        <IconButton
-          title={t('settings.menu')}
-          size={32}
-          data-testid="settings-open"
-          onClick={() => setSettingsOpen(true)}
-        >
-          <Settings size={16} />
-        </IconButton>
       </div>
       <ProjectHome open={projectOpen} onOpenChange={setProjectOpen} />
-      <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
       <RtkDrawer open={rtkDrawerOpen} onClose={() => setRtkDrawerOpen(false)} />
       <AlertCenter open={logDrawerOpen} onClose={() => setLogDrawerOpen(false)} />
       <SettingsDialog
@@ -520,139 +502,139 @@ async function exportDiagnostics(): Promise<void> {
   }
 }
 
-/** Tools ▾: the window launchers, one popover (motor-test plan §5). */
+/** High-frequency tools are inline on wide screens, in the menu otherwise. */
 function ToolsPopover({
   onInspector,
   onMotorTest,
   onParams,
   onLogs,
-  onAbout,
 }: {
   onInspector: () => void
   onMotorTest: () => void
   onParams: () => void
   onLogs: () => void
-  onAbout: () => void
 }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const [tools, setTools] = useState<ToolStatus[]>([])
-  const ref = useRef<HTMLDivElement>(null)
+  const compact = useIsNarrow(QUICK_TOOLS_MIN_WIDTH_PX - 1)
+  const buttons = useRef<Array<HTMLButtonElement | null>>([])
+  const firstFocus = useRef(0)
 
-  // U11: the badges (window open / motor test sending) poll while the menu
-  // is open — one cheap command, no event plumbing for a popover.
+  // U11: keep inline badges live too, even while the menu is closed.
   useEffect(() => {
-    if (!open || !isTauri()) return
+    if ((!open && compact) || !isTauri()) return
+    let cancelled = false
     const tick = () =>
       void invoke<ToolStatus[]>('tools_status')
-        .then(setTools)
+        .then((value) => { if (!cancelled) setTools(Array.isArray(value) ? value : []) })
         .catch(() => {})
     tick()
-    const id = window.setInterval(tick, 1000)
-    return () => window.clearInterval(id)
-  }, [open])
+    const id = window.setInterval(tick, TOOL_STATUS_POLL_MS)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [open, compact])
   const toolState = (id: string) => tools.find((t) => t.id === id)
 
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: PointerEvent) => {
-      const target = e.target as Node
-      if (!target.isConnected) return
-      if (!ref.current?.contains(target)) setOpen(false)
+  const entries = [
+    ...(compact ? [
+      { id: 'inspector', label: t('inspector.open'), icon: <LineChart size={14} />, action: onInspector },
+      { id: 'actuator', label: t('tools.motorTest'), icon: <Gauge size={14} />, action: onMotorTest },
+    ] : []),
+    { id: 'params', label: t('tools.parameters'), icon: <SlidersHorizontal size={14} />, action: onParams },
+    { id: 'logs', label: t('tools.logs'), icon: <FileDown size={14} />, action: onLogs },
+    { id: 'diagnostics', label: t('tools.diagnostics'), icon: <PackageOpen size={14} />, action: () => void exportDiagnostics() },
+  ]
+
+  const moveFocus = (event: ReactKeyboardEvent<HTMLButtonElement>, index: number) => {
+    let next = index
+    switch (event.key) {
+      case 'ArrowDown': next = (index + 1) % entries.length; break
+      case 'ArrowUp': next = (index + entries.length - 1) % entries.length; break
+      case 'Home': next = 0; break
+      case 'End': next = entries.length - 1; break
+      default: return
     }
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false)
-    window.addEventListener('pointerdown', onDown)
-    window.addEventListener('keydown', onKey)
-    return () => {
-      window.removeEventListener('pointerdown', onDown)
-      window.removeEventListener('keydown', onKey)
-    }
-  }, [open])
+    event.preventDefault()
+    buttons.current[next]?.focus()
+  }
 
   return (
-    <div className="relative" ref={ref}>
-      <button
-        data-testid="tools-open"
-        onClick={() => setOpen((o) => !o)}
-        aria-label={t('tools.popover')}
-        title={t('tools.popover')}
-        className={`flex ${CONTROL} items-center gap-1.5 rounded border border-line px-2.5 ${
-          open ? 'bg-panel text-ink' : 'bg-canvas text-muted hover:text-ink'
-        }`}
-      >
-        <Gauge size={16} />
-        <span className="hidden text-xs 2xl:inline">{t('tools.popover')}</span>
-        <ChevronDown size={12} />
-      </button>
-      {open && (
-        <div className="absolute right-0 top-full z-50 mt-1 w-52 rounded border border-line bg-panel p-1 shadow-2xl">
-          <button
-            onClick={() => {
-              setOpen(false)
-              onInspector()
-            }}
-            className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-sm text-ink hover:bg-canvas"
-          >
+    <div className="topbar-tool-launchers">
+      {!compact && (
+        <>
+          <button type="button" className="topbar-tool-shortcut" data-testid="inspector-shortcut" title={t('inspector.open')} aria-label={t('inspector.open')} onClick={onInspector}>
             <LineChart size={14} />
-            {t('inspector.open')}
-            <ToolBadge state={toolState('inspector')} />
+            <span>{t('tools.inspectorShortcut')}</span>
+            <ToolBadge state={toolState('inspector')} compact />
           </button>
-          <button
-            onClick={() => {
-              setOpen(false)
-              onMotorTest()
-            }}
-            className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-sm text-ink hover:bg-canvas"
-          >
+          <button type="button" className="topbar-tool-shortcut" data-testid="motor-test-shortcut" title={t('tools.motorTest')} onClick={onMotorTest}>
             <Gauge size={14} />
-            {t('tools.motorTest')}
-            <ToolBadge state={toolState('actuator')} />
+            <span>{t('tools.motorTest')}</span>
+            <ToolBadge state={toolState('actuator')} compact />
           </button>
-          <button
-            onClick={() => {
-              setOpen(false)
-              onParams()
-            }}
-            className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-sm text-ink hover:bg-canvas"
-          >
-            <SlidersHorizontal size={14} />
-            {t('tools.parameters')}
-            <ToolBadge state={toolState('params')} />
-          </button>
-          <button
-            onClick={() => {
-              setOpen(false)
-              onLogs()
-            }}
-            className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-sm text-ink hover:bg-canvas"
-          >
-            <FileDown size={14} />
-            {t('tools.logs')}
-          </button>
-          <button
-            data-testid="diagnostics-export"
-            onClick={() => {
-              setOpen(false)
-              void exportDiagnostics()
-            }}
-            className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-sm text-ink hover:bg-canvas"
-          >
-            <PackageOpen size={14} />
-            {t('tools.diagnostics')}
-          </button>
-          <button
-            data-testid="about-open"
-            onClick={() => {
-              setOpen(false)
-              onAbout()
-            }}
-            className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-sm text-ink hover:bg-canvas"
-          >
-            <BadgeInfo size={14} />
-            {t('about.menu')}
-          </button>
-        </div>
+        </>
       )}
+      <Popover.Root open={open} onOpenChange={setOpen}>
+        <Popover.Trigger asChild>
+          <button
+            type="button"
+            data-testid="tools-open"
+            aria-label={t('tools.popover')}
+            aria-haspopup="menu"
+            title={t('tools.popover')}
+            className={`flex ${CONTROL} items-center gap-1.5 rounded border border-line px-2.5 ${open ? 'bg-panel text-ink' : 'bg-canvas text-muted hover:text-ink'}`}
+            onPointerDown={() => { firstFocus.current = 0 }}
+            onKeyDown={(event) => {
+              firstFocus.current = event.key === 'ArrowUp' ? entries.length - 1 : 0
+              if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                event.preventDefault()
+                setOpen(true)
+              }
+            }}
+          >
+            <Wrench size={14} />
+            <span className="topbar-tools-label">{t('tools.popover')}</span>
+            <ChevronDown size={12} />
+          </button>
+        </Popover.Trigger>
+        <Popover.Portal>
+          <Popover.Content
+            className="topbar-tools-menu"
+            data-testid="tools-menu"
+            role="menu"
+            aria-label={t('tools.popover')}
+            align="start"
+            sideOffset={8}
+            collisionPadding={12}
+            onOpenAutoFocus={(event) => {
+              event.preventDefault()
+              buttons.current[Math.min(firstFocus.current, entries.length - 1)]?.focus()
+            }}
+          >
+            {entries.map((entry, index) => (
+              <button
+                key={entry.id}
+                type="button"
+                role="menuitem"
+                data-testid={entry.id === 'diagnostics' ? 'diagnostics-export' : `tool-${entry.id}`}
+                ref={(element) => { buttons.current[index] = element }}
+                onKeyDown={(event) => moveFocus(event, index)}
+                onClick={() => {
+                  setOpen(false)
+                  entry.action()
+                }}
+              >
+                {entry.icon}
+                <span>{entry.label}</span>
+                <ToolBadge state={toolState(entry.id)} />
+              </button>
+            ))}
+          </Popover.Content>
+        </Popover.Portal>
+      </Popover.Root>
     </div>
   )
 }
@@ -660,14 +642,14 @@ function ToolsPopover({
 
 /** U11: the Tools menu badge — a dot when the window is open, "sending"
  * (amber) while the motor test is sending ActuatorTest frames. */
-function ToolBadge({ state }: { state: ToolStatus | undefined }) {
+function ToolBadge({ state, compact = false }: { state: ToolStatus | undefined; compact?: boolean }) {
   const { t } = useTranslation()
   if (!state?.open) return null
   return state.busy ? (
-    <span data-testid="tool-busy-badge" className="ml-auto text-[10px] text-warn">
-      {t('tools.sending')}
+    <span data-testid="tool-busy-badge" role="status" aria-label={t('tools.sending')} title={t('tools.sending')} className="ml-auto text-[10px] text-warn">
+      {compact ? <Activity size={12} /> : t('tools.sending')}
     </span>
   ) : (
-    <span data-testid="tool-open-badge" className="ml-auto h-1.5 w-1.5 rounded-full bg-ok" />
+    <span data-testid="tool-open-badge" role="status" aria-label={t('tools.windowOpen')} title={t('tools.windowOpen')} className="ml-auto h-1.5 w-1.5 rounded-full bg-ok" />
   )
 }

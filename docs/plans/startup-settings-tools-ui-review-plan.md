@@ -1,8 +1,9 @@
 # Startup, Settings, and Tools: UI Assessment and Improvement Plan
 
 - **Review date:** 2026-10-22
-- **Status:** Motor Test and StartPage deliveries landed on 2026-10-22; the
-  remaining Settings/Tools surfaces stay deferred.
+- **Status:** Motor Test, Parameters, Inspector, and StartPage deliveries
+  landed on 2026-10-22. The compact TopBar, unified About, and Q-Mag branding
+  followed on 2026-10-23; remaining Settings/diagnostics tasks stay deferred.
 - **Scope:** The startup/project-selection page, main-window Settings, the Tools
   menu, and the layouts of the tools it opens.
 - **Related assessment:** [Tools → Logs](logs-ui-review-plan.md).
@@ -274,6 +275,55 @@ Shared presentation must preserve actual connection ownership: Motor Test's
 serial PX4 target and SITL source are distinct from the primary GCS link;
 Inspector replay is distinct from live telemetry.
 
+### 5.3 Main TopBar implementation update, 2026-10-23
+
+The title, five stage tabs, tool entries, and utilities had drifted into three
+visually unrelated clusters. The bar is now one 48 px row with four zones:
+
+- **Context:** one title/project entry (`Q-Mag / <project>`), with the tool
+  launchers and Settings next to it.
+- **Workflow:** the five stage tabs became a wizard popover (`4/5 · Fly ▾`)
+  with numbered steps, descriptions, Previous/Next, and Arrow/Home/End keys.
+  Selecting a step still only changes the workspace view; numbers identify
+  stages, not completion.
+- **Vehicle:** status (armed/mode/link), the always-visible RTL/Hold pair, and
+  health. Health still folds into *More* at ≤1366 px.
+- **Utilities:** the alert badge.
+
+High-frequency tools (Inspector, Motor test) are inline shortcuts at ≥1600 px
+and fold into the Tools menu below that width. The Tools menu is a Radix
+popover with arrow-key navigation and focus restoration. The map pop-out
+entry was removed at the operator's request. About now has one entry point:
+Settings ▸ About renders `AboutContent` with the runtime version, license,
+and attribution. `.main-topbar` keeps every control at the 32 px
+normal-mode floor (44 px in Field mode) via `--topbar-control-h`.
+
+Verified with `check-topbar.mjs` at 1920 × 1080, 1280 × 800, and 1024 × 800
+(status group complete and unoccluded, health folds, keyboard navigation,
+responsive logos, About theme switching), `e2e-shell.mjs` (stages,
+About, project entry), `check-field-mode.mjs` (44 px floor), and
+`check-logs-delete.mjs` (Tools menu entry). Screenshots:
+`frontend/screenshots/u2/topbar-1920.png`, `topbar-1280.png`,
+`workflow-1920.png`, `tools-1920.png`.
+
+### 5.4 Q-Mag branding update, 2026-10-23
+
+The application display name is **Q-Mag**, including desktop product metadata,
+window/browser titles, shutdown copy, and About. `AppLogo` renders the supplied
+lettering in full, wordmark, and compact-Q treatments using theme tokens.
+The main and standalone tool headers use Q at ≤1366 px and the wordmark above
+that width. Inspector, Motor test, and Parameters put it before the tool title;
+Logs and Settings use the Q at the left of their dialog title rows.
+
+StartPage and Settings ▸ About include the full application logo and the
+supplied Quaternion Aerospace company artwork. Company assets switch with the
+resolved dark/light theme. StartPage is scrollable: five recent projects plus
+the create form remain reachable at 1024 × 700 in Field mode
+(`check-startpage.mjs`). Tool logo/title bounds were measured at minimum and
+wide sizes in dark, light, and night-red; existing Inspector/Parameters/Motor
+Test/Logs regressions pass with the new headers. Screenshots and manual review
+steps are indexed in [frontend/README.md](../../frontend/README.md).
+
 ## 6. Layout assessment of each Tools entry
 
 ### 6.1 Signal Inspector
@@ -443,6 +493,10 @@ different version sources.
 controls, a readable bounded width, runtime version/build information, and the
 existing license/data-attribution content. Both entry points should agree.
 
+**Delivered 2026-10-23:** About is now exclusively in Settings and uses
+`AboutContent` for the runtime version, Q-Mag/company branding, license, and
+NRCan attribution. The duplicate Tools/About dialog was removed.
+
 ## 7. Proposed shared visual rules
 
 Confirm these as design contracts before applying them:
@@ -462,9 +516,9 @@ Confirm these as design contracts before applying them:
 
 ## 8. Deferred execution plan
 
-**WP3b is complete**, together with the Motor Test portion of WP4. Other work
-packages remain pending. Split packages with multiple behavior changes into
-smaller reviewed patches when execution resumes.
+**WP3a, WP3b, and WP8 are complete**, together with the Motor Test and Parameters
+portions of WP4. WP7's menu/About work is delivered; diagnostics feedback
+remains open. Split remaining packages into smaller reviewed patches.
 
 | WP | Priority | Work | Acceptance |
 | --- | --- | --- | --- |
@@ -477,7 +531,7 @@ smaller reviewed patches when execution resumes.
 | 4 | P1 | Share theme/Field-mode initialization and live propagation; update density-dependent controls and virtualized rows. | Main, Inspector, Parameters, and Motor Test agree on saved preferences at startup and update within 500 ms after a change; Field-mode targets meet 44 × 44 px without overlap. |
 | 5 | P1/P2 | **Partly completed 2026-10-22:** no-project entry, shared name-only create wizard, and recent remove/delete. Remaining: import on StartPage and recents availability/last-opened metadata. | Create/open work from StartPage; delete validates `project.json` before removing and never deletes an open project. Import from a fresh install and clear recovery for missing/locked/corrupt projects remain open. |
 | 6 | P1/P2 | Regroup and restyle Settings, including vertical navigation, accessible fields, clearer setting scope, and consistent saved state. | Keyboard-only navigation reaches every control; Connection and Map/simulation sections remain usable at target sizes; setting scope and commit behavior are visible. |
-| 7 | P1/P2 | Improve Tools menu grouping/keyboard behavior, then unify About and diagnostics feedback in separate tasks. | Arrow keys/Enter/Escape work; focus returns to the trigger; window/task states are distinguishable; diagnostics completion exposes its result; About versions/content agree. |
+| 7 | P1/P2 | **Partly completed 2026-10-23:** compact Q-Mag TopBar, wizard stage navigation, inline high-frequency shortcuts, keyboard-accessible Tools menu, removed map pop-out entry, and About merged into Settings (`AboutContent`). Remaining: diagnostics busy/success/failure feedback. | Arrow keys/Enter/Escape work; focus returns to the trigger; window/task states are distinguishable; diagnostics completion exposes its result; About versions/content agree. |
 | 8 | P2 | **Completed 2026-10-22:** Inspector sidebars resizable/collapsible, plot fills height with width-capped columns, common header (title/source/status), grouped toolbar with a replay strip, keyboard-reachable signal groups and trace selection, and severity-toned overlay notices. Logs handled by its own plan. | At 800 × 480 and both desktop sizes, primary controls and selected plots remain usable; long replay names and notices do not break the workspace (`check-inspector.mjs`). |
 
 If a follow-up task changes privileged USB installation, serial output, or
@@ -517,9 +571,18 @@ backends for those actions.
   do not displace the workspace (`check-inspector.mjs`;
   `inspector-notice-1366x768.png`).
 - [ ] Shared preference boot and live synchronization across all tool windows.
-- [ ] Tools keyboard behavior and focus restoration; selected/expanded states
-  available to assistive technology.
-- [ ] Diagnostics busy/success/failure feedback and shared About information.
+- [x] Main TopBar: single-row context/workflow/vehicle/utilities zones, wizard
+  stage navigation, wide-screen tool shortcuts, keyboard-accessible Tools menu, and
+  About merged into Settings; status group stays complete and unoccluded and
+  every control clears the 32 px floor at 1920 × 1080 and 1280 × 800
+  (`check-topbar.mjs`, `e2e-shell.mjs`, `check-field-mode.mjs`,
+  `check-logs-delete.mjs`; screenshots in `frontend/screenshots/u2/`).
+- [x] Tools keyboard behavior and focus restoration; expanded states available
+  to assistive technology (`check-topbar.mjs`).
+- [x] Q-Mag branding in main/tool headers, startup and About; company assets
+  switch with theme. Five-recents startup form stays reachable in Field mode.
+- [x] About is unified in Settings, with runtime version and complete credits.
+- [ ] Diagnostics busy/success/failure feedback.
 
 The existing `check-startup.mjs` injects an open mock project before checking
 startup dialogs. `check-startpage.mjs` now provides the genuine **no-project**
@@ -550,8 +613,9 @@ the applicable unit/SITL checks in addition to screenshots.
 | Application/startup | [App.tsx](../../frontend/src/App.tsx), [StartPage.tsx](../../frontend/src/components/StartPage.tsx), [bridge.ts](../../frontend/src/desktop/bridge.ts), [autoconnect.ts](../../frontend/src/stores/autoconnect.ts) |
 | Project entry | [ProjectHome.tsx](../../frontend/src/components/dialogs/ProjectHome.tsx), [project store](../../frontend/src/stores/project.ts), [project service](../../crates/app-tauri/src/project_service.rs), [project model](../../crates/core/src/project/model.rs) |
 | Settings/configuration | [SettingsDialog.tsx](../../frontend/src/components/dialogs/SettingsDialog.tsx), [endpoint.ts](../../frontend/src/desktop/endpoint.ts), [prefs.ts](../../frontend/src/desktop/prefs.ts), [appConfig.ts](../../frontend/src/desktop/appConfig.ts), [presets.ts](../../frontend/src/cesium/presets.ts) |
-| Menu / About / alerts | [TopBar.tsx](../../frontend/src/components/TopBar.tsx), [AboutDialog.tsx](../../frontend/src/components/dialogs/AboutDialog.tsx), [AlertLayer.tsx](../../frontend/src/components/AlertLayer.tsx) |
+| Menu / About / alerts | [TopBar.tsx](../../frontend/src/components/TopBar.tsx), [WorkflowNav.tsx](../../frontend/src/components/WorkflowNav.tsx), [topbar.css](../../frontend/src/components/topbar.css), [AboutContent.tsx](../../frontend/src/components/dialogs/AboutContent.tsx), [AlertLayer.tsx](../../frontend/src/components/AlertLayer.tsx) |
 | Shared design | [components.tsx](../../frontend/src/design-system/components.tsx), [index.css](../../frontend/src/design-system/index.css), [theme.ts](../../frontend/src/design-system/theme.ts), [ui.ts](../../frontend/src/stores/ui.ts) |
+| Branding | [AppLogo.tsx](../../frontend/src/components/AppLogo.tsx), [CompanyLogo.tsx](../../frontend/src/components/CompanyLogo.tsx), [branding.css](../../frontend/src/components/branding.css), [assets](../../frontend/public/brand/) |
 | Inspector | [InspectorApp.tsx](../../frontend/src/inspector/InspectorApp.tsx), [inspector.css](../../frontend/src/inspector/inspector.css), [entry](../../frontend/src/inspector/main.tsx) |
 | Parameters | [ParamsApp.tsx](../../frontend/src/params/ParamsApp.tsx), [params.css](../../frontend/src/params/params.css), [entry](../../frontend/src/params/main.tsx) |
 | Motor Test | [ActuatorApp.tsx](../../frontend/src/actuator/ActuatorApp.tsx), [actuator.css](../../frontend/src/actuator/actuator.css), [BenchHeader.tsx](../../frontend/src/actuator/BenchHeader.tsx), [MotorTrackingTable.tsx](../../frontend/src/actuator/MotorTrackingTable.tsx), [entry](../../frontend/src/actuator/main.tsx) |

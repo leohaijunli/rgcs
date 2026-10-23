@@ -1,6 +1,6 @@
 [package]
 name = "maggcs-app"
-description = "MagGCS desktop ground control station (Tauri 2)"
+description = "Q-Mag desktop ground control station (Tauri 2)"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true

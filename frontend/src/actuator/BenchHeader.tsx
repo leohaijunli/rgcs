@@ -3,6 +3,7 @@
 // always reachable while the workspace scrolls.
 
 import type { ActuatorStatus } from './benchTypes'
+import AppLogo from '../components/AppLogo'
 
 export interface BenchFailure {
   operation: 'start' | 'stop' | 'emergency_stop'
@@ -66,6 +67,10 @@ export default function BenchHeader(props: BenchHeaderProps) {
 
   return (
     <header className="actuator-header">
+      <span className="tool-header-brand">
+        <AppLogo variant="wordmark" />
+        <AppLogo variant="mark" />
+      </span>
       <strong className="bench-title">Motor test</strong>
 
       <span className="header-chip" title={status.target_endpoint ?? 'No serial target'}>
