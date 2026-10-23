@@ -203,7 +203,7 @@ pub fn import_project(zip_path: &Path, projects_root: &Path) -> ArchiveResult<Pa
     let mut contents: Vec<(String, Vec<u8>)> = Vec::new();
     for i in 0..archive.len() {
         let mut file = archive.by_index(i)?;
-        let name = file.name().to_string();
+        let name = file.name()?.into_owned();
         if name == MANIFEST_FILE {
             continue;
         }
@@ -383,7 +383,7 @@ mod tests {
         let options = SimpleFileOptions::default();
         for i in 0..archive.len() {
             let mut entry = archive.by_index(i).expect("entry");
-            let name = entry.name().to_string();
+            let name = entry.name().expect("entry name").into_owned();
             let mut bytes = Vec::new();
             entry.read_to_end(&mut bytes).expect("read");
             if name == "project.json" {
@@ -424,7 +424,7 @@ mod tests {
         let options = SimpleFileOptions::default();
         for i in 0..archive.len() {
             let mut entry = archive.by_index(i).expect("entry");
-            let name = entry.name().to_string();
+            let name = entry.name().expect("entry name").into_owned();
             let mut bytes = Vec::new();
             entry.read_to_end(&mut bytes).expect("read");
             if name == MANIFEST_FILE {

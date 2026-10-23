@@ -475,8 +475,9 @@ async fn batch_loop(
 }
 
 /// Open the inspector window, or focus it if it already exists.
+/// Must run asynchronously: synchronous WebView2 creation deadlocks on Windows.
 #[tauri::command]
-pub fn inspector_open(app: AppHandle) -> Result<(), String> {
+pub async fn inspector_open(app: AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("inspector") {
         let _ = win.show();
         let _ = win.set_focus();

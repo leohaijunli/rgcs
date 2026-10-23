@@ -3,6 +3,8 @@
 - `ARCHITECTURE.md` — system architecture: crates, processes/windows,
   MAVLink data flow, height conventions, PX4 interface facts, ADR index.
 - `FEATURES.md` — feature guide per view/window.
+- `RELEASES.md` — release checks, installer formats and sizes, Windows
+  download warnings, and tool-window troubleshooting.
 - `../issues.md` — open issues, deferred work (GoPro, M0 bench checklist),
   items awaiting verification.
 - `sitl-wsl-windows.md` — running PX4 SITL on Windows + WSL2 for local dev.

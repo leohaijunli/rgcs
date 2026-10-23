@@ -7,7 +7,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "1.0.1"
 edition = "2021"
 authors = ["MagGCS Contributors"]
 repository = "https://github.com/maggcs/maggcs"
@@ -17,7 +17,7 @@ license = "Apache-2.0"
 serde = { version = "1", features = ["derive"] }
 maggcs-core = { path = "crates/core" }
 thiserror = "2"
-tokio = { version = "1", features = ["sync", "time", "net", "rt-multi-thread", "macros", "io-util"] }
+tokio = { version = "1.53.3", features = ["sync", "time", "net", "rt-multi-thread", "macros", "io-util"] }
 mavlink = { version = "0.17", features = ["std", "udp", "tcp", "direct-serial", "common", "signing", "serde", "tokio-1", "emit-extensions"] }
 serialport = "4"
 ts-rs = { version = "11", features = ["serde-compat"] }
@@ -26,4 +26,4 @@ tiff = "0.11"
 las = { version = "0.11", features = ["laz"] }
 sha2 = "0.10"
 png = "0.17"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }

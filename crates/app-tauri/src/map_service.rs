@@ -17,12 +17,13 @@ pub const MAP_LABEL: &str = "map";
 
 /// Open (or focus) the detachable map window. The window boots `map.html`,
 /// which mounts the same MapView + alert layer as the embedded one.
+/// Must run asynchronously: synchronous WebView2 creation deadlocks on Windows.
 ///
 /// # Errors
 ///
 /// A stringified error when the webview cannot be created.
 #[tauri::command]
-pub fn map_open(app: AppHandle) -> Result<(), String> {
+pub async fn map_open(app: AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window(MAP_LABEL) {
         let _ = win.show();
         let _ = win.set_focus();

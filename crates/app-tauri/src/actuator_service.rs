@@ -112,8 +112,9 @@ pub struct ActuatorStatus {
 }
 
 /// Open the motor-test window, or focus it if it already exists.
+/// Must run asynchronously: synchronous WebView2 creation deadlocks on Windows.
 #[tauri::command]
-pub fn actuator_open(app: AppHandle) -> Result<(), String> {
+pub async fn actuator_open(app: AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("actuator") {
         let _ = win.show();
         let _ = win.set_focus();
@@ -1104,7 +1105,9 @@ fn respawn_actuator_logs<R: tauri::Runtime>(app: AppHandle<R>, state: &AppState)
     let task = tauri::async_runtime::spawn(async move {
         use maggcs_core::logs::protocol::{LogEvent, LogProtocol};
         let mut protocol = LogProtocol::new(target_system_id, target_component_id);
-        let mut list_reply: Option<tokio::sync::oneshot::Sender<Result<Vec<maggcs_core::logs::LogEntryInfo>, String>>> = None;
+        let mut list_reply: Option<
+            tokio::sync::oneshot::Sender<Result<Vec<maggcs_core::logs::LogEntryInfo>, String>>,
+        > = None;
         let mut save_paths: std::collections::HashMap<u16, String> =
             std::collections::HashMap::new();
         let mut tick = tokio::time::interval(std::time::Duration::from_millis(200));
@@ -1281,7 +1284,11 @@ fn actuator_logs_sender(
         .and_then(crate::motor_test_state::ActuatorLogsRuntime::sender)
 }
 
-fn publish_actuator_log_list<R: tauri::Runtime>(app: &AppHandle<R>, state: &AppState, entries: Vec<maggcs_core::logs::LogEntryInfo>) {
+fn publish_actuator_log_list<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    entries: Vec<maggcs_core::logs::LogEntryInfo>,
+) {
     let logs = state.motor_test.logs.lock();
     *logs.last_list.lock().expect("logs list lock") = Some(entries.clone());
     *logs.last_error.lock().expect("logs err lock") = None;
@@ -1296,7 +1303,10 @@ fn invalidate_actuator_log_list(state: &AppState) {
 
 /// Caller holds ops, so no target/capture/deletion mutation can change the
 /// index between its request and the verified result.
-async fn refresh_actuator_log_list<R: tauri::Runtime>(app: &AppHandle<R>, state: &AppState) -> Result<Vec<maggcs_core::logs::LogEntryInfo>, String> {
+async fn refresh_actuator_log_list<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+) -> Result<Vec<maggcs_core::logs::LogEntryInfo>, String> {
     if actuator_logs_sender(state).is_none() {
         respawn_actuator_logs(app.clone(), state);
     }
@@ -1306,7 +1316,9 @@ async fn refresh_actuator_log_list<R: tauri::Runtime>(app: &AppHandle<R>, state:
     tx.send(crate::motor_test_state::ActuatorLogCommand::List { reply })
         .await
         .map_err(|_| "log service stopped".to_string())?;
-    let result = response.await.map_err(|_| "log service stopped".to_string())?;
+    let result = response
+        .await
+        .map_err(|_| "log service stopped".to_string())?;
     match result {
         Ok(entries) => Ok(entries),
         Err(error) if error.contains("no reply to log list") => {
@@ -1314,17 +1326,30 @@ async fn refresh_actuator_log_list<R: tauri::Runtime>(app: &AppHandle<R>, state:
                 publish_actuator_log_list(app, state, Vec::new());
                 Ok(Vec::new())
             } else {
-                Err(format!("{error}; SD files still exist, so refresh the list before downloading"))
+                Err(format!(
+                    "{error}; SD files still exist, so refresh the list before downloading"
+                ))
             }
         }
         Err(error) => Err(error),
     }
 }
 
-fn same_log_entry(expected: &maggcs_core::logs::LogEntryInfo, entries: &[maggcs_core::logs::LogEntryInfo]) -> Result<maggcs_core::logs::LogEntryInfo, String> {
-    entries.iter().find(|entry| entry.id == expected.id && entry.time_utc == expected.time_utc && entry.size == expected.size)
+fn same_log_entry(
+    expected: &maggcs_core::logs::LogEntryInfo,
+    entries: &[maggcs_core::logs::LogEntryInfo],
+) -> Result<maggcs_core::logs::LogEntryInfo, String> {
+    entries
+        .iter()
+        .find(|entry| {
+            entry.id == expected.id
+                && entry.time_utc == expected.time_utc
+                && entry.size == expected.size
+        })
         .cloned()
-        .ok_or_else(|| "SD log list changed; use the refreshed list before downloading or deleting".into())
+        .ok_or_else(|| {
+            "SD log list changed; use the refreshed list before downloading or deleting".into()
+        })
 }
 
 /// Request the serial target PX4's SD log list (feature 2). The runtime is
@@ -1388,14 +1413,24 @@ pub async fn actuator_logs_erase_all(
     let _ops = state.ops().lock().await;
     ensure_idle_session(&state)?;
     crate::capture_service::ensure_logger_not_recording(&state).await?;
-    let handle = state.motor_test.target.lock().as_ref()
+    let handle = state
+        .motor_test
+        .target
+        .lock()
+        .as_ref()
         .map(|runtime| runtime.target.handle.clone())
         .ok_or("no serial PX4 target — connect it first")?;
     stop_actuator_logs(&state).await;
     invalidate_actuator_log_list(&state);
-    let mut protocol = maggcs_core::logs::LogProtocol::new(handle.config().target_system_id, handle.config().target_component_id);
+    let mut protocol = maggcs_core::logs::LogProtocol::new(
+        handle.config().target_system_id,
+        handle.config().target_component_id,
+    );
     for frame in protocol.begin_erase() {
-        handle.send_confirmed(frame).await.map_err(|error| error.to_string())?;
+        handle
+            .send_confirmed(frame)
+            .await
+            .map_err(|error| error.to_string())?;
     }
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
@@ -1409,7 +1444,9 @@ pub async fn actuator_logs_erase_all(
             respawn_actuator_logs(app.clone(), &state);
             let entries = refresh_actuator_log_list(&app, &state).await?;
             publish_actuator_log_list(&app, &state, entries);
-            return Err("PX4 has not confirmed deletion of every SD log; inspect the refreshed list".into());
+            return Err(
+                "PX4 has not confirmed deletion of every SD log; inspect the refreshed list".into(),
+            );
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
@@ -2720,10 +2757,19 @@ mod start_readiness_tests {
         let state = AppState::default();
         install_target(&state, 1).await;
         install_telemetry(&state, Some(heartbeat(1, false)), Some(Duration::ZERO));
-        for phase in [CapturePhase::Idle, CapturePhase::Ready, CapturePhase::Recording,
-            CapturePhase::ExistingRecording, CapturePhase::Failed, CapturePhase::Complete] {
+        for phase in [
+            CapturePhase::Idle,
+            CapturePhase::Ready,
+            CapturePhase::Recording,
+            CapturePhase::ExistingRecording,
+            CapturePhase::Failed,
+            CapturePhase::Complete,
+        ] {
             state.motor_test.capture.lock().status.lock().phase = phase;
-            assert!(prepare_start(&state, MotorTestLoad::None).is_ok(), "{phase:?}");
+            assert!(
+                prepare_start(&state, MotorTestLoad::None).is_ok(),
+                "{phase:?}"
+            );
         }
 
         let target = state.motor_test.target.lock().take();

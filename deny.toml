@@ -1,9 +1,9 @@
 # cargo-deny configuration (ADR-007: CI must check dependency licenses).
 #
-# MagGCS itself has no license yet (ADR-007 is still Draft), so the license
-# allow-list governs *dependencies*: it rejects copyleft/unknown licenses that
+# MagGCS and its workspace crates use Apache-2.0 (ADR-007). The license
+# allow-list rejects dependency licenses that
 # would constrain distribution alongside QGC (GPLv3) and commercial payload
-# software. Workspace members are `publish = false`, so they are ignored.
+# software.
 
 [graph]
 # Target platforms we ship desktop builds for.

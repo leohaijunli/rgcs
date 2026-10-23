@@ -755,8 +755,13 @@ mod tests {
         }
         p.handle(&fc_entry(2, 3, 2048), now).expect("entry 2");
         let (events, _) = p.handle(&fc_entry(1, 3, 4096), now).expect("entry 1");
-        let LogEvent::List { entries } = &events[0] else { panic!("list") };
-        assert_eq!(entries.iter().map(|entry| entry.id).collect::<Vec<_>>(), vec![0, 1, 2]);
+        let LogEvent::List { entries } = &events[0] else {
+            panic!("list")
+        };
+        assert_eq!(
+            entries.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
     }
 
     #[test]
@@ -768,13 +773,17 @@ mod tests {
         let mut requests = 0;
         let mut downloaded = None;
         while let Some(frame) = frames.pop() {
-            let MavMessage::LOG_REQUEST_DATA(request) = frame else { continue };
+            let MavMessage::LOG_REQUEST_DATA(request) = frame else {
+                continue;
+            };
             requests += 1;
             let mut offset = request.ofs;
             while offset < request.ofs + request.count {
                 // PX4 reads 90 bytes except at EOF, not at the request boundary.
                 let count = LOG_DATA_CHUNK.min(size - offset);
-                let (events, next) = p.handle(&fc_data_chunk(0, offset, count, 42), now).expect("PX4 chunk");
+                let (events, next) = p
+                    .handle(&fc_data_chunk(0, offset, count, 42), now)
+                    .expect("PX4 chunk");
                 frames.extend(next);
                 for event in events {
                     if let LogEvent::Downloaded { bytes, .. } = event {
@@ -797,7 +806,8 @@ mod tests {
         for _ in 0..MAX_RETRIES {
             now += REQUEST_TIMEOUT;
             p.handle(&fc_data(0, 0, 90, 1), now).expect("duplicate");
-            p.handle(&fc_data(0, 180, 90, 1), now).expect("future chunk");
+            p.handle(&fc_data(0, 180, 90, 1), now)
+                .expect("future chunk");
             assert_eq!(p.tick(now).expect("retry").len(), 1);
         }
         now += REQUEST_TIMEOUT;

@@ -79,6 +79,12 @@ so headless mode reuses them unchanged.
 | actuator | motor / mag-interference test | invokes (commands) + `actuator_event`/`actuator_telemetry`/`actuator_alarm` events |
 | params | FC parameters (PM3): three panes, lazy value fetch, staging tray, reboot banner | `params_event` + invokes (`params_pull/set/read/...`) |
 
+Tool-window creation runs in asynchronous Tauri commands. On Windows,
+creating a WebView2 window inside a synchronous command can deadlock the UI
+thread: the new window stays black and the native close button stops responding.
+This requirement applies to `actuator_open`, `inspector_open`, `params_open`,
+and `map_open`; see the [Tauri builder documentation](https://docs.rs/tauri/latest/tauri/webview/struct.WebviewWindowBuilder.html#method.new).
+
 MAVLink in: UDP/TCP/serial endpoints (ADR-011 four-level link model).
 MAVLink out: mission protocol, command service, and the motor-test sender
 (direct `ConnectionHandle::send`, fire-and-forget + ack counting — high-rate
