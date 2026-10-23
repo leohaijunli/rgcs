@@ -68,6 +68,20 @@ try {
   await waitRows()
   if (shots) await mkdir(shots, { recursive: true })
 
+  // --- Params-4: the two "Custom" controls are now distinct ---------------
+  {
+    const tabNames = await page.$$eval('.p-left-tabs .p-tab', (els) =>
+      els.map((e) => e.textContent?.trim()),
+    )
+    const filterNames = await page.$$eval('.p-filter .p-tab', (els) =>
+      els.map((e) => e.textContent?.trim()),
+    )
+    assert.ok(!tabNames.includes('Custom'), `pane chooser is not labelled "Custom" (${tabNames.join(', ')})`)
+    assert.ok(!filterNames.includes('Custom'), `membership filter is not labelled "Custom" (${filterNames.join(', ')})`)
+    assert.ok(tabNames.includes('My groups'), `pane chooser is labelled "My groups" (${tabNames.join(', ')})`)
+    assert.ok(filterNames.includes('In groups'), `membership filter is labelled "In groups" (${filterNames.join(', ')})`)
+  }
+
   await setSize(1366, 768, '1366x768')
   await assertNoOverflow('1366x768')
   // Value/Default get a flexible share, not the old fixed 90/70 px (Params-2).

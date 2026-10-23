@@ -514,6 +514,7 @@ export function ParamsApp() {
       <div className="p-left-tabs">
         <button
           className={`p-tab ${leftTab === 'px4' ? 'active' : ''}`}
+          title="Browse the built-in PX4 parameter groups"
           onClick={() => {
             setLeftTab('px4')
             // Coming from a custom group: back to All (a custom selection
@@ -528,6 +529,7 @@ export function ParamsApp() {
         </button>
         <button
           className={`p-tab ${leftTab === 'custom' ? 'active' : ''}`}
+          title="Show the groups you built (separate from the PX4 tree)"
           onClick={() => {
             setLeftTab('custom')
             // Coming from a PX4 view: jump to the first custom group (or
@@ -538,7 +540,7 @@ export function ParamsApp() {
             }
           }}
         >
-          Custom
+          My groups
         </button>
         <button
           className="p-pane-collapse"
@@ -678,16 +680,17 @@ export function ParamsApp() {
         <span className="p-hitcount">
           {rows.length}/{meta.size}
         </span>
-        <div className="p-filter">
+        <div className="p-filter" role="group" aria-label="Membership filter">
           {(
             [
-              ['all', 'All'],
-              ['custom', 'Custom'],
-            ] as Array<[Filter, string]>
-          ).map(([id, label]) => (
+              ['all', 'All', 'Show every parameter'],
+              ['custom', 'In groups', 'Show only parameters that are members of one of your groups'],
+            ] as Array<[Filter, string, string]>
+          ).map(([id, label, title]) => (
             <button
               key={id}
               className={`p-tab ${filter === id ? 'active' : ''}`}
+              title={title}
               onClick={() => setFilter(id)}
             >
               {label}
