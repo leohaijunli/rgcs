@@ -9,8 +9,14 @@
 //! PWM range is converted with `a·x² + (1−a)·x` (and `x = 1−fraction` for a
 //! reversed channel), matching PX4's forward model.
 
+use super::protocol::{OutputProtocol, OutputUnits};
+
 /// PWM endpoints accepted from `PWM_*_MINn` / `PWM_*_MAXn`.
 pub const PWM_US_MAX: u16 = 3000;
+
+/// PX4 `DSHOT_MAX_THROTTLE`: DShot mixer outputs are reported in 0…1999
+/// (`SERVO_OUTPUT_RAW`), not microseconds.
+pub const DSHOT_MAX_THROTTLE: u16 = 1999;
 
 /// Fallback PWM range used when the mapped channel's `PWM_*_MINn`/`MAXn`
 /// could not be read (or the motor is unmapped). This must never be applied
@@ -37,13 +43,27 @@ pub enum PwmModelError {
     InvalidRange,
     #[error("THR_MDL_FAC must be finite and in 0…1")]
     InvalidThrustFactor,
+    #[error("DSHOT_MIN must be finite and in 0…1")]
+    InvalidDShotMin,
     #[error("requested pulse is outside the mapped output range")]
     UnreachablePulse,
+    #[error("requested throttle is outside the mapped output range")]
+    UnreachableThrottle,
 }
 
-/// One mapped physical output's PWM configuration.
+/// What one mapped output's numbers mean. `Pulse` is microseconds (PWM /
+/// OneShot); `Throttle` is PX4's DShot mixer range (0…1).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum OutputRange {
+    Pulse { min_us: u16, max_us: u16 },
+    Throttle { min: f32, max: f32 },
+}
+
+/// One mapped physical output's configuration.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PwmModel {
+    /// PWM/OneShot: microseconds. DShot/BDShot: mixer units, 0…1999.
     pub min_us: u16,
     pub max_us: u16,
     pub reversed: bool,
@@ -53,6 +73,11 @@ pub struct PwmModel {
     pub disabled: bool,
     /// Whether the range was read from the FC or is the fallback default.
     pub range_source: PwmRangeSource,
+    /// Protocol detected (or overridden) for the bank carrying this output.
+    pub protocol: OutputProtocol,
+    /// PX4 `DSHOT_MIN` (0…1); the idle throttle fraction for DShot. Unused
+    /// for PWM/OneShot.
+    pub dshot_min: f32,
 }
 
 impl Default for PwmModel {
@@ -64,6 +89,8 @@ impl Default for PwmModel {
             thrust_factor: 0.0,
             disabled: false,
             range_source: PwmRangeSource::Fallback,
+            protocol: OutputProtocol::Unknown,
+            dshot_min: 0.0,
         }
     }
 }
@@ -89,6 +116,36 @@ impl PwmModel {
             thrust_factor,
             disabled: false,
             range_source: PwmRangeSource::Fc,
+            protocol: OutputProtocol::Pwm { rate_hz: None },
+            dshot_min: 0.0,
+        })
+    }
+
+    /// DShot/BDShot channel. PX4 ignores `PWM_*_MINn/MAXn` for these outputs
+    /// and maps the normalized value onto `DSHOT_MIN × 1999 … 1999`
+    /// (`DShot::apply_min_values`), so the range is derived from `DSHOT_MIN`.
+    pub fn dshot(
+        dshot_min: f32,
+        reversed: bool,
+        thrust_factor: f32,
+        protocol: OutputProtocol,
+    ) -> Result<Self, PwmModelError> {
+        if !dshot_min.is_finite() || !(0.0..1.0).contains(&dshot_min) {
+            return Err(PwmModelError::InvalidDShotMin);
+        }
+        if !thrust_factor.is_finite() || !(0.0..=1.0).contains(&thrust_factor) {
+            return Err(PwmModelError::InvalidThrustFactor);
+        }
+        let min_us = (dshot_min * f32::from(DSHOT_MAX_THROTTLE)).round() as u16;
+        Ok(Self {
+            min_us,
+            max_us: DSHOT_MAX_THROTTLE,
+            reversed,
+            thrust_factor,
+            disabled: false,
+            range_source: PwmRangeSource::Fc,
+            protocol,
+            dshot_min,
         })
     }
 
@@ -97,13 +154,40 @@ impl PwmModel {
         self
     }
 
+    pub fn with_protocol(mut self, protocol: OutputProtocol) -> Self {
+        self.protocol = protocol;
+        self
+    }
+
+    /// Unit of `min_us`/`max_us` for this output.
+    pub fn units(self) -> OutputUnits {
+        self.protocol.units()
+    }
+
+    /// Typed output range: microseconds for PWM/OneShot, 0…1 throttle for
+    /// DShot/BDShot.
+    pub fn output_range(self) -> OutputRange {
+        match self.units() {
+            OutputUnits::Microseconds => OutputRange::Pulse {
+                min_us: self.min_us,
+                max_us: self.max_us,
+            },
+            OutputUnits::DShotThrottle => OutputRange::Throttle {
+                min: f32::from(self.min_us) / f32::from(DSHOT_MAX_THROTTLE),
+                max: f32::from(self.max_us) / f32::from(DSHOT_MAX_THROTTLE),
+            },
+        }
+    }
+
+    /// Width of the output range in `min_us`/`max_us` units (µs for
+    /// PWM/OneShot, 0…1999 mixer units for DShot/BDShot).
     pub fn span_us(self) -> f32 {
         f32::from(self.max_us) - f32::from(self.min_us)
     }
 
-    /// Fraction of this channel's PWM range for a requested pulse. This is the
-    /// value the safety limits and slew limiter condition, *before* the thrust
-    /// model compensation.
+    /// Fraction of this channel's output range for a requested pulse. This is
+    /// the value the safety limits and slew limiter condition, *before* the
+    /// thrust model compensation.
     pub fn fraction_for_pulse(self, pulse_us: f32) -> Result<f32, PwmModelError> {
         if !pulse_us.is_finite()
             || pulse_us < f32::from(self.min_us)
@@ -112,6 +196,25 @@ impl PwmModel {
             return Err(PwmModelError::UnreachablePulse);
         }
         Ok((pulse_us - f32::from(self.min_us)) / self.span_us())
+    }
+
+    /// Fraction of this channel's output range for a requested output.
+    ///
+    /// PWM/OneShot take microseconds; DShot/BDShot take the throttle in
+    /// 0…1 (`SERVO_OUTPUT_RAW` divided by [`DSHOT_MAX_THROTTLE`]), which PX4
+    /// clamps to `DSHOT_MIN … 1.0`.
+    pub fn fraction_for_output(self, value: f32) -> Result<f32, PwmModelError> {
+        match self.units() {
+            OutputUnits::Microseconds => self.fraction_for_pulse(value),
+            OutputUnits::DShotThrottle => {
+                let min = f32::from(self.min_us) / f32::from(DSHOT_MAX_THROTTLE);
+                let max = f32::from(self.max_us) / f32::from(DSHOT_MAX_THROTTLE);
+                if !value.is_finite() || value < min || value > max {
+                    return Err(PwmModelError::UnreachableThrottle);
+                }
+                Ok((value - min) / (max - min))
+            }
+        }
     }
 
     /// The normalized `ACTUATOR_TEST.param1` value that PX4 turns back into
@@ -135,7 +238,13 @@ impl PwmModel {
         Ok(self.command_for_fraction(self.fraction_for_pulse(pulse_us)?))
     }
 
-    /// Inverse of [`Self::command_for_fraction`] in physical pulse width.
+    /// Protocol-aware variant of [`Self::command_for_pulse`]: microseconds for
+    /// PWM/OneShot, throttle 0…1 for DShot/BDShot.
+    pub fn command_for_output(self, value: f32) -> Result<f32, PwmModelError> {
+        Ok(self.command_for_fraction(self.fraction_for_output(value)?))
+    }
+
+    /// Inverse of [`Self::command_for_fraction`] in physical output units.
     /// Exposed for offline round-trip verification.
     pub fn pulse_for_command(self, command: f32) -> Result<f32, PwmModelError> {
         if !command.is_finite() || !(0.0..=1.0).contains(&command) {
@@ -152,6 +261,16 @@ impl PwmModel {
         };
         let fraction = if self.reversed { 1.0 - x } else { x };
         Ok(f32::from(self.min_us) + fraction as f32 * self.span_us())
+    }
+
+    /// Protocol-aware variant of [`Self::pulse_for_command`]: microseconds for
+    /// PWM/OneShot, throttle 0…1 for DShot/BDShot.
+    pub fn output_for_command(self, command: f32) -> Result<f32, PwmModelError> {
+        let output = self.pulse_for_command(command)?;
+        match self.units() {
+            OutputUnits::Microseconds => Ok(output),
+            OutputUnits::DShotThrottle => Ok(output / f32::from(DSHOT_MAX_THROTTLE)),
+        }
     }
 }
 
@@ -272,5 +391,95 @@ mod tests {
         let model = PwmModel::default();
         assert_eq!(model.command_for_fraction(f32::NAN), 0.0);
         assert_eq!(model.command_for_fraction(f32::INFINITY), 0.0);
+    }
+
+    #[test]
+    fn dshot_range_comes_from_dshot_min_not_the_pwm_parameters() {
+        let model = PwmModel::dshot(
+            0.055,
+            false,
+            0.0,
+            OutputProtocol::DShot {
+                rate: super::super::protocol::DShotRate::R600,
+            },
+        )
+        .expect("dshot model");
+        assert_eq!(model.min_us, 110);
+        assert_eq!(model.max_us, DSHOT_MAX_THROTTLE);
+        assert_eq!(model.units(), OutputUnits::DShotThrottle);
+        assert_eq!(
+            model.output_range(),
+            OutputRange::Throttle {
+                min: 110.0 / 1999.0,
+                max: 1.0
+            }
+        );
+        assert!(model.protocol.is_dshot());
+    }
+
+    #[test]
+    fn dshot_commands_round_trip_through_the_px4_forward_model() {
+        let model = PwmModel::dshot(
+            0.055,
+            false,
+            0.0,
+            OutputProtocol::DShot {
+                rate: super::super::protocol::DShotRate::R300,
+            },
+        )
+        .expect("dshot model");
+        let min = f32::from(model.min_us) / f32::from(DSHOT_MAX_THROTTLE);
+        for throttle in [min, 0.1, 0.25, 0.5, 0.75, 1.0] {
+            let command = model.command_for_output(throttle).expect("command");
+            let recovered = model.output_for_command(command).expect("inverse");
+            assert!(
+                (recovered - throttle).abs() <= 1e-4,
+                "{throttle} -> {command} -> {recovered}"
+            );
+        }
+    }
+
+    #[test]
+    fn dshot_rejects_throttles_outside_the_dshot_range() {
+        let model = PwmModel::dshot(
+            0.055,
+            false,
+            0.0,
+            OutputProtocol::DShot {
+                rate: super::super::protocol::DShotRate::R150,
+            },
+        )
+        .expect("dshot model");
+        assert_eq!(
+            model.fraction_for_output(0.0),
+            Err(PwmModelError::UnreachableThrottle)
+        );
+        assert_eq!(
+            model.fraction_for_output(f32::NAN),
+            Err(PwmModelError::UnreachableThrottle)
+        );
+        assert_eq!(
+            model.fraction_for_output(1.01),
+            Err(PwmModelError::UnreachableThrottle)
+        );
+    }
+
+    #[test]
+    fn invalid_dshot_min_is_rejected() {
+        let protocol = OutputProtocol::DShot {
+            rate: super::super::protocol::DShotRate::R600,
+        };
+        assert_eq!(
+            PwmModel::dshot(1.0, false, 0.0, protocol),
+            Err(PwmModelError::InvalidDShotMin)
+        );
+        assert_eq!(
+            PwmModel::dshot(-0.1, false, 0.0, protocol),
+            Err(PwmModelError::InvalidDShotMin)
+        );
+        assert_eq!(
+            PwmModel::dshot(f32::NAN, false, 0.0, protocol),
+            Err(PwmModelError::InvalidDShotMin)
+        );
     }
 }

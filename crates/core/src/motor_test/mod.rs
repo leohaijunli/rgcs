@@ -20,6 +20,7 @@
 pub mod interlock;
 pub mod mag_alarm;
 pub mod mapping;
+pub mod protocol;
 pub mod pwm;
 pub mod run;
 pub mod scope;
@@ -32,7 +33,8 @@ pub use mapping::{
     build_output_map, mapped_feedback_pwm, MappingIssue, OutputAssignment, OutputMap,
     OutputMapState, ServoChannel, ServoPort, MOTOR_FUNCTION_BASE, SERVO_CHANNELS_PER_PORT,
 };
-pub use pwm::{PwmModel, PwmModelError, PWM_US_MAX};
+pub use protocol::{detect_bank_protocol, DShotRate, OutputProtocol, OutputUnits};
+pub use pwm::{OutputRange, PwmModel, PwmModelError, DSHOT_MAX_THROTTLE, PWM_US_MAX};
 pub use run::{
     RunAction, RunConfig, RunCoordinator, RunError, RunPhase, RunStatus, RunStep, POST_ROLL,
     PRE_ROLL, RUN_FINALIZE_TIMEOUT,
