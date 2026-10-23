@@ -16,6 +16,8 @@ const shots = process.argv[3]
 const MIN_CENTER_W = 240
 /** PANE_STEP in InspectorApp.tsx. */
 const PANE_STEP = 8
+/** MIN_CHART_H in InspectorApp.tsx. */
+const MIN_CHART_H = 160
 
 const browser = await chromium.launch({ headless: true })
 const context = await browser.newContext({ viewport: { width: 1366, height: 768 } })
@@ -29,6 +31,18 @@ const widthOf = async (selector) => {
   assert.ok(b, `${selector} is present`)
   return b.width
 }
+const heightOf = async (selector) => {
+  const b = await box(selector)
+  assert.ok(b, `${selector} is present`)
+  return b.height
+}
+/** Number of resolved grid tracks in the plot workspace (Insp-2). */
+const gridCols = () =>
+  page
+    .locator('.plot-grid')
+    .evaluate((el) => getComputedStyle(el).gridTemplateColumns.split(' ').filter(Boolean).length)
+/** The layout preset <select> is the second select in the toolbar. */
+const layoutSelect = () => page.locator('.toolbar select').nth(1)
 /** No document-level overflow: the grid must not grow past the viewport. */
 const assertNoOverflow = async (label) => {
   const overflow = await page.evaluate(() => ({
@@ -58,6 +72,20 @@ try {
 
   // --- 1920 x 1080 --------------------------------------------------------
   await setSize(1920, 1080, '1920x1080')
+  // Insp-2: the plot fills the tall workspace and 3 columns are allowed here.
+  const chartTall = await heightOf('.chart')
+  assert.ok(
+    chartTall > 300,
+    `1920x1080: the chart fills the workspace height (got ${chartTall.toFixed(0)} px)`,
+  )
+  await layoutSelect().selectOption('3')
+  await page.waitForTimeout(120)
+  assert.equal(await gridCols(), 3, '1920x1080: a 3-column layout is used')
+  assert.equal(
+    await layoutSelect().locator('option[value="3"]').isDisabled(),
+    false,
+    '1920x1080: the 3-column option is enabled',
+  )
   if (shots) await page.screenshot({ path: join(shots, 'inspector-1920x1080.png') })
 
   // --- 800 x 480 (declared tool minimum): center stays usable -------------
@@ -66,6 +94,18 @@ try {
   assert.ok(
     centerAtMin >= MIN_CENTER_W - 1,
     `800x480: the plot workspace keeps >= ${MIN_CENTER_W} px (got ${centerAtMin.toFixed(0)})`,
+  )
+  // Insp-2: the chart keeps its floor and the column count caps to 1.
+  const chartMin = await heightOf('.chart')
+  assert.ok(
+    chartMin >= MIN_CHART_H - 1,
+    `800x480: the chart keeps >= ${MIN_CHART_H} px (got ${chartMin.toFixed(0)})`,
+  )
+  assert.equal(await gridCols(), 1, '800x480: the column count caps to 1')
+  assert.equal(
+    await layoutSelect().locator('option[value="3"]').isDisabled(),
+    true,
+    '800x480: the 3-column option is disabled',
   )
   const grid = await box('.plot-grid')
   const props = await box('.properties')

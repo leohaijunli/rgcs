@@ -133,6 +133,14 @@ const MAX_PANE_W = 520
 /** The plot workspace keeps at least this width at every window size. */
 const MIN_CENTER_W = 240
 
+/** A plot column needs at least this width; extra columns are held back
+ * until the workspace is wide enough (Insp-2). */
+const MIN_PLOT_W = 280
+/** Chart height before the host box has been measured. */
+const DEFAULT_CHART_H = 220
+/** Smallest height the chart host is allowed to collapse to (matches CSS). */
+const MIN_CHART_H = 160
+
 export const RAIL_W = 26
 export const SPLITTER_W = 4
 /** Keyboard nudge per arrow press on a splitter. */
@@ -445,6 +453,8 @@ export function InspectorApp() {
   const [axisLink, setAxisLink] = useState(false)
   /** Plot-grid column count (P7 layout presets): 1×1 / 2×1 / 3×1. */
   const [layoutCols, setLayoutCols] = useState(1)
+  /** Measured width of the plot workspace, to cap the column count (Insp-2). */
+  const [centerW, setCenterW] = useState(0)
   /** SDI-style dual cursor: click a plot to pin cursor A for Δt/Δy (P7). */
   const [measure, setMeasure] = useState(false)
   /** Plot that checkboxes add signals to (the "same plot" workflow). */
@@ -573,6 +583,8 @@ export function InspectorApp() {
    * window resize); uPlot only sizes on construction otherwise. */
   const chartResizers = useRef<Map<string, ResizeObserver>>(new Map())
   const chartHosts = useRef<Map<string, HTMLDivElement>>(new Map())
+  /** The plot workspace element, measured to cap the column count (Insp-2). */
+  const plotGridRef = useRef<HTMLDivElement | null>(null)
   /** Per-plot DOM node the uPlot legend is mounted into, so it never overlays
    * the curve or axes (uPlot's default legend sits inside the plot box). */
   const chartLegends = useRef<Map<string, HTMLDivElement>>(new Map())
@@ -615,6 +627,18 @@ export function InspectorApp() {
     onResize()
     return () => window.removeEventListener('resize', onResize)
   }, [resizeLeft, resizeRight])
+
+  // Measure the plot workspace so the column count can be capped to what fits
+  // (Insp-2). Its width does not depend on the column count, so this is stable.
+  useEffect(() => {
+    const el = plotGridRef.current
+    if (!el) return
+    const sync = () => setCenterW(el.clientWidth)
+    const ro = new ResizeObserver(sync)
+    ro.observe(el)
+    sync()
+    return () => ro.disconnect()
+  }, [])
   /** The x-range we last set per chart, to tell our auto-scale from a user zoom. */
   const expectedX = useRef<Map<uPlot, { min: number; max: number }>>(new Map())
 
@@ -1020,7 +1044,7 @@ export function InspectorApp() {
       const chart = new uPlot(
         {
           width: host.clientWidth,
-          height: 220,
+          height: Math.max(MIN_CHART_H, host.clientHeight || DEFAULT_CHART_H),
           legend: {
             show: true,
             live: true,
@@ -1078,7 +1102,9 @@ export function InspectorApp() {
       chartSigs.current.set(p.id, sig)
       const ro = new ResizeObserver(() => {
         const w = host.clientWidth
-        if (w > 0 && Math.abs(w - chart.width) > 1) chart.setSize({ width: w, height: 220 })
+        const h = Math.max(MIN_CHART_H, host.clientHeight || DEFAULT_CHART_H)
+        if (w > 0 && (Math.abs(w - chart.width) > 1 || Math.abs(h - chart.height) > 1))
+          chart.setSize({ width: w, height: h })
       })
       ro.observe(host)
       chartResizers.current.set(p.id, ro)
@@ -1294,6 +1320,10 @@ export function InspectorApp() {
     '--insp-right-split': rightCollapsed ? '0px' : `${SPLITTER_W}px`,
   } as unknown as React.CSSProperties
 
+  /** Cap the plot columns to what the workspace width can hold (Insp-2). */
+  const maxPlotCols = clamp(Math.floor(centerW / MIN_PLOT_W), 1, 3)
+  const effectiveCols = Math.min(layoutCols, maxPlotCols)
+
   return (
     <div className="inspector-grid" style={gridStyle}>
       <div className="toolbar">
@@ -1312,12 +1342,18 @@ export function InspectorApp() {
         </select>
         <select
           value={layoutCols}
-          title="Plot grid layout"
+          title={
+            maxPlotCols < layoutCols
+              ? `Plot grid layout (capped to ${maxPlotCols} at this width)`
+              : 'Plot grid layout'
+          }
           onChange={(e) => setLayoutCols(Number(e.target.value))}
         >
-          <option value={1}>1×1</option>
-          <option value={2}>2×1</option>
-          <option value={3}>3×1</option>
+          {[1, 2, 3].map((c) => (
+            <option key={c} value={c} disabled={c > maxPlotCols}>
+              {c}×1
+            </option>
+          ))}
         </select>
         <span className="toolbar-sep" />
         <button
@@ -1508,7 +1544,11 @@ export function InspectorApp() {
         </>
       )}
 
-      <div className="plot-grid" style={{ gridTemplateColumns: `repeat(${layoutCols}, minmax(0, 1fr))` }}>
+      <div
+        className="plot-grid"
+        ref={plotGridRef}
+        style={{ gridTemplateColumns: `repeat(${effectiveCols}, minmax(0, 1fr))` }}
+      >
         {plots.length === 0 && (
           <div className="plot-empty">No plots yet — check a signal on the left to start plotting.</div>
         )}
