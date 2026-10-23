@@ -12,6 +12,10 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE ?? 'playwright')
 const url = process.argv[2] ?? 'http://localhost:5199/params.html'
 const shots = process.argv[3]
 
+/** Must match MIN_CENTER_W / PANE_STEP in ParamsApp.tsx. */
+const MIN_CENTER_W = 460
+const PANE_STEP = 8
+
 const browser = await chromium.launch({ headless: true })
 const context = await browser.newContext({ viewport: { width: 1366, height: 768 } })
 const page = await context.newPage()
@@ -25,6 +29,12 @@ const originsOf = (locator) =>
 /** Width of each header column, in order (Name, Value, Default, Description). */
 const headerColWidths = () =>
   page.$$eval('.p-thead > span', (els) => els.map((e) => e.getBoundingClientRect().width))
+
+const widthOf = async (selector) => {
+  const b = await page.locator(selector).boundingBox()
+  assert.ok(b, `${selector} is present`)
+  return b.width
+}
 
 const assertAligned = async (label) => {
   const head = await originsOf(page.locator('.p-thead'))
@@ -102,6 +112,57 @@ try {
   await page.waitForTimeout(200)
   await assertAligned('after deep scroll')
   if (shots) await page.screenshot({ path: join(shots, 'params-deep-scroll.png') })
+
+  // --- Params-3: resizable / collapsible side panes ------------------------
+  await page.evaluate(() => localStorage.removeItem('maggcs.params.layout'))
+  await page.reload({ waitUntil: 'networkidle' })
+  await waitRows()
+
+  // Keyboard resize of the group pane, persisted across a reload.
+  await setSize(1366, 768, '1366x768 (pane resize)')
+  const beforeW = await widthOf('.p-left')
+  await page.locator('.p-split.left').focus()
+  for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowRight')
+  await page.waitForTimeout(60)
+  const afterW = await widthOf('.p-left')
+  assert.ok(
+    afterW >= beforeW + 5 * PANE_STEP - 2,
+    `ArrowRight widens the group pane (${beforeW.toFixed(0)} -> ${afterW.toFixed(0)})`,
+  )
+  await page.reload({ waitUntil: 'networkidle' })
+  await waitRows()
+  const restoredW = await widthOf('.p-left')
+  assert.ok(
+    Math.abs(restoredW - afterW) <= 2,
+    `pane width survives a reload (${afterW.toFixed(0)} -> ${restoredW.toFixed(0)})`,
+  )
+
+  // At the declared minimum size, collapsing both panes must grow the table
+  // while keeping it above MIN_CENTER_W and free of overflow.
+  await setSize(900, 600, '900x600 (collapsed)')
+  const centerOpen = await widthOf('.p-tablewrap')
+  await page.getByRole('button', { name: 'Hide group pane' }).click()
+  await page.locator('.p-rail.left .rail-toggle').waitFor()
+  assert.equal(await page.locator('.p-left').count(), 0, 'collapsed group pane is unmounted')
+  await page.getByRole('button', { name: 'Hide editor' }).click()
+  await page.locator('.p-rail.right .rail-toggle').waitFor()
+  assert.equal(await page.locator('.p-detail').count(), 0, 'collapsed editor is unmounted')
+  const centerCollapsed = await widthOf('.p-tablewrap')
+  assert.ok(
+    centerCollapsed >= MIN_CENTER_W,
+    `table keeps >= ${MIN_CENTER_W} px with both panes collapsed (got ${centerCollapsed.toFixed(0)})`,
+  )
+  assert.ok(
+    centerCollapsed > centerOpen,
+    `collapsing the panes widens the table (${centerOpen.toFixed(0)} -> ${centerCollapsed.toFixed(0)})`,
+  )
+  await assertNoOverflow('900x600 collapsed')
+  await assertAligned('900x600 collapsed')
+  if (shots) await page.screenshot({ path: join(shots, 'params-collapsed.png') })
+  await page.locator('.p-rail.left .rail-toggle').click()
+  await page.locator('.p-left').waitFor()
+  await page.locator('.p-rail.right .rail-toggle').click()
+  await page.locator('.p-detail').waitFor()
 
   assert.deepEqual(errors, [])
   console.log('PASS: header/body column origins align within 1 px at all sizes and scroll states')

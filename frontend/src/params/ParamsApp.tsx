@@ -7,9 +7,10 @@
 // grid; the left pane holds PX4 groups and the operator's custom groups
 // (add/rename/note/delete, kept separate from the PX4 tree).
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { ChevronsLeft, ChevronsRight } from 'lucide-react'
 import { isTauri } from '../inspector/mock'
 import type { ParamEntry } from '../generated-types/ParamEntry'
 import { useParamsStore, type ParamMeta, type ParamsIpcEvent } from './store'
@@ -44,12 +45,133 @@ function fmtDefault(meta: ParamMeta | undefined): string {
   return fmtValue(meta, meta?.default ?? null)
 }
 
-/** Fixed row height (compact tier, plan §5.2). */
+/** Fixed row height fallback (compact tier, plan §5.2). The live height is
+ * read from `--p-row-h` so Field mode can enlarge rows (Params-5). */
 const ROW_H = 26
 /** Extra rows rendered above/below the viewport (virtualization slack). */
 const OVERSCAN = 8
 
 type Filter = 'all' | 'custom'
+
+/** Pane geometry (Params-3). Values mirror the previous fixed columns
+ * (190 px group pane, 230 px editor) so an untouched layout looks unchanged. */
+interface LayoutPrefs {
+  version: 1
+  leftW: number
+  rightW: number
+  leftCollapsed: boolean
+  rightCollapsed: boolean
+}
+
+const LAYOUT_KEY = 'maggcs.params.layout'
+/** A pane never narrows past this, so its tabs/search stay usable. */
+const MIN_PANE_W = 140
+/** A pane never widens past this, so the table keeps most of the width. */
+const MAX_PANE_W = 420
+/** The table keeps at least this width so the `--p-param-cols` minimums fit. */
+const MIN_CENTER_W = 460
+
+const RAIL_W = 24
+const SPLITTER_W = 4
+/** Keyboard nudge per arrow press on a splitter. */
+const PANE_STEP = 8
+
+const DEFAULT_LAYOUT: LayoutPrefs = {
+  version: 1,
+  leftW: 180,
+  rightW: 220,
+  leftCollapsed: false,
+  rightCollapsed: false,
+}
+
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.min(hi, Math.max(lo, n))
+}
+
+function readLayout(): LayoutPrefs {
+  try {
+    const raw = localStorage.getItem(LAYOUT_KEY)
+    if (!raw) return DEFAULT_LAYOUT
+    const p = JSON.parse(raw) as Partial<LayoutPrefs>
+    return {
+      version: 1,
+      leftW: typeof p.leftW === 'number' ? p.leftW : DEFAULT_LAYOUT.leftW,
+      rightW: typeof p.rightW === 'number' ? p.rightW : DEFAULT_LAYOUT.rightW,
+      leftCollapsed: p.leftCollapsed === true,
+      rightCollapsed: p.rightCollapsed === true,
+    }
+  } catch {
+    return DEFAULT_LAYOUT
+  }
+}
+
+function saveLayout(p: LayoutPrefs): void {
+  try {
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify(p))
+  } catch {
+    /* private mode */
+  }
+}
+
+/** Draggable pane divider (Params-3), shared by the group pane and the editor. */
+function PaneSplitter({
+  side,
+  getWidth,
+  onResize,
+  onReset,
+}: {
+  side: 'left' | 'right'
+  getWidth: () => number
+  onResize: (px: number) => void
+  onReset: () => void
+}) {
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startW = getWidth()
+    const move = (ev: PointerEvent) => {
+      const dx = ev.clientX - startX
+      onResize(side === 'left' ? startW + dx : startW - dx)
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+  const label = side === 'left' ? 'Resize group pane' : 'Resize editor'
+  return (
+    <div
+      className={`p-split ${side}`}
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={label}
+      title={`${label} · double-click to reset`}
+      tabIndex={0}
+      onPointerDown={onPointerDown}
+      onDoubleClick={onReset}
+      onKeyDown={(e) => {
+        const step = e.key === 'ArrowRight' ? PANE_STEP : e.key === 'ArrowLeft' ? -PANE_STEP : 0
+        if (step === 0) return
+        e.preventDefault()
+        onResize(getWidth() + (side === 'left' ? step : -step))
+      }}
+    />
+  )
+}
+
+/** Narrow strip shown in place of a collapsed pane; its button reopens it. */
+function PaneRail({ side, title, onOpen }: { side: 'left' | 'right'; title: string; onOpen: () => void }) {
+  const Icon = side === 'left' ? ChevronsRight : ChevronsLeft
+  return (
+    <div className={`p-rail ${side}`}>
+      <button className="rail-toggle" title={title} aria-label={title} onClick={onOpen}>
+        <Icon size={16} />
+      </button>
+    </div>
+  )
+}
 
 export function ParamsApp() {
   const tauri = isTauri()
@@ -92,6 +214,52 @@ export function ParamsApp() {
   /** Scrollbar gutter width, so the fixed header can match the body's content
    * box (WP3a: header and rows must share column origins within 1 px). */
   const [gutter, setGutter] = useState(0)
+
+  /** Pane geometry (Params-3): resizable/collapsible group pane + editor. */
+  const initialLayout = useMemo(readLayout, [])
+  const [leftW, setLeftW] = useState(initialLayout.leftW)
+  const [rightW, setRightW] = useState(initialLayout.rightW)
+  const [leftCollapsed, setLeftCollapsed] = useState(initialLayout.leftCollapsed)
+  const [rightCollapsed, setRightCollapsed] = useState(initialLayout.rightCollapsed)
+  const leftWRef = useRef(leftW)
+  leftWRef.current = leftW
+  const rightWRef = useRef(rightW)
+  rightWRef.current = rightW
+  const leftCollapsedRef = useRef(leftCollapsed)
+  leftCollapsedRef.current = leftCollapsed
+  const rightCollapsedRef = useRef(rightCollapsed)
+  rightCollapsedRef.current = rightCollapsed
+
+  /** Largest width a pane may take while the table keeps MIN_CENTER_W. */
+  const maxPane = useCallback((otherW: number, otherCollapsed: boolean) => {
+    const other = otherCollapsed ? RAIL_W : otherW
+    const avail = window.innerWidth - MIN_CENTER_W - other - 2 * SPLITTER_W
+    return clamp(avail, MIN_PANE_W, MAX_PANE_W)
+  }, [])
+  const resizeLeft = useCallback(
+    (px: number) => setLeftW(clamp(px, MIN_PANE_W, maxPane(rightWRef.current, rightCollapsedRef.current))),
+    [maxPane],
+  )
+  const resizeRight = useCallback(
+    (px: number) => setRightW(clamp(px, MIN_PANE_W, maxPane(leftWRef.current, leftCollapsedRef.current))),
+    [maxPane],
+  )
+
+  // Persist the pane layout after every change.
+  useEffect(() => {
+    saveLayout({ version: 1, leftW, rightW, leftCollapsed, rightCollapsed })
+  }, [leftW, rightW, leftCollapsed, rightCollapsed])
+
+  // Re-clamp on window resize so the table never drops below MIN_CENTER_W.
+  useEffect(() => {
+    const onResize = () => {
+      resizeLeft(leftWRef.current)
+      resizeRight(rightWRef.current)
+    }
+    window.addEventListener('resize', onResize)
+    onResize()
+    return () => window.removeEventListener('resize', onResize)
+  }, [resizeLeft, resizeRight])
 
   // Load the bundled metadata once (works without a link).
   useEffect(() => {
@@ -372,6 +540,14 @@ export function ParamsApp() {
         >
           Custom
         </button>
+        <button
+          className="p-pane-collapse"
+          title="Hide group pane"
+          aria-label="Hide group pane"
+          onClick={() => setLeftCollapsed(true)}
+        >
+          <ChevronsLeft size={14} />
+        </button>
       </div>
       <div className="p-left-scroll">
         {leftTab === 'px4' ? (
@@ -472,6 +648,13 @@ export function ParamsApp() {
     </div>
   )
 
+  const gridStyle = {
+    '--p-left': `${leftCollapsed ? RAIL_W : leftW}px`,
+    '--p-left-split': leftCollapsed ? '0px' : `${SPLITTER_W}px`,
+    '--p-right': `${rightCollapsed ? RAIL_W : rightW}px`,
+    '--p-right-split': rightCollapsed ? '0px' : `${SPLITTER_W}px`,
+  } as React.CSSProperties
+
   return (
     <div className="p-grid">
       <header className="p-toolbar">
@@ -544,8 +727,20 @@ export function ParamsApp() {
           </div>
         </div>
       )}
-      <div className="p-main">
-        {leftPane}
+      <div className="p-main" style={gridStyle}>
+        {leftCollapsed ? (
+          <PaneRail side="left" title="Show group pane" onOpen={() => setLeftCollapsed(false)} />
+        ) : (
+          <>
+            {leftPane}
+            <PaneSplitter
+              side="left"
+              getWidth={() => leftWRef.current}
+              onResize={resizeLeft}
+              onReset={() => resizeLeft(DEFAULT_LAYOUT.leftW)}
+            />
+          </>
+        )}
 
         <div className="p-tablewrap">
           <div className="p-thead" style={{ paddingRight: 8 + gutter }}>
@@ -618,7 +813,27 @@ export function ParamsApp() {
           </div>
         </div>
 
-        <aside className="p-detail">
+        {rightCollapsed ? (
+          <PaneRail side="right" title="Show editor" onOpen={() => setRightCollapsed(false)} />
+        ) : (
+          <>
+            <PaneSplitter
+              side="right"
+              getWidth={() => rightWRef.current}
+              onResize={resizeRight}
+              onReset={() => resizeRight(DEFAULT_LAYOUT.rightW)}
+            />
+            <aside className="p-detail">
+              <div className="p-detail-head">
+                <button
+                  className="p-pane-collapse"
+                  title="Hide editor"
+                  aria-label="Hide editor"
+                  onClick={() => setRightCollapsed(true)}
+                >
+                  <ChevronsRight size={14} />
+                </button>
+              </div>
           {selected ? (
             <>
               <div className="p-detail-title mono">{selected}</div>
@@ -751,6 +966,8 @@ export function ParamsApp() {
             </div>
           )}
         </aside>
+          </>
+        )}
       </div>
 
       {staged.size > 0 && (

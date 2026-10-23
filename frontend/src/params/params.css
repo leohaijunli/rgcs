@@ -137,15 +137,93 @@ body,
   border-color: var(--mg-accent);
 }
 
-/* Main 3-pane */
+/* Main 3-pane (Params-3): every track is explicit, so a collapsed pane can be
+ * swapped for a slim rail and its splitter track can collapse to 0. */
 .p-main {
   display: grid;
-  grid-template-columns: 190px 1fr 230px;
+  grid-template-columns: var(--p-left, 180px) var(--p-left-split, 4px) 1fr
+    var(--p-right-split, 4px) var(--p-right, 220px);
+  grid-template-rows: 1fr;
   min-height: 0;
+}
+
+.p-main > * {
+  grid-row: 1;
+}
+
+.p-tablewrap {
+  grid-column: 3;
+}
+
+/* Draggable divider; the ::after widens the grab target beyond the 4 px track
+ * without taking layout space. */
+.p-split {
+  align-self: stretch;
+  position: relative;
+  width: 100%;
+  background: var(--mg-border);
+  cursor: col-resize;
+}
+
+.p-split.left {
+  grid-column: 2;
+}
+
+.p-split.right {
+  grid-column: 4;
+}
+
+.p-split::after {
+  content: '';
+  position: absolute;
+  inset: 0 -4px;
+}
+
+.p-split:hover,
+.p-split:focus-visible {
+  background: var(--mg-accent);
+}
+
+/* Collapsed-pane rail: a slim strip whose button reopens the pane. */
+.p-rail {
+  display: flex;
+  justify-content: center;
+  padding-top: 8px;
+  background: var(--mg-bg-raised);
+}
+
+.p-rail.left {
+  grid-column: 1;
+  border-right: 1px solid var(--mg-border);
+}
+
+.p-rail.right {
+  grid-column: 5;
+  border-left: 1px solid var(--mg-border);
+}
+
+.p-rail .rail-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  padding: 4px 0;
+  background: var(--mg-bg);
+  color: var(--mg-ink);
+  border: 1px solid var(--mg-border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.p-rail .rail-toggle:hover {
+  background: var(--mg-accent);
+  color: var(--mg-accent-ink);
+  border-color: var(--mg-accent);
 }
 
 /* Left pane */
 .p-left {
+  grid-column: 1;
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--mg-border);
@@ -154,8 +232,28 @@ body,
 
 .p-left-tabs {
   display: flex;
+  align-items: center;
   gap: 2px;
   padding: 6px 6px 0;
+}
+
+.p-pane-collapse {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  width: 22px;
+  border: 1px solid var(--mg-border);
+  border-radius: 4px;
+  background: var(--mg-bg);
+  color: var(--mg-muted);
+  cursor: pointer;
+}
+
+.p-pane-collapse:hover {
+  color: var(--mg-ink);
+  background: var(--mg-canvas);
 }
 
 .p-left-scroll {
@@ -426,10 +524,21 @@ body,
 
 /* Detail */
 .p-detail {
+  grid-column: 5;
   border-left: 1px solid var(--mg-border);
   padding: 8px;
   overflow-y: auto;
   font-size: 12px;
+}
+
+.p-detail-head {
+  position: sticky;
+  top: -8px;
+  display: flex;
+  justify-content: flex-end;
+  margin: -8px -8px 4px;
+  padding: 2px 4px;
+  background: var(--mg-bg);
 }
 
 .p-detail-title {
