@@ -437,9 +437,9 @@ mod download_tests {
 
     #[test]
     fn dem_prep_is_discovered_next_to_the_test_binary_or_on_path() {
-        // In the dev workspace the sibling `target/debug/dem-prep` exists
-        // (cargo builds both bins into one target dir); if the test binary
-        // lives elsewhere, PATH must carry dem-prep for this to pass.
+        // Build the regular helper first with `cargo build -p dem-prep`.
+        // CI does this explicitly because cargo test builds a test harness
+        // for the bin; an external test layout must carry the helper on PATH.
         let found = dem_prep_binary().expect("dem-prep discoverable");
         assert!(found.is_file(), "{}", found.display());
     }

@@ -36,6 +36,10 @@ jobs:
         working-directory: frontend
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
+      # The terrain discovery test needs the regular helper executable next
+      # to the test binaries; cargo test builds a test harness for the bin.
+      - name: Build DEM helper for terrain discovery tests
+        run: cargo build -p dem-prep --bin dem-prep
       - run: cargo test --all-targets
       # ADR-002: committed ts-rs bindings must match regeneration.
       - name: Check ts-rs bindings are in sync

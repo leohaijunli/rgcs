@@ -17,7 +17,7 @@ explicitly select `nsis,msi`; Ubuntu builds select `appimage,deb`.
 
 When preparing a release tag, keep the Cargo workspace version, Tauri config
 version, and frontend package/lockfile versions equal to the tag without its
-`v` prefix. The fixes below ship as `v1.0.1`, with installer version `1.0.1`.
+`v` prefix. The fixes below ship as `v1.0.2`, with installer version `1.0.2`.
 
 ## Check failures diagnosed on 2026-10-23
 
@@ -34,6 +34,21 @@ failed at these steps:
   `RUSTSEC-2026-0367`/`0368`/`0369`. Licenses, bans, and sources passed.
   Tokio is updated to `1.53.3` and ZIP to `9.0.5`. ZIP's fallible entry-name
   decoding is propagated through the existing archive error type.
+
+The `v1.0.1` follow-up passed formatting, Clippy, dependency checks, and the
+frontend job, then exposed the terrain helper discovery test's missing
+prerequisite. Before running the workspace tests, CI now builds the regular
+helper with `cargo build -p dem-prep --bin dem-prep`. A test harness alone does
+not provide the executable that discovery expects in the profile directory.
+
+To reproduce the Rust job locally, build the frontend, then run:
+
+```bash
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo build -p dem-prep --bin dem-prep
+cargo test --all-targets
+```
 
 ## Choosing an installer
 
