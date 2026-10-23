@@ -12,6 +12,7 @@ import { invoke, Channel } from '@tauri-apps/api/core'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { readTextFile } from '@tauri-apps/plugin-fs'
 import {
+  ChevronsLeft,
   ChevronsRight,
   Eraser,
   FolderOpen,
@@ -112,6 +113,67 @@ interface Workspace {
 
 const WS_KEY = 'maggcs.inspector.workspace'
 const SYNC_KEY = 'maggcs-inspector'
+
+/** Sidebar layout prefs (plan §6.1: resizable/collapsible sidebars). Persisted
+ * under its own key — unlike the workspace — so a resize survives a reload
+ * without requiring "Save workspace". */
+interface LayoutPrefs {
+  version: 1
+  leftW: number
+  rightW: number
+  leftCollapsed: boolean
+  rightCollapsed: boolean
+}
+
+const LAYOUT_KEY = 'maggcs.inspector.layout'
+/** A pane never narrows past this, so its header/search stay usable. */
+const MIN_PANE_W = 160
+/** A pane never widens past this, so the center keeps the plot area. */
+const MAX_PANE_W = 520
+/** The plot workspace keeps at least this width at every window size. */
+const MIN_CENTER_W = 240
+
+export const RAIL_W = 26
+export const SPLITTER_W = 4
+/** Keyboard nudge per arrow press on a splitter. */
+const PANE_STEP = 8
+
+const DEFAULT_LAYOUT: LayoutPrefs = {
+  version: 1,
+  leftW: 220,
+  rightW: 240,
+  leftCollapsed: false,
+  rightCollapsed: false,
+}
+
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.min(hi, Math.max(lo, n))
+}
+
+function readLayout(): LayoutPrefs {
+  try {
+    const raw = localStorage.getItem(LAYOUT_KEY)
+    if (!raw) return DEFAULT_LAYOUT
+    const p = JSON.parse(raw) as Partial<LayoutPrefs>
+    return {
+      version: 1,
+      leftW: typeof p.leftW === 'number' ? p.leftW : DEFAULT_LAYOUT.leftW,
+      rightW: typeof p.rightW === 'number' ? p.rightW : DEFAULT_LAYOUT.rightW,
+      leftCollapsed: p.leftCollapsed === true,
+      rightCollapsed: p.rightCollapsed === true,
+    }
+  } catch {
+    return DEFAULT_LAYOUT
+  }
+}
+
+function saveLayout(p: LayoutPrefs): void {
+  try {
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify(p))
+  } catch {
+    /* private mode */
+  }
+}
 
 /** Default series palette; a trace picks one by hashing its id, override-able.
  * Colours come from the trace tokens (ADR-010), resolved lazily so the theme
@@ -309,6 +371,68 @@ function findTrace(plots: Plot[], id: string): Trace | undefined {
   return undefined
 }
 
+/** Draggable, keyboard-operable divider between a sidebar and the workspace
+ * (plan §6.1). Pointer drag resizes; ←/→ nudge; double-click resets to the
+ * default width. The parent clamps to keep the center usable. */
+function PaneSplitter({
+  side,
+  getWidth,
+  onResize,
+  onReset,
+}: {
+  side: 'left' | 'right'
+  getWidth: () => number
+  onResize: (px: number) => void
+  onReset: () => void
+}) {
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startW = getWidth()
+    const move = (ev: PointerEvent) => {
+      const dx = ev.clientX - startX
+      onResize(side === 'left' ? startW + dx : startW - dx)
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+  const label = side === 'left' ? 'Resize signal list' : 'Resize properties panel'
+  return (
+    <div
+      className={`pane-splitter ${side}`}
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={label}
+      title={`${label} · double-click to reset`}
+      tabIndex={0}
+      onPointerDown={onPointerDown}
+      onDoubleClick={onReset}
+      onKeyDown={(e) => {
+        const step = e.key === 'ArrowRight' ? PANE_STEP : e.key === 'ArrowLeft' ? -PANE_STEP : 0
+        if (step === 0) return
+        e.preventDefault()
+        onResize(getWidth() + (side === 'left' ? step : -step))
+      }}
+    />
+  )
+}
+
+/** Narrow strip shown in place of a collapsed sidebar; its button reopens it. */
+function PaneRail({ side, title, onOpen }: { side: 'left' | 'right'; title: string; onOpen: () => void }) {
+  const Icon = side === 'left' ? ChevronsRight : ChevronsLeft
+  return (
+    <div className={`pane-rail ${side}`}>
+      <button className="rail-toggle" title={title} aria-label={title} onClick={onOpen}>
+        <Icon size={16} />
+      </button>
+    </div>
+  )
+}
+
 export function InspectorApp() {
   const tauri = isTauri()
   const [catalog, setCatalog] = useState<CatalogEntry[]>([])
@@ -327,6 +451,20 @@ export function InspectorApp() {
   const [activePlot, setActivePlot] = useState<string | null>(null)
   /** Auto-scroll x to the newest data; a user drag-zoom turns it off. */
   const [follow, setFollow] = useState(true)
+  /** Sidebar layout (plan §6.1): resizable/collapsible, persisted on change. */
+  const initialLayout = useMemo(readLayout, [])
+  const [leftW, setLeftW] = useState(initialLayout.leftW)
+  const [rightW, setRightW] = useState(initialLayout.rightW)
+  const [leftCollapsed, setLeftCollapsed] = useState(initialLayout.leftCollapsed)
+  const [rightCollapsed, setRightCollapsed] = useState(initialLayout.rightCollapsed)
+  const leftWRef = useRef(leftW)
+  leftWRef.current = leftW
+  const rightWRef = useRef(rightW)
+  rightWRef.current = rightW
+  const leftCollapsedRef = useRef(leftCollapsed)
+  leftCollapsedRef.current = leftCollapsed
+  const rightCollapsedRef = useRef(rightCollapsed)
+  rightCollapsedRef.current = rightCollapsed
   const [status, setStatus] = useState<InspectorStatus | null>(null)
   const [rate, setRate] = useState(0)
   /** O7: after a link rebuild (tap restart), the first packets carry an
@@ -446,6 +584,37 @@ export function InspectorApp() {
   measureEnabled.current = measure
   const followRef = useRef(follow)
   followRef.current = follow
+
+  /** Largest width a pane may take while the center keeps MIN_CENTER_W. */
+  const maxPane = useCallback((otherW: number, otherCollapsed: boolean) => {
+    const other = otherCollapsed ? RAIL_W : otherW
+    const avail = window.innerWidth - MIN_CENTER_W - other - 2 * SPLITTER_W
+    return clamp(avail, MIN_PANE_W, MAX_PANE_W)
+  }, [])
+  const resizeLeft = useCallback(
+    (px: number) => setLeftW(clamp(px, MIN_PANE_W, maxPane(rightWRef.current, rightCollapsedRef.current))),
+    [maxPane],
+  )
+  const resizeRight = useCallback(
+    (px: number) => setRightW(clamp(px, MIN_PANE_W, maxPane(leftWRef.current, leftCollapsedRef.current))),
+    [maxPane],
+  )
+
+  // Persist the pane layout after every change (independent of "Save workspace").
+  useEffect(() => {
+    saveLayout({ version: 1, leftW, rightW, leftCollapsed, rightCollapsed })
+  }, [leftW, rightW, leftCollapsed, rightCollapsed])
+
+  // Re-clamp on window resize so the center never drops below MIN_CENTER_W.
+  useEffect(() => {
+    const onResize = () => {
+      resizeLeft(leftWRef.current)
+      resizeRight(rightWRef.current)
+    }
+    window.addEventListener('resize', onResize)
+    onResize()
+    return () => window.removeEventListener('resize', onResize)
+  }, [resizeLeft, resizeRight])
   /** The x-range we last set per chart, to tell our auto-scale from a user zoom. */
   const expectedX = useRef<Map<uPlot, { min: number; max: number }>>(new Map())
 
@@ -1116,9 +1285,17 @@ export function InspectorApp() {
     })
   }, [replayControl, markDirty])
 
+  // Sidebar tracks as CSS custom properties (the grid template reads them);
+  // a collapsed pane shrinks to its rail and drops its splitter track.
+  const gridStyle = {
+    '--insp-left': `${leftCollapsed ? RAIL_W : leftW}px`,
+    '--insp-left-split': leftCollapsed ? '0px' : `${SPLITTER_W}px`,
+    '--insp-right': `${rightCollapsed ? RAIL_W : rightW}px`,
+    '--insp-right-split': rightCollapsed ? '0px' : `${SPLITTER_W}px`,
+  } as unknown as React.CSSProperties
 
   return (
-    <div className="inspector-grid">
+    <div className="inspector-grid" style={gridStyle}>
       <div className="toolbar">
         <button
           className={`icon-btn ${paused ? 'active' : ''}`}
@@ -1309,14 +1486,27 @@ export function InspectorApp() {
       </div>
       {notice && <div className="inspector-notice">{notice}</div>}
 
-      <SignalBrowser
-        catalog={catalog}
-        checked={checked}
-        colors={colors}
-        onColor={setColor}
-        onToggle={toggleSignal}
-        onToggleMany={toggleMany}
-      />
+      {leftCollapsed ? (
+        <PaneRail side="left" title="Show signal list" onOpen={() => setLeftCollapsed(false)} />
+      ) : (
+        <>
+          <SignalBrowser
+            catalog={catalog}
+            checked={checked}
+            colors={colors}
+            onColor={setColor}
+            onToggle={toggleSignal}
+            onToggleMany={toggleMany}
+            onCollapse={() => setLeftCollapsed(true)}
+          />
+          <PaneSplitter
+            side="left"
+            getWidth={() => leftWRef.current}
+            onResize={resizeLeft}
+            onReset={() => resizeLeft(DEFAULT_LAYOUT.leftW)}
+          />
+        </>
+      )}
 
       <div className="plot-grid" style={{ gridTemplateColumns: `repeat(${layoutCols}, minmax(0, 1fr))` }}>
         {plots.length === 0 && (
@@ -1426,22 +1616,35 @@ export function InspectorApp() {
         ))}
       </div>
 
-      <PropertiesPanel
-        selected={selected}
-        trace={selectedTrace}
-        color={selectedTrace ? colorOf(signalKey(selectedTrace.signal), colors) : undefined}
-        catalog={catalog}
-        algorithms={algorithms}
-        buffer={selected ? buffers.current.get(selected) : undefined}
-        tauri={tauri}
-        showFilters={hasProcessors}
-        onColor={(c) => selectedTrace && setColor(signalKey(selectedTrace.signal), c)}
-        onRemove={() => selected && removeTrace(selected)}
-        onAddStage={(algorithm, params) => selected && addStage(selected, algorithm, params)}
-        onRemoveStage={(i) => selected && removeStage(selected, i)}
-        onSetStage={(i, next) => selected && setStage(selected, i, next)}
-        onError={showNotice}
-      />
+      {rightCollapsed ? (
+        <PaneRail side="right" title="Show properties" onOpen={() => setRightCollapsed(false)} />
+      ) : (
+        <>
+          <PaneSplitter
+            side="right"
+            getWidth={() => rightWRef.current}
+            onResize={resizeRight}
+            onReset={() => resizeRight(DEFAULT_LAYOUT.rightW)}
+          />
+          <PropertiesPanel
+            selected={selected}
+            trace={selectedTrace}
+            color={selectedTrace ? colorOf(signalKey(selectedTrace.signal), colors) : undefined}
+            catalog={catalog}
+            algorithms={algorithms}
+            buffer={selected ? buffers.current.get(selected) : undefined}
+            tauri={tauri}
+            showFilters={hasProcessors}
+            onColor={(c) => selectedTrace && setColor(signalKey(selectedTrace.signal), c)}
+            onRemove={() => selected && removeTrace(selected)}
+            onAddStage={(algorithm, params) => selected && addStage(selected, algorithm, params)}
+            onRemoveStage={(i) => selected && removeStage(selected, i)}
+            onSetStage={(i, next) => selected && setStage(selected, i, next)}
+            onError={showNotice}
+            onCollapse={() => setRightCollapsed(true)}
+          />
+        </>
+      )}
     </div>
   )
 }
@@ -1542,6 +1745,7 @@ function SignalBrowser({
   onColor,
   onToggle,
   onToggleMany,
+  onCollapse,
 }: {
   catalog: CatalogEntry[]
   checked: Set<string>
@@ -1549,6 +1753,7 @@ function SignalBrowser({
   onColor: (key: string, color: string) => void
   onToggle: (signal: SignalId) => void
   onToggleMany: (signals: SignalId[], add: boolean) => void
+  onCollapse: () => void
 }) {
   const [query, setQuery] = useState('')
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
@@ -1594,7 +1799,12 @@ function SignalBrowser({
 
   return (
     <div className="signal-list">
-      <div style={{ marginBottom: 6, fontWeight: 600 }}>Signals</div>
+      <div className="signal-head">
+        <span className="signal-head-title">Signals</span>
+        <button className="icon-btn" title="Hide signal list" aria-label="Hide signal list" onClick={onCollapse}>
+          <ChevronsLeft size={14} />
+        </button>
+      </div>
       <input
         className="signal-search"
         placeholder="Search…"
@@ -1975,6 +2185,7 @@ function PropertiesPanel({
   onRemoveStage,
   onSetStage,
   onError,
+  onCollapse,
 }: {
   selected: string | null
   trace: Trace | undefined
@@ -1991,11 +2202,17 @@ function PropertiesPanel({
   onRemoveStage: (index: number) => void
   onSetStage: (index: number, next: AlgoConfig) => void
   onError: (msg: string) => void
+  onCollapse: () => void
 }) {
   if (!selected || !trace) {
     return (
       <aside className="properties">
-        <div className="prop-title">Properties</div>
+        <div className="prop-title">
+          <span>Properties</span>
+          <button className="icon-btn" title="Hide properties" aria-label="Hide properties" onClick={onCollapse}>
+            <ChevronsRight size={14} />
+          </button>
+        </div>
         <div style={{ color: 'var(--mg-ink)', fontSize: 12 }}>No trace selected — click a trace chip.</div>
       </aside>
     )
@@ -2007,7 +2224,12 @@ function PropertiesPanel({
   const unit = signalUnit(trace.signal.field)
   return (
     <aside className="properties">
-      <div className="prop-title">Properties</div>
+      <div className="prop-title">
+        <span>Properties</span>
+        <button className="icon-btn" title="Hide properties" aria-label="Hide properties" onClick={onCollapse}>
+          <ChevronsRight size={14} />
+        </button>
+      </div>
       <dl>
         <dt>Signal</dt>
         <dd className="mono">

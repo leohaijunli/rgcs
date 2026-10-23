@@ -14,13 +14,22 @@ body,
 
 .inspector-grid {
   display: grid;
-  grid-template-columns: 220px 1fr 240px;
-  grid-template-rows: 40px 1fr;
+  /* Five tracks: left pane, left splitter, workspace, right splitter, right
+   * pane. The custom properties are set inline from the pane state; a
+   * collapsed pane is replaced by its rail and the splitter track collapses. */
+  grid-template-columns: var(--insp-left, 220px) var(--insp-left-split, 4px) 1fr
+    var(--insp-right-split, 4px) var(--insp-right, 240px);
+  /* Row 1 header, row 2 the (optional, auto-height) notice, row 3 workspace.
+   * Row 3 is the flex track, so a notice only reduces it — it never pushes the
+   * panes into implicit rows and breaks the workspace. */
+  grid-template-rows: 40px auto 1fr;
   height: 100%;
+  min-width: 0;
 }
 
 .toolbar {
   grid-column: 1 / -1;
+  grid-row: 1;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -199,6 +208,7 @@ input[type='range'] {
 
 .inspector-notice {
   grid-column: 1 / -1;
+  grid-row: 2;
   background: var(--mg-bg-raised);
   color: var(--mg-error);
   border: 1px solid var(--mg-error);
@@ -208,12 +218,98 @@ input[type='range'] {
   font-size: 12px;
 }
 
+/* Draggable sidebar divider (plan §6.1); the ::after widens the grab target
+ * beyond the 4 px track without taking layout space. */
+.pane-splitter {
+  grid-row: 3;
+  align-self: stretch;
+  position: relative;
+  width: 100%;
+  background: var(--mg-border);
+  cursor: col-resize;
+}
+
+.pane-splitter.left {
+  grid-column: 2;
+}
+
+.pane-splitter.right {
+  grid-column: 4;
+}
+
+.pane-splitter::after {
+  content: '';
+  position: absolute;
+  inset: 0 -4px;
+}
+
+.pane-splitter:hover,
+.pane-splitter:focus-visible {
+  background: var(--mg-accent);
+}
+
+/* Collapsed-sidebar rail: a slim strip whose button reopens the pane. */
+.pane-rail {
+  grid-row: 3;
+  display: flex;
+  justify-content: center;
+  padding-top: 8px;
+  background: var(--mg-bg-raised);
+}
+
+.pane-rail.left {
+  grid-column: 1;
+  border-right: 1px solid var(--mg-border);
+}
+
+.pane-rail.right {
+  grid-column: 5;
+  border-left: 1px solid var(--mg-border);
+}
+
+.pane-rail .rail-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  padding: 4px 0;
+  background: var(--mg-bg);
+  color: var(--mg-ink);
+  border: 1px solid var(--mg-border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.pane-rail .rail-toggle:hover {
+  background: var(--mg-accent);
+  color: var(--mg-accent-ink);
+  border-color: var(--mg-accent);
+}
+
 .signal-list {
   grid-column: 1;
+  grid-row: 3;
   overflow: auto;
   border-right: 1px solid var(--mg-border);
   padding: 8px;
   font-size: 12px;
+}
+
+.signal-list .signal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.signal-list .signal-head-title {
+  font-weight: 600;
+}
+
+.signal-list .signal-head .icon-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 4px;
 }
 
 .signal-list .signal-search {
@@ -323,7 +419,8 @@ input[type='range'] {
 }
 
 .plot-grid {
-  grid-column: 2;
+  grid-column: 3;
+  grid-row: 3;
   overflow: auto;
   padding: 8px;
   display: grid;
@@ -399,7 +496,8 @@ input[type='range'] {
 }
 
 .properties {
-  grid-column: 3;
+  grid-column: 5;
+  grid-row: 3;
   overflow: auto;
   border-left: 1px solid var(--mg-border);
   padding: 10px;
@@ -407,8 +505,17 @@ input[type='range'] {
 }
 
 .properties .prop-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   font-weight: 600;
   margin-bottom: 8px;
+}
+
+.properties .prop-title .icon-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 4px;
 }
 
 .properties dl {

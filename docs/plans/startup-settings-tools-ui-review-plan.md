@@ -281,6 +281,19 @@ Inspector replay is distinct from live telemetry.
 **Strengths:** logical signal-browser / plot-workspace / properties structure;
 search, multi-signal selection, trace colors, units, and plot-grid controls.
 
+**Implementation update, 2026-10-22 — sidebars:** the signal browser and
+properties panels are now resizable (drag the divider, ←/→ to nudge,
+double-click to reset) and collapsible (a header chevron folds a pane to a
+reopen rail). The layout is persisted separately from the workspace
+(`maggcs.inspector.layout`), so it survives a reload without *Save workspace*.
+The grid uses explicit `header / notice / workspace` rows, so a notice no
+longer pushes the panes into implicit rows, and each pane is clamped so the
+center keeps ≥ 240 px at every window size. Verified at 800 × 480, 1366 × 768,
+and 1920 × 1080 (`check-inspector.mjs`; screenshots in
+`frontend/screenshots/inspector/`). Remaining 6.1 items: plot height/columns,
+toolbar/replay grouping, title placement, keyboard reachability, and notice
+severity.
+
 **Improvements:**
 
 - Make sidebars resizable/collapsible. The current 220 + 240 px fixed sidebars
@@ -423,7 +436,7 @@ smaller reviewed patches when execution resumes.
 | 5 | P1/P2 | **Partly completed 2026-10-22:** no-project entry, shared name-only create wizard, and recent remove/delete. Remaining: import on StartPage and recents availability/last-opened metadata. | Create/open work from StartPage; delete validates `project.json` before removing and never deletes an open project. Import from a fresh install and clear recovery for missing/locked/corrupt projects remain open. |
 | 6 | P1/P2 | Regroup and restyle Settings, including vertical navigation, accessible fields, clearer setting scope, and consistent saved state. | Keyboard-only navigation reaches every control; Connection and Map/simulation sections remain usable at target sizes; setting scope and commit behavior are visible. |
 | 7 | P1/P2 | Improve Tools menu grouping/keyboard behavior, then unify About and diagnostics feedback in separate tasks. | Arrow keys/Enter/Escape work; focus returns to the trigger; window/task states are distinguishable; diagnostics completion exposes its result; About versions/content agree. |
-| 8 | P2 | Refine Inspector sidebars, toolbar/replay layout, and plot sizing. Follow the separate Logs plan for that surface. | At 800 × 480 and both desktop sizes, primary controls and selected plots remain usable; long replay names and notices do not break the workspace. |
+| 8 | P2 | **Partly completed 2026-10-22:** Inspector sidebars are resizable/collapsible and the workspace row is bounded. Remaining: toolbar/replay layout, title placement, plot sizing, and notice severity. Follow the separate Logs plan for that surface. | At 800 × 480 and both desktop sizes, primary controls and selected plots remain usable; long replay names and notices do not break the workspace. |
 
 If a follow-up task changes privileged USB installation, serial output, or
 device configuration, perform the repository-required failure/wrong-device
@@ -447,6 +460,9 @@ backends for those actions.
   search/group changes after deep scrolling; Field-mode row-height consistency.
 - [x] Motor Test: all workspace content reachable; persistent stop controls at
   supported sizes; verified against the integrated working-tree UI on 2026-10-22.
+- [x] Inspector sidebars: resizable/collapsible, layout persisted, and a
+  ≥ 240 px workspace at 800 × 480, 1366 × 768, and 1920 × 1080
+  (`check-inspector.mjs`; screenshots in `frontend/screenshots/inspector/`).
 - [ ] Shared preference boot and live synchronization across all tool windows.
 - [ ] Tools keyboard behavior and focus restoration; selected/expanded states
   available to assistive technology.
