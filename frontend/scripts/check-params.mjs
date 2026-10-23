@@ -178,6 +178,59 @@ try {
   await page.locator('.p-rail.right .rail-toggle').click()
   await page.locator('.p-detail').waitFor()
 
+  // --- Params-5: keyboard row navigation -----------------------------------
+  await setSize(1366, 768, '1366x768 (keyboard)')
+  await page.locator('.p-scroll').focus()
+  await page.keyboard.press('Home')
+  await page.waitForTimeout(80)
+  const firstSel = (await page.locator('.p-row.sel .p-name').textContent())?.trim()
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
+  await page.waitForTimeout(80)
+  const thirdSel = (await page.locator('.p-row.sel .p-name').textContent())?.trim()
+  assert.ok(
+    firstSel && thirdSel && firstSel !== thirdSel,
+    `ArrowDown moves the selection (${firstSel} -> ${thirdSel})`,
+  )
+  assert.equal(
+    (await page.locator('.p-detail-title').textContent())?.replace('\u27f2', '').trim(),
+    thirdSel?.replace('\u27f2', '').trim(),
+    'the detail pane follows the keyboard selection',
+  )
+  await page.keyboard.press('End')
+  await page.waitForTimeout(150)
+  const lastVisible = await page.locator('.p-row.sel').evaluate((el) => {
+    const list = el.closest('.p-scroll')
+    if (!list) return false
+    const r = el.getBoundingClientRect()
+    const l = list.getBoundingClientRect()
+    return r.top >= l.top - 1 && r.bottom <= l.bottom + 1
+  })
+  assert.ok(lastVisible, 'End scrolls the selected row into view')
+
+  // --- Params-5: row height follows Field-mode density ---------------------
+  await page.evaluate(() => localStorage.setItem('maggcs.fieldMode', 'true'))
+  await page.reload({ waitUntil: 'networkidle' })
+  await waitRows()
+  const density = await page.evaluate(() => {
+    const inner = document.querySelector('.p-scroll > div')
+    const row = document.querySelector('.p-row')
+    const hit = document.querySelector('.p-hitcount')?.textContent ?? ''
+    return {
+      innerH: inner ? inner.getBoundingClientRect().height : 0,
+      rowH: row ? row.getBoundingClientRect().height : 0,
+      rows: Number(hit.split('/')[0]) || 0,
+    }
+  })
+  assert.ok(
+    Math.abs(density.rowH - 44) <= 1,
+    `Field mode enlarges rows to the 44 px touch floor (got ${density.rowH.toFixed(0)})`,
+  )
+  assert.ok(
+    Math.abs(density.innerH - density.rows * density.rowH) <= 2,
+    `the virtual span matches rows x row height (${density.innerH.toFixed(0)} vs ${(density.rows * density.rowH).toFixed(0)})`,
+  )
+
   assert.deepEqual(errors, [])
   console.log('PASS: header/body column origins align within 1 px at all sizes and scroll states')
 } finally {

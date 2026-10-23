@@ -8,12 +8,24 @@ import { ParamsApp } from './ParamsApp'
 import ErrorBoundary from '../components/ErrorBoundary'
 import AlertLayer from '../components/AlertLayer'
 import { initAppConfig } from '../desktop/appConfig'
-import { applyThemePref, readThemePref } from '../design-system/theme'
+import { applyFieldMode, applyThemePref, readFieldMode, readThemePref } from '../design-system/theme'
 
 // Restore the persisted theme before first paint (the main window's
 // settings own it; this window only mirrors `maggcs.theme` so its tokens
 // and native controls pick the right color-scheme at boot).
 applyThemePref(readThemePref())
+// Field mode enlarges the data rows (Params-5); mirror it like the theme.
+applyFieldMode(readFieldMode())
+
+// Follow the main window's display preferences while already open.
+window.addEventListener('storage', (event) => {
+  if (event.key === null || event.key === 'maggcs.theme') {
+    applyThemePref(readThemePref())
+  }
+  if (event.key === null || event.key === 'maggcs.fieldMode') {
+    applyFieldMode(readFieldMode())
+  }
+})
 
 // Read-only hydrate of the shared config so the alert layer uses the saved
 // volume; this window never writes the file (A6).

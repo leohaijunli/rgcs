@@ -214,6 +214,9 @@ export function ParamsApp() {
   /** Scrollbar gutter width, so the fixed header can match the body's content
    * box (WP3a: header and rows must share column origins within 1 px). */
   const [gutter, setGutter] = useState(0)
+  /** Live data-row height, read from `--p-row-h` (Params-5): Field mode
+   * enlarges it, and the virtualizer must track that, not a fixed 26. */
+  const [rowH, setRowH] = useState(ROW_H)
 
   /** Pane geometry (Params-3): resizable/collapsible group pane + editor. */
   const initialLayout = useMemo(readLayout, [])
@@ -472,8 +475,8 @@ export function ParamsApp() {
   }, [meta, metaGroups, groups, values, activeGroup, groupPane, query, filter])
 
   // Virtualization window.
-  const first = Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN)
-  const visibleCount = Math.ceil(viewH / ROW_H) + OVERSCAN * 2
+  const first = Math.max(0, Math.floor(scrollTop / rowH) - OVERSCAN)
+  const visibleCount = Math.ceil(viewH / rowH) + OVERSCAN * 2
   const slice = rows.slice(first, first + visibleCount)
 
   useEffect(() => {
@@ -491,6 +494,31 @@ export function ParamsApp() {
     return () => ro.disconnect()
   }, [])
 
+  // Track the declared row height (`--p-row-h`). Field mode toggles the
+  // `field-mode` class on <html>, so observe that too (Params-5).
+  useEffect(() => {
+    const read = () => {
+      const v = parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue('--p-row-h'),
+      )
+      setRowH(Number.isFinite(v) && v > 0 ? v : ROW_H)
+    }
+    read()
+    const mo = new MutationObserver(read)
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
+    return () => mo.disconnect()
+  }, [])
+
+  /** Keep a row within the viewport after keyboard navigation. */
+  const scrollRowIntoView = (index: number) => {
+    const el = scrollRef.current
+    if (!el) return
+    const top = index * rowH
+    const bottom = top + rowH
+    if (top < el.scrollTop) el.scrollTop = top
+    else if (bottom > el.scrollTop + el.clientHeight) el.scrollTop = bottom - el.clientHeight
+  }
+
   // A group/pane switch changes the row set: snap back to the top, or a
   // deep scroll position renders past the end of a short group and the
   // list looks like it never switched.
@@ -501,6 +529,40 @@ export function ParamsApp() {
 
   const selectedMeta = selected ? meta.get(selected) : undefined
   const selectedValue = selected ? values.get(selected) : undefined
+
+  /** Keyboard navigation over the virtualized list (Params-5). */
+  const selectedIndex = selected ? rows.indexOf(selected) : -1
+  const onListKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (rows.length === 0) return
+    const page = Math.max(1, Math.floor(viewH / rowH))
+    let next = selectedIndex
+    switch (e.key) {
+      case 'ArrowDown':
+        next = selectedIndex < 0 ? 0 : selectedIndex + 1
+        break
+      case 'ArrowUp':
+        next = selectedIndex < 0 ? rows.length - 1 : selectedIndex - 1
+        break
+      case 'PageDown':
+        next = (selectedIndex < 0 ? 0 : selectedIndex) + page
+        break
+      case 'PageUp':
+        next = (selectedIndex < 0 ? 0 : selectedIndex) - page
+        break
+      case 'Home':
+        next = 0
+        break
+      case 'End':
+        next = rows.length - 1
+        break
+      default:
+        return
+    }
+    e.preventDefault()
+    const idx = clamp(next, 0, rows.length - 1)
+    selectRow(rows[idx])
+    scrollRowIntoView(idx)
+  }
 
   const groupCounts = useMemo(() => {
     const counts = new Map<string, number>()
@@ -755,6 +817,15 @@ export function ParamsApp() {
           <div
             className="p-scroll"
             ref={scrollRef}
+            role="listbox"
+            aria-label="Parameters"
+            tabIndex={0}
+            aria-activedescendant={
+              selectedIndex >= first && selectedIndex < first + slice.length
+                ? `p-opt-${selectedIndex}`
+                : undefined
+            }
+            onKeyDown={onListKeyDown}
             onScroll={(e) => setScrollTop((e.target as HTMLDivElement).scrollTop)}
           >
             {rows.length === 0 ? (
@@ -766,7 +837,10 @@ export function ParamsApp() {
                     : 'No parameters in this group.'}
               </div>
             ) : (
-              <div style={{ height: rows.length * ROW_H, position: 'relative' }}>
+              <div
+                role="presentation"
+                style={{ height: rows.length * rowH, position: 'relative' }}
+              >
                 {slice.map((name, i) => {
                   const m = meta.get(name)!
                   const v = values.get(name)
@@ -785,9 +859,15 @@ export function ParamsApp() {
                   return (
                     <div
                       key={name}
+                      id={`p-opt-${first + i}`}
+                      role="option"
+                      aria-selected={isSel}
                       className={`p-row ${isSel ? 'sel' : ''}`}
-                      style={{ top: (first + i) * ROW_H, height: ROW_H }}
-                      onClick={() => selectRow(name)}
+                      style={{ top: (first + i) * rowH, height: rowH }}
+                      onClick={() => {
+                        selectRow(name)
+                        scrollRef.current?.focus()
+                      }}
                     >
                       <span
                         className="mono p-name"

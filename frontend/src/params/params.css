@@ -32,6 +32,16 @@ body,
   font-family: var(--mg-font-sans);
 }
 
+/* Data-row height (Params-5). The virtualizer reads this variable, so Field
+ * mode can enlarge rows without a second, hardcoded assumption in JS. */
+:root {
+  --p-row-h: 26px;
+}
+
+html.field-mode {
+  --p-row-h: 44px;
+}
+
 /* Flex column, not grid: the version note / reboot banner are conditional
  * siblings, and a fixed row template let them push the main panes into an
  * `auto` row — the parameter table collapsed to the bottom of the window
@@ -446,6 +456,17 @@ body,
   position: relative;
 }
 
+/* The list is a focusable listbox so arrow/Page/Home/End keys move selection
+ * (Params-5); only keyboard focus draws a ring. */
+.p-scroll:focus {
+  outline: none;
+}
+
+.p-scroll:focus-visible {
+  outline: 1px solid var(--mg-accent);
+  outline-offset: -1px;
+}
+
 .p-row {
   display: grid;
   grid-template-columns: var(--p-param-cols);
@@ -461,6 +482,7 @@ body,
   position: absolute;
   left: 0;
   right: 0;
+  height: var(--p-row-h, 26px);
 }
 
 .p-row:hover {
