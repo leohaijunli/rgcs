@@ -250,7 +250,7 @@
 - 验收(WP 原文):合成地形(斜坡/台阶/尖峰/悬崖/沟谷)表驱动 8 条单测——grade 窗口全程满足 ✓、floor 全程满足 ✓、预瞻证据(台阶前 25 m 已提前爬升 > 目标+1 m)✓、出带区段与自检一致 ✓、不可行成因分类(ClimbRate)✓、DEM 外拒绝(NoData)✓、同输入同结果同哈希 ✓、交叉点数值良构 ✓。与因果基线的对照:look-ahead 在台阶前预爬升(floor 永不破坏),因果式传播会在台阶后压破 floor——`the_look_ahead_holds_the_floor_where_a_causal_pass_cannot` 断言 floor 零破坏 + 台阶前 20 m 已抬升(因果基线在该处仍在目标高度)。
 - 验证:`cargo test -p maggcs-core --lib` 674(新增 8)、clippy `-D warnings`、fmt 通过;前端不动(DR4 接 UI)。DR3 接线前,`solve` 尚未被 app 调用(管线仍是 DR1 过渡桥)。
 
-#### DR1 执行记录 (2026-10-18)
+#### DR1 执行记录 (2026-10-18) 
 
 - 决策:ADR-022(`docs/adr/022-drape.md`)——优先级 `净空 > 爬降率 > AGL 目标`、冲突报告不截断、设计/监控同源 `DrapeResult`、`min_clearance_dsm` 必填无默认、`vertical_offset` 带来源与备注且不动安全下界与降落目标;DR2 算法标记为"推荐两遍预瞻限速,DR2 落定"。
 - core(新 `terrain/drape_spec.rs`):`DrapeSpec`(14 参数 + `TurnPolicy::Standard` 占位 + `VerticalOffset{meters, origin: Operator|DemBiasEstimate, note}`)、`validate(dem_resolution_m)`(`DrapeSpecError::MissingClearance/InvalidValue/SampleStepExceedsCell`)、派生 `max_grade_up/down`(不存储,哈希只盖输入)、`spec_hash()`(规范 JSON → SHA-256,version 参与)、`DrapeResult{lines[LineProfile{line_id, kind: LineKind, profile[DrapeSample]}], waypoints, infeasible[InfeasibleSpan{line_id, s_range, reason: Clearance|ClimbRate|DescentRate|NoData, max_deficit_m}], stats[DrapeStats], crossings[Crossing], spec_hash, dem_ref[DemRef], version}`;core 补 `sha2` workspace 依赖。
