@@ -2008,6 +2008,7 @@ dependencies = [
  "parking_lot",
  "serde",
  "serde_json",
+ "serialport",
  "sha2",
  "tauri",
  "tauri-build",

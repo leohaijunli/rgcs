@@ -31,9 +31,13 @@ import { useCommandStore } from '../stores/command'
 import { useDevicesStore } from '../stores/devices'
 import { useLinkStore } from '../stores/link'
 import { useMissionStore } from '../stores/mission'
+import { useRtkStore } from '../stores/rtk'
 import { useTelemetryStore } from '../stores/telemetry'
 import { startMockFeed } from '../telemetry/mock'
 import { startDeviceWatcher } from '../stores/devices'
+import { startSerialAutoWatcher, useSerialAutoStore } from '../stores/serialAuto'
+import type { SerialAutoConnectSnapshot } from '../generated-types/SerialAutoConnectSnapshot'
+import { legacyRtkSettings } from '../util/rtkSettings'
 
 function inTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -66,6 +70,7 @@ export function useTelemetryBridge() {
       // Serial hotplug subscription (issues.md #40): keeps the connection
       // dropdown live when ports appear or disappear.
       startDeviceWatcher()
+      startSerialAutoWatcher()
       const un1 = await listen<TelemetrySnapshot>('telemetry', (e) => {
         useTelemetryStore.getState().applySnapshot(e.payload)
       })
@@ -80,6 +85,11 @@ export function useTelemetryBridge() {
         // A dead link ends any in-flight command or mission operation; their
         // acks/events will never arrive (the mission service exits with the
         // connection), so clear the pending state instead of hanging.
+        if (e.payload.link_state !== 'connected') {
+          // A vehicle disconnect retires forwarding, while the independent
+          // base receiver can continue its survey and RTCM output.
+          useRtkStore.getState().resetLink()
+        }
         if (!e.payload.fc_alive) {
           useCommandStore.getState().reset()
           useMissionStore.getState().linkLost()
@@ -142,7 +152,10 @@ export function useTelemetryBridge() {
         // Keep the SITL helper file in step with a setting saved by an older
         // build or on a fresh profile (Settings -> Vehicle).
         syncSitlHome(usePrefsStore.getState().initialPosition)
-        if (autoConnect) {
+        const serial = await invoke<SerialAutoConnectSnapshot | null>('serial_auto_connect_status', { legacyRtk: legacyRtkSettings() }).catch(() => null)
+        if (disposed) return
+        useSerialAutoStore.getState().handle(serial)
+        if (autoConnect && (serial?.primary_startup_owner === 'legacy_endpoint' || (!serial && !endpoint.startsWith('serial:')))) {
           // L8: the operator gets a 3 s cancel window instead of a silent
           // connect — the dialog fires `connect` when the countdown expires.
           const { useAutoConnectStore } = await import('../stores/autoconnect')

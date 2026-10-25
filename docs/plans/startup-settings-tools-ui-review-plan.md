@@ -407,11 +407,24 @@ bounded (`max-height: 60px`) and scrollable so every pending entry and the Apply
 button stay reachable. `check-params.mjs` covers all of the above
 (`params-collapsed.png`, `params-staged-tray.png`).
 
-**Confirmed layout defect:** virtualized `.p-row` elements are absolutely
-positioned without a common full-width constraint. Their automatic widths vary
-with content, so each row computes different fractional columns even though it
-uses the same grid template as the header. Numeric values consequently drift
-between rows and no longer sit under the Value/Default headers.
+**Implementation update, 2026-10-23 — current/default presentation:** the
+right-aligned numeric cells sat under left-aligned **Value**/**Default**
+headers, so a current value visually appeared in the Default column. Both
+headers now share the values' right edge. The detail pane shows **Current
+value** and **Default** before the firmware description (previously a long
+description pushed the default below the fold), both wrap in full, and each new
+selection scrolls the pane back to that summary. `check-params.mjs` now also
+asserts column widths and actual value-text alignment, and no horizontal
+overflow at the widest pane size; `check-params-connection.mjs` covers long enum
+meanings at 900 × 600 and with a 140 px editor. The table's minimum content
+width is 474 px plus the live scrollbar gutter.
+
+**Original confirmed layout defect (fixed in the updates above):** virtualized
+`.p-row` elements were absolutely positioned without a common full-width
+constraint. Their automatic widths varied with content, so each row computed
+different fractional columns even though it used the same grid template as the
+header. Numeric values consequently drifted between rows and no longer sat
+under the Value/Default headers.
 
 **Improvements:**
 

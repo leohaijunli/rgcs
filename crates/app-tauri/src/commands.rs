@@ -6,7 +6,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ::mavlink::common::MavCmd;
-use maggcs_core::devices::{DeviceDatabase, DeviceManager, SerialDeviceInfo};
+use maggcs_core::config::serial::{AutoConnectIntentRef, AutoConnectRole};
+use maggcs_core::devices::SerialDeviceInfo;
+use maggcs_core::devices::{BaudSelection, SerialOwner, SerialPortRef};
 use maggcs_core::lifecycle::{ShutdownError, StopReason, TeardownGuard};
 use maggcs_core::mavlink::connection::{
     spawn_connection, ConnectionEvent, ConnectionHandle, LinkStatus,
@@ -15,6 +17,7 @@ use maggcs_core::mavlink::message::MavMessage;
 use maggcs_core::mavlink::{ConnectionConfig, Endpoint};
 use maggcs_core::mission::service::MissionIds;
 use maggcs_core::mission::types::MissionItem;
+use maggcs_core::rtk::base::BASE_STOP_TIMEOUT as SERIAL_CLOSE_BUDGET;
 use maggcs_core::safety::{
     arm_gate_with_ack, evaluate, evaluate_force_arm, ArmGate, Checklist, ChecklistItemId,
     ForceArmOutcome, ForceArmRequest, PlanState, PreflightRefusal, RefusalKind, SafetyConfig,
@@ -47,6 +50,14 @@ pub struct ConnectResponse {
     pub target_discovered: bool,
 }
 
+struct PrimaryInstallation {
+    system_id: u8,
+    component_id: u8,
+    discovered: bool,
+    intent: AutoConnectIntentRef,
+    port: Option<SerialPortRef>,
+}
+
 /// Open a MAVLink connection and start the telemetry hub.
 ///
 /// Idempotent: any previous connection/hub is shut down first.
@@ -56,11 +67,8 @@ pub async fn connect(
     state: State<'_, AppState>,
     endpoint: String,
     heartbeat_timeout_ms: Option<u64>,
+    expected_serial: Option<SerialPortRef>,
 ) -> Result<ConnectResponse, String> {
-    // Serialize connect/disconnect so two concurrent calls cannot race the
-    // link swap (issues.md #21).
-    let _guard = state.ops().lock().await;
-
     let mut config = ConnectionConfig {
         endpoint: Endpoint::try_from(endpoint.as_str()).map_err(|e| e.to_string())?,
         ..Default::default()
@@ -68,14 +76,84 @@ pub async fn connect(
     if let Some(ms) = heartbeat_timeout_ms {
         config.heartbeat_timeout = Duration::from_millis(ms);
     }
+    let serial = crate::serial_service::ensure(&app, &state).await?;
+    let manual = serial.begin_manual(AutoConnectRole::PrimaryFc).await?;
+    if let Some(current) = state.connection() {
+        if current.config().endpoint == config.endpoint
+            && current.state().await == maggcs_core::mavlink::LinkState::Connected
+        {
+            manual.check()?;
+            if matches!(config.endpoint, Endpoint::Serial { .. }) {
+                let selected = expected_serial
+                    .as_ref()
+                    .ok_or("Select a current serial device before connecting.")?;
+                if serial.snapshot().fc.port.as_ref().map(|p| p.instance_id)
+                    != Some(selected.instance_id)
+                {
+                    return Err("The connected serial attachment differs from this selection. Disconnect and select it again.".into());
+                }
+            }
+            let identity = current.target_identity();
+            let (sys, comp) = identity
+                .as_ref()
+                .map(|id| (id.system_id, id.component_id))
+                .unwrap_or((
+                    current.config().target_system_id,
+                    current.config().target_component_id,
+                ));
+            let response = ConnectResponse {
+                ok: true,
+                endpoint: config.endpoint.to_address_string(),
+                target_system_id: sys,
+                target_component_id: comp,
+                target_discovered: identity.is_some(),
+            };
+            let baud = match config.endpoint {
+                Endpoint::Serial { baudrate, .. } => Some(BaudSelection::Fixed(baudrate)),
+                _ => None,
+            };
+            manual
+                .commit(
+                    crate::serial_service::fc_session(&current),
+                    expected_serial,
+                    identity,
+                    None,
+                    baud,
+                )
+                .await;
+            return Ok(response);
+        }
+    }
+    let lease = serial
+        .reserve_endpoint(
+            &config.endpoint,
+            expected_serial.clone(),
+            SerialOwner::PrimaryFc,
+        )
+        .await?;
+    manual.check()?;
+    crate::rtk_service::ensure_port_not_base(&state, &config.endpoint)?;
 
-    let (handle, events_rx, first_result) = spawn_connection(config.clone())
-        .await
-        .map_err(|e| e.to_string())?;
+    let spawned = match lease {
+        Some(lease) => {
+            maggcs_core::mavlink::connection::spawn_leased_serial_connection(config.clone(), lease)
+                .await
+        }
+        None => spawn_connection(config.clone()).await,
+    };
+    let (handle, events_rx, first_result) = spawned.map_err(|e| e.to_string())?;
 
     // Wait for the first connect/bind attempt so failures surface here instead
     // of "ok: true" followed by a background error (issue #4).
-    let outcome = match tokio::time::timeout(FIRST_CONNECT_TIMEOUT, first_result).await {
+    let first_result = tokio::select! {
+        biased;
+        _ = manual.cancel.cancelled() => {
+            let _ = handle.shutdown_and_wait(SERIAL_CLOSE_BUDGET).await;
+            return Err("manual connection cancelled or superseded".into());
+        }
+        result = tokio::time::timeout(FIRST_CONNECT_TIMEOUT, first_result) => result,
+    };
+    let outcome = match first_result {
         Ok(Ok(Ok(()))) => Ok(()),
         Ok(Ok(Err(failure))) => {
             handle.shutdown().await;
@@ -96,6 +174,17 @@ pub async fn connect(
     };
     outcome?;
 
+    let _guard = state.ops().lock().await;
+    if let Err(error) = manual.check() {
+        let _ = handle.shutdown_and_wait(SERIAL_CLOSE_BUDGET).await;
+        return Err(error);
+    }
+
+    if let Err(error) = crate::main_link_service::before_primary_replace(&app, &state).await {
+        handle.shutdown().await;
+        return Err(error);
+    }
+
     // The FC ids are settled either by auto-discovery (first autopilot
     // heartbeat on the link, e.g. a non-default PX4 sysid) or by the
     // configured expectation when the link stays quiet.
@@ -105,6 +194,59 @@ pub async fn connect(
     } else {
         (config.target_system_id, config.target_component_id, false)
     };
+
+    let baud = match &config.endpoint {
+        Endpoint::Serial { baudrate, .. } => Some(BaudSelection::Fixed(*baudrate)),
+        _ => None,
+    };
+    let identity = handle.target_identity();
+    let result = install_connection(
+        app,
+        &state,
+        config,
+        handle.clone(),
+        events_rx,
+        PrimaryInstallation {
+            system_id: target_system_id,
+            component_id: target_component_id,
+            discovered: target_discovered,
+            intent: manual.intent.clone(),
+            port: expected_serial.clone(),
+        },
+    )
+    .await;
+    drop(_guard);
+    if result.is_ok() {
+        manual
+            .commit(
+                crate::serial_service::fc_session(&handle),
+                expected_serial,
+                identity,
+                None,
+                baud,
+            )
+            .await;
+    } else {
+        let _ = handle.shutdown_and_wait(SERIAL_CLOSE_BUDGET).await;
+    }
+    result
+}
+
+async fn install_connection(
+    app: AppHandle,
+    state: &AppState,
+    config: ConnectionConfig,
+    handle: ConnectionHandle,
+    events_rx: tokio::sync::broadcast::Receiver<ConnectionEvent>,
+    installation: PrimaryInstallation,
+) -> Result<ConnectResponse, String> {
+    let PrimaryInstallation {
+        system_id: target_system_id,
+        component_id: target_component_id,
+        discovered: target_discovered,
+        intent,
+        port,
+    } = installation;
 
     // The hub consumes the initial event stream, so the `Connected` emitted by
     // the worker cannot be missed (issue #2).
@@ -132,7 +274,7 @@ pub async fn connect(
     // after the new link is up (a failed reconnect no longer kills a working
     // link).
     let log_connection = handle.clone();
-    let previous = state.set_primary_link(ActiveLink {
+    let new_link = ActiveLink {
         id: LinkId::next(),
         connection: handle,
         hub,
@@ -141,7 +283,9 @@ pub async fn connect(
         logs: None,
         params: None,
         rtk: None,
-    });
+    };
+    let serial = state.serial.get().ok_or("serial service is unavailable")?;
+    let previous = serial.install_primary(state, &intent, port, new_link)?;
     if let Some(mut old) = previous {
         if let Some(rtk) = old.rtk.take() {
             let _ = rtk
@@ -159,7 +303,7 @@ pub async fn connect(
                 .await;
         }
         old.hub.shutdown();
-        old.connection.shutdown().await;
+        let _ = old.connection.shutdown_and_wait(SERIAL_CLOSE_BUDGET).await;
     }
     let logs = state.logs.spawn(app.clone(), log_connection);
     state.set_primary_logs(logs);
@@ -221,6 +365,73 @@ pub async fn connect(
     })
 }
 
+pub(crate) async fn connect_probed_serial(
+    app: AppHandle,
+    probed: maggcs_core::mavlink::serial::ProbedFcSerial,
+    intent: AutoConnectIntentRef,
+) -> Result<ConnectionHandle, String> {
+    let state = app.state::<AppState>();
+    let _ops = state
+        .ops()
+        .try_lock()
+        .map_err(|_| "a manual connection change is in progress")?;
+    let service = state.serial.get().ok_or("serial service unavailable")?;
+    if !service.is_current(&intent) {
+        return Err("serial discovery intent changed".into());
+    }
+    if let Some(current) = state.connection() {
+        if current.state().await != maggcs_core::mavlink::LinkState::Disconnected {
+            return Err("the primary connection is already owned".into());
+        }
+    }
+    crate::main_link_service::before_primary_replace(&app, &state).await?;
+    if !service.is_current(&intent) {
+        return Err("serial discovery intent changed".into());
+    }
+    let identity = probed.target().clone();
+    let port = probed.port().clone();
+    let config = ConnectionConfig {
+        endpoint: probed.endpoint(),
+        target_system_id: identity.system_id,
+        target_component_id: identity.component_id,
+        auto_discover_target: false,
+        ..Default::default()
+    };
+    let (handle, events, first) = probed
+        .connect(config.clone())
+        .await
+        .map_err(|e| e.to_string())?;
+    let result = async {
+        tokio::time::timeout(FIRST_CONNECT_TIMEOUT, first)
+            .await
+            .map_err(|_| "serial handoff timed out")?
+            .map_err(|_| "serial worker stopped")?
+            .map_err(|e| e.message)?;
+        install_connection(
+            app.clone(),
+            &state,
+            config,
+            handle.clone(),
+            events,
+            PrimaryInstallation {
+                system_id: identity.system_id,
+                component_id: identity.component_id,
+                discovered: true,
+                intent,
+                port: Some(port),
+            },
+        )
+        .await?;
+        Ok::<(), String>(())
+    }
+    .await;
+    if let Err(error) = result {
+        let _ = handle.shutdown_and_wait(SERIAL_CLOSE_BUDGET).await;
+        return Err(error);
+    }
+    Ok(handle)
+}
+
 /// How long `connect` waits for the first bind/connect attempt to resolve.
 const FIRST_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -236,6 +447,9 @@ const TARGET_DISCOVER_TIMEOUT: Duration = Duration::from_secs(5);
 /// already reports a heartbeat from the expected node.
 async fn resolve_target(handle: &ConnectionHandle, config: &ConnectionConfig) -> (u8, u8, bool) {
     let mut events = handle.subscribe();
+    if let Some(identity) = handle.target_identity() {
+        return (identity.system_id, identity.component_id, true);
+    }
     let outcome = tokio::time::timeout(TARGET_DISCOVER_TIMEOUT, async {
         loop {
             match events.recv().await {
@@ -249,7 +463,8 @@ async fn resolve_target(handle: &ConnectionHandle, config: &ConnectionConfig) ->
                     // The configured target is already alive: keep it as-is.
                     if env.header.system_id == config.target_system_id
                         && env.header.component_id == config.target_component_id
-                        && matches!(env.message, MavMessage::HEARTBEAT(_))
+                        && maggcs_core::mavlink::serial::classify_autopilot_heartbeat(&env)
+                            .is_some()
                     {
                         return (config.target_system_id, config.target_component_id);
                     }
@@ -262,7 +477,7 @@ async fn resolve_target(handle: &ConnectionHandle, config: &ConnectionConfig) ->
     .await;
     match outcome {
         Ok((sys, comp)) => {
-            let discovered = sys != config.target_system_id || comp != config.target_component_id;
+            let discovered = handle.target_identity().is_some();
             (sys, comp, discovered)
         }
         Err(_) => (config.target_system_id, config.target_component_id, false),
@@ -312,11 +527,28 @@ async fn request_supplementary_streams(
 /// A refusal raises a `warn` alert even if the caller ignores the error.
 #[tauri::command]
 pub async fn disconnect(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    disconnect_for_intent(&app, &state, None).await
+}
+
+pub(crate) async fn disconnect_for_intent(
+    app: &AppHandle,
+    state: &AppState,
+    expected: Option<&AutoConnectIntentRef>,
+) -> Result<(), String> {
     let _guard = state.ops().lock().await;
-    lifecycle_service::run(&app, StopReason::Disconnect)
+    if let Some(expected) = expected {
+        if !state
+            .serial
+            .get()
+            .is_some_and(|service| service.is_current(expected))
+        {
+            return Err("automatic connection intent changed".into());
+        }
+    }
+    lifecycle_service::run(app, StopReason::Disconnect)
         .await
         .map_err(|err| refusal_message("Disconnect", &err))?;
-    crate::actuator_service::stop_auxiliary_links(&app, &state).await;
+    crate::actuator_service::stop_auxiliary_links(app, state).await;
     // Inspector: stop the live tap and clear the observed message table so
     // the signal tree shows only what the *next* link produces (real FC → SITL
     // must not leave the old FC's messages listed). Trace configs stay until
@@ -326,6 +558,11 @@ pub async fn disconnect(app: AppHandle, state: State<'_, AppState>) -> Result<()
     state.instruments().detach();
     state.publish_link(LinkStatus::disconnected());
     let _ = app.emit("link", LinkStatus::disconnected());
+    let serial = state.serial.get().cloned();
+    drop(_guard);
+    if let Some(serial) = serial {
+        serial.persist(&serial.snapshot().settings_revision).await?;
+    }
     Ok(())
 }
 
@@ -389,6 +626,9 @@ pub async fn shutdown_app(app: AppHandle, state: State<'_, AppState>) -> Result<
         .await
         .map_err(|err| refusal_message("Shut down", &err))?;
     crate::actuator_service::stop_auxiliary_links(&app, &state).await;
+    if let Some(serial) = state.serial.get() {
+        serial.shutdown().await?;
+    }
     let _ = app.emit("link", LinkStatus::disconnected());
     app.exit(0);
     Ok(())
@@ -402,9 +642,20 @@ pub async fn get_snapshot(state: State<'_, AppState>) -> Result<Option<Telemetry
 
 /// Enumerate attached serial/USB devices (plan §9).
 #[tauri::command]
-pub fn enumerate_devices() -> Result<Vec<SerialDeviceInfo>, String> {
-    let manager = DeviceManager::new(DeviceDatabase::builtin());
-    manager.enumerate().map_err(|e| e.to_string())
+pub async fn enumerate_devices(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<SerialDeviceInfo>, String> {
+    let service = crate::serial_service::ensure(&app, &state).await?;
+    Ok(service
+        .discovery
+        .refresh()
+        .await
+        .map_err(|e| e.to_string())?
+        .ports
+        .into_iter()
+        .map(|p| p.port.device)
+        .collect())
 }
 
 /// One Tools ▾ entry's coordination state (plan §7 U11): whether the window

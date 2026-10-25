@@ -12,6 +12,10 @@ use maggcs_core::mavlink::{
 };
 use tokio::time::timeout;
 
+/// UDP ports are allocated by bind-then-release, so parallel tests can race
+/// for the same port. Keep this binary's real-socket tests serialized.
+static TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Find a free UDP port by binding to :0 and releasing.
 fn free_udp_port() -> u16 {
     let sock = UdpSocket::bind("127.0.0.1:0").expect("bind ephemeral");
@@ -68,6 +72,7 @@ where
 
 #[tokio::test(flavor = "multi_thread")]
 async fn udp_heartbeat_flow_alive_lost_restored() {
+    let _guard = TEST_LOCK.lock().await;
     let port = free_udp_port();
     let config = config_for_port(port).await;
     let (handle, mut rx, _first) = spawn_connection(config).await.expect("spawn");
@@ -143,6 +148,7 @@ async fn udp_heartbeat_flow_alive_lost_restored() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn heartbeat_lost_while_other_nodes_keep_sending() {
+    let _guard = TEST_LOCK.lock().await;
     // Issue #1: inbound traffic from non-target nodes must not reset the
     // heartbeat timeout. A QGC-like peer keeps sending while the FC goes
     // silent; `HeartbeatLost` must still fire.
@@ -218,12 +224,19 @@ async fn heartbeat_lost_while_other_nodes_keep_sending() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn gcs_heartbeat_is_announced_automatically() {
+    let _guard = TEST_LOCK.lock().await;
     // Issue #3: the worker must advertise a MAV_TYPE_GCS heartbeat on its own,
     // without the caller sending anything.
     let port = free_udp_port();
     let config = config_for_port(port).await;
     let our_system_id = config.system_id;
-    let (handle, _rx, _first) = spawn_connection(config).await.expect("spawn");
+    let (handle, _rx, first) = spawn_connection(config).await.expect("spawn");
+    // The one peer-discovery datagram must not race the asynchronous UDP bind.
+    timeout(Duration::from_secs(2), first)
+        .await
+        .expect("bind deadline")
+        .expect("worker result")
+        .expect("bound before peer sends");
 
     let mut peer =
         mavlink::connect_async::<mavlink::common::MavMessage>(&format!("udpout:127.0.0.1:{port}"))
@@ -274,6 +287,7 @@ async fn gcs_heartbeat_is_announced_automatically() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn first_attempt_success_is_reported() {
+    let _guard = TEST_LOCK.lock().await;
     // Issue #4: a successful bind resolves the first-attempt result with Ok.
     let port = free_udp_port();
     let config = config_for_port(port).await;
@@ -293,6 +307,7 @@ async fn first_attempt_success_is_reported() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn first_attempt_failure_is_reported() {
+    let _guard = TEST_LOCK.lock().await;
     // Issue #4: a transport that fails to open must surface synchronously on
     // the first-attempt result instead of "ok" followed by a background event.
     let mut config = config_for_port(0).await;
@@ -316,6 +331,7 @@ async fn first_attempt_failure_is_reported() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn send_round_trip_to_peer() {
+    let _guard = TEST_LOCK.lock().await;
     let port = free_udp_port();
     let config = config_for_port(port).await;
     let (handle, mut rx, _first) = spawn_connection(config).await.expect("spawn");
@@ -376,6 +392,7 @@ async fn send_round_trip_to_peer() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn auto_discovery_adopts_non_default_fc_sysid() {
+    let _guard = TEST_LOCK.lock().await;
     // The FC streams from sysid 250 (a custom MAV_SYS_ID) while the config
     // expects 1/1; the worker must adopt the FC's real ids and track it.
     let port = free_udp_port();

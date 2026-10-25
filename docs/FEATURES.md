@@ -133,18 +133,44 @@ motor test → RTK → FC logs → parameters → mission/command → (recorder)
 
 ## RTK (Tools-less: TopBar GPS/RTK pill ▸ drawer)
 
-- **Base station**: the drawer lists operator-pluggable serial ports
-  (`COM*` / `ttyUSB*` / `ttyACM*` — the same enumeration as the devices
-  page); pick one + baud (F9P), Start/Stop injection.
+- **Base station**: the drawer classifies operator-pluggable serial ports as
+  FC, RTK candidate or unknown; known/in-use FC ports are excluded. It rechecks
+  USB identity before opening. Choose preconfigured RTCM reading or **F9P
+  Survey-In**, default **2.00 m / 180 s**. Configuration is identified,
+  RAM-only, acknowledged and read back. Both survey targets and the receiver's
+  completion flags are required (ADR-027).
+- **Independent lifetime**: base observation works without an FC. Disconnecting
+  the vehicle preserves the base; exiting the app stops it. Start returns a
+  session ID so configuration can be cancelled and old Stop requests cannot
+  affect a replacement. Native automatic connection defaults on for eligible,
+  unambiguous devices; saved identity wins, and Disconnect persists a pause.
+  Manual port/baud/mode controls remain available and take priority.
+- **RTK/GPS instruments**: the drawer includes a HUD-style solution readout,
+  satellites/HDOP/VDOP, RTCM age ring, local-TX history and separate Survey-In
+  time/precision bars. Missing and stale data are explicit; bars alone do not
+  establish receiver validity and local TX does not establish rover reception.
 - **Injection**: RTCM3 frames from the base are reassembled, fragmented
   into `GPS_RTCM_DATA` and sent to the FC (`core::rtk`); PX4 forwards the
   fragments to the GNSS in arrival order (ADR-008 addendum). Single-source
-  mutual exclusion; a bounded queue drops oldest on overflow.
-- **Health**: 1 Hz stats — source, B/s, RTCM type counts, dropped chunks
-  and a 5 s stall alarm (matching the PX4 GPS driver's link-switch
-  timeout); all transitions land in the event log.
+  mutual exclusion; a bounded queue drops oldest on overflow. Complete RTCM3
+  frames up to 1029 bytes are supported on the PX4 byte-stream path by using
+  multiple sequenced groups of at most four 180-byte packets. Statistics count
+  RTCM frames rather than transport groups; large frames no longer terminate
+  the service, and Stop/Start remains available after them. Forwarding is
+  immediate, with whole-frame deadlines, cancellation and transport-generation
+  guards. Reconnection uses fresh corrections after the new transport opened.
+- **Health**: 1 Hz stats — source, valid RTCM bytes per actual elapsed second,
+  RTCM message-type counts (1074/1084/…), dropped chunks and source-data age.
+  The 5 s stall alarm uses the last nonempty read, with a startup grace period;
+  no data yet retains a null age. Valid RTCM freshness is displayed separately
+  from raw source traffic. Throughput reflects successful local transport
+  writes, not rover receipt. A slow stats consumer cannot block Stop. Vehicle
+  disconnect clears forwarding state; session/revision guards reject old events.
+  Stop stays available after FC heartbeat loss and surfaces failures for retry.
 - **Rover**: fix type (RTK FIXED/FLOAT/…) and satellite count from
-  telemetry.
+  telemetry, with a stale-data annotation. Automated coverage and outstanding
+  real-F9P/serial acceptance are recorded in the
+  [detailed RTK / air–ground TODOs](plans/rtk-base-and-air-ground-todos.md).
 
 ## Map
 
@@ -333,6 +359,10 @@ the right.
   queued reads are invalidated; the selected row is re-read, and delayed
   replies from the old connection cannot overwrite the new state. Search
   changes reset the virtualized scroll position.
+- **Values**: the table's **Current value** and **Default** columns are
+  right-aligned under their matching headers, so the live value never reads as
+  the default. The detail pane lists both values first, above the firmware
+  description, and wraps long enum meanings in full instead of truncating them.
 - **Editing**: inline type-aware editor (enum dropdowns show
   `value · description`; numbers carry units), Stage → staging tray →
   Apply with echo confirmation.
@@ -354,34 +384,67 @@ remains the PX4 autopilot default (1).
 
 The window is responsive (Task 9): at 1366×768 and wider it keeps the
 three-region layout (input + start/alarm controls / setup + plots /
-output + logging). Each column has a bounded height and scrolls independently.
+target summary + RPM). Manual motors use a compact 2×2 grid. Capture/logging is
+a bottom utility drawer spanning the center/right workspace: capture state and
+Start/Stop remain visible while detailed configuration/retrieval actions default
+closed. Each column has a bounded height and scrolls independently.
 At 1024×640 the regions stack into one primary scroll region with the header
 pinned (Stop and Emergency Stop stay visible). The left-column workflow comes
-first: SITL details, unlock/START, then Mag alarm. Inactive SITL details collapse
+first: SITL details, the default-OFF Motor control switch, unlock/START, ESC
+tones, then Mag alarm. Motor control must be enabled explicitly for each
+target/connection; enabling is passive, and OFF keeps the window monitor-only
+while telemetry and capture remain available. Inactive SITL details collapse
 by default and open when Forward is selected. Logger configuration and log
-retrieval expand independently of the always-available capture controls.
-The scope signal list can be collapsed at every width, and extra plot panes
-scroll instead of compressing their curves. Motor Test applies saved theme and
-Field mode at startup and follows changes from the main window. See the
+retrieval live in the drawer behind the always-available capture controls.
+The scope uses a Signal Inspector-style searchable/collapsible list, toolbar
+and two independent stacked plots. A Top/Bottom switch in the list chooses which
+plot a checkbox edits, so each plot has its own selection and the same signal may
+appear in both (defaults: Output on top, Magnetic field below). Mixed units keep
+separate axes. The list separator is draggable and keyboard-operable (Arrow
+keys, Home/End, double-click reset); width is clamped to 220–560 px, defaults to
+300 px and persists. Each signal has a persistent color override. X-axes are
+cumulative seconds from the first plotted value; Clear/disconnect/reopen resets
+0 s, while protocol, selection and color changes preserve it. Motor Test applies
+saved theme and Field mode at startup and follows changes from the main window. See the
 [workspace verification and screenshots](../frontend/src/actuator/README.md).
 
+- **Output protocols and ESC RPM**: Motor Test renders and sends only the
+  configured M1..MN prefix. Its three output families are PWM, OneShot and DShot;
+  bitrate and bidirectional operation are DShot attributes. Detection uses each
+  PX4 bank's `PWM_MAIN_TIMn` / `PWM_AUX_TIMn`, showing pulse output in µs and
+  DShot in mixer counts. Different known families on MAIN/AUX are supported;
+  unknown or conflicting protocols within a bank, `DSHOT_3D_ENABLE != 0`
+  and unread ranges block START instead of guessing. ESC RPM from `ESC_STATUS` is shown
+  live, stale (500 ms) or missing. These are display-only ESC indices, not motor
+  assignments. Wire index 0 maps to ESC1–4 and index 4 to ESC5–8; aggregation,
+  scope samples and per-ESC receive timestamps agree. Unseen ESCs remain absent,
+  a reported zero is valid data, and each bank's freshness is independent.
+  RPM hold, mapping-verification pulses, learned/manual RPM limits,
+  feedforward and speed-performance verdicts have been removed from the UI,
+  IPC commands and core modules (MR-06). The scope keeps command, magnetic,
+  ESC and battery-current traces. RPM availability does not gate motor START.
+  See [ADR-023](adr/023-motor-test-protocols-rpm-hold.md).
+
 - **Header and motor tracking**: the fixed header shows the target identity,
-  armed/heartbeat state, SD capture state, START/STOP state and owned failures.
+  armed/heartbeat state, active output protocol, START/STOP state and owned failures.
   One test-state label distinguishes Locked, Unlocked, Starting, Running,
   Releasing and Emergency; the raw backend session is labelled Command transport.
-  Firmware release and measured command rate are shown as `Unknown`/`—` because
-  this link does not report them; the configured 10 Hz is labelled `cfg`. The
-  Motor tracking table keeps Motor, mapped output, source value, expected pulse,
-  target-reported pulse, Δ and state together. Expected is inverted from the
+  Unavailable firmware/rate placeholders and capture state do not crowd the
+  safety header. Output blockers remain visible with their reason. The
+  Motor tracking table keeps Motor, mapped output, source value, expected output,
+  target-reported output, Δ and state together. Expected is inverted from the
   `ACTUATOR_TEST` value actually sent (after safety limits), and `tracking`
-  means the reported pulse is within ±5 µs. Rows expand to show function→pin
+  means feedback is within ±5 µs for pulse outputs or ±2 mixer counts for DShot.
+  Rows expand to show function→pin
   mapping, range/reversal/THR_MDL_FAC and the encoded command. Missing models
-  or feedback stay `—`, never inferred. Connection, mapping, capture and log
-  errors persist until dismissed.
-- **Safety gate** (risk-scaled, operator-declared prop load): no props /
-  flat plate — unlock toggle → Start; full props — unlock → type
-  `START PROPS` → hold Start 3 s. Any load/source/preset/target/mapping change
-  or manual motor edit while idle re-locks. Start also requires a fresh
+  or feedback stay `—`, never inferred. Tracking cannot fold while running,
+  stale or blocked; user-expanded motor details remain pinned when a temporary
+  warning clears. Connection, mapping, capture and log errors persist until dismissed.
+- **Safety gate**: unlock → hold Start 3 s for every command source; a short
+  click never starts. All tests use a fixed 0.3 maximum normalized demand and
+  2.0/s slew. Any source/preset/target/mapping change or manual motor edit while
+  idle re-locks. Ordinary STOP retains the unlock; emergency reset re-locks it.
+  Start also requires a fresh
   heartbeat from the exact connected target showing PX4 and disarmed; no motor
   command is sent before that heartbeat arrives.
 - **Command sources**: Manual sliders (sync-all, ~30 Hz merge, latest value
@@ -390,7 +453,7 @@ Field mode at startup and follows changes from the main window. See the
   live actuator outputs (latest-value slot, stale feed auto-stops). The
   source connection also selects the MAVLink system/component ID and MAIN or
   AUX bank; channels 1–4 from any other node or bank are ignored. Forwarding
-  is capped and slewed by the declared prop load.
+  uses the same fixed output cap and slew limit.
 - **Output mapping and feedback**: the serial target's `PWM_MAIN_FUNC1..8`
   and `PWM_AUX_FUNC1..8` are read on connect and by Refresh mapping. PX4
   functions 101–104 correspond to Motor1–4, so feedback for each motor is
@@ -407,32 +470,58 @@ Field mode at startup and follows changes from the main window. See the
   endpoints, reversal and thrust factor. The tracking table always shows
   each motor's FC-read range. Missing/invalid ranges are explicitly marked
   fallback and block starting until refreshed.
-- **Command PWM curves**: the sender converts its queued, compensated
-  ACTUATOR_TEST values into µs using the same target models. Command PWM is
-  displayed and plotted separately from measured servo feedback; release is
-  a curve gap, not a synthetic zero or minimum pulse. The MAVLink wire value
-  remains normalized as required by the protocol.
+- **Protocol-aware output curves**: the sender converts queued, compensated
+  ACTUATOR_TEST values through the same target models used for sending.
+  PWM/OneShot are µs; DShot/BDShot are mixer counts. Every command and mapped
+  FC-feedback sample carries the target connection, configuration revision,
+  motor, physical MAIN/AUX channel and unit. FC curves use `fc.motorN`, selected
+  from the actual output mapping rather than an assumed servo number. A context
+  change clears only output history and rejects late/untagged samples; mixed
+  units use independent axes. Release is a typed gap, not a synthetic zero or
+  minimum. Stale telemetry inserts one deadline boundary, and run completion
+  breaks existing command, mapped-feedback and RPM traces; every affected series
+  resumes without spanning the invalid interval. The MAVLink wire value remains
+  normalized as required.
 - **Sending**: `MAV_CMD_ACTUATOR_TEST` at 10 Hz addressed to the configured
   target system ID; only that system's heartbeat/ACK and target telemetry are
   used for the safety gate and plots. A session is bound to its connection
-  and load: reconnecting the target or changing the load while idle replaces
-  the session, while a sending session must be stopped first. FC-side timeout
-  0.3 s per command (PX4 caps at 3 s), output cap + slew limit per declared
-  load, disarmed-only interlock (armed or stale heartbeat → immediate
+  and output-configuration revision: reconnecting the target or refreshing its
+  configuration while idle replaces the session, while a sending session must
+  be stopped first. FC-side timeout is 0.3 s per command (PX4 caps at 3 s),
+  with the fixed output cap and slew limit, a disarmed-only interlock
+  (armed or stale heartbeat → immediate
   release), ACK denial stops the test. PX4 needs `COM_MOT_TEST_EN=1`.
-- **Live curves**: calibrated total field (baseline Δ), per-ESC current (A)
-  and RPM (right axis) over a 60 s rolling window.
+- **Main serial reuse**: explicitly borrow the main window's compatible PX4
+  serial link and parameter cache. Attach starts monitor-only; detach/tool
+  close preserves main I/O. Main-link failure/reconnect revokes permission and
+  expires the attachment. Exact target/generation checks reject stale offers
+  and writes. Use Motor Test's Capture/Logs while attached; main telemetry and
+  Parameters remain available. See [ADR-026](adr/026-main-serial-target-reuse.md).
+- **Live curves**: one selected Output, Magnetic field, ESC telemetry or Battery
+  view, with a 10/30/60/120 s rolling window (30 s default). Raw/calibrated total
+  field, per-ESC current/RPM and total battery current remain selectable signals.
 - **Mag alarm**: threshold watchdog over the EMA-smoothed total field —
   debounce (1 s), hysteresis (50 nT), cooldown (30 s) prevent false and
   repeated triggers; alarm = window flash + beeps + Acknowledge. Enable and
-  threshold are in the right panel.
+  threshold are in the left panel.
 - **FC prerequisites**: `COM_MOT_TEST_EN=1`; test runs only while disarmed.
 - **Stopping**: normal and emergency stops release all configured functions
   with `ACTUATOR_TEST.param2=0`, within a 2 s overall command/write budget.
   Active commands remain stopped after a failed pass, and the full release
   batch is retried. Reset cannot clear an incomplete emergency release.
-- **Target parameters**: reads and writes go only to the serial-target PX4
-  (never the primary-link vehicle). Integer parameters are decoded from
+- **AM32 ESC tones**: independent saved Start tone and Stop tone selections,
+  with Off, Rising/1, Falling/2, Sweep/3 and Triple/4. Defaults are Rising for
+  start and Falling for stop. Playback uses the target's MAVLink shell and
+  checks live `dshot status` bank/channel/function/mask data before addressing
+  physical outputs. Only configured DShot motors receive beacon commands.
+  The start cue precedes output; the stop cue follows confirmed releases with
+  a 1 s coast allowance, including preset completion. A pending start can be
+  cancelled through STOP, CANCEL START or Escape; an already dispatched sound
+  retains its playback fence before the next start. Stop-tone failures do not
+  delay or invalidate motor release. MR-21 software/IPC acceptance passes;
+  actual sound and timing on the installed ESC firmware remain pending.
+- **Target parameters**: reads and writes go to the explicitly selected PX4,
+  using its dedicated link or the borrowed main serial connection. Integer parameters are decoded from
   PX4's byte-concat encoding, so `COM_MOT_TEST_EN=1` shows "enabled" — not a
   denormal float. A write is reported only after the FC's own echo **and** a
   read-back match; a clamped or mismatched value is an error that shows the
@@ -448,17 +537,22 @@ Field mode at startup and follows changes from the main window. See the
   Recording (this test's own file) or Existing recording (a file already
   running, which is a valid observation rather than a failed check). Start
   sends `logger on` and reports Recording only after PX4 names a new `Log file:`
-  path. Every motor start requires that owned Recording state; an existing
-  recording never authorises motor commands. Stop releases motors first, then
-  re-checks status before `logger off`, and waits for stable "Not logging"
-  evidence inside a 10 s finalization window. Stop is available after a failed
-  check, an existing recording or a timed-out exchange, so the operator can
-  always recover. Missing storage, a non-file logger backend, rejected
-  commands, timeouts and path reuse are explicit errors. `SDLOG_MODE` labels
-  follow v1.17 (0 armed→disarm, 1 boot→disarm, 2 boot→shutdown, 3 AUX1,
-  4 first arm→shutdown).
-- **Test run coordinator**: after the capture reports a new file, a 1 s
-  pre-roll runs before START is accepted. A confirmed motor release starts a
+  path. Manual capture start/stop is independent of the motor-test session and
+  remains available while motors are running; motor START/STOP never starts or
+  stops capture. The manual start still requires a disarmed target and does not
+  authorise motor commands. Stop waits for stable "Not logging" evidence inside
+  a 10 s finalization window. Motor STOP/E-STOP bypass capture's operation lock:
+  MR-16 loopback and UI tests hold Check/Start/Stop replies until the motor
+  releases finish, then verify that late capture replies do not restart motors
+  or clear Emergency. Stop capture is available after a failed check, an
+  existing recording or a timed-out exchange, so the operator can always
+  recover. Missing storage, a non-file logger backend, rejected commands,
+  timeouts and path reuse are explicit errors. `SDLOG_MODE` labels follow v1.17
+  (0 armed→disarm, 1 boot→disarm, 2 boot→shutdown, 3 AUX1, 4 first arm→shutdown).
+- **Test run coordinator**: the coordinator is a separate orchestrated path;
+  it requires an idle motor session and no active run before starting capture,
+  then after a confirmed recording and 1 s pre-roll accepts START. Manual capture
+  does not enter this path. A confirmed motor release starts a
   1 s post-roll, then `logger off`. Abort releases the motors first. Every
   run writes an atomically updated manifest at
   `<app_data>/motor-tests/<test_id>/manifest.json` (test id, log path, FC
@@ -474,6 +568,31 @@ Field mode at startup and follows changes from the main window. See the
   the request timeout, so long downloads no longer exhaust the retry budget
   after ~6 s; broadcast lag or an ordinary link lifecycle event no longer stops
   the download task, and replacing the link aborts the old runtime.
+
+## Standard MAVLink stream catalog
+
+The core library provides a searchable catalog of **229 standard messages and
+1883 fields** from the locked, compiled `common` dialect (MR-18a). Descriptors
+carry numeric ID, exact name, field wire types/array sizes, units and documented
+PX4 v1.17 source support. Exact names and IDs rank first; partial/field searches
+never silently select a message. Unknown and ambiguous selections return typed
+errors. Source support does not imply a particular vehicle is streaming the
+message or honoring a requested rate.
+
+The **Streams…** analysis action adds the live manager for Motor Test's dedicated
+PX4 link (MR-18b). It provides explicit selection/fields/units, immediate Hz
+editing, disable and observed/waiting/stale states. Saved requests are scoped
+to endpoint/system/component and restored once per new transport generation;
+default scope requests cannot overwrite them. Wrong/expired targets and invalid
+rates are rejected before guarded writes. Motor STOP/E-STOP remains independent
+of stream operations. Six verified PX4 v1.17 uORB mappings expose source links
+and interpretation notes. Exact source aliases resolve to their standard
+message; shared `vehicle_imu` requires an explicit choice between 26/105, and
+unmapped topics send no request. [MR-20 SITL verification](verification/mr20-standard-streams-20261025.md)
+passed required stream rates, disable/stale and persisted reconnect behavior on
+PX4 v1.17.0. ESC_STATUS had no source in that SIH fixture; physical hardware
+acceptance remains separate. See the
+[catalog API and regeneration checks](../crates/core/src/mavlink/README.md).
 
 ## Signal Inspector (Tools ▸)
 

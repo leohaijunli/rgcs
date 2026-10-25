@@ -12,6 +12,7 @@
 //! 4. on a link failure or explicit [`ConnectionHandle::reconnect`],
 //!    tears down and retries after `reconnect_delay`.
 
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -22,6 +23,7 @@ use super::endpoint::Endpoint;
 use super::error::MavlinkError;
 use super::heartbeat::HeartbeatMonitor;
 use super::message::{MavHeader, MavMessage, MessageEnvelope};
+use crate::devices::{LeasePhase, SerialCancellation, SerialLease, SerialOwner};
 use crate::mavlink::MavVersion;
 
 /// Event bus capacity (number of frames buffered for slow subscribers).
@@ -41,6 +43,7 @@ pub const HEARTBEAT_WATCHDOG_TICK: Duration = Duration::from_millis(500);
 pub const GCS_HEARTBEAT_PERIOD: Duration = Duration::from_secs(1);
 /// Default delay before reconnect attempts after a link failure.
 pub const DEFAULT_RECONNECT_DELAY: Duration = Duration::from_secs(1);
+const SERIAL_WRITE_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Configuration for a MAVLink connection to a single flight controller.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -255,7 +258,11 @@ fn raw_wire_bytes(frame: &::mavlink::MAVLinkMessageRaw) -> &[u8] {
 #[derive(Debug, Clone)]
 pub enum ConnectionEvent {
     /// Link established (first connect or reconnect).
-    Connected { endpoint: Endpoint },
+    Connected {
+        endpoint: Endpoint,
+        generation: u64,
+        started_at: Instant,
+    },
     /// An autopilot node was adopted as the FC from its first heartbeat,
     /// replacing the configured target expectation (auto-discovery).
     TargetDiscovered { system_id: u8, component_id: u8 },
@@ -277,15 +284,21 @@ struct OutboundFrame {
     header: MavHeader,
     message: MavMessage,
     sent: Option<oneshot::Sender<Result<(), String>>>,
+    guard: Option<(u64, tokio::time::Instant)>,
 }
 
 /// Internal shared state of a connection.
 struct ConnectionInner {
+    id: usize,
+    generation: AtomicU64,
+    connected_since: Mutex<Option<Instant>>,
     config: ConnectionConfig,
     outbound: mpsc::Sender<OutboundFrame>,
     reconnect: watch::Sender<u64>,
     shutdown: watch::Sender<bool>,
     state: Mutex<LinkState>,
+    stopped: watch::Receiver<bool>,
+    target_identity: watch::Sender<Option<super::serial::FcIdentity>>,
 }
 
 /// Handle for driving a MAVLink connection.
@@ -300,7 +313,17 @@ impl ConnectionHandle {
     /// Identity of the underlying connection — stable for one link session;
     /// used to detect a link swap without comparing endpoints.
     pub fn handle_id(&self) -> usize {
-        Arc::as_ptr(&self.inner) as usize
+        self.inner.id
+    }
+
+    /// A successful transport open increments this value even when the handle
+    /// survives reconnection. Generation zero has not opened a transport yet.
+    pub fn generation(&self) -> u64 {
+        self.inner.generation.load(Ordering::Acquire)
+    }
+
+    pub async fn connected_since(&self) -> Option<Instant> {
+        *self.inner.connected_since.lock().await
     }
 
     /// Subscribe to the event stream.
@@ -343,8 +366,15 @@ impl ConnectionHandle {
         &self.inner.config
     }
 
+    pub fn target_identity(&self) -> Option<super::serial::FcIdentity> {
+        self.inner.target_identity.borrow().clone()
+    }
+
     /// Current link state.
     pub async fn state(&self) -> LinkState {
+        if *self.inner.shutdown.borrow() {
+            return LinkState::Disconnected;
+        }
         *self.inner.state.lock().await
     }
 
@@ -373,6 +403,7 @@ impl ConnectionHandle {
             header,
             message,
             sent: None,
+            guard: None,
         };
         self.inner
             .outbound
@@ -396,6 +427,7 @@ impl ConnectionHandle {
                 },
                 message,
                 sent: Some(sent),
+                guard: None,
             })
             .await
             .map_err(|_| MavlinkError::ChannelClosed)?;
@@ -404,6 +436,47 @@ impl ConnectionHandle {
             Ok(Err(error)) => Err(MavlinkError::Protocol(error)),
             Err(error) => Err(MavlinkError::WorkerGone(error.to_string())),
         }
+    }
+
+    /// A bounded write that must not migrate to a replacement transport. The
+    /// worker drops expired/cancelled guarded frames before touching the device.
+    pub async fn send_in_generation(
+        &self,
+        message: MavMessage,
+        generation: u64,
+        deadline: tokio::time::Instant,
+    ) -> Result<(), MavlinkError> {
+        if generation == 0
+            || self.generation() != generation
+            || self.state().await != LinkState::Connected
+        {
+            return Err(MavlinkError::Protocol(
+                "transport generation is not connected".into(),
+            ));
+        }
+        let (sent, confirmation) = oneshot::channel();
+        tokio::time::timeout_at(deadline, async {
+            self.inner
+                .outbound
+                .send(OutboundFrame {
+                    header: MavHeader {
+                        system_id: self.config().system_id,
+                        component_id: self.config().component_id,
+                        sequence: 0,
+                    },
+                    message,
+                    sent: Some(sent),
+                    guard: Some((generation, deadline)),
+                })
+                .await
+                .map_err(|_| MavlinkError::ChannelClosed)?;
+            confirmation
+                .await
+                .map_err(|error| MavlinkError::WorkerGone(error.to_string()))?
+                .map_err(MavlinkError::Protocol)
+        })
+        .await
+        .map_err(|_| MavlinkError::Protocol("guarded transport write timed out".into()))?
     }
 
     /// Ask the worker to drop the link and reconnect.
@@ -416,7 +489,32 @@ impl ConnectionHandle {
     pub async fn shutdown(&self) {
         self.inner.shutdown.send_modify(|s| *s = true);
     }
+
+    /// Wait for actual transport/lease retirement, not only the stop signal.
+    pub async fn shutdown_and_wait(&self, deadline: Duration) -> Result<(), MavlinkError> {
+        self.shutdown().await;
+        let mut stopped = self.inner.stopped.clone();
+        if *stopped.borrow() {
+            return Ok(());
+        }
+        let result = tokio::time::timeout(deadline, stopped.wait_for(|done| *done)).await;
+        match result {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(_)) => Err(MavlinkError::WorkerGone(
+                "connection worker completion lost".into(),
+            )),
+            Err(_) => Err(MavlinkError::Protocol(
+                "timed out waiting for serial transport to close".into(),
+            )),
+        }
+    }
 }
+
+pub type SpawnedConnection = (
+    ConnectionHandle,
+    broadcast::Receiver<ConnectionEvent>,
+    oneshot::Receiver<Result<(), LinkFailure>>,
+);
 
 /// Spawn the connection worker for the given config.
 ///
@@ -426,28 +524,59 @@ impl ConnectionHandle {
 /// first attempt fails. The caller can await it so errors (e.g. a UDP port
 /// already in use) surface synchronously instead of being reported only as a
 /// later event (issue #4).
-pub async fn spawn_connection(
+pub async fn spawn_connection(config: ConnectionConfig) -> Result<SpawnedConnection, MavlinkError> {
+    spawn_with_serial(config, None).await
+}
+
+pub async fn spawn_leased_serial_connection(
     config: ConnectionConfig,
-) -> Result<
-    (
-        ConnectionHandle,
-        broadcast::Receiver<ConnectionEvent>,
-        oneshot::Receiver<Result<(), LinkFailure>>,
-    ),
-    MavlinkError,
-> {
+    lease: SerialLease,
+) -> Result<SpawnedConnection, MavlinkError> {
+    let Endpoint::Serial { port, .. } = &config.endpoint else {
+        return Err(MavlinkError::InvalidEndpoint(
+            "serial lease requires a serial endpoint".into(),
+        ));
+    };
+    if !lease.matches_path(port) || lease.owner() == SerialOwner::RtkBase {
+        return Err(MavlinkError::Protocol(
+            "serial lease does not match this vehicle connection".into(),
+        ));
+    }
+    spawn_with_serial(
+        config,
+        Some(SerialBootstrap {
+            transport: None,
+            lease,
+            heartbeat: None,
+            cancel: SerialCancellation::new(),
+            single_transport: false,
+        }),
+    )
+    .await
+}
+
+pub(crate) async fn spawn_with_serial(
+    config: ConnectionConfig,
+    serial: Option<SerialBootstrap>,
+) -> Result<SpawnedConnection, MavlinkError> {
     let (events_tx, events_rx) = broadcast::channel(EVENT_CAPACITY);
     let (raw_tx, _raw_rx) = broadcast::channel(RAW_EVENT_CAPACITY);
     let (outbound_tx, outbound_rx) = mpsc::channel(OUTBOUND_CAPACITY);
     let (reconnect_tx, reconnect_rx) = watch::channel(0u64);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (first_tx, first_rx) = oneshot::channel();
+    let (stopped_tx, stopped_rx) = watch::channel(false);
     let inner = Arc::new(ConnectionInner {
+        id: NEXT_CONNECTION_ID.fetch_add(1, Ordering::Relaxed),
+        generation: AtomicU64::new(0),
+        connected_since: Mutex::new(None),
         config,
         outbound: outbound_tx,
         reconnect: reconnect_tx,
         shutdown: shutdown_tx,
         state: Mutex::new(LinkState::Connecting),
+        stopped: stopped_rx,
+        target_identity: watch::channel(None).0,
     });
     let handle = ConnectionHandle {
         inner: inner.clone(),
@@ -455,20 +584,47 @@ pub async fn spawn_connection(
         raw: raw_tx.clone(),
     };
 
-    tokio::spawn(run_worker(
-        inner,
-        events_tx,
-        raw_tx,
-        outbound_rx,
-        reconnect_rx,
-        shutdown_rx,
-        first_tx,
-    ));
+    tokio::spawn(async move {
+        run_worker(
+            inner.clone(),
+            WorkerChannels {
+                events: events_tx,
+                raw: raw_tx,
+                outbound_rx,
+                reconnect_rx,
+                shutdown_rx,
+                first_result: first_tx,
+            },
+            serial,
+        )
+        .await;
+        *inner.state.lock().await = LinkState::Disconnected;
+        stopped_tx.send_replace(true);
+    });
 
     Ok((handle, events_rx, first_rx))
 }
 
-type Conn = Box<dyn ::mavlink::AsyncMavConnection<MavMessage> + Sync + Send>;
+pub(crate) type Conn = Box<dyn ::mavlink::AsyncMavConnection<MavMessage> + Sync + Send>;
+
+pub(crate) struct SerialBootstrap {
+    // Drop the transport before the lease, including a cancelled probe.
+    pub transport: Option<Conn>,
+    pub lease: SerialLease,
+    pub heartbeat: Option<MessageEnvelope>,
+    pub cancel: SerialCancellation,
+    pub single_transport: bool,
+}
+
+struct WorkerChannels {
+    events: broadcast::Sender<ConnectionEvent>,
+    raw: broadcast::Sender<RawFrame>,
+    outbound_rx: mpsc::Receiver<OutboundFrame>,
+    reconnect_rx: watch::Receiver<u64>,
+    shutdown_rx: watch::Receiver<bool>,
+    first_result: oneshot::Sender<Result<(), LinkFailure>>,
+}
+static NEXT_CONNECTION_ID: AtomicUsize = AtomicUsize::new(1);
 
 /// A `MAV_TYPE_GCS` heartbeat, announced at [`GCS_HEARTBEAT_PERIOD`] so the
 /// FC and other GCS software see us as a live ground station (issue #3).
@@ -485,30 +641,24 @@ fn gcs_heartbeat_message() -> MavMessage {
 
 /// A HEARTBEAT from an autopilot node, eligible for auto-discovery adoption.
 ///
-/// The autopilot check is the discriminator: our own GCS heartbeat is
-/// `MAV_AUTOPILOT_GENERIC`, and the FC's system id may coincide with ours
-/// (both default to 250), so no source-id exclusion is possible.
 fn candidate_autopilot_node(env: &MessageEnvelope) -> Option<(u8, u8)> {
-    match &env.message {
-        MavMessage::HEARTBEAT(hb)
-            if hb.autopilot != ::mavlink::common::MavAutopilot::MAV_AUTOPILOT_GENERIC =>
-        {
-            Some((env.header.system_id, env.header.component_id))
-        }
-        _ => None,
-    }
+    super::serial::classify_autopilot_heartbeat(env).map(|id| (id.system_id, id.component_id))
 }
 
 /// Connection worker task.
 async fn run_worker(
     inner: Arc<ConnectionInner>,
-    events: broadcast::Sender<ConnectionEvent>,
-    raw: broadcast::Sender<RawFrame>,
-    mut outbound_rx: mpsc::Receiver<OutboundFrame>,
-    mut reconnect_rx: watch::Receiver<u64>,
-    mut shutdown_rx: watch::Receiver<bool>,
-    first_result: oneshot::Sender<Result<(), LinkFailure>>,
+    channels: WorkerChannels,
+    mut serial: Option<SerialBootstrap>,
 ) {
+    let WorkerChannels {
+        events,
+        raw,
+        mut outbound_rx,
+        mut reconnect_rx,
+        mut shutdown_rx,
+        first_result,
+    } = channels;
     let config = &inner.config;
     let address = config.endpoint.to_address_string();
     let mut seq: u8 = 0;
@@ -519,6 +669,41 @@ async fn run_worker(
             return;
         }
         *inner.state.lock().await = LinkState::Connecting;
+        inner.target_identity.send_replace(None);
+        if let Some(serial) = serial.as_ref() {
+            let check = tokio::select! {
+                biased;
+                _ = shutdown_rx.wait_for(|stopped| *stopped) => return,
+                _ = serial.cancel.cancelled() => return,
+                result = serial.lease.revalidate() => result,
+            };
+            if let Err(error) = check {
+                let failure = LinkFailure {
+                    kind: LinkErrorKind::Serial,
+                    message: error.to_string(),
+                };
+                if let Some(tx) = first_result.take() {
+                    let _ = tx.send(Err(failure.clone()));
+                }
+                let _ = events.send(ConnectionEvent::Failed(failure));
+                return;
+            }
+            if serial
+                .heartbeat
+                .as_ref()
+                .is_some_and(|hb| hb.received_at.elapsed() > DEFAULT_HEARTBEAT_TIMEOUT)
+            {
+                let failure = LinkFailure {
+                    kind: LinkErrorKind::HeartbeatTimeout,
+                    message: "autopilot probe evidence expired before handoff".into(),
+                };
+                if let Some(tx) = first_result.take() {
+                    let _ = tx.send(Err(failure.clone()));
+                }
+                let _ = events.send(ConnectionEvent::Failed(failure));
+                return;
+            }
+        }
         // Per-link discovery state: each fresh connection may expose a
         // different FC, so the monitor and the adopted node reset on reconnect.
         let mut heartbeat = HeartbeatMonitor::new(
@@ -528,7 +713,11 @@ async fn run_worker(
         );
         let mut adopted_target: Option<(u8, u8)> = None;
         let mut fc_alive = false;
-        let mut conn: Conn = match ::mavlink::connect_async::<MavMessage>(&address).await {
+        let opened = match serial.as_mut().and_then(|serial| serial.transport.take()) {
+            Some(transport) => Ok(transport),
+            None => ::mavlink::connect_async::<MavMessage>(&address).await,
+        };
+        let mut conn: Conn = match opened {
             Ok(c) => c,
             Err(e) => {
                 let failure = LinkFailure::from(&MavlinkError::Io(e));
@@ -537,20 +726,85 @@ async fn run_worker(
                     let _ = tx.send(Err(failure));
                 }
                 tokio::select! {
+                    _ = shutdown_rx.wait_for(|stopped| *stopped) => return,
+                    _ = serial_cancelled(&serial) => return,
                     _ = tokio::time::sleep(config.reconnect_delay) => {}
                     _ = reconnect_rx.changed() => {}
                 }
                 continue;
             }
         };
-        if let Some(tx) = first_result.take() {
-            let _ = tx.send(Ok(()));
+        if let Some(serial) = serial.as_ref() {
+            let check = tokio::select! {
+                biased;
+                _ = shutdown_rx.wait_for(|stopped| *stopped) => return,
+                _ = serial.cancel.cancelled() => return,
+                result = serial.lease.revalidate() => result,
+            };
+            if let Err(error) = check {
+                let failure = LinkFailure {
+                    kind: LinkErrorKind::Serial,
+                    message: error.to_string(),
+                };
+                if let Some(tx) = first_result.take() {
+                    let _ = tx.send(Err(failure.clone()));
+                }
+                let _ = events.send(ConnectionEvent::Failed(failure));
+                return;
+            }
+            if serial
+                .heartbeat
+                .as_ref()
+                .is_some_and(|hb| hb.received_at.elapsed() > DEFAULT_HEARTBEAT_TIMEOUT)
+            {
+                let failure = LinkFailure {
+                    kind: LinkErrorKind::HeartbeatTimeout,
+                    message: "autopilot evidence expired during serial handoff".into(),
+                };
+                if let Some(tx) = first_result.take() {
+                    let _ = tx.send(Err(failure.clone()));
+                }
+                let _ = events.send(ConnectionEvent::Failed(failure));
+                return;
+            }
+        }
+        if *shutdown_rx.borrow() || serial.as_ref().is_some_and(|s| s.cancel.is_cancelled()) {
+            return;
+        }
+        if let Some(serial) = serial.as_ref() {
+            if serial.lease.set_phase(LeasePhase::Active).is_err() {
+                return;
+            }
         }
         conn.set_protocol_version(config.mavlink_version.into());
+        let started_at = Instant::now();
+        *inner.connected_since.lock().await = Some(started_at);
+        let generation = inner.generation.fetch_add(1, Ordering::AcqRel) + 1;
         *inner.state.lock().await = LinkState::Connected;
         let _ = events.send(ConnectionEvent::Connected {
             endpoint: config.endpoint.clone(),
+            generation,
+            started_at,
         });
+        if let Some(message) = serial.as_mut().and_then(|serial| serial.heartbeat.take()) {
+            inner
+                .target_identity
+                .send_replace(super::serial::classify_autopilot_heartbeat(&message));
+            heartbeat.observe(
+                config.target_system_id,
+                config.target_component_id,
+                message.received_at,
+            );
+            adopted_target = Some((config.target_system_id, config.target_component_id));
+            fc_alive = true;
+            let _ = events.send(ConnectionEvent::Message(Box::new(message)));
+            let _ = events.send(ConnectionEvent::HeartbeatRestored);
+        }
+        // A successful startup receipt includes the transport generation and
+        // primed event stream, so callers cannot install a generation-zero link.
+        if let Some(tx) = first_result.take() {
+            let _ = tx.send(Ok(()));
+        }
 
         // Fixed-interval heartbeat watchdog. A `sleep(timeout)` recreated on
         // each loop iteration would be reset by any inbound frame, so the
@@ -641,9 +895,10 @@ async fn run_worker(
 
                         let target =
                             adopted_target.unwrap_or((config.target_system_id, config.target_component_id));
-                        let is_target_heartbeat = env.header.system_id == target.0
-                            && env.header.component_id == target.1
-                            && matches!(env.message, MavMessage::HEARTBEAT(_));
+                        let is_target_heartbeat = candidate_autopilot_node(&env) == Some(target);
+                        if is_target_heartbeat {
+                            inner.target_identity.send_replace(super::serial::classify_autopilot_heartbeat(&env));
+                        }
                         let _ = events.send(ConnectionEvent::Message(Box::new(env)));
                         if is_target_heartbeat && !just_adopted {
                             let was_alive = fc_alive;
@@ -681,10 +936,35 @@ async fn run_worker(
                 },
                 cmd = outbound_rx.recv() => match cmd {
                     Some(mut frame) => {
+                        if frame.guard.is_some_and(|(expected, deadline)| {
+                            expected != generation || *shutdown_rx.borrow() || tokio::time::Instant::now() >= deadline
+                                || frame.sent.as_ref().is_some_and(oneshot::Sender::is_closed)
+                        }) {
+                            if let Some(sent) = frame.sent { let _ = sent.send(Err("guarded write expired or changed transport generation".into())); }
+                            continue 'connected;
+                        }
                         frame.header.sequence = seq;
                         seq = seq.wrapping_add(1);
-                        if let Err(e) = conn.send(&frame.header, &frame.message).await {
-                            let message = e.to_string();
+                        let write = async {
+                            if let Some((_, deadline)) = frame.guard {
+                                guarded_write(conn.send(&frame.header, &frame.message), &mut frame.sent, deadline).await
+                            } else {
+                                conn.send(&frame.header, &frame.message).await.map_err(|error| error.to_string())
+                            }
+                        };
+                        let result = if frame.guard.is_some() || serial.is_some() {
+                            tokio::select! {
+                                biased;
+                                _ = shutdown_rx.changed() => Err("guarded write interrupted by shutdown".into()),
+                                _ = serial_cancelled(&serial) => Err("serial write cancelled".into()),
+                                _ = reconnect_rx.changed() => Err("guarded write interrupted by reconnect".into()),
+                                _ = tokio::time::sleep(SERIAL_WRITE_TIMEOUT), if serial.is_some() => Err("serial write timed out".into()),
+                                result = write => result,
+                            }
+                        } else {
+                            write.await
+                        };
+                        if let Err(message) = result {
                             if let Some(sent) = frame.sent {
                                 let _ = sent.send(Err(message.clone()));
                             }
@@ -713,24 +993,29 @@ async fn run_worker(
                 _ = gcs_heartbeat.tick() => {
                     // Errors are ignored: on `udpin` the peer address may not
                     // be known yet Voice
-                    if conn
-                        .send(
-                            &MavHeader {
-                                system_id: config.system_id,
-                                component_id: config.component_id,
-                                sequence: seq,
-                            },
-                            &gcs_heartbeat_message(),
-                        )
-                        .await
-                        .is_ok()
-                    {
+                    let header = MavHeader { system_id: config.system_id,
+                        component_id: config.component_id, sequence: seq };
+                    let heartbeat_message = gcs_heartbeat_message();
+                    let send = conn.send(&header, &heartbeat_message);
+                    let sent = if serial.is_some() { tokio::select! {
+                        biased;
+                        _ = shutdown_rx.wait_for(|stopped| *stopped) => return,
+                        _ = serial_cancelled(&serial) => return,
+                        result = tokio::time::timeout(SERIAL_WRITE_TIMEOUT, send) => matches!(result, Ok(Ok(_))),
+                    } } else { send.await.is_ok() };
+                    if sent {
                         seq = seq.wrapping_add(1);
+                    } else if serial.is_some() {
+                        let _ = events.send(ConnectionEvent::LinkError(LinkFailure {
+                            kind: LinkErrorKind::Serial, message: "serial heartbeat write failed or timed out".into(),
+                        }));
+                        break 'connected;
                     }
                 }
                 _ = reconnect => {
                     break 'connected;
                 }
+                _ = serial_cancelled(&serial) => return,
                 _ = shutdown_rx.changed() => {
                     if *shutdown_rx.borrow() {
                         return;
@@ -740,20 +1025,186 @@ async fn run_worker(
             }
         }
 
+        if serial
+            .as_ref()
+            .is_some_and(|serial| serial.single_transport)
+        {
+            let _ = events.send(ConnectionEvent::Failed(LinkFailure {
+                kind: LinkErrorKind::Serial,
+                message: "serial session ended; fresh discovery is required".into(),
+            }));
+            return;
+        }
+
         if *shutdown_rx.borrow() {
             return;
         }
 
         *inner.state.lock().await = LinkState::Reconnecting;
         tokio::select! {
+            _ = shutdown_rx.wait_for(|stopped| *stopped) => return,
+            _ = serial_cancelled(&serial) => return,
             _ = tokio::time::sleep(config.reconnect_delay) => {}
             _ = reconnect_rx.changed() => {}
         }
     }
 }
 
+async fn serial_cancelled(serial: &Option<SerialBootstrap>) {
+    match serial {
+        Some(serial) => tokio::select! {
+            _ = serial.cancel.cancelled() => {},
+            _ = serial.lease.cancelled() => {},
+        },
+        None => std::future::pending::<()>().await,
+    }
+}
+
+/// Once a stream write has begun, cancellation may leave a partial MAVLink
+/// frame. The caller must retire that transport on any error, as `run_worker`
+/// does, rather than appending another message to the partial frame.
+async fn guarded_write<F, T, E>(
+    write: F,
+    receipt: &mut Option<oneshot::Sender<Result<(), String>>>,
+    deadline: tokio::time::Instant,
+) -> Result<T, String>
+where
+    F: std::future::Future<Output = Result<T, E>>,
+    E: std::fmt::Display,
+{
+    tokio::select! {
+        biased;
+        _ = async {
+            if let Some(receipt) = receipt.as_mut() { receipt.closed().await; }
+            else { std::future::pending::<()>().await; }
+        } => Err("guarded transport write cancelled".into()),
+        _ = tokio::time::sleep_until(deadline) => Err("guarded transport write timed out".into()),
+        result = write => result.map_err(|error| error.to_string()),
+    }
+}
+
+/// A connected handle whose bounded output queue has no worker draining it.
+/// The opaque receiver must stay alive to model backpressure, not disconnection.
+#[cfg(test)]
+pub(crate) fn stalled_test_connection() -> (ConnectionHandle, impl Send) {
+    let (outbound, receiver) = mpsc::channel(1);
+    let (events, _) = broadcast::channel(8);
+    let (raw, _) = broadcast::channel(8);
+    let inner = Arc::new(ConnectionInner {
+        id: NEXT_CONNECTION_ID.fetch_add(1, Ordering::Relaxed),
+        generation: AtomicU64::new(1),
+        connected_since: Mutex::new(Some(Instant::now())),
+        config: ConnectionConfig::default(),
+        outbound,
+        reconnect: watch::channel(0).0,
+        shutdown: watch::channel(false).0,
+        state: Mutex::new(LinkState::Connected),
+        stopped: watch::channel(true).1,
+        target_identity: watch::channel(None).0,
+    });
+    (ConnectionHandle { inner, events, raw }, receiver)
+}
+
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn guarded_inflight_write_is_bounded_and_cancellable() {
+        use super::*;
+        let (sent, receiver) = oneshot::channel();
+        let mut sent = Some(sent);
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(20);
+        let error = guarded_write(
+            std::future::pending::<Result<(), String>>(),
+            &mut sent,
+            deadline,
+        )
+        .await
+        .expect_err("write must expire");
+        assert!(error.contains("timed out"));
+        drop(receiver);
+        let error = tokio::time::timeout(
+            Duration::from_millis(100),
+            guarded_write(
+                std::future::pending::<Result<(), String>>(),
+                &mut sent,
+                tokio::time::Instant::now() + Duration::from_secs(30),
+            ),
+        )
+        .await
+        .expect("cancellation does not wait for deadline")
+        .expect_err("cancelled");
+        assert!(error.contains("cancelled"));
+    }
+
+    #[tokio::test]
+    async fn queued_guarded_writes_do_not_cross_a_transport_generation() {
+        use super::*;
+        let peer = tokio::net::UdpSocket::bind("127.0.0.1:0")
+            .await
+            .expect("peer");
+        let config = ConnectionConfig {
+            endpoint: Endpoint::UdpClient {
+                addr: peer.local_addr().expect("address"),
+            },
+            reconnect_delay: Duration::from_millis(50),
+            ..Default::default()
+        };
+        let (handle, mut events, first) =
+            spawn_connection(config.clone()).await.expect("connection");
+        first.await.expect("first result").expect("connected");
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while handle.generation() == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("first generation");
+        let old = handle.generation();
+        handle.reconnect().await.expect("reconnect");
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Ok(ConnectionEvent::Connected { generation, .. }) = events.recv().await {
+                    if generation > old {
+                        break;
+                    }
+                }
+            }
+        })
+        .await
+        .expect("new generation");
+        // Insert directly to exercise the worker's guard, independently of the
+        // public send method's earlier generation check.
+        let (sent, receipt) = oneshot::channel();
+        handle
+            .inner
+            .outbound
+            .send(OutboundFrame {
+                header: MavHeader {
+                    system_id: 250,
+                    component_id: 190,
+                    sequence: 0,
+                },
+                message: gcs_heartbeat_message(),
+                sent: Some(sent),
+                guard: Some((old, tokio::time::Instant::now() + Duration::from_secs(2))),
+            })
+            .await
+            .expect("queue old generation");
+        let error = tokio::time::timeout(Duration::from_secs(2), receipt)
+            .await
+            .expect("receipt deadline")
+            .expect("receipt")
+            .expect_err("worker must discard old write");
+        assert!(error.contains("generation"));
+        let (replacement, _, opened) = spawn_connection(config).await.expect("second handle");
+        opened.await.expect("open result").expect("opened");
+        assert!(
+            replacement.handle_id() > handle.handle_id(),
+            "handle IDs cannot alias a retired allocation"
+        );
+        handle.shutdown().await;
+        replacement.shutdown().await;
+    }
     use super::*;
 
     #[test]

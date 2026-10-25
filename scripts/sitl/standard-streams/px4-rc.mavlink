@@ -1,0 +1,5 @@
+#!/bin/sh
+# Isolated MR-20 link; sourced by upstream rcS via the runner's PATH.
+# No normal GCS/offboard/broadcast links are created by this fixture.
+mavlink start -x -u "$MAGGCS_SITL_FC_PORT" -o "$MAGGCS_SITL_GCS_PORT" -t 127.0.0.1 -r 4000000 -m custom
+mavlink stream -u "$MAGGCS_SITL_FC_PORT" -s HEARTBEAT -r 2

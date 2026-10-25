@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::Mutex;
-use tauri::{AppHandle, Emitter, Runtime, State};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 use maggcs_core::logs::capture::{
     CapturePhase, SdCapture, SdCaptureCommand, SdCaptureError, SdCaptureStatus, SdCaptureStep,
@@ -171,6 +171,7 @@ fn publish<R: Runtime>(
 async fn apply_step<R: Runtime>(
     app: &AppHandle<R>,
     handle: &ConnectionHandle,
+    generation: u64,
     target_system_id: u8,
     capture: &mut SdCapture,
     status: &Arc<Mutex<SdCaptureStatus>>,
@@ -178,6 +179,7 @@ async fn apply_step<R: Runtime>(
 ) {
     if let Err(error) = px4_shell::send_lines(
         handle,
+        generation,
         target_system_id,
         TARGET_COMPONENT_ID,
         std::mem::take(&mut step.outbound),
@@ -192,6 +194,7 @@ async fn apply_step<R: Runtime>(
 async fn run_capture<R: Runtime>(
     app: AppHandle<R>,
     handle: ConnectionHandle,
+    generation: u64,
     target_system_id: u8,
     status: Arc<Mutex<SdCaptureStatus>>,
     mut commands: tokio::sync::mpsc::Receiver<CaptureRequest>,
@@ -207,8 +210,23 @@ async fn run_capture<R: Runtime>(
         tokio::select! {
             request = commands.recv() => {
                 let Some(request) = request else { break };
+                if handle.generation() != generation { break; }
                 let now = std::time::Instant::now();
                 let (command, kind, reply) = match request {
+                    CaptureRequest::Tone(mut job) => {
+                        let request = job.request;
+                        let state = app.state::<AppState>();
+                        let result = if wait.is_some() && request.tone != crate::motor_tone_service::MotorTone::Off {
+                            Err(crate::motor_tone_service::MotorToneError::Busy)
+                        } else {
+                            crate::motor_tone_service::working(&state, request);
+                            let result = crate::motor_tone_service::execute(&state, &handle, &mut route, request).await;
+                            result
+                        };
+                        state.motor_test.tones.finish(request, &result);
+                        if let Some(reply) = job.reply.take() { let _ = reply.send(result); }
+                        continue;
+                    }
                     CaptureRequest::Shell { command, reply } => {
                         let busy = wait.is_some() || matches!(capture.status().phase,
                             CapturePhase::Verifying | CapturePhase::Starting |
@@ -239,7 +257,7 @@ async fn run_capture<R: Runtime>(
                 match capture.command(command, now) {
                     Ok(step) => {
                         wait = Some(Wait { kind, reply });
-                        apply_step(&app, &handle, target_system_id, &mut capture, &status, step).await;
+                        apply_step(&app, &handle, generation, target_system_id, &mut capture, &status, step).await;
                         resolve_wait(&mut wait, &capture);
                     }
                     Err(error) => {
@@ -259,7 +277,7 @@ async fn run_capture<R: Runtime>(
                                 continue;
                             };
                             let step = capture.ingest_shell(&chunk, std::time::Instant::now());
-                            apply_step(&app, &handle, target_system_id, &mut capture, &status, step).await;
+                            apply_step(&app, &handle, generation, target_system_id, &mut capture, &status, step).await;
                             resolve_wait(&mut wait, &capture);
                         }
                     }
@@ -282,7 +300,7 @@ async fn run_capture<R: Runtime>(
             }
             _ = ticker.tick() => {
                 let step = capture.tick(std::time::Instant::now());
-                apply_step(&app, &handle, target_system_id, &mut capture, &status, step).await;
+                apply_step(&app, &handle, generation, target_system_id, &mut capture, &status, step).await;
                 resolve_wait(&mut wait, &capture);
             }
         }
@@ -314,7 +332,8 @@ pub(crate) fn spawn_actuator_capture<R: Runtime>(
     let (tx, rx) = tokio::sync::mpsc::channel(4);
     let task = tauri::async_runtime::spawn(run_capture(
         app,
-        handle,
+        handle.clone(),
+        handle.generation(),
         target_system_id,
         status.clone(),
         rx,
@@ -331,6 +350,7 @@ pub(crate) fn spawn_actuator_capture<R: Runtime>(
 
 /// Stop the capture service and reset the visible status (target teardown).
 pub(crate) async fn stop_actuator_capture(state: &AppState) {
+    state.motor_test.tones.cancel();
     let old = { state.motor_test.capture.lock().runtime.take() };
     if let Some(old) = old {
         old.stop(CAPTURE_STOP_TIMEOUT).await;
@@ -404,7 +424,8 @@ pub async fn actuator_capture_verify(
         .map_err(|error| error.to_string())
 }
 
-/// Manually start a unique SD file. Capture remains independent of motor tests.
+/// Manually start a unique SD file. Capture life-cycle is independent of the
+/// motor-test session; only the target's armed state gates the shell command.
 #[tauri::command]
 pub async fn actuator_capture_start(
     state: State<'_, AppState>,
@@ -422,7 +443,6 @@ pub(crate) async fn start_capture_locked(
     state: &AppState,
     test_id: String,
 ) -> Result<SdCaptureStatus, String> {
-    crate::actuator_service::ensure_idle_session(state)?;
     let (target, params) = target_params(state)?;
     crate::actuator_service::ensure_target_disarmed(state, target)?;
     let tx = capture_sender(state, target)?;
@@ -444,18 +464,19 @@ pub(crate) async fn start_capture_locked(
 }
 
 /// Stop the active capture and wait for a stable "Not logging" observation.
+/// The motor-test session does not gate this operation.
 #[tauri::command]
 pub async fn actuator_capture_stop(state: State<'_, AppState>) -> Result<SdCaptureStatus, String> {
     let _ops = state.ops().lock().await;
     stop_capture_locked(&state).await
 }
 
-/// Release the motors first, then stop the capture. The caller holds the ops
-/// lock.
+/// Stop only the capture. Manual motor control remains independent; the
+/// coordinated caller separately orders motor release before its stop action.
+/// The caller holds the ops lock.
 pub(crate) async fn stop_capture_locked(state: &AppState) -> Result<SdCaptureStatus, String> {
     let (target, _) = target_params(state)?;
     let tx = capture_sender(state, target)?;
-    crate::actuator_service::ensure_idle_session(state)?;
     crate::actuator_service::ensure_target_disarmed(state, target)?;
     request_stop_with(tx).await
 }
@@ -514,17 +535,4 @@ pub(crate) fn capture_status_blocking(state: &AppState) -> SdCaptureStatus {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn check_and_start_waits_accept_an_existing_recording() {
-        let status = SdCaptureStatus {
-            phase: CapturePhase::ExistingRecording,
-            ..Default::default()
-        };
-        assert!(wait_done(&WaitKind::Check, &status));
-        assert!(wait_done(&WaitKind::Start, &status));
-        assert!(!wait_done(&WaitKind::Stop, &status));
-    }
-}
+mod tests;

@@ -72,6 +72,7 @@ pub(crate) async fn exec(
     command: &str,
 ) -> Result<String, String> {
     let _shell = console.shell_lock.lock().await;
+    crate::main_link_service::ensure_primary_tools_available(state)?;
     console.attach(app, state).await;
     let connection = state
         .connection()
@@ -93,6 +94,7 @@ pub(crate) async fn probe_shell(
     state: &AppState,
 ) -> Result<crate::px4_shell::ShellKind, String> {
     let _shell = console.shell_lock.lock().await;
+    crate::main_link_service::ensure_primary_tools_available(state)?;
     console.attach(app, state).await;
     let connection = state
         .connection()
@@ -106,6 +108,9 @@ pub(crate) async fn probe_shell(
 }
 
 impl ConsoleState {
+    pub(crate) async fn lock_shell(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.shell_lock.lock().await
+    }
     /// Ensure a watcher is running on the *current* primary link: rebuild it
     /// only when the link handle changed (or the task died). The old task
     /// exits on its own when its event bus closes (link swap / disconnect).
@@ -201,6 +206,7 @@ pub async fn console_send(
     command: String,
 ) -> Result<(), String> {
     let _shell = console.shell_lock.lock().await;
+    crate::main_link_service::ensure_primary_tools_available(&state)?;
     console.attach(&app, &state).await;
     let connection = state
         .connection()
@@ -221,6 +227,10 @@ pub async fn console_close(
     console: tauri::State<'_, Arc<ConsoleState>>,
 ) -> Result<(), String> {
     let _shell = console.shell_lock.lock().await;
+    if crate::main_link_service::is_attached(&state) {
+        console.detach().await;
+        return Ok(());
+    }
     let connection = state
         .connection()
         .ok_or_else(|| "no live link".to_string())?;

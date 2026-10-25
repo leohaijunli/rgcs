@@ -4,10 +4,13 @@ import type { LinkStatus } from '../generated-types/LinkStatus'
 import type { StopReason } from '../generated-types/StopReason'
 import type { TeardownGuard } from '../generated-types/TeardownGuard'
 import { useLinkStore } from '../stores/link'
+import { serialPortForEndpoint } from '../stores/devices'
+import type { SerialPortRef } from '../generated-types/SerialPortRef'
 
 /** Ask the desktop shell to open a MAVLink connection. */
-export async function connectEndpoint(endpoint: string): Promise<LinkStatus | null> {
-  await invoke('connect', { endpoint })
+export async function connectEndpoint(endpoint: string, selected?: SerialPortRef | null): Promise<LinkStatus | null> {
+  const expectedSerial = selected ?? await serialPortForEndpoint(endpoint)
+  await invoke('connect', { endpoint, expectedSerial })
   return invoke<LinkStatus | null>('link_status')
 }
 

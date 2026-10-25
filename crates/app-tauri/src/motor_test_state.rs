@@ -4,6 +4,7 @@
 //! re-spawned on the next start command.
 
 use parking_lot::Mutex as PLMutex;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use maggcs_core::calib::mag::MagCalibration;
@@ -11,8 +12,9 @@ use maggcs_core::logs::capture::{SdCaptureError, SdCaptureStatus};
 use maggcs_core::mavlink::ConnectionHandle;
 use maggcs_core::motor_test::mag_alarm::MagAlarm;
 use maggcs_core::motor_test::mapping::{OutputMap, ServoPort, SERVO_CHANNELS_PER_PORT};
+use maggcs_core::motor_test::protocol::OutputProtocols;
 use maggcs_core::motor_test::pwm::PwmModel;
-use maggcs_core::motor_test::scope::ScopeBus;
+use maggcs_core::motor_test::scope::{ScopeBus, ScopeOutputMeta, MAX_ESC};
 use maggcs_core::motor_test::source::ForwardSlot;
 use maggcs_core::motor_test::{MotorTestService, SafetyLimits, SessionState};
 use maggcs_core::signals::derived::EscAggregator;
@@ -23,33 +25,27 @@ pub const TARGET_COMPONENT_ID: u8 = 1;
 /// Stable identity of the link a motor-test session is bound to. A reconnect
 /// through `actuator_connect_target` creates a new connection ID; a stale
 /// session must never be reused for the replacement target.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MotorTestTargetRef {
     pub connection_id: usize,
     pub target_system_id: u8,
     pub target_component_id: u8,
 }
 
-/// Operator-declared prop load. Unknown values are rejected instead of
-/// silently falling back to the most permissive envelope.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MotorTestLoad {
-    None,
-    Plate,
-    Props,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetLinkOrigin {
+    Dedicated,
+    MainSerial,
 }
 
-impl MotorTestLoad {
-    pub fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "none" => Ok(Self::None),
-            "plate" => Ok(Self::Plate),
-            "props" => Ok(Self::Props),
-            other => Err(format!(
-                "unknown prop load '{other}' (expected none, plate or props)"
-            )),
-        }
-    }
+/// An explicit offer to borrow the currently connected primary serial node.
+/// IPC callers echo the identity and generation; an obsolete offer is refused.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct MainSerialTarget {
+    pub target: MotorTestTargetRef,
+    pub transport_generation: u64,
+    pub endpoint: String,
 }
 
 /// The live service handle (plus the event-forwarder task handle, so the
@@ -63,21 +59,48 @@ pub struct RunningMotorTest {
     /// Latest values actually sent to the FC (post clamp/slew) — the
     /// window's actuator-output readout.
     pub output: tokio::sync::watch::Receiver<Vec<f32>>,
-    /// Link and load this service was started with. A start for a different
-    /// target or load must replace the session, never reuse it.
+    /// Link this service was started with. A start for a different target
+    /// must replace the session, never reuse it.
     pub target: MotorTestTargetRef,
-    pub load: MotorTestLoad,
+    /// Output units, mapping and revision captured for this service's lifetime.
+    pub scope_outputs: Vec<ScopeOutputMeta>,
+    pub tone_generation: u64,
 }
 
 impl RunningMotorTest {
-    pub fn matches(&self, target: MotorTestTargetRef, load: MotorTestLoad) -> bool {
-        self.target == target && self.load == load
+    pub fn matches(&self, target: MotorTestTargetRef) -> bool {
+        self.target == target
     }
 }
 
-/// The motor test's own target link: the **real PX4** (serial), separate from
-/// the main GCS's primary link (which may be a UDP SITL). Every `ACTUATOR_TEST`
-/// frame the motor test sends goes out through this link.
+/// One validated, atomically published view of the target's output
+/// configuration. Readers must take one clone under one lock so they cannot
+/// mix fields from two refreshes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OutputConfigSnapshot {
+    /// Monotonic revision per target link, starting at 1.
+    pub revision: u64,
+    /// Link identity this snapshot was read from.
+    pub target: MotorTestTargetRef,
+    pub map: OutputMap,
+    pub models: Vec<PwmModel>,
+    pub protocols: OutputProtocols,
+    /// Every existing timer parameter was readable.
+    pub protocols_known: bool,
+    pub dshot_3d_enable: Option<i32>,
+    pub dshot_bidir_en: Option<i32>,
+}
+
+impl OutputConfigSnapshot {
+    /// True only when a start may use this snapshot as-is.
+    pub fn is_startable(&self) -> bool {
+        self.map.state == maggcs_core::motor_test::mapping::OutputMapState::Complete
+            && self.protocols_known
+    }
+}
+
+/// The explicitly selected PX4 target, on a dedicated connection or the
+/// borrowed primary serial link. Every motor command uses this exact handle.
 pub struct MotorTestTarget {
     pub handle: ConnectionHandle,
     pub endpoint: String,
@@ -89,12 +112,15 @@ pub struct MotorTestTarget {
     pub params: maggcs_core::params::ParamService,
     /// A confirmed persistent parameter change needs activation after reboot.
     pub restart_pending: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    /// Motor function → physical MAIN/AUX output, read from `PWM_*_FUNCx`.
-    /// Feedback for Motor N is read from this channel, not from servoN.
-    pub output_map: std::sync::Arc<PLMutex<OutputMap>>,
-    /// Per-motor PWM model (endpoints, reversal, thrust factor) for the mapped
-    /// channel. Replaced atomically with the mapping refresh before a start.
-    pub pwm_models: std::sync::Arc<PLMutex<Vec<PwmModel>>>,
+    /// Validated map/models/protocol/flags published as one revision.
+    /// `None` until the first read; readers never mix fields.
+    pub config: std::sync::Arc<PLMutex<Option<OutputConfigSnapshot>>>,
+    /// A refresh hit a read failure and kept the previous snapshot for
+    /// inspection. START stays blocked until a refresh succeeds.
+    pub config_stale: std::sync::Arc<AtomicBool>,
+    /// The FC's complete parameter-name inventory from a full pull, when one
+    /// completed. Lets the reader distinguish absent channels from failures.
+    pub param_names: std::sync::Arc<PLMutex<Option<std::collections::HashSet<String>>>>,
 }
 
 impl MotorTestTarget {
@@ -114,6 +140,7 @@ impl MotorTestTarget {
 /// invoking it.
 pub struct AuxiliaryLinkRuntime {
     handle: Option<ConnectionHandle>,
+    borrowed_generation: Option<u64>,
     tasks: Vec<tauri::async_runtime::JoinHandle<()>>,
 }
 
@@ -125,7 +152,17 @@ impl AuxiliaryLinkRuntime {
     ) -> Self {
         Self {
             handle: Some(handle),
+            borrowed_generation: None,
             tasks: tasks.into_iter().collect(),
+        }
+    }
+
+    /// Own only tool-local tasks; the primary runtime retains the transport.
+    pub fn borrowed(handle: &ConnectionHandle) -> Self {
+        Self {
+            handle: None,
+            borrowed_generation: Some(handle.generation()),
+            tasks: Vec::new(),
         }
     }
 
@@ -152,7 +189,9 @@ impl AuxiliaryLinkRuntime {
     pub async fn stop(&mut self) {
         stop_auxiliary_tasks(self.take_tasks()).await;
         if let Some(handle) = self.handle.take() {
-            handle.shutdown().await;
+            let _ = handle
+                .shutdown_and_wait(maggcs_core::lifecycle::DEFAULT_STAGE_TIMEOUT)
+                .await;
         }
     }
 }
@@ -164,7 +203,9 @@ impl Drop for AuxiliaryLinkRuntime {
         }
         if let Some(handle) = self.handle.take() {
             tauri::async_runtime::spawn(async move {
-                handle.shutdown().await;
+                let _ = handle
+                    .shutdown_and_wait(maggcs_core::lifecycle::DEFAULT_STAGE_TIMEOUT)
+                    .await;
             });
         }
     }
@@ -204,6 +245,20 @@ pub struct SitlLinkRuntime {
 }
 
 impl TargetLinkRuntime {
+    pub fn origin(&self) -> TargetLinkOrigin {
+        if self.runtime.borrowed_generation.is_some() {
+            TargetLinkOrigin::MainSerial
+        } else {
+            TargetLinkOrigin::Dedicated
+        }
+    }
+
+    pub fn generation_is_current(&self) -> bool {
+        self.runtime
+            .borrowed_generation
+            .is_none_or(|generation| generation == self.target.handle.generation())
+    }
+
     /// Stop observers and the link owned by this target.
     pub async fn stop(mut self) {
         self.runtime.stop().await;
@@ -345,12 +400,17 @@ pub struct MotorTelemetry {
     /// When the last target-FC heartbeat arrived. Unlike `hb` (the decoded
     /// state) this lets the status poll tell "alive now" from "was alive once".
     pub last_heartbeat_at: Option<std::time::Instant>,
+    /// Last `ESC_STATUS` receive time for each zero-based ESC slot.
+    /// `None` = that ESC has never reported. Only slots covered by a frame
+    /// are refreshed, including when its first index is not a multiple of four.
+    pub esc_seen_at: [Option<std::time::Instant>; MAX_ESC],
 }
 
 /// Process-wide holder; `Default` = nothing running. `last_state` mirrors the
 /// newest event so the status poll stays cheap (no service round-trip).
 #[derive(Default)]
 pub struct MotorTestState {
+    pub control: crate::motor_control_service::MotorControlGate,
     pub running: PLMutex<Option<RunningMotorTest>>,
     pub last_state: PLMutex<Option<SessionState>>,
     /// The real-PX4 (serial) link the motor test sends to.
@@ -371,6 +431,9 @@ pub struct MotorTestState {
     pub capture: PLMutex<ActuatorCapture>,
     /// Per-test run coordinator + recovery manifest (Task 8).
     pub run: PLMutex<crate::run_service::ActuatorRun>,
+    pub tones: std::sync::Arc<crate::motor_tone_service::MotorToneState>,
+    pub streams: PLMutex<Option<crate::stream_service::ActuatorStreams>>,
+    pub stream_profiles: std::sync::Arc<PLMutex<crate::stream_service::StreamProfiles>>,
 }
 
 /// The serial target's SD-capture service: one shell controller per target.
@@ -418,6 +481,7 @@ impl Drop for ActuatorCaptureRuntime {
 
 /// Capture requests from Tauri commands to the shell task.
 pub(crate) enum CaptureRequest {
+    Tone(crate::motor_tone_service::ToneJob),
     Shell {
         command: String,
         reply: tokio::sync::oneshot::Sender<Result<String, SdCaptureError>>,
@@ -508,21 +572,13 @@ impl MotorTestState {
     }
 }
 
-/// Conservative default envelope per declared prop load (plan §2.2-2: the
-/// load sets the output cap and confirmation strength). Numbers are starting
-/// points — M0 bench data will tighten them.
-pub fn limits_for_load(load: MotorTestLoad, target_system_id: u8) -> SafetyLimits {
-    let (max_value, max_slew_per_s) = match load {
-        // No props: safest — full range, brisk ramp.
-        MotorTestLoad::None => (1.0, 8.0),
-        // Flat plates: some thrust, still benign.
-        MotorTestLoad::Plate => (0.6, 4.0),
-        // Full props: low cap, slow ramp, until M0 says otherwise.
-        MotorTestLoad::Props => (0.3, 2.0),
-    };
+/// The one safety envelope for every motor-test start. The UI no longer
+/// lets the operator declare a lighter load: even a props-off bench must pass
+/// the full-prop cap, slew limit and long-press confirmation.
+pub fn motor_test_limits(target_system_id: u8) -> SafetyLimits {
     SafetyLimits {
-        max_value,
-        max_slew_per_s,
+        max_value: 0.3,
+        max_slew_per_s: 2.0,
         heartbeat_timeout: Duration::from_millis(1500),
         target_sys: target_system_id,
         target_comp: TARGET_COMPONENT_ID,
@@ -534,22 +590,10 @@ mod load_tests {
     use super::*;
 
     #[test]
-    fn unknown_load_is_rejected_instead_of_defaulting_to_props() {
-        assert!(MotorTestLoad::parse("typo").is_err());
-        assert_eq!(MotorTestLoad::parse("none"), Ok(MotorTestLoad::None));
-        assert_eq!(MotorTestLoad::parse("plate"), Ok(MotorTestLoad::Plate));
-        assert_eq!(MotorTestLoad::parse("props"), Ok(MotorTestLoad::Props));
-    }
-
-    #[test]
-    fn each_load_applies_its_own_cap_and_slew() {
-        let none = limits_for_load(MotorTestLoad::None, 42);
-        let plate = limits_for_load(MotorTestLoad::Plate, 42);
-        let props = limits_for_load(MotorTestLoad::Props, 42);
-        assert_eq!((none.max_value, none.max_slew_per_s), (1.0, 8.0));
-        assert_eq!((plate.max_value, plate.max_slew_per_s), (0.6, 4.0));
-        assert_eq!((props.max_value, props.max_slew_per_s), (0.3, 2.0));
-        assert_eq!(none.target_sys, 42);
-        assert_eq!(none.target_comp, TARGET_COMPONENT_ID);
+    fn every_motor_test_uses_the_full_prop_envelope() {
+        let limits = motor_test_limits(42);
+        assert_eq!((limits.max_value, limits.max_slew_per_s), (0.3, 2.0));
+        assert_eq!(limits.target_sys, 42);
+        assert_eq!(limits.target_comp, TARGET_COMPONENT_ID);
     }
 }

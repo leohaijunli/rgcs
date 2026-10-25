@@ -3,14 +3,35 @@
 // the intervals during which the motor test was sending.
 //
 // Samples arrive from the shell as `actuator_samples` batches of
-// `{ id, t, v }` (t = host epoch seconds). The ids are documented in
+// `{ id, t, v, output? }` (t = host epoch seconds). Output metadata carries
+// configuration identity, physical channel and units. The ids are documented in
 // `core::motor_test::scope`. A signal exists here only once its first sample
 // arrives — which is how "is there an RPM / current signal" gets answered.
 
-/** Which stacked plot pane a signal is drawn in. */
+/** Signal category in the list; either plot can draw signals from any category. */
 export type ScopeGroup = 'cmd' | 'mag' | 'esc' | 'bat'
 
-export type ScopeUnit = 'µs' | '%' | 'nT' | 'rpm' | 'A' | 'V'
+export type ScopeUnit = 'µs' | 'thr' | 'raw' | 'nT' | 'rpm' | 'A' | 'V'
+export type ScopeGapReason = 'released' | 'stale' | 'run_boundary'
+const TRACE_COLOR_RE = /^#[0-9a-f]{6}$/i
+
+export function normalizeTraceColor(value: unknown): `#${string}` | null {
+  return typeof value === 'string' && TRACE_COLOR_RE.test(value)
+    ? value.toLowerCase() as `#${string}`
+    : null
+}
+
+export interface ScopeOutputMeta {
+  connection_id: number
+  revision: number
+  motor: number
+  channel: { port: 'main' | 'aux'; channel: number }
+  unit: 'microseconds' | 'd_shot_throttle'
+}
+
+export type ScopeConfigResult =
+  | { ok: true }
+  | { ok: false; reason: 'invalid_configuration' | 'obsolete_configuration' }
 
 export interface SignalDef {
   id: string
@@ -24,6 +45,10 @@ export interface SignalDef {
   dash: number[] | null
   /** Auto-checked the first time data for it appears. */
   defaultOn: boolean
+  /** Seconds without a value before one stale gap is inserted; null = explicit gaps only. */
+  staleAfterS: number | null
+  /** Output configuration identity; included in the mounted plot's identity. */
+  contextKey?: string
 }
 
 /** One list section (a collapsible group of related signals). */
@@ -42,10 +67,19 @@ export interface HintContext {
 }
 
 const MOTORS = [0, 1, 2, 3]
+const OUTPUT_CHANNEL_COUNT = 8
+const OUTPUT_MOTOR_BY_ID = new Map<string, number>(
+  MOTORS.flatMap((motor) => [
+    [`cmd.pwm${motor + 1}`, motor + 1] as const,
+    [`fc.motor${motor + 1}`, motor + 1] as const,
+  ]),
+)
 const DASH_FC = [6, 4]
 const DASH_CMD = [2, 3]
 const DASH_CURRENT = [6, 4]
 const DASH_VOLT = [2, 3]
+const DEFAULT_STALE_S = 2
+const ESC_STALE_S = 0.5
 
 function perMotor(
   prefix: string,
@@ -55,6 +89,7 @@ function perMotor(
   label: string,
   dash: number[] | null,
   defaultOn: boolean,
+  staleAfterS: number | null,
 ): SignalDef[] {
   return MOTORS.map((m) => ({
     id: `${prefix}${m + 1}${field}`,
@@ -64,13 +99,14 @@ function perMotor(
     motor: m,
     dash,
     defaultOn,
+    staleAfterS,
   }))
 }
 
 const DEFS: SignalDef[] = [
-  ...perMotor('sitl.servo', '', 'cmd', 'µs', 'SITL servo', null, true),
-  ...perMotor('cmd.pwm', '', 'cmd', 'µs', 'Command PWM M', DASH_CMD, true),
-  ...perMotor('fc.servo', '', 'cmd', 'µs', 'FC servo', DASH_FC, true),
+  ...perMotor('sitl.servo', '', 'cmd', 'µs', 'SITL servo', null, true, DEFAULT_STALE_S),
+  ...perMotor('cmd.pwm', '', 'cmd', 'raw', 'Command output M', DASH_CMD, true, null),
+  ...perMotor('fc.motor', '', 'cmd', 'raw', 'FC output M', DASH_FC, true, DEFAULT_STALE_S),
   {
     id: 'mag.raw_total',
     group: 'mag',
@@ -79,6 +115,7 @@ const DEFS: SignalDef[] = [
     motor: null,
     dash: DASH_FC,
     defaultOn: true,
+    staleAfterS: DEFAULT_STALE_S,
   },
   {
     id: 'mag.cal_total',
@@ -88,6 +125,7 @@ const DEFS: SignalDef[] = [
     motor: null,
     dash: null,
     defaultOn: true,
+    staleAfterS: DEFAULT_STALE_S,
   },
   {
     id: 'bat1.current',
@@ -97,10 +135,11 @@ const DEFS: SignalDef[] = [
     motor: 0,
     dash: null,
     defaultOn: true,
+    staleAfterS: DEFAULT_STALE_S,
   },
-  ...perMotor('esc', '.rpm', 'esc', 'rpm', 'ESC rpm', null, true),
-  ...perMotor('esc', '.current', 'esc', 'A', 'ESC current', DASH_CURRENT, true),
-  ...perMotor('esc', '.voltage', 'esc', 'V', 'ESC voltage', DASH_VOLT, false),
+  ...perMotor('esc', '.rpm', 'esc', 'rpm', 'ESC rpm', null, true, ESC_STALE_S),
+  ...perMotor('esc', '.current', 'esc', 'A', 'ESC current', DASH_CURRENT, true, ESC_STALE_S),
+  ...perMotor('esc', '.voltage', 'esc', 'V', 'ESC voltage', DASH_VOLT, false, ESC_STALE_S),
 ]
 
 const DEF_BY_ID = new Map(DEFS.map((d) => [d.id, d]))
@@ -108,7 +147,11 @@ const DEF_BY_ID = new Map(DEFS.map((d) => [d.id, d]))
 /** Definition for `id`; ESC 5–8 and extra battery ids are built on demand so a
  * bigger airframe / more batteries show up without a code change. */
 export function defOf(id: string): SignalDef | undefined {
-  const known = DEF_BY_ID.get(id)
+  return scopeStore.definitionOf(id)
+}
+
+function definitionFor(id: string, definitions: Map<string, SignalDef>): SignalDef | undefined {
+  const known = definitions.get(id)
   if (known) return known
   const m = /^esc(\d+)\.(rpm|current|voltage)$/.exec(id)
   if (!m) {
@@ -123,8 +166,9 @@ export function defOf(id: string): SignalDef | undefined {
       motor: (k - 1) % 4,
       dash: null,
       defaultOn: true,
+      staleAfterS: DEFAULT_STALE_S,
     }
-    DEF_BY_ID.set(id, def)
+    definitions.set(id, def)
     return def
   }
   const k = Number(m[1])
@@ -137,8 +181,9 @@ export function defOf(id: string): SignalDef | undefined {
     motor: (k - 1) % 4,
     dash: q === 'rpm' ? null : q === 'current' ? DASH_CURRENT : DASH_VOLT,
     defaultOn: q !== 'voltage',
+    staleAfterS: ESC_STALE_S,
   }
-  DEF_BY_ID.set(id, def)
+  definitions.set(id, def)
   return def
 }
 
@@ -155,14 +200,14 @@ export const LIST_GROUPS: ListGroup[] = [
   },
   {
     key: 'fc',
-    title: 'FC servo (serial SERVO_OUTPUT_RAW)',
-    ids: ids('fc.servo'),
+    title: 'Mapped FC outputs (SERVO_OUTPUT_RAW)',
+    ids: ids('fc.motor'),
     emptyHint: (c) =>
       c.targetConnected ? 'Waiting for SERVO_OUTPUT_RAW…' : 'Connect the PX4 serial link.',
   },
   {
     key: 'cmd',
-    title: 'Command PWM (converted ACTUATOR_TEST, µs)',
+    title: 'Command output (converted ACTUATOR_TEST)',
     ids: ids('cmd.pwm'),
     emptyHint: () => 'Appears while a test is sending.',
   },
@@ -220,6 +265,10 @@ export class ScopeRing {
   }
 
   push(t: number, v: number): void {
+    if (this.size > 0 && t === this.timeAt(this.size - 1)) {
+      this.v[(this.start + this.size - 1) % this.cap] = v
+      return
+    }
     const i = (this.start + this.size) % this.cap
     this.t[i] = t
     this.v[i] = v
@@ -263,9 +312,11 @@ export interface SignalStat {
   /** False until a non-zero value has been seen: an ESC that answers with
    * exact zeros has no current/voltage telemetry, which is not "idle". */
   everNonZero: boolean
+  /** Latest intentional break after `lastT`; cleared by the next value. */
+  lastGap: ScopeGapReason | null
 }
 
-export type SignalState = 'none' | 'zero' | 'live' | 'stale' | 'released'
+export type SignalState = 'none' | 'zero' | 'live' | 'stale' | 'released' | 'boundary'
 
 /** Seconds without a sample before a seen signal counts as stale. */
 export const STALE_S = 2
@@ -284,6 +335,34 @@ export interface IncomingSample {
   id: string
   t: number
   v: number | null
+  gap?: ScopeGapReason | null
+  output?: ScopeOutputMeta | null
+}
+
+function validGapReason(value: unknown): value is ScopeGapReason {
+  return value === 'released' || value === 'stale' || value === 'run_boundary'
+}
+
+function validOutputMeta(value: unknown): value is ScopeOutputMeta {
+  if (typeof value !== 'object' || value === null) return false
+  const output = value as Partial<ScopeOutputMeta>
+  return typeof output.connection_id === 'number'
+    && Number.isSafeInteger(output.connection_id) && output.connection_id >= 0
+    && typeof output.revision === 'number'
+    && Number.isSafeInteger(output.revision) && output.revision > 0
+    && typeof output.motor === 'number'
+    && Number.isInteger(output.motor) && output.motor >= 1 && output.motor <= MOTORS.length
+    && typeof output.channel === 'object' && output.channel !== null
+    && (output.channel.port === 'main' || output.channel.port === 'aux')
+    && Number.isInteger(output.channel.channel)
+    && output.channel.channel >= 1 && output.channel.channel <= OUTPUT_CHANNEL_COUNT
+    && (output.unit === 'microseconds' || output.unit === 'd_shot_throttle')
+}
+
+function sameOutputMeta(a: ScopeOutputMeta, b: ScopeOutputMeta): boolean {
+  return a.connection_id === b.connection_id && a.revision === b.revision
+    && a.motor === b.motor && a.unit === b.unit
+    && a.channel.port === b.channel.port && a.channel.channel === b.channel.channel
 }
 
 export class ScopeStore {
@@ -295,6 +374,84 @@ export class ScopeStore {
   private pendingNew: string[] = []
   /** Newest sample time seen across all signals (host epoch seconds). */
   newestT = 0
+  /** Epoch of the first accepted plotted value; the visible x-axis starts at 0 s. */
+  originT: number | null = null
+  private definitions = new Map(DEF_BY_ID)
+  private outputs = new Map<number, ScopeOutputMeta>()
+  private lastContext: { connection_id: number; revision: number } | null = null
+  private lastConfigSignature = ''
+
+  definitionOf(id: string): SignalDef | undefined {
+    return definitionFor(id, this.definitions)
+  }
+
+  /** Configure units from one published backend snapshot. Data cannot infer or
+   * replace configuration. Older snapshots and conflicting metadata are refused. */
+  configureOutputs(outputs: readonly ScopeOutputMeta[]): ScopeConfigResult {
+    if (!Array.isArray(outputs) || outputs.length > MOTORS.length || !outputs.every(validOutputMeta)) {
+      return { ok: false, reason: 'invalid_configuration' }
+    }
+    if (outputs.length === 0) {
+      this.outputs.clear()
+      this.dropOutputHistory()
+      this.updateOutputDefinitions([])
+      return { ok: true }
+    }
+    const next = outputs.map((output) => ({
+      connection_id: output.connection_id,
+      revision: output.revision,
+      motor: output.motor,
+      channel: { port: output.channel.port, channel: output.channel.channel },
+      unit: output.unit,
+    })).sort((a, b) => a.motor - b.motor)
+    const first = next[0]
+    const channels = new Set(next.map((output) => `${output.channel.port}:${output.channel.channel}`))
+    if (channels.size !== next.length || next.some((output, index) =>
+      output.motor !== index + 1 || output.connection_id !== first.connection_id || output.revision !== first.revision,
+    )) return { ok: false, reason: 'invalid_configuration' }
+    const signature = JSON.stringify(next)
+    if (this.lastContext) {
+      if (first.connection_id < this.lastContext.connection_id
+        || (first.connection_id === this.lastContext.connection_id && first.revision < this.lastContext.revision)) {
+        return { ok: false, reason: 'obsolete_configuration' }
+      }
+      if (first.connection_id === this.lastContext.connection_id && first.revision === this.lastContext.revision
+        && signature !== this.lastConfigSignature) {
+        return { ok: false, reason: 'invalid_configuration' }
+      }
+    }
+    if (this.outputs.size > 0 && signature === this.lastConfigSignature) return { ok: true }
+    this.dropOutputHistory()
+    this.outputs = new Map(next.map((output) => [output.motor, output]))
+    this.lastContext = { connection_id: first.connection_id, revision: first.revision }
+    this.lastConfigSignature = signature
+    this.updateOutputDefinitions(next)
+    return { ok: true }
+  }
+
+  private dropOutputHistory(): void {
+    for (const id of OUTPUT_MOTOR_BY_ID.keys()) {
+      this.rings.delete(id)
+      this.stats.delete(id)
+    }
+  }
+
+  private updateOutputDefinitions(outputs: readonly ScopeOutputMeta[]): void {
+    const byMotor = new Map(outputs.map((output) => [output.motor, output]))
+    for (const [id, motor] of OUTPUT_MOTOR_BY_ID) {
+      const base = DEF_BY_ID.get(id)
+      if (!base) continue
+      const output = byMotor.get(motor)
+      const unit: ScopeUnit = output ? (output.unit === 'microseconds' ? 'µs' : 'thr') : 'raw'
+      const contextKey = output ? JSON.stringify(output) : ''
+      const label = id.startsWith('cmd.pwm')
+        ? `${unit === 'thr' ? 'Command throttle' : unit === 'µs' ? 'Command PWM' : 'Command output'} M ${motor}`
+        : `FC output M ${motor}${output ? ` (${output.channel.port.toUpperCase()}${output.channel.channel})` : ''}`
+      const current = this.definitions.get(id)
+      if (current?.contextKey === contextKey && current.unit === unit && current.label === label) continue
+      this.definitions.set(id, { ...base, label, unit, contextKey })
+    }
+  }
 
   /** Ingest one batch. Out-of-order samples within a signal are dropped so
    * every ring stays sorted (the plot's merge relies on it). */
@@ -305,24 +462,32 @@ export class ScopeStore {
         this.markRun((s.v ?? 0) > 0.5, s.t)
         continue
       }
-      const release = s.v === null && /^cmd\.pwm[1-4]$/.test(s.id)
-      if ((!release && !Number.isFinite(s.v)) || !defOf(s.id)) continue
+      const motor = OUTPUT_MOTOR_BY_ID.get(s.id)
+      if (motor !== undefined) {
+        const expected = this.outputs.get(motor)
+        if (!expected || !validOutputMeta(s.output) || !sameOutputMeta(s.output, expected)) continue
+      }
       let ring = this.rings.get(s.id)
-      // A motor never commanded should not get a fictitious PWM trace.
-      if (release && !ring) continue
+      if (s.v === null) {
+        // A valid gap never creates a signal that has not produced a value.
+        if (ring && validGapReason(s.gap)) this.insertGap(s.id, s.t, s.gap)
+        continue
+      }
+      if (!Number.isFinite(s.v) || !this.definitionOf(s.id)) continue
       if (!ring) {
         ring = new ScopeRing(RING_CAP)
         this.rings.set(s.id, ring)
       }
+      if (this.originT === null) this.originT = s.t
       const n = ring.length
       if (n > 0 && s.t < ring.timeAt(n - 1)) continue
-      const value = s.v ?? NaN
+      const value = s.v
       ring.push(s.t, value)
       if (s.t > this.newestT) this.newestT = s.t
 
       let st = this.stats.get(s.id)
       if (!st) {
-        st = { count: 0, last: 0, lastT: s.t, rateHz: 0, everNonZero: false }
+        st = { count: 0, last: 0, lastT: s.t, rateHz: 0, everNonZero: false, lastGap: null }
         this.stats.set(s.id, st)
       } else {
         const dt = s.t - st.lastT
@@ -334,6 +499,7 @@ export class ScopeStore {
       }
       st.count++
       st.last = value
+      st.lastGap = null
       if (Number.isFinite(value) && value !== 0) st.everNonZero = true
 
       if (!this.offered.has(s.id)) {
@@ -349,9 +515,36 @@ export class ScopeStore {
       this.runs.push({ t0: t, t1: null })
     } else if (!running && open && open.t1 === null) {
       open.t1 = t
+      for (const id of this.rings.keys()) {
+        if (/^(?:cmd\.pwm|fc\.motor)\d+$/.test(id) || /^esc\d+\.rpm$/.test(id)) {
+          this.insertGap(id, t, 'run_boundary')
+        }
+      }
     }
     // Bounded history.
     if (this.runs.length > 64) this.runs.splice(0, this.runs.length - 64)
+  }
+
+  private insertGap(id: string, t: number, reason: ScopeGapReason): void {
+    const ring = this.rings.get(id)
+    const stat = this.stats.get(id)
+    if (!ring || !stat || !Number.isFinite(t)) return
+    const n = ring.length
+    if (n > 0 && t < ring.timeAt(n - 1)) return
+    if (stat.lastGap === reason && n > 0 && !Number.isFinite(ring.valueAt(n - 1))) return
+    ring.push(t, NaN)
+    stat.lastGap = reason
+    if (t > this.newestT) this.newestT = t
+  }
+
+  /** Insert one deterministic stale boundary for every overdue live series. */
+  advanceTime(nowT: number): void {
+    if (!Number.isFinite(nowT)) return
+    for (const [id, stat] of this.stats) {
+      const staleAfterS = this.definitionOf(id)?.staleAfterS
+      if (staleAfterS == null || stat.lastGap !== null || nowT - stat.lastT <= staleAfterS) continue
+      this.insertGap(id, stat.lastT + staleAfterS, 'stale')
+    }
   }
 
   /** Mark ids as already offered for auto-check (restored from the previous
@@ -370,9 +563,17 @@ export class ScopeStore {
   stateOf(id: string, nowT: number): SignalState {
     const st = this.stats.get(id)
     if (!st) return 'none'
-    if (!Number.isFinite(st.last)) return 'released'
-    if (nowT - st.lastT > STALE_S) return 'stale'
+    if (st.lastGap === 'released') return 'released'
+    if (st.lastGap === 'run_boundary') return 'boundary'
+    if (st.lastGap === 'stale') return 'stale'
+    const staleAfterS = this.definitionOf(id)?.staleAfterS ?? STALE_S
+    if (nowT - st.lastT > staleAfterS) return 'stale'
     return st.everNonZero ? 'live' : 'zero'
+  }
+
+  elapsedAt(epochSeconds: number): number {
+    if (this.originT === null || !Number.isFinite(epochSeconds)) return 0
+    return Math.max(0, epochSeconds - this.originT)
   }
 
   /** Drop the data (keeps the auto-check memory: a cleared signal that the
@@ -382,6 +583,7 @@ export class ScopeStore {
     this.stats.clear()
     this.runs = []
     this.newestT = 0
+    this.originT = null
   }
 }
 

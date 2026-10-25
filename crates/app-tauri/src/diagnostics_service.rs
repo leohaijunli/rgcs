@@ -121,10 +121,10 @@ pub fn diagnostics_export(
         .path()
         .app_log_dir()
         .map_err(|e| format!("app log dir: {e}"))?;
-    let stamp = (std::time::SystemTime::now()
+    let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)) as u128;
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
     let folder = log_dir.join(format!("diagnostics-{stamp}"));
     fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
 
@@ -150,6 +150,35 @@ pub fn diagnostics_export(
     if fs::copy(config_dir.join("config.json"), folder.join("config.json")).is_ok() {
         files.push("config.json".into());
     }
+    let serial_file = maggcs_core::config::serial::SERIAL_SETTINGS_FILE;
+    if fs::copy(config_dir.join(serial_file), folder.join(serial_file)).is_ok() {
+        files.push(serial_file.into());
+    }
+    // Read-only evidence for hotplug/reboot acceptance. IDs stay strings so
+    // tools cannot silently round them through a JavaScript number.
+    let connection = state.connection().map(|connection| {
+        serde_json::json!({
+            "handle_id": connection.handle_id().to_string(),
+            "generation": connection.generation().to_string(),
+            "endpoint": connection.config().endpoint.to_address_string(),
+            "target": connection.target_identity(),
+        })
+    });
+    let serial_state = serde_json::json!({
+        "captured_at_unix_ms": stamp.to_string(),
+        "version": VERSION,
+        "connection": connection,
+        "link": state.link_status(),
+        "inventory": state.serial.get().map(|service| service.discovery.snapshot()),
+        "automatic": state.serial.get().map(|service| service.snapshot()),
+        "base": state.rtk.base.snapshot(),
+    });
+    fs::write(
+        folder.join("serial-state.json"),
+        serde_json::to_vec_pretty(&serial_state).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    files.push("serial-state.json".into());
     // 3. The current alert snapshot.
     let alerts =
         serde_json::to_string_pretty(&state.alerts().snapshot()).map_err(|e| e.to_string())?;
@@ -164,7 +193,7 @@ pub fn diagnostics_export(
     }
     // 5. A readme so the bundle explains itself in the field.
     let readme = format!(
-        "Q-Mag diagnostics bundle v{VERSION}\nexported: {} \ncontents: log files, config.json (no secrets), alerts.json, session.json (if recording)\n",
+        "Q-Mag diagnostics bundle v{VERSION}\nexported: {} \ncontents: log files, config.json (no secrets), serial-connections.json (when present), serial-state.json, alerts.json, session.json (if recording)\n",
         chrono_header(),
     );
     fs::write(folder.join("README.txt"), readme).map_err(|e| e.to_string())?;

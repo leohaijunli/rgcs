@@ -22,15 +22,20 @@ use maggcs_core::mavlink::connection::{spawn_connection, ConnectionEvent, Connec
 use maggcs_core::mavlink::router::MessageRoute;
 use maggcs_core::mavlink::{MavMessage, MessageEnvelope};
 use maggcs_core::motor_test::mapping::{
-    build_output_map, mapped_feedback_pwm, OutputMap, ServoPort, SERVO_CHANNELS_PER_PORT,
+    build_output_map_checked, mapped_feedback_pwm, FunctionRead, MappingIssue, OutputMap,
+    ServoPort, SERVO_CHANNELS_PER_PORT,
 };
-use maggcs_core::motor_test::pwm::PwmModel;
-use maggcs_core::motor_test::scope::{self, ScopeBus};
+use maggcs_core::motor_test::protocol::{
+    detect_bank_protocol_checked, OutputProtocol, OutputProtocols,
+};
+use maggcs_core::motor_test::pwm::{PwmModel, PwmRangeSource};
+use maggcs_core::motor_test::scope::{self, OutputScopeError, ScopeBus, ScopeOutputMeta};
 use maggcs_core::motor_test::service::{MotorTestCommand, MotorTestEvent, MotorTestService};
 use maggcs_core::motor_test::source::{ForwardSlot, ForwardState};
 use maggcs_core::motor_test::{SessionState, DEFAULT_TICK_HZ};
 use maggcs_core::params::model::{ParamType, ParamValue};
 use maggcs_core::params::{ParamEntry, ParamObservation, ParamService};
+use maggcs_core::signals::derived::esc_frame_range;
 
 /// Maximum time to observe the release pass before closing an actuator link.
 const MOTOR_TEST_STOP_TIMEOUT: Duration = Duration::from_secs(2);
@@ -41,11 +46,16 @@ const TARGET_HEARTBEAT_STALE: Duration = Duration::from_secs(3);
 const MOTOR_TEST_MOTOR_COUNT: u8 = 4;
 /// Older SERVO_OUTPUT_RAW samples are not shown as live feedback.
 const FC_OUTPUT_STALE: Duration = Duration::from_secs(2);
+/// `ESC_STATUS` older than this must not be shown as a "live" RPM value.
+const ESC_RPM_STALE: Duration = Duration::from_millis(500);
+/// Short per-name probe before a full parameter inventory is available. An
+/// absent channel otherwise stalls for the full transaction timeout.
+const MAPPING_PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 
-use crate::motor_test_state::limits_for_load;
+use crate::motor_test_state::motor_test_limits;
 use crate::motor_test_state::{
-    AuxiliaryLinkRuntime, FcPortOutputs, MotorTestLoad, MotorTestTarget, MotorTestTargetRef,
-    SitlLinkRuntime, SitlSourceConfig, TargetLinkRuntime,
+    AuxiliaryLinkRuntime, FcPortOutputs, MotorTestTarget, MotorTestTargetRef, OutputConfigSnapshot,
+    SitlLinkRuntime, SitlSourceConfig, TargetLinkRuntime, TARGET_COMPONENT_ID,
 };
 use crate::state::AppState;
 
@@ -53,6 +63,9 @@ use crate::state::AppState;
 /// the UI; safety-relevant signals are low-rate).
 #[derive(Debug, Clone, Serialize)]
 pub struct ActuatorStatus {
+    pub motor_control: crate::motor_control_service::MotorControlStatus,
+    pub streams: crate::stream_service::StreamSnapshot,
+    pub tones: crate::motor_tone_service::MotorToneStatus,
     pub connected: bool,
     pub fc_alive: bool,
     /// The serial target PX4's heartbeat is fresh (`false` when no target is
@@ -82,6 +95,8 @@ pub struct ActuatorStatus {
     pub target_connected: bool,
     pub target_endpoint: Option<String>,
     pub target_system_id: Option<u8>,
+    pub target_origin: Option<crate::motor_test_state::TargetLinkOrigin>,
+    pub main_serial_target: Option<crate::motor_test_state::MainSerialTarget>,
     /// `COM_MOT_TEST_EN` read from the target PX4 (`None` = unknown): PX4
     /// denies ACTUATOR_TEST while this is not 1.
     pub com_mot_test_en: Option<i32>,
@@ -108,10 +123,34 @@ pub struct ActuatorStatus {
     /// Per-motor target PWM model (endpoints, reversal, `THR_MDL_FAC`,
     /// disabled) used to compensate `ACTUATOR_TEST` and forward raw pulses.
     pub pwm_models: Vec<PwmModel>,
+    /// Complete output descriptors from the same configuration snapshot.
+    /// Empty until units/mapping are known or while the snapshot is stale.
+    pub scope_outputs: Vec<ScopeOutputMeta>,
+    /// Output protocol PX4 applies to each bank, detected from `PWM_*_TIMn`.
+    pub output_protocols: OutputProtocols,
+    /// Target `DSHOT_3D_ENABLE` (null = unread). Nonzero blocks DShot starts.
+    pub dshot_3d_enable: Option<i32>,
+    /// Target `DSHOT_BIDIR_EN` (null = unread), needed for RPM telemetry.
+    pub dshot_bidir_en: Option<i32>,
+    /// Per-ESC RPM from `ESC_STATUS`; `rpm` null means that ESC never
+    /// reported. `stale` marks a value older than the RPM freshness window.
+    pub esc_rpm: Vec<EscRpmStatus>,
     /// Target-shell SD-file capture state (Task 6).
     pub sd_capture: SdCaptureStatus,
     /// Current/last per-test run + recovery manifest (Task 8).
     pub run: crate::run_service::RunSnapshot,
+}
+
+/// One ESC's RPM sample in the status snapshot.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct EscRpmStatus {
+    /// 1-based display index; the `ESC_STATUS` wire index is zero-based.
+    pub esc: u8,
+    /// Latest reported RPM; null when this ESC has never reported.
+    pub rpm: Option<f64>,
+    /// Seconds since the newest frame covering this ESC.
+    pub age_s: Option<f64>,
+    pub stale: bool,
 }
 
 /// Open the motor-test window, or focus it if it already exists.
@@ -123,6 +162,10 @@ pub async fn actuator_open(app: AppHandle) -> Result<(), String> {
         let _ = win.set_focus();
         return Ok(());
     }
+    // A fresh tool window always begins in monitor-only mode, even if a prior
+    // window's failed release left a session available for a STOP retry.
+    let state = app.state::<AppState>();
+    let _ = crate::motor_control_service::set_control(&state, false).await;
     let win = WebviewWindowBuilder::new(&app, "actuator", WebviewUrl::App("actuator.html".into()))
         .devtools(true)
         .title("Motor test")
@@ -146,14 +189,16 @@ pub async fn actuator_open(app: AppHandle) -> Result<(), String> {
     win.on_window_event(move |event| {
         if let WindowEvent::Destroyed = event {
             let app = app_for_cleanup.clone();
+            crate::motor_control_service::revoke(&app.state::<AppState>());
             tauri::async_runtime::spawn(async move {
                 let state = app.state::<AppState>();
-                let _ops = state.ops().lock().await;
                 if let Err(error) = stop_active_session(&state).await {
                     let _ = app.emit("actuator_stop_warning", error);
                     return;
                 }
+                let _ops = state.ops().lock().await;
                 state.motor_test.running.lock().take();
+                crate::stream_service::stop(&state);
                 let sitl = state.motor_test.sitl.lock().take();
                 if let Some(sitl) = sitl {
                     sitl.stop().await;
@@ -173,8 +218,9 @@ pub async fn actuator_open(app: AppHandle) -> Result<(), String> {
 /// Close the motor-test window and run the stop path.
 #[tauri::command]
 pub async fn actuator_close(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    let _ops = state.ops().lock().await;
+    crate::motor_control_service::revoke(&state);
     stop_active_session(&state).await?;
+    let _ops = state.ops().lock().await;
     state.motor_test.running.lock().take();
     detach_motor_telemetry(&state).await;
     stop_auxiliary_links(&app, &state).await;
@@ -191,43 +237,104 @@ pub fn actuator_status(state: State<'_, AppState>) -> Result<ActuatorStatus, Str
     Ok(state.actuator_status())
 }
 
-/// A start that passed target identity, heartbeat and load checks. Holding
-/// it binds the new session to the exact connection the checks were made on.
+/// A start that passed target identity and heartbeat checks. Holding it
+/// binds the new session to the exact connection the checks were made on.
 struct PreparedStart {
     handle: ConnectionHandle,
     target: MotorTestTargetRef,
-    load: MotorTestLoad,
     limits: maggcs_core::motor_test::SafetyLimits,
     /// Captured with the target identity, so every start sends exactly the
     /// models that were current when readiness was checked.
     pwm_models: Vec<PwmModel>,
+    scope_outputs: Vec<ScopeOutputMeta>,
+    /// Configured M1..MN prefix from the captured output map.
+    active_motors: usize,
 }
 
 /// Verify the current target before any session is created or reused. The
 /// caller holds [`AppState::ops`], so the target cannot be replaced between
 /// these checks and the spawn.
-fn prepare_start(state: &AppState, load: MotorTestLoad) -> Result<PreparedStart, String> {
-    let (handle, target, pwm_models) = {
+fn prepare_start(state: &AppState) -> Result<PreparedStart, String> {
+    let (handle, target, config, config_stale) = {
         let guard = state.motor_test.target.lock();
         let runtime = guard
             .as_ref()
             .ok_or("no serial PX4 target — connect it first")?;
-        let pwm_models = runtime.target.pwm_models.lock().clone();
-        (
-            runtime.target.handle.clone(),
-            runtime.target.target_ref(),
-            pwm_models,
-        )
+        let handle = runtime.target.handle.clone();
+        let target = runtime.target.target_ref();
+        let config = runtime.target.config.lock().clone();
+        let stale = runtime
+            .target
+            .config_stale
+            .load(std::sync::atomic::Ordering::Relaxed);
+        (handle, target, config, stale)
     };
-    refuse_unread_pwm_ranges(&pwm_models)?;
+    let config =
+        config.ok_or("output configuration has not been read yet — refresh the mapping first")?;
+    if config_stale {
+        return Err(
+            "output configuration is stale after a failed refresh — refresh the mapping again"
+                .into(),
+        );
+    }
+    if config.target != target {
+        return Err(
+            "output configuration belongs to a different target — refresh the mapping first".into(),
+        );
+    }
+    refuse_unread_pwm_ranges(
+        &config.map,
+        &config.models,
+        config.protocols_known,
+        config.dshot_3d_enable,
+    )?;
     ensure_target_disarmed(state, target)?;
+    let scope_outputs = output_scope_metadata(&config).map_err(|error| error.to_string())?;
     Ok(PreparedStart {
         handle,
         target,
-        load,
-        limits: limits_for_load(load, target.target_system_id),
-        pwm_models,
+        limits: motor_test_limits(target.target_system_id),
+        pwm_models: config.models,
+        scope_outputs,
+        active_motors: usize::from(config.map.active_count()),
     })
+}
+
+fn output_scope_metadata(
+    config: &OutputConfigSnapshot,
+) -> Result<Vec<ScopeOutputMeta>, OutputScopeError> {
+    if !config.protocols_known {
+        return Err(OutputScopeError::IncompleteConfiguration);
+    }
+    scope::output_metadata(
+        config.target.connection_id,
+        config.revision,
+        &config.map,
+        &config.models,
+    )
+}
+
+/// Take output metadata before acquiring the telemetry lock. A replaced target
+/// or stale configuration cannot lend units/mapping to an old tap.
+fn scope_outputs_for_target(state: &AppState, target: MotorTestTargetRef) -> Vec<ScopeOutputMeta> {
+    let config = {
+        let guard = state.motor_test.target.lock();
+        guard
+            .as_ref()
+            .filter(|runtime| {
+                runtime.target.target_ref() == target
+                    && !runtime
+                        .target
+                        .config_stale
+                        .load(std::sync::atomic::Ordering::Relaxed)
+            })
+            .and_then(|runtime| runtime.target.config.lock().clone())
+    };
+    config
+        .as_ref()
+        .filter(|config| config.target == target)
+        .and_then(|config| output_scope_metadata(config).ok())
+        .unwrap_or_default()
 }
 
 /// Read-only readiness for logger control as well as motor starts. The
@@ -276,35 +383,86 @@ pub(crate) fn ensure_target_disarmed(
     Ok(())
 }
 
-/// Refuse a start while any motor's PWM range could not be read from the FC
-/// (the fallback 1100–1900 would look real but is not). The operator must
-/// refresh the mapping until every launched motor reports its FC range.
-fn refuse_unread_pwm_ranges(models: &[PwmModel]) -> Result<(), String> {
-    if models.len() != usize::from(MOTOR_TEST_MOTOR_COUNT) {
+/// Refuse a start unless every active motor (the contiguous M1..MN prefix)
+/// has an FC-read range and a known output protocol. Missing middle motors,
+/// duplicates, unknown protocols and unread `DSHOT_MIN` are all blocking: the
+/// fallback range would look real but is not.
+fn refuse_unread_pwm_ranges(
+    map: &OutputMap,
+    models: &[PwmModel],
+    protocols_known: bool,
+    dshot_3d_enable: Option<i32>,
+) -> Result<(), String> {
+    if map.has_gap() {
+        return Err(
+            "output mapping has a gap (for example M1 and M3 without M2) —              fix PWM_*_FUNCn and refresh the mapping first"
+                .into(),
+        );
+    }
+    if map.state == maggcs_core::motor_test::mapping::OutputMapState::Invalid {
+        return Err("output mapping is invalid (a motor function is assigned twice) —              fix PWM_*_FUNCn and refresh the mapping first"
+            .into());
+    }
+    if map.state != maggcs_core::motor_test::mapping::OutputMapState::Complete {
         return Err(format!(
-            "PWM ranges incomplete: expected {MOTOR_TEST_MOTOR_COUNT} FC-read motor models, got {} — refresh the mapping first",
+            "output mapping is not complete ({:?}) — a function or timer read may have failed; refresh the mapping and parameters first",
+            map.state
+        ));
+    }
+    if !protocols_known {
+        return Err(
+            "output protocol reads are incomplete — refresh the mapping and parameters first"
+                .into(),
+        );
+    }
+    let active = map.active_count();
+    if active == 0 {
+        return Err(
+            "no configured motor outputs found — assign a motor function to              PWM_MAIN/AUX_FUNCn and refresh the mapping first"
+                .into(),
+        );
+    }
+    if models.len() < usize::from(active) {
+        return Err(format!(
+            "output configuration incomplete: expected {active} active motor models, got {} — refresh the mapping first",
             models.len()
         ));
     }
-    let unread = models
-        .iter()
-        .enumerate()
-        .filter(|(_, model)| {
-            model.range_source == maggcs_core::motor_test::pwm::PwmRangeSource::Fallback
-        })
-        .map(|(index, _)| index + 1)
-        .collect::<Vec<_>>();
-    if unread.is_empty() {
+    let mut problems = Vec::new();
+    for motor in 1..=active {
+        let model = models[usize::from(motor - 1)];
+        if model.range_source == PwmRangeSource::Fallback {
+            problems.push(format!(
+                "M{motor}: output range not read (check the link and PWM_*_MINn/MAXn{})",
+                if model.protocol.is_dshot() {
+                    " / DSHOT_MIN"
+                } else {
+                    ""
+                }
+            ));
+        }
+        if model.protocol == OutputProtocol::Unknown {
+            problems.push(format!(
+                "M{motor}: output protocol unknown (check PWM_MAIN/AUX_TIMn)"
+            ));
+        }
+        if model.protocol.is_dshot() && dshot_3d_enable != Some(0) {
+            problems.push(match dshot_3d_enable {
+                Some(value) => format!(
+                    "M{motor}: DSHOT_3D_ENABLE={value}; 3D mode changes the throttle range —                      set it to 0 before using the motor test"
+                ),
+                None => format!(
+                    "M{motor}: DSHOT_3D_ENABLE could not be read; 3D mode would change the                      throttle range — refresh the parameters first"
+                ),
+            });
+        }
+    }
+    if problems.is_empty() {
         return Ok(());
     }
     Err(format!(
-        "PWM range not read from the PX4 for motor(s) {} — refresh the mapping first \
-         (check the serial link and PWM_MAIN/AUX_MINn/MAXn)",
-        unread
-            .iter()
-            .map(|motor| format!("M{motor}"))
-            .collect::<Vec<_>>()
-            .join(", ")
+        "motor output configuration is not ready — {}; refresh the mapping and parameters first",
+        problems.join("; ")
     ))
 }
 
@@ -323,9 +481,9 @@ pub(crate) fn ensure_idle_session(state: &AppState) -> Result<(), String> {
     }
 }
 
-/// Reuse only a session bound to the same target and load. An idle session
-/// from another load/target is stopped (release confirmed) before replacement;
-/// a running one is never silently re-bounded.
+/// Reuse only a session bound to the same target and output configuration.
+/// An idle session with obsolete metadata is released before replacement; a
+/// running one is never silently re-bounded.
 async fn reusable_session(
     state: &AppState,
     prepared: &PreparedStart,
@@ -333,7 +491,7 @@ async fn reusable_session(
     let running = state.motor_test.running.lock().as_ref().map(|running| {
         (
             running.svc.clone(),
-            running.matches(prepared.target, prepared.load),
+            running.matches(prepared.target) && running.scope_outputs == prepared.scope_outputs,
         )
     });
     let Some((service, matches)) = running else {
@@ -347,7 +505,9 @@ async fn reusable_session(
         .session()
         .is_some_and(|session| session.is_sending())
     {
-        return Err("stop the motor test before changing the prop load or target".into());
+        return Err(
+            "stop the motor test before changing the target or output configuration".into(),
+        );
     }
     service
         .stop_and_wait()
@@ -357,16 +517,27 @@ async fn reusable_session(
     Ok(None)
 }
 
-fn spawn_session(app: &AppHandle, state: &AppState, prepared: &PreparedStart) -> MotorTestService {
+fn spawn_session<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    prepared: &PreparedStart,
+    tone_generation: u64,
+) -> MotorTestService {
     let (service, events, output) =
         MotorTestService::spawn(prepared.handle.clone(), prepared.limits.clone());
-    let forwarder = tauri::async_runtime::spawn(forward_events(app.clone(), events));
+    let forwarder = tauri::async_runtime::spawn(forward_events(
+        app.clone(),
+        events,
+        prepared.target,
+        tone_generation,
+    ));
     *state.motor_test.running.lock() = Some(crate::motor_test_state::RunningMotorTest {
         svc: service.clone(),
         forwarder,
         output,
         target: prepared.target,
-        load: prepared.load,
+        scope_outputs: prepared.scope_outputs.clone(),
+        tone_generation,
     });
     service
 }
@@ -377,6 +548,14 @@ async fn send_pwm_models(
     service: &MotorTestService,
     prepared: &PreparedStart,
 ) -> Result<(), String> {
+    // Width first: a preset/forward start drives exactly the configured
+    // M1..MN prefix, never unmapped trailing motor functions.
+    service
+        .send(MotorTestCommand::SetMotorCount {
+            motors: prepared.active_motors,
+        })
+        .await
+        .map_err(|error| error.to_string())?;
     service
         .send(MotorTestCommand::SetPwmModels {
             models: prepared.pwm_models.clone(),
@@ -385,50 +564,106 @@ async fn send_pwm_models(
         .map_err(|error| error.to_string())
 }
 
-/// Start manual sending. `load` is the declared prop load (`none` | `plate`
-/// | `props`) — it picks the output envelope (`limits_for_load`); the
-/// risk-scaled confirmation happened in the UI before this call.
+/// Start manual sending with the one full-prop safety envelope (0.3 cap,
+/// 2.0/s slew). The long-press confirmation happened in the UI.
 #[tauri::command]
 pub async fn actuator_start_manual(
     app: AppHandle,
     state: State<'_, AppState>,
-    load: String,
     values: Vec<f32>,
 ) -> Result<(), String> {
+    start_source(&app, &state, StartSource::Manual(values)).await
+}
+
+pub(crate) enum StartSource {
+    Manual(Vec<f32>),
+    Preset(maggcs_core::motor_test::source::WaveformPreset),
+    Forward,
+}
+
+/// All sources cross the same cancellable tone fence and atomic start commit.
+pub(crate) async fn start_source<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    source: StartSource,
+) -> Result<(), String> {
+    crate::motor_control_service::ensure_enabled(state).map_err(|error| error.to_string())?;
+    let expected = state.motor_test.tones.generation();
     let _ops = state.ops().lock().await;
-    ensure_idle_session(&state)?;
-    let load = MotorTestLoad::parse(&load)?;
-    let prepared = prepare_start(&state, load)?;
-    crate::run_service::authorize_motor_start(&app, &state)?;
-    if let Some(service) = reusable_session(&state, &prepared).await? {
-        if send_pwm_models(&service, &prepared).await.is_ok()
-            && service
-                .send(MotorTestCommand::SetValues(values.clone()))
-                .await
-                .is_ok()
-            && service.send(MotorTestCommand::StartManual).await.is_ok()
-        {
-            return confirm_start_or_release(&app, &state).await;
+    crate::motor_control_service::ensure_enabled(state).map_err(|error| error.to_string())?;
+    ensure_idle_session(state)?;
+    let prepared = prepare_start(state)?;
+    crate::run_service::authorize_motor_start(app, state)?;
+    let (command, values) = match source {
+        StartSource::Manual(values) => (MotorTestCommand::StartManual, Some(values)),
+        StartSource::Preset(preset) => (MotorTestCommand::StartPreset { preset }, None),
+        StartSource::Forward => {
+            let slot = state
+                .motor_test
+                .sitl
+                .lock()
+                .as_ref()
+                .map(|source| source.slot.clone())
+                .ok_or("connect the SITL source first")?;
+            (MotorTestCommand::StartForward { slot }, None)
         }
-        state.motor_test.running.lock().take();
+    };
+    // Each run gets an event observer bound to its generation. A delayed stop
+    // event from a prior run must never schedule a tone for the new run.
+    if let Some(old) = reusable_session(state, &prepared).await? {
+        old.stop_and_wait()
+            .await
+            .map_err(|error| error.to_string())?;
     }
-    let service = spawn_session(&app, &state, &prepared);
+    let old = state.motor_test.running.lock().take();
+    if let Some(old) = old {
+        old.forwarder.abort();
+        let _ = old.forwarder.await;
+    }
+    let revision = prepared
+        .scope_outputs
+        .first()
+        .ok_or("missing output configuration")?
+        .revision;
+    let mut lease =
+        crate::motor_tone_service::begin_start(state, prepared.target, revision, expected)
+            .map_err(|error| error.to_string())?;
+    crate::motor_tone_service::play_motor_tone(state, lease.request)
+        .await
+        .map_err(|error| error.to_string())?;
+    // Heartbeat and output configuration may have changed during the sound.
+    let current = prepare_start(state)?;
+    if current.target != prepared.target || current.scope_outputs != prepared.scope_outputs {
+        return Err(crate::motor_tone_service::MotorToneError::TargetChanged.to_string());
+    }
+    ensure_idle_session(state)?;
+    let service = spawn_session(app, state, &prepared, lease.request.session_generation);
     send_pwm_models(&service, &prepared).await?;
-    service
-        .send(MotorTestCommand::SetValues(values))
-        .await
-        .map_err(|error| error.to_string())?;
-    service
-        .send(MotorTestCommand::StartManual)
-        .await
-        .map_err(|error| error.to_string())?;
-    confirm_start_or_release(&app, &state).await
+    if let Some(values) = values {
+        service
+            .send(MotorTestCommand::SetValues(values))
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    lease.commit(|| {
+        crate::motor_control_service::with_enabled(state, || {
+            service
+                .try_send(command)
+                .map_err(|error| error.to_string())?;
+            state.motor_test.note_state(SessionState::ManualRunning);
+            Ok(())
+        })
+    })?;
+    confirm_start_or_release(app, state).await
 }
 
 /// The run manifest may only claim `MotorRunning` after the start was sent.
 /// If that bookkeeping fails, stop the session rather than leave motors
 /// running without a run.
-async fn confirm_start_or_release(app: &AppHandle, state: &AppState) -> Result<(), String> {
+async fn confirm_start_or_release<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+) -> Result<(), String> {
     match crate::run_service::confirm_motor_started(app, state) {
         Ok(()) => Ok(()),
         Err(error) => {
@@ -444,32 +679,9 @@ async fn confirm_start_or_release(app: &AppHandle, state: &AppState) -> Result<(
 pub async fn actuator_start_preset(
     app: AppHandle,
     state: State<'_, AppState>,
-    load: String,
     preset: maggcs_core::motor_test::source::WaveformPreset,
 ) -> Result<(), String> {
-    let _ops = state.ops().lock().await;
-    ensure_idle_session(&state)?;
-    let load = MotorTestLoad::parse(&load)?;
-    let prepared = prepare_start(&state, load)?;
-    crate::run_service::authorize_motor_start(&app, &state)?;
-    if let Some(service) = reusable_session(&state, &prepared).await? {
-        if send_pwm_models(&service, &prepared).await.is_ok()
-            && service
-                .send(MotorTestCommand::StartPreset { preset })
-                .await
-                .is_ok()
-        {
-            return confirm_start_or_release(&app, &state).await;
-        }
-        state.motor_test.running.lock().take();
-    }
-    let service = spawn_session(&app, &state, &prepared);
-    send_pwm_models(&service, &prepared).await?;
-    service
-        .send(MotorTestCommand::StartPreset { preset })
-        .await
-        .map_err(|error| error.to_string())?;
-    confirm_start_or_release(&app, &state).await
+    start_source(&app, &state, StartSource::Preset(preset)).await
 }
 
 /// Latest-value-wins slider update (the UI throttles to ~30 Hz).
@@ -478,7 +690,25 @@ pub async fn actuator_set_values(
     state: State<'_, AppState>,
     values: Vec<f32>,
 ) -> Result<(), String> {
-    send_session(&state, MotorTestCommand::SetValues(values)).await
+    crate::motor_control_service::ensure_enabled(&state).map_err(|error| error.to_string())?;
+    let expected = session_identity(&state);
+    // Serialize slider updates with ordinary session start/stop operations.
+    let _ops = state.ops().lock().await;
+    if expected.is_none()
+        || session_identity(&state) != expected
+        || !state
+            .motor_test
+            .session()
+            .is_some_and(|session| session.is_sending())
+    {
+        return Err(crate::motor_control_service::MotorControlError::Busy.to_string());
+    }
+    let service = service_of(&state).ok_or("no motor-test session")?;
+    crate::motor_control_service::with_enabled(&state, || {
+        service
+            .try_send(MotorTestCommand::SetValues(values))
+            .map_err(|error| error.to_string())
+    })
 }
 
 /// Operator stop. Idempotent: fine with no session (link already died).
@@ -490,23 +720,39 @@ pub async fn actuator_stop(state: State<'_, AppState>) -> Result<(), String> {
 /// Emergency stop: latched in the session; the UI mirrors it.
 #[tauri::command]
 pub async fn actuator_estop(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    if let Some(service) = service_of(&state) {
+    emergency_stop_active_session(&state).await?;
+    pin_window(&app, false);
+    Ok(())
+}
+
+/// Release immediately without waiting for capture or connection-operation locks.
+pub(crate) async fn emergency_stop_active_session(state: &AppState) -> Result<(), String> {
+    state.motor_test.tones.cancel();
+    let identity = session_identity(state);
+    if let Some(service) = service_of(state) {
         let receipt = service
             .emergency_stop_and_wait()
             .await
             .map_err(|error| error.to_string())?;
         state.motor_test.note_state(receipt.state);
+        if let Some((target, generation)) = identity {
+            crate::motor_tone_service::after_release(state, target, generation);
+        }
     } else {
         state.motor_test.note_state(SessionState::Emergency);
     }
-    pin_window(&app, false);
     Ok(())
 }
 
 /// Explicit emergency reset (never automatic).
 #[tauri::command]
 pub async fn actuator_reset_emergency(state: State<'_, AppState>) -> Result<(), String> {
-    send_session(&state, MotorTestCommand::ResetEmergency).await
+    if service_of(&state).is_some() {
+        send_session(&state, MotorTestCommand::ResetEmergency).await
+    } else {
+        state.motor_test.note_state(SessionState::Idle);
+        Ok(())
+    }
 }
 
 /// The SITL feed's stream rate for `SERVO_OUTPUT_RAW` (10 Hz: enough head
@@ -519,9 +765,12 @@ const SITL_STREAM_HZ: f64 = 10.0;
 /// dropped.
 #[tauri::command]
 pub async fn actuator_connect_sitl(
+    app: AppHandle,
     state: State<'_, AppState>,
     source: SitlSourceConfig,
+    expected_serial: Option<maggcs_core::devices::SerialPortRef>,
 ) -> Result<(), String> {
+    state.motor_test.tones.cancel();
     if source.system_id == 0 || source.component_id == 0 {
         return Err("SITL source system and component IDs must be 1–255".into());
     }
@@ -535,8 +784,38 @@ pub async fn actuator_connect_sitl(
         heartbeat_timeout: Duration::from_secs(30),
         ..Default::default()
     };
-    let (handle, _events_rx, first_result) =
-        spawn_connection(config).await.map_err(|e| e.to_string())?;
+    let serial = crate::serial_service::ensure(&app, &state).await?;
+    let _manual = if matches!(
+        config.endpoint,
+        maggcs_core::mavlink::Endpoint::Serial { .. }
+    ) {
+        Some(
+            serial
+                .begin_manual(maggcs_core::config::serial::AutoConnectRole::PrimaryFc)
+                .await?,
+        )
+    } else {
+        None
+    };
+    let lease = serial
+        .reserve_endpoint(
+            &config.endpoint,
+            expected_serial,
+            maggcs_core::devices::SerialOwner::AuxiliarySource,
+        )
+        .await?;
+    let _ops = state.ops().lock().await;
+    if let Some(manual) = &_manual {
+        manual.check()?;
+    }
+    crate::rtk_service::ensure_port_not_base(&state, &config.endpoint)?;
+    let spawned = match lease {
+        Some(lease) => {
+            maggcs_core::mavlink::connection::spawn_leased_serial_connection(config, lease).await
+        }
+        None => spawn_connection(config).await,
+    };
+    let (handle, _events_rx, first_result) = spawned.map_err(|e| e.to_string())?;
     match tokio::time::timeout(Duration::from_secs(3), first_result).await {
         Ok(Ok(Ok(()))) => {}
         Ok(Ok(Err(failure))) => {
@@ -549,6 +828,14 @@ pub async fn actuator_connect_sitl(
         }
     }
 
+    if let Some(manual) = &_manual {
+        if let Err(error) = manual.check() {
+            let _ = handle
+                .shutdown_and_wait(maggcs_core::rtk::base::BASE_STOP_TIMEOUT)
+                .await;
+            return Err(error);
+        }
+    }
     // Ask the SITL to stream its actuator outputs (fire-and-forget; PX4
     // accepts MAV_CMD_SET_MESSAGE_INTERVAL while disarmed).
     let interval_us = (1_000_000.0 / SITL_STREAM_HZ) as f32;
@@ -570,7 +857,6 @@ pub async fn actuator_connect_sitl(
         ))
         .await;
 
-    let _ops = state.ops().lock().await;
     let existing_sitl = state.motor_test.sitl.lock().is_some();
     let old_sitl = stop_before_auxiliary_close(
         async {
@@ -613,6 +899,7 @@ pub async fn actuator_connect_sitl(
 /// Drop the SITL source link.
 #[tauri::command]
 pub async fn actuator_disconnect_sitl(state: State<'_, AppState>) -> Result<(), String> {
+    state.motor_test.tones.cancel();
     let _ops = state.ops().lock().await;
     let existing_sitl = state.motor_test.sitl.lock().is_some();
     stop_before_auxiliary_close(
@@ -656,9 +943,10 @@ pub async fn actuator_connect_target(
     state: State<'_, AppState>,
     endpoint: String,
     target_system_id: u8,
+    expected_serial: Option<maggcs_core::devices::SerialPortRef>,
 ) -> Result<(), String> {
     let target_system_id = validate_target_system_id(target_system_id)?;
-    let _ops = state.ops().lock().await;
+    crate::motor_control_service::revoke(&state);
     let config = maggcs_core::mavlink::ConnectionConfig {
         endpoint: maggcs_core::mavlink::Endpoint::try_from(endpoint.as_str())
             .map_err(|e| e.to_string())?,
@@ -670,8 +958,29 @@ pub async fn actuator_connect_target(
         heartbeat_timeout: Duration::from_secs(30),
         ..Default::default()
     };
-    let (handle, _events_rx, first_result) =
-        spawn_connection(config).await.map_err(|e| e.to_string())?;
+    crate::main_link_service::ensure_port_not_primary(&state, &config.endpoint)?;
+    let serial = crate::serial_service::ensure(&app, &state).await?;
+    let _manual = serial
+        .begin_manual(maggcs_core::config::serial::AutoConnectRole::PrimaryFc)
+        .await?;
+    let lease = serial
+        .reserve_endpoint(
+            &config.endpoint,
+            expected_serial,
+            maggcs_core::devices::SerialOwner::MotorTestTarget,
+        )
+        .await?;
+    let _ops = state.ops().lock().await;
+    _manual.check()?;
+    crate::main_link_service::ensure_port_not_primary(&state, &config.endpoint)?;
+    crate::rtk_service::ensure_port_not_base(&state, &config.endpoint)?;
+    let spawned = match lease {
+        Some(lease) => {
+            maggcs_core::mavlink::connection::spawn_leased_serial_connection(config, lease).await
+        }
+        None => spawn_connection(config).await,
+    };
+    let (handle, _events_rx, first_result) = spawned.map_err(|e| e.to_string())?;
     match tokio::time::timeout(Duration::from_secs(3), first_result).await {
         Ok(Ok(Ok(()))) => {}
         Ok(Ok(Err(failure))) => {
@@ -682,6 +991,12 @@ pub async fn actuator_connect_target(
             handle.shutdown().await;
             return Err("timed out waiting for the PX4 link".into());
         }
+    }
+    if let Err(error) = _manual.check() {
+        let _ = handle
+            .shutdown_and_wait(maggcs_core::rtk::base::BASE_STOP_TIMEOUT)
+            .await;
+        return Err(error);
     }
     // A session retains the old target handle. Release it before replacing
     // that target; on timeout preserve the old target and close the new link.
@@ -694,6 +1009,7 @@ pub async fn actuator_connect_target(
             detach_motor_telemetry(&state).await;
             crate::run_service::interrupt_active(&app, &state, "serial target link replaced");
             crate::capture_service::stop_actuator_capture(&state).await;
+            crate::stream_service::stop(&state);
             state.motor_test.running.lock().take();
             let old = state.motor_test.target.lock().take();
             if let Some(old) = old {
@@ -707,22 +1023,58 @@ pub async fn actuator_connect_target(
         handle.shutdown().await;
         return Err(error);
     }
+    if let Err(error) = _manual.check() {
+        let _ = handle
+            .shutdown_and_wait(maggcs_core::rtk::base::BASE_STOP_TIMEOUT)
+            .await;
+        return Err(error);
+    }
     // The mag/ESC alarm reads HIGHRES_IMU / ESC_STATUS from the target FC.
     // Stream-rate requests and the parameter read are link-scoped tasks;
     // publish their owner before starting any observers.
     let (params, _param_events, parameter_task) =
         ParamService::spawn_with_task(handle.clone(), target_system_id, 1);
+    let runtime = AuxiliaryLinkRuntime::new(
+        handle.clone(),
+        [tauri::async_runtime::spawn(async move {
+            let _ = parameter_task.await;
+        })],
+    );
+    install_target(
+        &app,
+        &state,
+        handle,
+        endpoint,
+        target_system_id,
+        params,
+        runtime,
+    );
+    Ok(())
+}
+
+/// Publish one target and start only its tool-local tasks. A borrowed target
+/// supplies the primary ParamService and a non-owning transport runtime.
+pub(crate) fn install_target<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    handle: ConnectionHandle,
+    endpoint: String,
+    target_system_id: u8,
+    params: ParamService,
+    runtime: AuxiliaryLinkRuntime,
+) {
     let initial_params = params.clone();
-    let output_map = std::sync::Arc::new(parking_lot::Mutex::new(OutputMap::unknown(
-        MOTOR_TEST_MOTOR_COUNT,
-    )));
-    let mapping_slot = output_map.clone();
-    let pwm_models = std::sync::Arc::new(parking_lot::Mutex::new(vec![
-        PwmModel::default();
-        MOTOR_TEST_MOTOR_COUNT
-            as usize
-    ]));
-    let pwm_models_slot = pwm_models.clone();
+    let config = std::sync::Arc::new(parking_lot::Mutex::new(None));
+    let config_slot = config.clone();
+    let config_stale = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let config_stale_slot = config_stale.clone();
+    let param_names = std::sync::Arc::new(parking_lot::Mutex::new(None));
+    let param_names_slot = param_names.clone();
+    let config_target = MotorTestTargetRef {
+        connection_id: handle.handle_id(),
+        target_system_id,
+        target_component_id: TARGET_COMPONENT_ID,
+    };
     let telemetry_handle = handle.clone();
     *state.motor_test.target.lock() = Some(TargetLinkRuntime {
         target: MotorTestTarget {
@@ -731,33 +1083,14 @@ pub async fn actuator_connect_target(
             target_system_id,
             params,
             restart_pending: Default::default(),
-            output_map,
-            pwm_models,
+            config,
+            config_stale,
+            param_names,
         },
-        runtime: AuxiliaryLinkRuntime::new(
-            telemetry_handle.clone(),
-            [tauri::async_runtime::spawn(async move {
-                let _ = parameter_task.await;
-            })],
-        ),
+        runtime,
     });
-    // The scope needs these at useful rates; the FC defaults are low or
-    // absent (ESC_STATUS only streams when asked). Stream rates only —
-    // nothing persistent is written and a reboot reverts them.
-    let stream_requests = {
-        let handle = telemetry_handle.clone();
-        tauri::async_runtime::spawn(async move {
-            for (msg_id, hz) in TARGET_STREAMS {
-                request_message_interval(&handle, target_system_id, msg_id, hz).await;
-            }
-        })
-    };
-    if let Some(target) = state.motor_test.target.lock().as_mut() {
-        target.runtime.add_task(stream_requests);
-    } else {
-        stream_requests.abort();
-    }
-    attach_motor_telemetry(&app, telemetry_handle.clone(), target_system_id);
+    crate::stream_service::attach(app, state, telemetry_handle.clone(), target_system_id);
+    attach_motor_telemetry(app, telemetry_handle.clone(), target_system_id);
     // Discovery is read-only. Permission changes use an explicit verified set.
     let task = tauri::async_runtime::spawn(async move {
         let _ = initial_params.request_fc_version().await;
@@ -769,10 +1102,19 @@ pub async fn actuator_connect_target(
         ] {
             let _ = initial_params.read(name).await;
         }
-        let map = read_output_map(&initial_params).await;
-        let models = read_pwm_models(&initial_params, &map).await;
-        *mapping_slot.lock() = map;
-        *pwm_models_slot.lock() = models;
+        let read = read_output_config(&initial_params, &param_names_slot).await;
+        let snapshot = OutputConfigSnapshot {
+            revision: 1,
+            target: config_target,
+            map: read.map,
+            models: read.models,
+            protocols: read.protocols,
+            protocols_known: read.protocols_known,
+            dshot_3d_enable: read.dshot_3d_enable,
+            dshot_bidir_en: read.dshot_bidir_en,
+        };
+        *config_slot.lock() = Some(snapshot);
+        config_stale_slot.store(false, std::sync::atomic::Ordering::Relaxed);
     });
     if let Some(target) = state.motor_test.target.lock().as_mut() {
         target.runtime.add_task(task);
@@ -780,37 +1122,32 @@ pub async fn actuator_connect_target(
         task.abort();
     }
     // Rebuild the SD-log runtime on the new target handle (feature 2).
-    respawn_actuator_logs(app.clone(), &state);
+    respawn_actuator_logs(app.clone(), state);
     // Task 6: one shell controller bound to this target/shell.
     crate::capture_service::spawn_actuator_capture(
         app.clone(),
-        &state,
+        state,
         telemetry_handle,
         target_system_id,
     );
     // Task 8: close runs that a previous process left pending on this PX4.
-    if let Some(target) = state
+    let target = state
         .motor_test
         .target
         .lock()
         .as_ref()
-        .map(|runtime| runtime.target.target_ref())
-    {
+        .map(|runtime| runtime.target.target_ref());
+    if let Some(target) = target {
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
             crate::run_service::reconcile_target(app, target).await;
         });
     }
-    Ok(())
 }
-
-/// Messages the scope asks the target FC to stream: `(MAVLink id, Hz)` —
-/// `SERVO_OUTPUT_RAW`, `HIGHRES_IMU` (mag), `BATTERY_STATUS` (current),
-/// `ESC_STATUS`.
-const TARGET_STREAMS: [(u32, f64); 4] = [(36, 20.0), (105, 50.0), (147, 5.0), (291, 10.0)];
 
 /// Fire-and-forget `MAV_CMD_SET_MESSAGE_INTERVAL` (PX4 accepts it while
 /// disarmed; a FC that lacks the stream simply never sends it).
+#[cfg(test)]
 async fn request_message_interval(
     handle: &ConnectionHandle,
     target_system_id: u8,
@@ -839,10 +1176,11 @@ async fn request_message_interval(
 /// Drop the motor test's dedicated target link (real PX4). The session (if
 /// any) is stopped first so no frames are left addressed to a dead link.
 #[tauri::command]
-pub async fn actuator_disconnect_target(
-    app: AppHandle,
+pub async fn actuator_disconnect_target<R: tauri::Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    crate::motor_control_service::revoke(&state);
     let _ops = state.ops().lock().await;
     stop_before_auxiliary_close(
         async {
@@ -853,6 +1191,8 @@ pub async fn actuator_disconnect_target(
             detach_motor_telemetry(&state).await;
             crate::run_service::interrupt_active(&app, &state, "serial target disconnected");
             crate::capture_service::stop_actuator_capture(&state).await;
+            stop_actuator_logs(&state).await;
+            crate::stream_service::stop(&state);
             state.motor_test.running.lock().take();
             let old = state.motor_test.target.lock().take();
             if let Some(old) = old {
@@ -866,44 +1206,13 @@ pub async fn actuator_disconnect_target(
 
 /// Start realtime forwarding: the live SITL actuator outputs (already
 /// normalized into the slot by the tap) drive the real FC's motors. The
-/// declared load still caps the forwarded demand.
+/// full-prop envelope still caps the forwarded demand.
 #[tauri::command]
 pub async fn actuator_start_forward(
     app: AppHandle,
     state: State<'_, AppState>,
-    load: String,
 ) -> Result<(), String> {
-    let _ops = state.ops().lock().await;
-    ensure_idle_session(&state)?;
-    let load = MotorTestLoad::parse(&load)?;
-    // The slot is fed by the SITL tap; forwarding without it is meaningless.
-    let slot = state
-        .motor_test
-        .sitl
-        .lock()
-        .as_ref()
-        .map(|s| s.slot.clone())
-        .ok_or("connect the SITL source first")?;
-    let prepared = prepare_start(&state, load)?;
-    crate::run_service::authorize_motor_start(&app, &state)?;
-    if let Some(service) = reusable_session(&state, &prepared).await? {
-        if send_pwm_models(&service, &prepared).await.is_ok()
-            && service
-                .send(MotorTestCommand::StartForward { slot: slot.clone() })
-                .await
-                .is_ok()
-        {
-            return confirm_start_or_release(&app, &state).await;
-        }
-        state.motor_test.running.lock().take();
-    }
-    let service = spawn_session(&app, &state, &prepared);
-    send_pwm_models(&service, &prepared).await?;
-    service
-        .send(MotorTestCommand::StartForward { slot })
-        .await
-        .map_err(|error| error.to_string())?;
-    confirm_start_or_release(&app, &state).await
+    start_source(&app, &state, StartSource::Forward).await
 }
 
 /// Standard PPM range of `SERVO_OUTPUT_RAW`: 1000 µs = 0 %, 2000 µs = 100 %.
@@ -1060,6 +1369,7 @@ pub async fn actuator_param_set(
     value: ParamValue,
     ptype: ParamType,
 ) -> Result<ParamEntry, String> {
+    crate::motor_control_service::ensure_enabled(&state).map_err(|error| error.to_string())?;
     let _ops = state.ops().lock().await;
     if state
         .motor_test
@@ -1076,6 +1386,7 @@ pub async fn actuator_param_set(
             current.ptype
         ));
     }
+    crate::motor_control_service::ensure_enabled(&state).map_err(|error| error.to_string())?;
     let entry = svc
         .set_confirmed(&name, value, ptype)
         .await
@@ -1096,8 +1407,8 @@ pub async fn actuator_param_set(
 }
 
 /// Enable or disable `COM_MOT_TEST_EN` on the target PX4. PX4 refuses
-/// `MAV_CMD_ACTUATOR_TEST` while this is not 1, so the window enables it
-/// automatically on connect; this command lets the operator flip it back.
+/// `MAV_CMD_ACTUATOR_TEST` while this is not 1. Changes are explicit and require
+/// the Motor control gate; connecting the window only reads this parameter.
 #[tauri::command]
 pub async fn actuator_set_mot_test_en(
     state: State<'_, AppState>,
@@ -1554,6 +1865,8 @@ async fn send_session(state: &AppState, cmd: MotorTestCommand) -> Result<(), Str
 /// Stop the auxiliary owners outside any state lock; their tasks are
 /// cancelled/joined before their connection workers are shut down.
 pub(crate) async fn stop_auxiliary_links(app: &AppHandle, state: &AppState) {
+    crate::motor_control_service::revoke(state);
+    crate::stream_service::stop(state);
     detach_motor_telemetry(state).await;
     crate::run_service::interrupt_active(app, state, "auxiliary links closed");
     // Feature 2: stop the serial-target SD-log and capture runtimes (both are
@@ -1582,6 +1895,8 @@ where
 }
 
 pub(crate) async fn stop_active_session(state: &AppState) -> Result<(), String> {
+    state.motor_test.tones.cancel();
+    let identity = session_identity(state);
     let Some(service) = service_of(state) else {
         return Ok(());
     };
@@ -1590,24 +1905,49 @@ pub(crate) async fn stop_active_session(state: &AppState) -> Result<(), String> 
         .map_err(|_| "timed out waiting for motor-test release; link kept open".to_string())?
         .map_err(|error| format!("motor-test release failed; link kept open: {error}"))?;
     state.motor_test.note_state(receipt.state);
+    if let Some((target, generation)) = identity {
+        crate::motor_tone_service::after_release(state, target, generation);
+    }
     Ok(())
+}
+
+fn session_identity(state: &AppState) -> Option<(MotorTestTargetRef, u64)> {
+    state
+        .motor_test
+        .running
+        .lock()
+        .as_ref()
+        .map(|running| (running.target, running.tone_generation))
 }
 
 /// Push session events to the window, remember the state for the status
 /// poll, and pin the window while sending.
-async fn forward_events(app: AppHandle, mut rx: tokio::sync::mpsc::Receiver<MotorTestEvent>) {
+async fn forward_events<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    mut rx: tokio::sync::mpsc::Receiver<MotorTestEvent>,
+    target: MotorTestTargetRef,
+    generation: u64,
+) {
     while let Some(ev) = rx.recv().await {
+        if let Some(state) = app.try_state::<AppState>() {
+            if session_identity(&state) != Some((target, generation)) {
+                continue;
+            }
+        }
         match ev {
             MotorTestEvent::StateChanged(s) => {
                 if let Some(state) = app.try_state::<AppState>() {
                     state.motor_test.note_state(s);
                     // Exact send start/stop instants for the scope's shaded
                     // "motor test sending" band.
-                    state.motor_test.scope.push_all(vec![scope::ScopeSample {
-                        id: "session.running".into(),
-                        t: now_epoch_s(),
-                        v: if s.is_sending() { 1.0 } else { 0.0 },
-                    }]);
+                    state
+                        .motor_test
+                        .scope
+                        .push_all(vec![scope::ScopeSample::value(
+                            "session.running".into(),
+                            now_epoch_s(),
+                            if s.is_sending() { 1.0 } else { 0.0 },
+                        )]);
                 }
                 pin_window(&app, s.is_sending());
                 let _ = app.emit("actuator_event", SessionPayload::State { state: s });
@@ -1616,6 +1956,7 @@ async fn forward_events(app: AppHandle, mut rx: tokio::sync::mpsc::Receiver<Moto
                 eprintln!("motor test stopped: {reason:?}");
                 if let Some(state) = app.try_state::<AppState>() {
                     crate::run_service::note_motor_released(&app, &state, reason);
+                    crate::motor_tone_service::after_release(&state, target, generation);
                 }
                 pin_window(&app, false);
                 let _ = app.emit("actuator_event", SessionPayload::Stopped { reason });
@@ -1640,7 +1981,7 @@ enum SessionPayload {
 }
 
 /// Pin/unpin the motor-test window (operator request: on top while sending).
-fn pin_window(app: &AppHandle, on_top: bool) {
+fn pin_window<R: tauri::Runtime>(app: &AppHandle<R>, on_top: bool) {
     if let Some(win) = app.get_webview_window("actuator") {
         let _ = win.set_always_on_top(on_top);
     }
@@ -1774,8 +2115,9 @@ impl AppState {
             target_system_id,
             com_mot_test_en,
             sdlog_mode,
-            output_map,
-            pwm_models,
+            config,
+            config_target,
+            config_stale,
             sd_capture,
         ) = {
             let guard = self.motor_test.target.lock();
@@ -1786,8 +2128,12 @@ impl AppState {
                     Some(runtime.target.target_system_id),
                     cached_int(&runtime.target.params, "COM_MOT_TEST_EN"),
                     cached_int(&runtime.target.params, "SDLOG_MODE"),
-                    runtime.target.output_map.lock().clone(),
-                    runtime.target.pwm_models.lock().clone(),
+                    runtime.target.config.lock().clone(),
+                    Some(runtime.target.target_ref()),
+                    runtime
+                        .target
+                        .config_stale
+                        .load(std::sync::atomic::Ordering::Relaxed),
                     self.motor_test.capture.lock().status.lock().clone(),
                 ),
                 None => (
@@ -1796,11 +2142,39 @@ impl AppState {
                     None,
                     None,
                     None,
-                    OutputMap::unknown(MOTOR_TEST_MOTOR_COUNT),
-                    Vec::new(),
+                    None,
+                    None,
+                    false,
                     self.motor_test.capture.lock().status.lock().clone(),
                 ),
             }
+        };
+        // One snapshot, cloned once: map, models, protocols and DShot flags
+        // always describe the same revision.
+        let output_map = config
+            .as_ref()
+            .map(|snapshot| snapshot.map.clone())
+            .unwrap_or_else(|| OutputMap::unknown(MOTOR_TEST_MOTOR_COUNT));
+        let pwm_models = config
+            .as_ref()
+            .map(|snapshot| snapshot.models.clone())
+            .unwrap_or_default();
+        let output_protocols = config
+            .as_ref()
+            .map(|snapshot| snapshot.protocols)
+            .unwrap_or_default();
+        let dshot_3d_enable = config
+            .as_ref()
+            .and_then(|snapshot| snapshot.dshot_3d_enable);
+        let dshot_bidir_en = config.as_ref().and_then(|snapshot| snapshot.dshot_bidir_en);
+        let scope_outputs = if config_stale {
+            Vec::new()
+        } else {
+            config
+                .as_ref()
+                .filter(|config| Some(config.target) == config_target)
+                .and_then(|config| output_scope_metadata(config).ok())
+                .unwrap_or_default()
         };
         let fc_output_pwm = (1..=MOTOR_TEST_MOTOR_COUNT)
             .map(|motor| {
@@ -1824,7 +2198,37 @@ impl AppState {
                 None => (None, false),
             }
         };
+        let esc_rpm = {
+            let telemetry = self.motor_test.telemetry.lock();
+            let now = std::time::Instant::now();
+            let mut esc_rpm = Vec::new();
+            if let Some(telemetry) = telemetry.as_ref() {
+                for esc in 1..=telemetry.esc.esc_count() {
+                    let at = telemetry.esc_seen_at.get(esc - 1).copied().flatten();
+                    let age = at.map(|at| now.saturating_duration_since(at));
+                    let rpm = at
+                        .and_then(|_| telemetry.esc.sample(esc - 1))
+                        .map(|s| s.rpm);
+                    esc_rpm.push(EscRpmStatus {
+                        esc: esc as u8,
+                        rpm,
+                        age_s: age.map(|age| age.as_secs_f64()),
+                        stale: age.is_some_and(|age| age > ESC_RPM_STALE),
+                    });
+                }
+            }
+            esc_rpm
+        };
+        let target_origin = self
+            .motor_test
+            .target
+            .lock()
+            .as_ref()
+            .map(TargetLinkRuntime::origin);
         ActuatorStatus {
+            motor_control: crate::motor_control_service::status(self),
+            streams: crate::stream_service::snapshot(self),
+            tones: self.motor_test.tones.snapshot(),
             connected: link
                 .as_ref()
                 .map(|l| l.link_state == maggcs_core::mavlink::LinkState::Connected)
@@ -1845,6 +2249,8 @@ impl AppState {
             target_connected,
             target_endpoint,
             target_system_id,
+            target_origin,
+            main_serial_target: crate::main_link_service::candidate(self),
             input_values,
             input_pwm,
             output_values,
@@ -1856,6 +2262,11 @@ impl AppState {
             fc_output_pwm,
             output_map,
             pwm_models,
+            scope_outputs,
+            output_protocols,
+            dshot_3d_enable,
+            dshot_bidir_en,
+            esc_rpm,
             sd_capture,
             run: crate::run_service::snapshot(&self.motor_test.run),
         }
@@ -1872,9 +2283,21 @@ fn cached_int(service: &ParamService, name: &str) -> Option<i32> {
 /// Read `PWM_MAIN_FUNC1..8` and `PWM_AUX_FUNC1..8` from the serial target and
 /// build the Motor-function → physical-output map. Missing parameters are
 /// reported as unreadable, not mistaken for "disabled".
+#[cfg(test)]
 async fn read_output_map(params: &ParamService) -> OutputMap {
-    let mut main = [None; SERVO_CHANNELS_PER_PORT as usize];
-    let mut aux = [None; SERVO_CHANNELS_PER_PORT as usize];
+    read_output_map_with_names(params, None).await
+}
+
+async fn read_output_map_with_names(
+    params: &ParamService,
+    names: Option<&std::collections::HashSet<String>>,
+) -> OutputMap {
+    let mut main = [FunctionRead::Absent; SERVO_CHANNELS_PER_PORT as usize];
+    let mut aux = [FunctionRead::Absent; SERVO_CHANNELS_PER_PORT as usize];
+    if names.is_none() {
+        main = [FunctionRead::Unreadable; SERVO_CHANNELS_PER_PORT as usize];
+        aux = [FunctionRead::Unreadable; SERVO_CHANNELS_PER_PORT as usize];
+    }
     for port in [ServoPort::Main, ServoPort::Aux] {
         let values = match port {
             ServoPort::Main => &mut main,
@@ -1882,27 +2305,144 @@ async fn read_output_map(params: &ParamService) -> OutputMap {
         };
         for channel in 1..=SERVO_CHANNELS_PER_PORT {
             let name = format!("{}_FUNC{channel}", port.param_prefix());
-            if let Ok(entry) = params.read(&name).await {
-                if let ParamValue::Int(value) = entry.value {
-                    values[usize::from(channel - 1)] = Some(value);
-                }
+            if names.is_some_and(|known| !known.contains(&name)) {
+                values[usize::from(channel - 1)] = FunctionRead::Absent;
+                continue;
             }
+            let result = if names.is_some() {
+                params.read(&name).await
+            } else {
+                params.read_with_timeout(&name, MAPPING_PROBE_TIMEOUT).await
+            };
+            values[usize::from(channel - 1)] = match result {
+                Ok(entry) => match entry.value {
+                    ParamValue::Int(value) => FunctionRead::Value(value),
+                    _ => FunctionRead::Unreadable,
+                },
+                Err(_) => FunctionRead::Unreadable,
+            };
         }
     }
-    build_output_map(MOTOR_TEST_MOTOR_COUNT, &main, &aux)
+    build_output_map_checked(MOTOR_TEST_MOTOR_COUNT, &main, &aux)
+}
+
+/// One reader pass over the target's output configuration. The caller adds
+/// the target identity and revision before publishing it as one snapshot.
+struct OutputConfigRead {
+    map: OutputMap,
+    models: Vec<PwmModel>,
+    protocols: OutputProtocols,
+    protocols_known: bool,
+    dshot_3d_enable: Option<i32>,
+    dshot_bidir_en: Option<i32>,
+}
+
+impl OutputConfigRead {
+    fn is_startable(&self) -> bool {
+        self.map.state == maggcs_core::motor_test::mapping::OutputMapState::Complete
+            && self.protocols_known
+    }
+
+    /// A transient read failed (as opposed to a mapping the FC actually
+    /// reports as invalid). Such a result must not replace a usable snapshot.
+    fn read_failure(&self) -> bool {
+        let active = usize::from(self.map.active_count());
+        let models = &self.models;
+        self.map
+            .issues
+            .iter()
+            .any(|issue| matches!(issue, MappingIssue::Unreadable { .. }))
+            || !self.protocols_known
+            || models
+                .iter()
+                .take(active)
+                .any(|model| model.range_source == PwmRangeSource::Fallback)
+            || (self.dshot_3d_enable.is_none()
+                && models
+                    .iter()
+                    .take(active)
+                    .any(|model| model.protocol.is_dshot()))
+    }
+}
+
+/// Read map, models, protocols and DShot flags from one link pass. A failed
+/// read is preserved as `Partial`; it is never converted into "disabled".
+async fn read_output_config(
+    params: &ParamService,
+    names_slot: &parking_lot::Mutex<Option<std::collections::HashSet<String>>>,
+) -> OutputConfigRead {
+    let mut names = names_slot.lock().clone();
+    let mut map = read_output_map_with_names(params, names.as_ref()).await;
+    let (mut protocols, mut protocols_known) =
+        read_output_protocols_checked(params, names.as_ref()).await;
+    if names.is_none() && (map_has_unreadable(&map) || !protocols_known) {
+        // Reduced-channel boards expose fewer FUNC/TIM parameters; only a
+        // complete FC inventory can prove that a missing name is absent.
+        if let Some(fresh) = ensure_param_names(params, names_slot).await {
+            names = Some(fresh);
+            map = read_output_map_with_names(params, names.as_ref()).await;
+            (protocols, protocols_known) =
+                read_output_protocols_checked(params, names.as_ref()).await;
+        }
+    }
+    let models = read_pwm_models(params, &map, protocols).await;
+    OutputConfigRead {
+        map,
+        models,
+        protocols,
+        protocols_known,
+        dshot_3d_enable: read_int_param(params, "DSHOT_3D_ENABLE").await,
+        dshot_bidir_en: read_int_param(params, "DSHOT_BIDIR_EN").await,
+    }
+}
+
+/// Read the FC's full parameter-name inventory if it is not cached yet. A
+/// partial pull is not used: absent-channel inference requires the complete
+/// declared set. Returns the inventory when already known or freshly read.
+async fn ensure_param_names(
+    params: &ParamService,
+    slot: &parking_lot::Mutex<Option<std::collections::HashSet<String>>>,
+) -> Option<std::collections::HashSet<String>> {
+    if let Some(names) = slot.lock().clone() {
+        return Some(names);
+    }
+    let report = params.pull_and_wait(Duration::from_secs(60)).await.ok()?;
+    if !report.is_complete() {
+        return None;
+    }
+    let names: std::collections::HashSet<String> = params.cache().names().into_iter().collect();
+    *slot.lock() = Some(names.clone());
+    Some(names)
+}
+
+/// A map with any failed read is only partial. The FC's parameter inventory
+/// can prove that a channel does not exist, which is not a failure.
+fn map_has_unreadable(map: &OutputMap) -> bool {
+    map.issues
+        .iter()
+        .any(|issue| matches!(issue, MappingIssue::Unreadable { .. }))
 }
 
 /// Read one integer parameter, if it is currently readable.
 async fn read_int_param(params: &ParamService, name: &str) -> Option<i32> {
-    match params.read(name).await.ok()?.value {
+    read_int_param_bounded(params, name, Duration::from_secs(5)).await
+}
+
+async fn read_int_param_bounded(
+    params: &ParamService,
+    name: &str,
+    timeout: Duration,
+) -> Option<i32> {
+    match params.read_with_timeout(name, timeout).await.ok()?.value {
         ParamValue::Int(value) => i32::try_from(value).ok(),
         ParamValue::Real(value) => Some(value as i32),
     }
 }
 
-/// Build one model from the raw `PWM_*_` parameter reads. Unmapped motors or
-/// missing/invalid endpoints fall back explicitly (PwmRangeSource::Fallback
-/// plus the 1100–1900 default) — never silently to a plausible-looking range.
+/// Build one PWM/OneShot model from the raw `PWM_*_` parameter reads.
+/// Unmapped motors or missing/invalid endpoints fall back explicitly
+/// (`PwmRangeSource::Fallback` plus the 1100–1900 default) — never silently
+/// to a plausible-looking range.
 fn pwm_model_from_raw(
     min: Option<i32>,
     max: Option<i32>,
@@ -1910,6 +2450,7 @@ fn pwm_model_from_raw(
     disabled: bool,
     thrust_factor: f32,
     mapped: bool,
+    protocol: OutputProtocol,
 ) -> PwmModel {
     if !mapped {
         return PwmModel::default();
@@ -1926,12 +2467,91 @@ fn pwm_model_from_raw(
         .and_then(Result::ok)
         .unwrap_or_default()
         .with_disabled(disabled)
+        .with_protocol(protocol)
+}
+
+/// Build a DShot/BDShot model. `DSHOT_MIN` is required: an unread value must
+/// not masquerade as a valid 0…1999 range, so it stays marked fallback.
+fn dshot_model_from_raw(
+    dshot_min: Option<f32>,
+    reversed: bool,
+    disabled: bool,
+    thrust_factor: f32,
+    protocol: OutputProtocol,
+) -> PwmModel {
+    match dshot_min {
+        Some(value) => PwmModel::dshot(value, reversed, thrust_factor, protocol)
+            .map(|model| model.with_disabled(disabled))
+            .unwrap_or_else(|_| dshot_fallback_model(reversed, disabled, thrust_factor, protocol)),
+        None => dshot_fallback_model(reversed, disabled, thrust_factor, protocol),
+    }
+}
+
+fn dshot_fallback_model(
+    reversed: bool,
+    disabled: bool,
+    thrust_factor: f32,
+    protocol: OutputProtocol,
+) -> PwmModel {
+    let mut model = PwmModel::dshot(0.0, reversed, thrust_factor, protocol).unwrap_or_default();
+    model.range_source = PwmRangeSource::Fallback;
+    model.with_disabled(disabled)
+}
+
+/// Read `PWM_MAIN_TIMn` / `PWM_AUX_TIMn` and fold each bank into one
+/// protocol. MAJOR (MAIN) exposes TIM0..2; AUX exposes TIM0..3 on Pixhawk 6X.
+///
+/// With a complete parameter inventory, channels the board does not have are
+/// skipped instead of counting as failed reads. Any present-but-unreadable
+/// timer keeps the snapshot incomplete, so the start gate can refuse it.
+async fn read_output_protocols_checked(
+    params: &ParamService,
+    names: Option<&std::collections::HashSet<String>>,
+) -> (OutputProtocols, bool) {
+    async fn bank(
+        params: &ParamService,
+        port: ServoPort,
+        names: Option<&std::collections::HashSet<String>>,
+    ) -> (OutputProtocol, bool) {
+        let count = match port {
+            ServoPort::Main => 3,
+            ServoPort::Aux => 4,
+        };
+        let mut values = Vec::with_capacity(count);
+        for index in 0..count {
+            let name = format!("{}_TIM{index}", port.param_prefix());
+            if names.is_some_and(|known| !known.contains(&name)) {
+                continue;
+            }
+            let value = if names.is_some() {
+                read_int_param(params, &name).await
+            } else {
+                read_int_param_bounded(params, &name, MAPPING_PROBE_TIMEOUT).await
+            };
+            values.push(value.map(i64::from));
+        }
+        detect_bank_protocol_checked(&values)
+    }
+    let (main, main_known) = bank(params, ServoPort::Main, names).await;
+    let (aux, aux_known) = bank(params, ServoPort::Aux, names).await;
+    (OutputProtocols { main, aux }, main_known && aux_known)
+}
+
+#[cfg(test)]
+async fn read_output_protocols(params: &ParamService) -> OutputProtocols {
+    read_output_protocols_checked(params, None).await.0
 }
 
 /// Read the mapped channel's `PWM_*_MIN/MAX/REV/DISn` plus the global
-/// `THR_MDL_FAC` and build one model per motor. Missing/invalid ranges and
-/// unmapped motors are marked fallback; the start gate rejects them.
-async fn read_pwm_models(params: &ParamService, map: &OutputMap) -> Vec<PwmModel> {
+/// `THR_MDL_FAC` and build one model per motor. DShot/BDShot derive their
+/// range from `DSHOT_MIN` instead of the PWM endpoints. Missing/invalid
+/// values and unmapped motors are marked fallback; the start gate rejects
+/// them.
+async fn read_pwm_models(
+    params: &ParamService,
+    map: &OutputMap,
+    protocols: OutputProtocols,
+) -> Vec<PwmModel> {
     let factor = match params.read("THR_MDL_FAC").await.map(|entry| entry.value) {
         Ok(ParamValue::Real(value)) => value,
         Ok(ParamValue::Int(value)) => value as f32,
@@ -1942,6 +2562,7 @@ async fn read_pwm_models(params: &ParamService, map: &OutputMap) -> Vec<PwmModel
     } else {
         0.0
     };
+    let dshot_min = read_real_param(params, "DSHOT_MIN").await;
     let mut models = Vec::with_capacity(usize::from(MOTOR_TEST_MOTOR_COUNT));
     for motor in 1..=MOTOR_TEST_MOTOR_COUNT {
         let Some(channel) = map.channel_for(motor) else {
@@ -1950,80 +2571,110 @@ async fn read_pwm_models(params: &ParamService, map: &OutputMap) -> Vec<PwmModel
         };
         let prefix = channel.port.param_prefix();
         let n = channel.channel;
-        let min = read_int_param(params, &format!("{prefix}_MIN{n}")).await;
-        let max = read_int_param(params, &format!("{prefix}_MAX{n}")).await;
+        let protocol = match channel.port {
+            ServoPort::Main => protocols.main,
+            ServoPort::Aux => protocols.aux,
+        };
         let reversed = read_int_param(params, &format!("{prefix}_REV{n}"))
             .await
             .is_some_and(|value| value != 0);
         let disabled = read_int_param(params, &format!("{prefix}_DIS{n}"))
             .await
             .is_some_and(|value| value != 0);
+        if protocol.is_dshot() {
+            models.push(dshot_model_from_raw(
+                dshot_min, reversed, disabled, factor, protocol,
+            ));
+            continue;
+        }
+        let min = read_int_param(params, &format!("{prefix}_MIN{n}")).await;
+        let max = read_int_param(params, &format!("{prefix}_MAX{n}")).await;
         let mapped = map.channel_for(motor).is_some();
         models.push(pwm_model_from_raw(
-            min, max, reversed, disabled, factor, mapped,
+            min, max, reversed, disabled, factor, mapped, protocol,
         ));
     }
     models
+}
+
+/// Read one real-valued parameter, if it is currently readable.
+async fn read_real_param(params: &ParamService, name: &str) -> Option<f32> {
+    match params.read(name).await.ok()?.value {
+        ParamValue::Real(value) => Some(value),
+        ParamValue::Int(value) => Some(value as f32),
+    }
 }
 
 /// Re-read the target's output assignments and PWM models. Safe to call while
 /// idle; the UI freezes the action while a test is sending.
 #[tauri::command]
 pub async fn actuator_refresh_mapping(state: State<'_, AppState>) -> Result<OutputMap, String> {
-    let (params, slot, models_slot) = {
+    let (params, config_slot, config_stale, param_names_slot, target_ref) = {
         let guard = state.motor_test.target.lock();
         let runtime = guard
             .as_ref()
             .ok_or("no serial PX4 target — connect it first")?;
         (
             runtime.target.params.clone(),
-            runtime.target.output_map.clone(),
-            runtime.target.pwm_models.clone(),
+            runtime.target.config.clone(),
+            runtime.target.config_stale.clone(),
+            runtime.target.param_names.clone(),
+            runtime.target.target_ref(),
         )
     };
-    let map = read_output_map(&params).await;
-    let models = read_pwm_models(&params, &map).await;
-    *slot.lock() = map.clone();
-    *models_slot.lock() = models;
-    Ok(map)
-}
-
-/// Request the streams the motor-test window plots from the FC on `handle`:
-/// `HIGHRES_IMU` (105, the mag field), `BATTERY_STATUS` (147, total current),
-/// `ESC_STATUS` (291, ESC current/RPM) and `SERVO_OUTPUT_RAW` (36, the servo
-/// curves) at useful rates. A bare serial link streams only the default set
-/// otherwise, so the curves would stay flat.
-fn request_motor_test_streams(
-    handle: &maggcs_core::mavlink::ConnectionHandle,
-    target_system_id: u8,
-) -> tauri::async_runtime::JoinHandle<()> {
-    let h = handle.clone();
-    tauri::async_runtime::spawn(async move {
-        for (msg_id, interval_us) in [
-            (105u32, 100_000u32), // HIGRES_IMU @ 10 Hz (mag total)
-            (147u32, 200_000u32), // BATTERY_STATUS @ 5 Hz (total current)
-            (291u32, 100_000u32), // ESC_STATUS @ 10 Hz (current, RPM)
-            (36u32, 40_000u32),   // SERVO_OUTPUT_RAW @ 25 Hz (servo curves)
-        ] {
-            let _ = h
-                .send(MavMessage::COMMAND_LONG(
-                    ::mavlink::common::COMMAND_LONG_DATA {
-                        param1: msg_id as f32,
-                        param2: interval_us as f32,
-                        param3: 0.0,
-                        param4: 0.0,
-                        param5: 0.0,
-                        param6: 0.0,
-                        param7: 0.0,
-                        command: ::mavlink::common::MavCmd::MAV_CMD_SET_MESSAGE_INTERVAL,
-                        target_system: target_system_id,
-                        target_component: 1,
-                        confirmation: 0,
-                    },
-                ))
-                .await;
+    let read = read_output_config(&params, &param_names_slot).await;
+    // The read can take seconds (a first pull). Only the validation and the
+    // publish are serialized with start/stop, so E-STOP never waits on I/O.
+    let _ops = state.ops().lock().await;
+    ensure_idle_session(&state)?;
+    let current = {
+        let guard = state.motor_test.target.lock();
+        let runtime = guard
+            .as_ref()
+            .ok_or("no serial PX4 target — connect it first")?;
+        if runtime.target.target_ref() != target_ref {
+            return Err("target changed while reading — refresh again".into());
         }
-    })
+        let current = runtime.target.config.lock().clone();
+        current
+    };
+    if !read.is_startable() && read.read_failure() {
+        // Keep the last complete snapshot for inspection, but mark it stale
+        // so START cannot use it after a failed read.
+        config_stale.store(true, std::sync::atomic::Ordering::Relaxed);
+        if current
+            .as_ref()
+            .is_some_and(OutputConfigSnapshot::is_startable)
+        {
+            return Err(refuse_unread_pwm_ranges(
+                &read.map,
+                &read.models,
+                read.protocols_known,
+                read.dshot_3d_enable,
+            )
+            .err()
+            .unwrap_or_else(|| "output configuration is incomplete — refresh again".into()));
+        }
+    }
+    let revision = current
+        .as_ref()
+        .map_or(1, |snapshot| snapshot.revision.saturating_add(1));
+    let snapshot = OutputConfigSnapshot {
+        revision,
+        target: target_ref,
+        map: read.map,
+        models: read.models,
+        protocols: read.protocols,
+        protocols_known: read.protocols_known,
+        dshot_3d_enable: read.dshot_3d_enable,
+        dshot_bidir_en: read.dshot_bidir_en,
+    };
+    config_stale.store(
+        !snapshot.is_startable(),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    *config_slot.lock() = Some(snapshot.clone());
+    Ok(snapshot.map)
 }
 
 /// Attach the mag/ESC/battery telemetry tap to a link (A4 wiring): subscribes
@@ -2031,21 +2682,17 @@ fn request_motor_test_streams(
 /// `ESC_STATUS` (291), applies the loaded calibration, drives the alarm state
 /// machine, and emits `actuator_telemetry` events for the window's curves.
 /// Called from `connect` after the link comes up.
-pub fn attach_motor_telemetry(
-    app: &AppHandle,
+pub fn attach_motor_telemetry<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     handle: maggcs_core::mavlink::ConnectionHandle,
     target_system_id: u8,
 ) {
-    // Ask the FC to stream the messages the motor-test window plots: the mag
-    // (HIGRES_IMU), the ESC telemetry (ESC_STATUS) and the servo outputs.
-    // PX4 accepts MAV_CMD_SET_MESSAGE_INTERVAL while disarmed; fire-and-forget
-    // (a busy FC just misses this attach — the next one retries).
-    let stream_task = request_motor_test_streams(&handle, target_system_id);
+    // The link-scoped stream manager owns rate requests, including defaults.
     let state = app.state::<AppState>();
     // (Re)attach resets the alarm clock; the loaded calibration survives
     // (it is a file, not link state). The target runtime owns the task.
     *state.motor_test.telemetry.lock() = Some(crate::motor_test_state::MotorTelemetry {
-        esc: maggcs_core::signals::derived::EscAggregator::new(8),
+        esc: maggcs_core::signals::derived::EscAggregator::new(scope::MAX_ESC),
         alarm: maggcs_core::motor_test::MagAlarm::new(Default::default()),
         // The loaded calibration is process-wide, so it survives link swaps
         // and is re-applied here on every attach.
@@ -2054,6 +2701,7 @@ pub fn attach_motor_telemetry(
         hb: None,
         fc_outputs: [None, None],
         last_heartbeat_at: None,
+        esc_seen_at: [None; scope::MAX_ESC],
     });
     let tap_app = app.clone();
     let telemetry_task =
@@ -2061,9 +2709,8 @@ pub fn attach_motor_telemetry(
     {
         let mut target = state.motor_test.target.lock();
         if let Some(target) = target.as_mut() {
-            target.runtime.add_tasks([stream_task, telemetry_task]);
+            target.runtime.add_tasks([telemetry_task]);
         } else {
-            stream_task.abort();
             telemetry_task.abort();
         }
     }
@@ -2080,17 +2727,37 @@ fn store_fc_output(
     outputs[port.wire() as usize] = Some(FcPortOutputs { pwm, at });
 }
 
+/// Update only the ESC slots covered by this standard MAVLink frame.
+/// `index` identifies its first ESC; other slots keep their samples and ages.
+fn store_esc_status(
+    telemetry: &mut crate::motor_test_state::MotorTelemetry,
+    esc: &::mavlink::common::ESC_STATUS_DATA,
+    received_at: std::time::Instant,
+) {
+    telemetry
+        .esc
+        .feed(esc.index, &esc.rpm, &esc.voltage, &esc.current);
+    for slot in esc_frame_range(esc.index, telemetry.esc_seen_at.len()) {
+        telemetry.esc_seen_at[slot] = Some(received_at);
+    }
+}
+
 /// The telemetry tap: `HIGHRES_IMU` (105) → calibrated `mag_total` → alarm;
 /// `ESC_STATUS` (291) → the ESC aggregator; `BATTERY_STATUS` (147) → the total
 /// battery current trace; `SERVO_OUTPUT_RAW` (36) → the target-FC servo trace.
 /// Emits `actuator_telemetry` (aggregated snapshot) at ~10 Hz for the
 /// alarm/status readout, and pushes every sample (not a snapshot) to the scope
 /// bus.
-async fn run_motor_telemetry_tap(
-    app: AppHandle,
+async fn run_motor_telemetry_tap<R: tauri::Runtime>(
+    app: AppHandle<R>,
     handle: maggcs_core::mavlink::ConnectionHandle,
     target_system_id: u8,
 ) {
+    let target = MotorTestTargetRef {
+        connection_id: handle.handle_id(),
+        target_system_id,
+        target_component_id: TARGET_COMPONENT_ID,
+    };
     // Only telemetry from the configured target may gate motor-test safety
     // or feed the target's plots and alarm.
     let mut events = handle
@@ -2107,6 +2774,11 @@ async fn run_motor_telemetry_tap(
             Ok(ConnectionEvent::Message(env)) => {
                 let Some(state) = app.try_state::<AppState>() else {
                     return;
+                };
+                let scope_outputs = if matches!(&env.message, MavMessage::SERVO_OUTPUT_RAW(_)) {
+                    scope_outputs_for_target(&state, target)
+                } else {
+                    Vec::new()
                 };
                 let mut guard = state.motor_test.telemetry.lock();
                 let Some(telemetry) = guard.as_mut() else {
@@ -2152,9 +2824,7 @@ async fn run_motor_telemetry_tap(
                         ));
                     }
                     MavMessage::ESC_STATUS(esc) => {
-                        telemetry
-                            .esc
-                            .feed(esc.index, &esc.rpm, &esc.voltage, &esc.current);
+                        store_esc_status(telemetry, esc, std::time::Instant::now());
                         bus.push_all(scope::esc_samples(
                             esc.index,
                             now_epoch_s(),
@@ -2185,10 +2855,11 @@ async fn run_motor_telemetry_tap(
                             pwm,
                             std::time::Instant::now(),
                         );
-                        bus.push_all(scope::servo_samples(
-                            "fc",
+                        bus.push_all(scope::mapped_feedback_samples(
                             now_epoch_s(),
-                            [pwm[0], pwm[1], pwm[2], pwm[3]],
+                            port,
+                            &pwm,
+                            &scope_outputs,
                         ));
                     }
                     _ => {}
@@ -2292,44 +2963,26 @@ fn start_scope_flusher(app: &AppHandle) {
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         // Emit the final release gap once after the last active PWM command.
         let mut cmd_active = false;
-        // Keep re-asking the target PX4 for the scope streams: the one-shot
-        // request at connect can be lost (busy, link settling), and the
-        // curves would stay silent forever (the reported "no mag data").
-        let mut last_stream_req = tokio::time::Instant::now() - Duration::from_secs(3);
         loop {
             tick.tick().await;
-            if last_stream_req.elapsed() >= Duration::from_secs(3) {
-                last_stream_req = tokio::time::Instant::now();
-                // Clone the target handle first: the `State` guard is not Send
-                // and must not live across the awaited sends below.
-                let target = app.try_state::<AppState>().and_then(|state| {
-                    state.motor_test.target.lock().as_ref().map(|runtime| {
-                        (
-                            runtime.target.handle.clone(),
-                            runtime.target.target_system_id,
-                        )
-                    })
-                });
-                if let Some((target, target_system_id)) = target {
-                    for (msg_id, hz) in TARGET_STREAMS {
-                        request_message_interval(&target, target_system_id, msg_id, hz).await;
-                    }
-                }
-            }
             let Some(state) = app.try_state::<AppState>() else {
                 return;
             };
             let mut batch = state.motor_test.scope.drain();
-            let pwm_us = state
+            let command_output = state
                 .motor_test
                 .running
                 .lock()
                 .as_ref()
-                .map(|r| r.svc.pwm_output());
-            if let Some(pwm_us) = pwm_us {
-                let live = pwm_us.iter().any(Option::is_some);
+                .map(|r| (r.svc.pwm_output(), r.scope_outputs.clone()));
+            if let Some((values, scope_outputs)) = command_output {
+                let live = values.iter().any(Option::is_some);
                 if live || cmd_active {
-                    batch.extend(scope::command_samples(now_epoch_s(), &pwm_us));
+                    batch.extend(scope::command_samples(
+                        now_epoch_s(),
+                        &values,
+                        &scope_outputs,
+                    ));
                 }
                 cmd_active = live;
             } else {
@@ -2351,7 +3004,9 @@ fn stop_scope_flusher(state: &AppState) {
 
 #[cfg(test)]
 mod auxiliary_link_lifecycle_tests {
-    use super::{stop_before_auxiliary_close, validate_target_system_id};
+    use super::{
+        reusable_session, stop_before_auxiliary_close, validate_target_system_id, PreparedStart,
+    };
 
     #[test]
     fn target_system_id_must_not_be_broadcast() {
@@ -2426,6 +3081,114 @@ mod auxiliary_link_lifecycle_tests {
             system_status: ::mavlink::common::MavState::MAV_STATE_ACTIVE,
             mavlink_version: 3,
         })
+    }
+
+    async fn install_idle_scope_session(
+        state: &crate::state::AppState,
+        handle: &ConnectionHandle,
+    ) -> PreparedStart {
+        let target = crate::motor_test_state::MotorTestTargetRef {
+            connection_id: handle.handle_id(),
+            target_system_id: 1,
+            target_component_id: 1,
+        };
+        let limits = crate::motor_test_state::motor_test_limits(1);
+        let models = vec![
+            super::PwmModel::new(1000, 2000, false, 0.0)
+                .expect("model")
+                .with_protocol(super::OutputProtocol::Pwm { rate_hz: Some(400) });
+            2
+        ];
+        let outputs: Vec<super::ScopeOutputMeta> = (1..=2)
+            .map(|motor| super::ScopeOutputMeta {
+                connection_id: handle.handle_id(),
+                revision: 1,
+                motor,
+                channel: maggcs_core::motor_test::mapping::ServoChannel::new(
+                    super::ServoPort::Main,
+                    motor,
+                )
+                .expect("channel"),
+                unit: maggcs_core::motor_test::protocol::OutputUnits::Microseconds,
+            })
+            .collect();
+        let (service, mut events, output) =
+            super::MotorTestService::spawn(handle.clone(), limits.clone());
+        service
+            .send(super::MotorTestCommand::SetMotorCount { motors: 2 })
+            .await
+            .expect("motor count");
+        service
+            .send(super::MotorTestCommand::SetPwmModels {
+                models: models.clone(),
+            })
+            .await
+            .expect("models");
+        let forwarder =
+            tauri::async_runtime::spawn(async move { while events.recv().await.is_some() {} });
+        *state.motor_test.running.lock() = Some(crate::motor_test_state::RunningMotorTest {
+            svc: service,
+            forwarder,
+            output,
+            target,
+            scope_outputs: outputs.clone(),
+            tone_generation: 0,
+        });
+        PreparedStart {
+            handle: handle.clone(),
+            target,
+            limits,
+            pwm_models: models,
+            scope_outputs: outputs,
+            active_motors: 2,
+        }
+    }
+
+    #[tokio::test]
+    async fn an_idle_session_is_not_reused_after_its_output_revision_changes() {
+        let state = crate::state::AppState::default();
+        let (handle, _peer) = loopback_link().await;
+        let mut prepared = install_idle_scope_session(&state, &handle).await;
+        assert!(reusable_session(&state, &prepared)
+            .await
+            .expect("same context")
+            .is_some());
+        for output in &mut prepared.scope_outputs {
+            output.revision = 2;
+        }
+        assert!(reusable_session(&state, &prepared)
+            .await
+            .expect("released old context")
+            .is_none());
+        assert!(state.motor_test.running.lock().is_none());
+        handle.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_running_session_refuses_changed_scope_configuration() {
+        let state = crate::state::AppState::default();
+        let (handle, _peer) = loopback_link().await;
+        let mut prepared = install_idle_scope_session(&state, &handle).await;
+        state
+            .motor_test
+            .note_state(maggcs_core::motor_test::SessionState::ManualRunning);
+        for output in &mut prepared.scope_outputs {
+            output.revision = 2;
+        }
+        let error = reusable_session(&state, &prepared)
+            .await
+            .err()
+            .expect("busy session refused");
+        assert!(error.contains("output configuration"));
+        {
+            let guard = state.motor_test.running.lock();
+            let running = guard.as_ref().expect("old session retained");
+            assert!(running
+                .scope_outputs
+                .iter()
+                .all(|output| output.revision == 1));
+        }
+        handle.shutdown().await;
     }
 
     #[tokio::test]
@@ -2538,7 +3301,7 @@ mod start_refusal_tests {
     use crate::state::AppState;
     use crate::state::{ActiveLink, LinkId};
 
-    use super::{prepare_start, MotorTestLoad};
+    use super::prepare_start;
 
     /// Regression (user report 2026-10-17): with a **live primary link** (a
     /// flying PX4 SITL) and **no serial motor-test target** connected, Start
@@ -2593,8 +3356,12 @@ mod start_refusal_tests {
         });
 
         // The primary link is up, but it must NOT satisfy the motor test.
+        assert!(
+            crate::main_link_service::candidate(&state).is_none(),
+            "UDP primary is never offered as a shared serial target"
+        );
         assert_eq!(
-            prepare_start(&state, MotorTestLoad::None).map(|_| ()),
+            prepare_start(&state).map(|_| ()),
             Err("no serial PX4 target — connect it first".to_string())
         );
 
@@ -2615,36 +3382,63 @@ mod start_refusal_tests {
 mod start_readiness_tests {
     use std::time::{Duration, Instant};
 
+    use ::mavlink::common::ESC_STATUS_DATA;
     use maggcs_core::logs::capture::CapturePhase;
     use maggcs_core::mavlink::{ConnectionConfig, ConnectionHandle, Endpoint};
     use maggcs_core::motor_test::mag_alarm::{MagAlarm, MagAlarmConfig};
     use maggcs_core::motor_test::mapping::OutputMap;
+    use maggcs_core::motor_test::protocol::{OutputProtocol, OutputProtocols};
     use maggcs_core::motor_test::pwm::PwmModel;
+    use maggcs_core::motor_test::scope::MAX_ESC;
     use maggcs_core::motor_test::SessionState;
     use maggcs_core::params::ParamService;
     use maggcs_core::signals::derived::EscAggregator;
     use maggcs_core::telemetry::{Autopilot, BaseMode, FlightState, Heartbeat, VehicleType};
 
     use crate::motor_test_state::{
-        AuxiliaryLinkRuntime, MotorTelemetry, MotorTestLoad, MotorTestTarget, TargetLinkRuntime,
+        AuxiliaryLinkRuntime, MotorTelemetry, MotorTestTarget, MotorTestTargetRef,
+        OutputConfigSnapshot, TargetLinkRuntime, TARGET_COMPONENT_ID,
     };
     use crate::state::AppState;
 
-    use super::{ensure_idle_session, prepare_start, TARGET_HEARTBEAT_STALE};
+    use super::{
+        ensure_idle_session, prepare_start, store_esc_status, telemetry_payload, FunctionRead,
+        TARGET_HEARTBEAT_STALE,
+    };
 
     fn mark_capture_recording(state: &AppState) {
         state.motor_test.capture.lock().status.lock().phase = CapturePhase::Recording;
     }
 
-    fn refusal(state: &AppState, load: MotorTestLoad) -> String {
-        prepare_start(state, load)
-            .err()
-            .expect("start must be refused")
+    fn refusal(state: &AppState) -> String {
+        prepare_start(state).err().expect("start must be refused")
     }
 
     /// Models that look like they were read from the FC (the start gate passes).
     fn fc_models() -> Vec<PwmModel> {
-        vec![PwmModel::new(1100, 1900, false, 0.0).expect("model"); 4]
+        vec![
+            PwmModel::new(1100, 1900, false, 0.0)
+                .expect("model")
+                .with_protocol(OutputProtocol::Pwm { rate_hz: Some(400) });
+            4
+        ]
+    }
+
+    fn checked_map(main: [Option<i64>; 8]) -> OutputMap {
+        let main = main.map(|value| match value {
+            Some(value) => FunctionRead::Value(value),
+            None => FunctionRead::Absent,
+        });
+        let aux = [FunctionRead::Absent; 8];
+        maggcs_core::motor_test::mapping::build_output_map_checked(4, &main, &aux)
+    }
+
+    fn fc_map() -> OutputMap {
+        let mut main = [None; 8];
+        for (index, slot) in main.iter_mut().take(4).enumerate() {
+            *slot = Some(maggcs_core::motor_test::MOTOR_FUNCTION_BASE + index as i64);
+        }
+        checked_map(main)
     }
 
     async fn install_target(state: &AppState, system_id: u8) -> ConnectionHandle {
@@ -2676,8 +3470,25 @@ mod start_readiness_tests {
                 target_system_id: system_id,
                 params,
                 restart_pending: Default::default(),
-                output_map: std::sync::Arc::new(parking_lot::Mutex::new(OutputMap::unknown(4))),
-                pwm_models: std::sync::Arc::new(parking_lot::Mutex::new(fc_models())),
+                config: std::sync::Arc::new(parking_lot::Mutex::new(Some(OutputConfigSnapshot {
+                    revision: 1,
+                    target: MotorTestTargetRef {
+                        connection_id: handle.handle_id(),
+                        target_system_id: system_id,
+                        target_component_id: TARGET_COMPONENT_ID,
+                    },
+                    map: fc_map(),
+                    models: fc_models(),
+                    protocols: OutputProtocols {
+                        main: OutputProtocol::Pwm { rate_hz: Some(400) },
+                        aux: OutputProtocol::Pwm { rate_hz: Some(400) },
+                    },
+                    protocols_known: true,
+                    dshot_3d_enable: Some(0),
+                    dshot_bidir_en: Some(0),
+                }))),
+                config_stale: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                param_names: Default::default(),
             },
             runtime: AuxiliaryLinkRuntime::new(runtime_handle, []),
         });
@@ -2700,14 +3511,191 @@ mod start_readiness_tests {
 
     fn install_telemetry(state: &AppState, hb: Option<Heartbeat>, age: Option<Duration>) {
         *state.motor_test.telemetry.lock() = Some(MotorTelemetry {
-            esc: EscAggregator::new(8),
+            esc: EscAggregator::new(MAX_ESC),
             alarm: MagAlarm::new(MagAlarmConfig::default()),
             calib: None,
             last_mag_total_nt: None,
             hb,
             fc_outputs: [None, None],
             last_heartbeat_at: age.map(|age| Instant::now() - age),
+            esc_seen_at: [None; MAX_ESC],
         });
+    }
+
+    fn esc_frame(index: u8) -> ESC_STATUS_DATA {
+        ESC_STATUS_DATA {
+            index,
+            rpm: [1000, 2000, 0, 4000],
+            voltage: [12.0; 4],
+            current: [1.0, 2.0, 3.0, 4.0],
+            ..Default::default()
+        }
+    }
+
+    /// MR-09: fresh, stale and unseen samples are distinct, including true zero.
+    #[test]
+    fn status_distinguishes_fresh_stale_and_missing_esc_rpm() {
+        let state = AppState::default();
+        install_telemetry(&state, None, None);
+        {
+            let mut guard = state.motor_test.telemetry.lock();
+            let telemetry = guard.as_mut().expect("telemetry");
+            store_esc_status(telemetry, &esc_frame(0), Instant::now());
+        }
+        let status = state.actuator_status();
+        assert_eq!(status.esc_rpm[0].rpm, Some(1000.0));
+        assert!(!status.esc_rpm[0].stale);
+        assert_eq!(
+            status.esc_rpm[2].rpm,
+            Some(0.0),
+            "reported zero is not missing"
+        );
+        assert!(!status.esc_rpm[2].stale);
+        assert_eq!(status.esc_rpm[4].rpm, None, "bank 2 never reported");
+        assert_eq!(status.esc_rpm[4].age_s, None);
+        assert!(!status.esc_rpm[4].stale);
+        assert_eq!(status.esc_rpm.len(), 8);
+
+        {
+            let mut guard = state.motor_test.telemetry.lock();
+            store_esc_status(
+                guard.as_mut().expect("telemetry"),
+                &esc_frame(0),
+                Instant::now() - Duration::from_secs(1),
+            );
+        }
+        let stale = state.actuator_status();
+        assert_eq!(stale.esc_rpm[0].rpm, Some(1000.0), "last value is kept");
+        assert!(stale.esc_rpm[0].stale);
+        assert!(stale.esc_rpm[0].age_s.is_some_and(|age| age >= 1.0));
+        *state.motor_test.telemetry.lock() = None;
+    }
+
+    #[test]
+    fn esc_index_four_has_independent_values_and_freshness() {
+        let state = AppState::default();
+        install_telemetry(&state, None, None);
+        let first = esc_frame(0);
+        let second = ESC_STATUS_DATA {
+            rpm: [5000, 6000, 0, 8000],
+            ..esc_frame(4)
+        };
+        let now = Instant::now();
+        {
+            let mut guard = state.motor_test.telemetry.lock();
+            let telemetry = guard.as_mut().expect("telemetry");
+            store_esc_status(telemetry, &first, now - Duration::from_secs(1));
+            store_esc_status(telemetry, &second, now);
+            let payload = telemetry_payload(telemetry);
+            assert_eq!(payload.esc.len(), MAX_ESC * 3);
+            assert!(payload
+                .esc
+                .iter()
+                .any(|(id, value)| id == "esc5.rpm" && *value == 5000.0));
+            assert!(payload
+                .esc
+                .iter()
+                .any(|(id, value)| id == "esc1.rpm" && *value == 1000.0));
+        }
+        let status = state.actuator_status();
+        for (row, rpm) in status.esc_rpm[..4].iter().zip(first.rpm) {
+            assert_eq!(row.rpm, Some(f64::from(rpm)));
+            assert!(row.stale);
+        }
+        for (row, rpm) in status.esc_rpm[4..].iter().zip(second.rpm) {
+            assert_eq!(row.rpm, Some(f64::from(rpm)));
+            assert!(!row.stale);
+        }
+        {
+            let mut guard = state.motor_test.telemetry.lock();
+            let telemetry = guard.as_mut().expect("telemetry");
+            store_esc_status(telemetry, &second, now - Duration::from_secs(1));
+            store_esc_status(telemetry, &first, Instant::now());
+        }
+        let inverted = state.actuator_status();
+        assert!(inverted.esc_rpm[..4].iter().all(|row| !row.stale));
+        assert!(inverted.esc_rpm[4..].iter().all(|row| row.stale));
+        assert_eq!(inverted.esc_rpm[4].rpm, Some(5000.0));
+    }
+
+    #[test]
+    fn the_second_esc_bank_can_report_before_the_first() {
+        let state = AppState::default();
+        install_telemetry(&state, None, None);
+        {
+            let mut guard = state.motor_test.telemetry.lock();
+            let telemetry = guard.as_mut().expect("telemetry");
+            store_esc_status(telemetry, &esc_frame(4), Instant::now());
+            let payload = telemetry_payload(telemetry);
+            assert_eq!(payload.esc.len(), 12, "only the observed bank is emitted");
+            assert!(payload.esc.iter().any(|(id, _)| id == "esc5.rpm"));
+            assert!(!payload.esc.iter().any(|(id, _)| id == "esc1.rpm"));
+        }
+        let status = state.actuator_status();
+        assert!(status.esc_rpm[..4]
+            .iter()
+            .all(|row| row.rpm.is_none() && row.age_s.is_none() && !row.stale));
+        for (row, rpm) in status.esc_rpm[4..].iter().zip(esc_frame(4).rpm) {
+            assert_eq!(row.rpm, Some(f64::from(rpm)));
+            assert!(row.age_s.is_some());
+            assert!(!row.stale);
+        }
+    }
+
+    #[test]
+    fn out_of_range_esc_frames_do_not_refresh_existing_samples() {
+        let state = AppState::default();
+        install_telemetry(&state, None, None);
+        {
+            let mut guard = state.motor_test.telemetry.lock();
+            let telemetry = guard.as_mut().expect("telemetry");
+            store_esc_status(
+                telemetry,
+                &esc_frame(0),
+                Instant::now() - Duration::from_secs(1),
+            );
+            let seen_at = telemetry.esc_seen_at;
+            let signals = telemetry.esc.signals();
+            for index in [8, u8::MAX] {
+                store_esc_status(telemetry, &esc_frame(index), Instant::now());
+                assert_eq!(telemetry.esc_seen_at, seen_at);
+                assert_eq!(telemetry.esc.signals(), signals);
+            }
+        }
+        let status = state.actuator_status();
+        assert!(status.esc_rpm[..4].iter().all(|row| row.stale));
+        assert!(status.esc_rpm[4..].iter().all(|row| row.rpm.is_none()));
+    }
+
+    #[test]
+    fn overlapping_esc_frames_refresh_only_the_reported_slots() {
+        let state = AppState::default();
+        install_telemetry(&state, None, None);
+        {
+            let mut guard = state.motor_test.telemetry.lock();
+            let telemetry = guard.as_mut().expect("telemetry");
+            store_esc_status(
+                telemetry,
+                &esc_frame(0),
+                Instant::now() - Duration::from_secs(1),
+            );
+            store_esc_status(
+                telemetry,
+                &ESC_STATUS_DATA {
+                    rpm: [10, 20, 30, 40],
+                    ..esc_frame(1)
+                },
+                Instant::now(),
+            );
+        }
+        let status = state.actuator_status();
+        assert_eq!(status.esc_rpm[0].rpm, Some(1000.0));
+        assert!(status.esc_rpm[0].stale, "ESC1 was not in the newer frame");
+        for (row, rpm) in status.esc_rpm[1..5].iter().zip([10, 20, 30, 40]) {
+            assert_eq!(row.rpm, Some(f64::from(rpm)));
+            assert!(!row.stale);
+        }
+        assert!(status.esc_rpm[5..].iter().all(|row| row.rpm.is_none()));
     }
 
     /// Task 3 acceptance: every start is bound to the current target and only
@@ -2715,26 +3703,23 @@ mod start_readiness_tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn prepare_start_requires_a_fresh_matching_disarmed_px4() {
         let state = AppState::default();
-        assert_eq!(
-            refusal(&state, MotorTestLoad::None),
-            "no serial PX4 target — connect it first"
-        );
+        assert_eq!(refusal(&state), "no serial PX4 target — connect it first");
 
         let handle = install_target(&state, 1).await;
         assert_eq!(
-            refusal(&state, MotorTestLoad::None),
+            refusal(&state),
             "target telemetry is not attached — reconnect the serial PX4"
         );
 
         install_telemetry(&state, Some(heartbeat(1, false)), None);
         assert_eq!(
-            refusal(&state, MotorTestLoad::None),
+            refusal(&state),
             "waiting for the target PX4 heartbeat — connect it first"
         );
 
         install_telemetry(&state, Some(heartbeat(1, true)), Some(Duration::ZERO));
         assert_eq!(
-            refusal(&state, MotorTestLoad::None),
+            refusal(&state),
             "target is armed — disarm it before starting"
         );
 
@@ -2744,13 +3729,13 @@ mod start_readiness_tests {
             Some(TARGET_HEARTBEAT_STALE + Duration::from_millis(1)),
         );
         assert_eq!(
-            refusal(&state, MotorTestLoad::None),
+            refusal(&state),
             "target heartbeat is stale — check the serial PX4 link"
         );
 
         install_telemetry(&state, Some(heartbeat(99, false)), Some(Duration::ZERO));
         assert_eq!(
-            refusal(&state, MotorTestLoad::None),
+            refusal(&state),
             "target heartbeat identity changed — reconnect the serial PX4"
         );
 
@@ -2758,32 +3743,34 @@ mod start_readiness_tests {
         wrong_component.component_id = 2;
         install_telemetry(&state, Some(wrong_component), Some(Duration::ZERO));
         assert_eq!(
-            refusal(&state, MotorTestLoad::None),
+            refusal(&state),
             "target heartbeat identity changed — reconnect the serial PX4"
         );
 
         let mut ardupilot = heartbeat(1, false);
         ardupilot.autopilot = Autopilot::ArduPilot;
         install_telemetry(&state, Some(ardupilot), Some(Duration::ZERO));
-        assert_eq!(
-            refusal(&state, MotorTestLoad::None),
-            "target is not a PX4 autopilot"
-        );
+        assert_eq!(refusal(&state), "target is not a PX4 autopilot");
 
         install_telemetry(&state, Some(heartbeat(1, false)), Some(Duration::ZERO));
         let custom_model = PwmModel::new(1100, 1900, true, 0.5)
             .expect("model")
             .with_disabled(true);
         if let Some(runtime) = state.motor_test.target.lock().as_mut() {
-            *runtime.target.pwm_models.lock() = vec![custom_model; 4];
+            runtime
+                .target
+                .config
+                .lock()
+                .as_mut()
+                .expect("config")
+                .models = vec![custom_model; 4];
         }
         mark_capture_recording(&state);
-        let prepared = prepare_start(&state, MotorTestLoad::Props).expect("ready target");
+        let prepared = prepare_start(&state).expect("ready target");
         assert_eq!(prepared.pwm_models, vec![custom_model; 4]);
         assert_eq!(prepared.target.connection_id, handle.handle_id());
         assert_eq!(prepared.target.target_system_id, 1);
         assert_eq!(prepared.target.target_component_id, 1);
-        assert_eq!(prepared.load, MotorTestLoad::Props);
         assert_eq!(prepared.limits.max_value, 0.3);
         assert_eq!(prepared.limits.max_slew_per_s, 2.0);
         assert_eq!(
@@ -2796,6 +3783,123 @@ mod start_readiness_tests {
             target.stop().await;
         }
         *state.motor_test.telemetry.lock() = None;
+    }
+
+    /// A start uses exactly one published revision; a snapshot read from a
+    /// different link or no snapshot at all is refused before telemetry.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn prepare_start_binds_one_published_configuration_revision() {
+        let state = AppState::default();
+        install_target(&state, 1).await;
+        install_telemetry(&state, Some(heartbeat(1, false)), Some(Duration::ZERO));
+        let prepared = prepare_start(&state).expect("start prepared");
+        let published = {
+            let guard = state.motor_test.target.lock();
+            let published = guard
+                .as_ref()
+                .expect("target")
+                .target
+                .config
+                .lock()
+                .clone()
+                .expect("config");
+            published
+        };
+        assert_eq!(prepared.pwm_models, published.models);
+        assert_eq!(published.revision, 1);
+        assert_eq!(
+            prepared.scope_outputs,
+            super::output_scope_metadata(&published).expect("scope metadata")
+        );
+        assert_eq!(
+            state.actuator_status().scope_outputs,
+            prepared.scope_outputs
+        );
+
+        {
+            let guard = state.motor_test.target.lock();
+            guard
+                .as_ref()
+                .expect("target")
+                .target
+                .config_stale
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        assert!(refusal(&state).contains("stale"));
+        assert!(state.actuator_status().scope_outputs.is_empty());
+        assert!(super::scope_outputs_for_target(&state, published.target).is_empty());
+        {
+            let guard = state.motor_test.target.lock();
+            guard
+                .as_ref()
+                .expect("target")
+                .target
+                .config_stale
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        {
+            let guard = state.motor_test.target.lock();
+            guard
+                .as_ref()
+                .expect("target")
+                .target
+                .config
+                .lock()
+                .as_mut()
+                .expect("config")
+                .target
+                .connection_id += 1;
+        }
+        assert!(refusal(&state).contains("different target"));
+        assert!(state.actuator_status().scope_outputs.is_empty());
+        assert!(super::scope_outputs_for_target(&state, published.target).is_empty());
+
+        {
+            let guard = state.motor_test.target.lock();
+            *guard.as_ref().expect("target").target.config.lock() = None;
+        }
+        assert!(refusal(&state).contains("has not been read"));
+
+        let target = state.motor_test.target.lock().take();
+        if let Some(target) = target {
+            target.stop().await;
+        }
+        *state.motor_test.telemetry.lock() = None;
+    }
+
+    /// Status must not combine a map from one refresh with models from
+    /// another: both come from the same snapshot clone.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_reads_map_and_models_from_the_same_snapshot() {
+        let state = AppState::default();
+        install_target(&state, 1).await;
+        let custom = vec![
+            PwmModel::new(1200, 1800, true, 0.2)
+                .expect("model")
+                .with_protocol(OutputProtocol::Pwm { rate_hz: Some(400) });
+            4
+        ];
+        {
+            let guard = state.motor_test.target.lock();
+            guard
+                .as_ref()
+                .expect("target")
+                .target
+                .config
+                .lock()
+                .as_mut()
+                .expect("config")
+                .models = custom.clone();
+        }
+        let status = state.actuator_status();
+        assert_eq!(status.output_map, fc_map());
+        assert_eq!(status.pwm_models, custom);
+
+        let target = state.motor_test.target.lock().take();
+        if let Some(target) = target {
+            target.stop().await;
+        }
     }
 
     /// Manual SD capture is optional, even after a failed or existing capture.
@@ -2813,10 +3917,7 @@ mod start_readiness_tests {
             CapturePhase::Complete,
         ] {
             state.motor_test.capture.lock().status.lock().phase = phase;
-            assert!(
-                prepare_start(&state, MotorTestLoad::None).is_ok(),
-                "{phase:?}"
-            );
+            assert!(prepare_start(&state).is_ok(), "{phase:?}");
         }
 
         let target = state.motor_test.target.lock().take();
@@ -2836,22 +3937,35 @@ mod start_readiness_tests {
         install_telemetry(&state, Some(heartbeat(1, false)), Some(Duration::ZERO));
         {
             let runtime = state.motor_test.target.lock();
-            *runtime.as_ref().expect("target").target.pwm_models.lock() =
-                vec![PwmModel::default(); 4];
+            runtime
+                .as_ref()
+                .expect("target")
+                .target
+                .config
+                .lock()
+                .as_mut()
+                .expect("config")
+                .models = vec![PwmModel::default(); 4];
         }
-        let error = refusal(&state, MotorTestLoad::None);
+        let error = refusal(&state);
         assert!(
-            error.contains("M1, M2, M3, M4") && error.contains("refresh the mapping"),
+            (1..=4).all(|motor| error.contains(&format!("M{motor}: output range not read")))
+                && error.contains("refresh the mapping"),
             "the error lists the unread motors: {error}"
         );
         {
             let runtime = state.motor_test.target.lock();
-            *runtime.as_ref().expect("target").target.pwm_models.lock() = fc_models();
+            runtime
+                .as_ref()
+                .expect("target")
+                .target
+                .config
+                .lock()
+                .as_mut()
+                .expect("config")
+                .models = fc_models();
         }
-        assert!(
-            prepare_start(&state, MotorTestLoad::None).is_ok(),
-            "FC-read ranges pass again"
-        );
+        assert!(prepare_start(&state).is_ok(), "FC-read ranges pass again");
         let target = state.motor_test.target.lock().take();
         if let Some(target) = target {
             target.stop().await;
@@ -2867,10 +3981,10 @@ mod start_readiness_tests {
         install_target(&state, 1).await;
         install_telemetry(&state, Some(heartbeat(1, false)), Some(Duration::ZERO));
         mark_capture_recording(&state);
-        let first = prepare_start(&state, MotorTestLoad::Plate).expect("first target");
+        let first = prepare_start(&state).expect("first target");
 
         let second_handle = install_target(&state, 1).await;
-        let second = prepare_start(&state, MotorTestLoad::Plate).expect("replacement target");
+        let second = prepare_start(&state).expect("replacement target");
         assert_ne!(first.target.connection_id, second.target.connection_id);
         assert_eq!(second.target.connection_id, second_handle.handle_id());
 
@@ -2906,9 +4020,21 @@ mod status_deadlock_tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use maggcs_core::motor_test::mapping::{FunctionRead, OutputMap};
+    use maggcs_core::motor_test::protocol::{OutputProtocol, OutputProtocols};
     use maggcs_core::motor_test::pwm::PwmModel;
 
+    use super::OutputConfigRead;
     use crate::state::AppState;
+
+    fn checked_map(main: [Option<i64>; 8]) -> OutputMap {
+        let main = main.map(|value| match value {
+            Some(value) => FunctionRead::Value(value),
+            None => FunctionRead::Absent,
+        });
+        let aux = [FunctionRead::Absent; 8];
+        maggcs_core::motor_test::mapping::build_output_map_checked(4, &main, &aux)
+    }
 
     /// Regression (user report 2026-10-22: the motor-test window froze on
     /// open): `actuator_status` took the non-reentrant target mutex twice in
@@ -2916,7 +4042,15 @@ mod status_deadlock_tests {
     /// poll must complete promptly, even with no target connected.
     #[test]
     fn pwm_model_from_raw_reads_endpoints_and_flags() {
-        let model = super::pwm_model_from_raw(Some(1100), Some(1900), true, true, 0.5, true);
+        let model = super::pwm_model_from_raw(
+            Some(1100),
+            Some(1900),
+            true,
+            true,
+            0.5,
+            true,
+            OutputProtocol::Pwm { rate_hz: Some(400) },
+        );
         assert_eq!(model.min_us, 1100);
         assert_eq!(model.max_us, 1900);
         assert!(model.reversed);
@@ -2930,16 +4064,41 @@ mod status_deadlock_tests {
 
     #[test]
     fn pwm_model_from_raw_falls_back_to_identity_on_bad_values() {
-        let expected = PwmModel::default();
-        let model = super::pwm_model_from_raw(Some(2000), Some(1000), false, false, 0.0, true);
+        let expected =
+            PwmModel::default().with_protocol(OutputProtocol::Pwm { rate_hz: Some(400) });
+        let model = super::pwm_model_from_raw(
+            Some(2000),
+            Some(1000),
+            false,
+            false,
+            0.0,
+            true,
+            OutputProtocol::Pwm { rate_hz: Some(400) },
+        );
         assert_eq!(model, expected);
-        let model = super::pwm_model_from_raw(None, Some(1900), false, false, 0.0, true);
+        let model = super::pwm_model_from_raw(
+            None,
+            Some(1900),
+            false,
+            false,
+            0.0,
+            true,
+            OutputProtocol::Pwm { rate_hz: Some(400) },
+        );
         assert_eq!(model, expected);
     }
 
     #[test]
     fn an_unmapped_motor_gets_the_explicit_fallback_model() {
-        let model = super::pwm_model_from_raw(None, None, false, false, 0.0, false);
+        let model = super::pwm_model_from_raw(
+            None,
+            None,
+            false,
+            false,
+            0.0,
+            false,
+            OutputProtocol::Unknown,
+        );
         assert_eq!(model, PwmModel::default());
         assert_eq!(
             model.range_source,
@@ -2949,12 +4108,150 @@ mod status_deadlock_tests {
         assert_eq!(model.max_us, 1900);
     }
 
+    /// A failed read must keep the previous snapshot; a mapping the FC really
+    /// reports as gapped is a new (partial) configuration, not a transient
+    /// failure.
     #[test]
-    fn missing_motor_models_cannot_pass_the_fc_range_gate() {
-        assert!(super::refuse_unread_pwm_ranges(&[]).is_err());
-        let model = PwmModel::new(1100, 1900, false, 0.0).expect("model");
-        assert!(super::refuse_unread_pwm_ranges(&[model; 3]).is_err());
-        assert!(super::refuse_unread_pwm_ranges(&[model; 4]).is_ok());
+    fn a_read_failure_is_distinct_from_a_reported_mapping_gap() {
+        let model = PwmModel::new(1100, 1900, false, 0.0)
+            .expect("model")
+            .with_protocol(OutputProtocol::Pwm { rate_hz: Some(400) });
+        let gap_map = checked_map([Some(101), None, Some(103), None, None, None, None, None]);
+        let gap = OutputConfigRead {
+            map: gap_map,
+            models: vec![model; 4],
+            protocols: OutputProtocols::default(),
+            protocols_known: true,
+            dshot_3d_enable: Some(0),
+            dshot_bidir_en: Some(0),
+        };
+        assert!(!gap.read_failure(), "a gap is reported by the FC");
+        assert!(!gap.is_startable());
+
+        let mut main = [FunctionRead::Absent; 8];
+        main[0] = FunctionRead::Value(101);
+        main[1] = FunctionRead::Unreadable;
+        let unreadable = OutputConfigRead {
+            map: maggcs_core::motor_test::mapping::build_output_map_checked(
+                4,
+                &main,
+                &[FunctionRead::Absent; 8],
+            ),
+            models: vec![model; 4],
+            protocols: OutputProtocols::default(),
+            protocols_known: true,
+            dshot_3d_enable: Some(0),
+            dshot_bidir_en: Some(0),
+        };
+        assert!(unreadable.read_failure());
+        assert!(!unreadable.is_startable());
+
+        let mut protocols = unreadable;
+        protocols.map.state = maggcs_core::motor_test::mapping::OutputMapState::Complete;
+        protocols.protocols_known = false;
+        assert!(protocols.read_failure());
+    }
+
+    fn list_motor_function(index: usize) -> i64 {
+        maggcs_core::motor_test::MOTOR_FUNCTION_BASE + index as i64
+    }
+
+    fn map_with_motors(count: i64) -> maggcs_core::motor_test::mapping::OutputMap {
+        let mut main = [None; 8];
+        for (index, slot) in main
+            .iter_mut()
+            .take(usize::try_from(count).expect("motor count"))
+            .enumerate()
+        {
+            *slot = Some(list_motor_function(index));
+        }
+        checked_map(main)
+    }
+
+    #[test]
+    fn the_start_gate_checks_only_the_active_motor_prefix() {
+        assert!(super::refuse_unread_pwm_ranges(
+            &maggcs_core::motor_test::mapping::OutputMap::unknown(4),
+            &[],
+            false,
+            Some(0)
+        )
+        .is_err());
+        let model = PwmModel::new(1100, 1900, false, 0.0)
+            .expect("model")
+            .with_protocol(OutputProtocol::Pwm { rate_hz: Some(400) });
+        for count in 1_i64..=4 {
+            let map = map_with_motors(count);
+            let models = vec![model; usize::try_from(count).expect("count")];
+            let result = super::refuse_unread_pwm_ranges(&map, &models, true, Some(0));
+            assert!(result.is_ok(), "{count} motors should start: {result:?}");
+        }
+        assert!(
+            super::refuse_unread_pwm_ranges(&map_with_motors(3), &[model; 2], true, Some(0))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_mapping_gap_blocks_the_start_gate() {
+        let mut main = [None; 8];
+        main[0] = Some(1);
+        main[2] = Some(3);
+        let map = checked_map(main);
+        let model = PwmModel::new(1100, 1900, false, 0.0)
+            .expect("model")
+            .with_protocol(OutputProtocol::Pwm { rate_hz: Some(400) });
+        assert!(super::refuse_unread_pwm_ranges(&map, &[model; 4], true, Some(0)).is_err());
+    }
+
+    #[test]
+    fn dshot_requires_a_known_non_3d_configuration() {
+        let dshot = PwmModel::dshot(
+            0.055,
+            false,
+            0.0,
+            OutputProtocol::DShot {
+                rate: maggcs_core::motor_test::DShotRate::R600,
+            },
+        )
+        .expect("dshot model");
+        let map = map_with_motors(1);
+        assert!(super::refuse_unread_pwm_ranges(&map, &[dshot], true, Some(1)).is_err());
+        assert!(super::refuse_unread_pwm_ranges(&map, &[dshot], true, None).is_err());
+        let result = super::refuse_unread_pwm_ranges(&map, &[dshot], true, Some(0));
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[test]
+    fn an_incomplete_parameter_inventory_blocks_the_start_gate() {
+        let map = map_with_motors(1);
+        let model = PwmModel::new(1100, 1900, false, 0.0)
+            .expect("model")
+            .with_protocol(OutputProtocol::Pwm { rate_hz: Some(400) });
+        assert!(super::refuse_unread_pwm_ranges(&map, &[model], false, Some(0)).is_err());
+    }
+
+    #[test]
+    fn dshot_models_use_mixer_units_and_block_unread_dshot_min() {
+        let protocol = OutputProtocol::DShot {
+            rate: maggcs_core::motor_test::DShotRate::R600,
+        };
+        let model = super::dshot_model_from_raw(Some(0.055), false, false, 0.0, protocol);
+        assert_eq!(model.min_us, 110);
+        assert_eq!(model.max_us, maggcs_core::motor_test::DSHOT_MAX_THROTTLE);
+        assert_eq!(
+            model.range_source,
+            maggcs_core::motor_test::pwm::PwmRangeSource::Fc
+        );
+        assert!(model.protocol.is_dshot());
+
+        let unread = super::dshot_model_from_raw(None, false, false, 0.0, protocol);
+        assert_eq!(
+            unread.range_source,
+            maggcs_core::motor_test::pwm::PwmRangeSource::Fallback
+        );
+        assert_eq!(unread.max_us, maggcs_core::motor_test::DSHOT_MAX_THROTTLE);
+        assert!(unread.protocol.is_dshot());
     }
 
     #[test]
@@ -3067,7 +4364,7 @@ mod serial_bench_tests {
     //!
     //! Risk analysis (repo rule 5): the bench runs disarmed with the
     //! propeller removed; starts only pass the FC-read PWM-range gate; the
-    //! demand stays inside `limits_for_load(None)`; every run ends with a
+    //! demand stays inside `motor_test_limits()`; every run ends with a
     //! confirmed full release pass (`StopAndWait` receipt `Idle`).
 
     use std::path::PathBuf;
@@ -3082,7 +4379,7 @@ mod serial_bench_tests {
         MotorTestCommand, MotorTestEvent, MotorTestService, SessionState,
     };
 
-    use crate::motor_test_state::{limits_for_load, MotorTestLoad};
+    use crate::motor_test_state::motor_test_limits;
 
     use super::{refuse_unread_pwm_ranges, MOTOR_TEST_MOTOR_COUNT};
 
@@ -3175,7 +4472,9 @@ mod serial_bench_tests {
         ensure_mot_test_en(params).await;
         let map = super::read_output_map(params).await;
         println!("output map: {map:?}");
-        let models = super::read_pwm_models(params, &map).await;
+        let protocols = super::read_output_protocols(params).await;
+        println!("output protocols: {protocols:?}");
+        let models = super::read_pwm_models(params, &map, protocols).await;
         for (motor, model) in models.iter().enumerate() {
             println!(
                 "M{}: {}–{} µs reversed={} disabled={} range_source={:?}",
@@ -3369,9 +4668,11 @@ mod serial_bench_tests {
         );
         let (map, models) = read_configuration(&params).await;
         assert!(map.channel_for(1).is_some(), "Motor 1 must be mapped");
-        refuse_unread_pwm_ranges(&models).expect("every launched motor needs an FC-read range");
+        let dshot_3d = super::read_int_param(&params, "DSHOT_3D_ENABLE").await;
+        refuse_unread_pwm_ranges(&map, &models, true, dshot_3d)
+            .expect("every launched motor needs an FC-read range");
 
-        let limits = limits_for_load(MotorTestLoad::None, BENCH_SYSTEM_ID);
+        let limits = motor_test_limits(BENCH_SYSTEM_ID);
         let (service, mut events, output) = MotorTestService::spawn(handle.clone(), limits);
         service
             .send(MotorTestCommand::SetPwmModels { models })
@@ -3484,7 +4785,9 @@ mod serial_bench_tests {
             map.channel_for(1).is_some() && map.channel_for(3).is_some(),
             "Motor 1 and Motor 3 must both be mapped"
         );
-        refuse_unread_pwm_ranges(&models).expect("every launched motor needs an FC-read range");
+        let dshot_3d = super::read_int_param(&params, "DSHOT_3D_ENABLE").await;
+        refuse_unread_pwm_ranges(&map, &models, true, dshot_3d)
+            .expect("every launched motor needs an FC-read range");
         for motor in 1..=MOTOR_TEST_MOTOR_COUNT {
             let channel = map.channel_for(motor).expect("mapped bench motor");
             assert!(
@@ -3501,7 +4804,7 @@ mod serial_bench_tests {
         }
         println!("PWM_MAIN_DIS1..4 = {dis:?}");
 
-        let limits = limits_for_load(MotorTestLoad::None, BENCH_SYSTEM_ID);
+        let limits = motor_test_limits(BENCH_SYSTEM_ID);
         let (service, mut events, output) = MotorTestService::spawn(handle.clone(), limits);
         service
             .send(MotorTestCommand::SetPwmModels { models })
@@ -3637,12 +4940,13 @@ mod serial_bench_tests {
                 "M{motor} must stay released (DIS {dis_pulse} µs), observed {lo}..{hi} µs"
             );
         }
-        // The benchmark's raised cosine peaks at twice BENCH_AMPLITUDE.
+        // The requested raised cosine is capped by the fixed bench envelope.
+        let peak_demand = (2.0 * BENCH_AMPLITUDE).min(motor_test_limits(BENCH_SYSTEM_ID).max_value);
         for motor in [1u8, 3u8] {
             let ch = usize::from(map.channel_for(motor).expect("mapped").channel - 1);
             let model = analysis_models[usize::from(motor - 1)];
             let [lo, hi] = spans[ch];
-            let range_hi = f32::from(model.min_us) + 2.0 * BENCH_AMPLITUDE * model.span_us();
+            let range_hi = f32::from(model.min_us) + peak_demand * model.span_us();
             assert!(
                 lo <= f32::from(model.min_us) + 0.05 * model.span_us()
                     && hi >= range_hi - 0.05 * model.span_us() && hi <= range_hi + 5.0,

@@ -36,6 +36,8 @@ jobs:
         working-directory: frontend
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
+      - name: Check compiled MAVLink stream catalog metadata
+        run: python3 scripts/generate-stream-catalog.py --check
       # The terrain discovery test needs the regular helper executable next
       # to the test binaries; cargo test builds a test harness for the bin.
       - name: Build DEM helper for terrain discovery tests

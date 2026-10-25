@@ -3,6 +3,87 @@
 React/TypeScript, Cesium, Radix UI, shared design tokens, and English i18n.
 See [ADR-010](../docs/adr/010-frontend-stack.md).
 
+## RTK drawer
+
+`components/RtkDrawer.tsx` offers **F9P Survey-In** and **Preconfigured RTCM
+receiver** modes. Survey defaults are 2.00 m / 180 s, with both conditions
+required and completion reported by the receiver. Native serial profiles own
+automatic settings; valid older local preferences are imported on first use.
+Manual edits are applied on Connect. Survey-In works without a vehicle link.
+
+The selector labels FC, RTK-candidate and unknown devices, excludes known/in-use
+FC ports and requires reselection when USB identity changes. During startup,
+Cancel is available once a session exists; Disconnect stays available after
+heartbeat loss. A failure is visible and retryable. Base-session/revision and
+ordered link-status guards reject stale cache/events and late Start replies.
+
+Base progress/identity, raw source freshness, valid RTCM freshness, locally
+written correction throughput and rover-reported fix are separate. Vehicle
+disconnect clears forwarding state and preserves the base. See the
+[detailed TODOs](../docs/plans/rtk-base-and-air-ground-todos.md).
+
+Run `npm run check:rtk -- http://localhost:5199/ screenshots/rtk` with Vite
+running. The regression covers invalid inputs, offline survey, dual-target
+progress, fresh corrections/rover separation, FC disconnect, Stop failure/retry,
+changed USB identity, late cached sessions and cancellation before Start's
+reply. Screenshots, visually checked at desktop/compact/Field sizes:
+
+- [Settings, 1920×1080](screenshots/rtk/survey-in-settings-1920x1080.png)
+- [Survey beyond the minimum time, 1024×640](screenshots/rtk/survey-in-progress-1024x640.png)
+- [Ready base / FLOAT rover](screenshots/rtk/survey-in-ready-1920x1080.png)
+- [Field/light, stale RTCM with live source data](screenshots/rtk/survey-in-field-light.png)
+
+Manual packaged-app review:
+
+1. Open the RTK pill (More at compact widths). Pause auto for manual input checks. Check device labels, defaults
+   and the disabled FC option. Invalid accuracy or fractional/zero duration
+   must disable Connect.
+2. Select the intended F9P, Connect, and check real identity/configuration
+   reports. Cancel during identification; reconnect and observe the survey.
+3. Check elapsed time may exceed its minimum while estimated accuracy is still
+   above target. After completion inspect valid RTCM age and local write counts.
+4. Disconnect/reconnect the FC: the base survey/session continues, forwarding
+   resumes with fresh data. Compare rover state with independent GNSS evidence.
+5. Unplug/replug the base: an enabled saved identity reconnects under a new
+   session; a paused role remains paused. A different device requires selection.
+6. Repeat at 1024×640, 1920×1080 and Field/light; check wrapping, scroll access,
+   pinned Disconnect and keyboard Escape/focus containment. Exit the app and
+    verify the receiver port is released.
+
+## Automatic links and RTK/GPS HUD
+
+`SerialAutoControls` uses the native revisioned policy in Settings → Connection
+and the RTK drawer. Automatic linking defaults on for eligible devices. Manual
+Connect/Disconnect, serial/baud and receiver-mode controls remain available.
+`useSerialSelection` binds the manual choice to the attachment ID, including
+same-path device replacement; explicit reselection is required after a change.
+
+`RtkGpsDashboard` sits at the drawer top: large FIXED/FLOAT/3D solution status,
+satellite count, dimensionless HDOP/VDOP, an RTCM-age ring, local correction-TX
+history (up to 60 samples/seconds) and independent time/precision progress bars.
+LIVE/STALE/NO DATA are explicit. Full bars do not imply receiver validity;
+TX does not imply rover receipt. Receiver/transport changes clear history.
+
+```bash
+npm run check:serial-auto -- http://localhost:5199/ screenshots/serial-auto
+```
+
+The browser fixture verifies native startup ownership, default-on policy, legacy
+settings import, manual precedence, port-ID invalidation, persistent pause,
+Resume, old snapshots, stale FIXED and session-scoped HUD history.
+
+- [HUD, desktop](screenshots/serial-auto/rtk-gps-hud-1920x1080.png)
+- [HUD, compact](screenshots/serial-auto/rtk-gps-hud-1024x640.png)
+- [HUD, Field/light](screenshots/serial-auto/rtk-gps-hud-field-light-1366x768.png)
+- [Manual FC controls](screenshots/serial-auto/fc-manual-controls-1920x1080.png)
+- [Automatic policy and manual connection, Field/light](screenshots/serial-auto/fc-manual-field-light-1366x768.png)
+
+For manual verification, compare HUD values to the independent receiver, remove
+telemetry and correction inputs separately, check stale indicators and history
+reset, and scroll to the retained manual controls. The
+[20-case hardware checklist](../docs/verification/serial-rtk-hardware-checklist.md)
+provides setup, timing, expected results and evidence requirements.
+
 ## Shell and branding
 
 `components/TopBar.tsx` keeps the title/project entry, tools, Settings,

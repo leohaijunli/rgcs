@@ -1,6 +1,6 @@
 // Parameters table geometry regression (plan §6.2 / WP3a). Runs against the
 // real React UI in browser mock mode (bundled PX4 metadata, no Tauri) and
-// checks that the header and body share column origins within 1 CSS px.
+// checks column geometry and actual value-text alignment within 1 CSS px.
 //   node scripts/check-params.mjs [url] [screenshots]
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
@@ -13,7 +13,7 @@ const url = process.argv[2] ?? 'http://localhost:5199/params.html'
 const shots = process.argv[3]
 
 /** Must match MIN_CENTER_W / PANE_STEP in ParamsApp.tsx. */
-const MIN_CENTER_W = 460
+const MIN_CENTER_W = 474
 const PANE_STEP = 8
 
 const browser = await chromium.launch({ headless: true })
@@ -22,9 +22,20 @@ const page = await context.newPage()
 const errors = []
 page.on('pageerror', (error) => errors.push(String(error)))
 
-/** Left edge (x) of the direct children of a row/header element. */
-const originsOf = (locator) =>
-  locator.evaluate((el) => [...el.children].map((c) => c.getBoundingClientRect().x))
+/** Cell geometry and the text's alignment edge (not just its containing box). */
+const columnsOf = (locator) =>
+  locator.evaluate((el) => [...el.children].map((c) => {
+    const cell = c.getBoundingClientRect()
+    const range = document.createRange()
+    range.selectNodeContents(c)
+    const text = range.getBoundingClientRect()
+    return {
+      x: cell.x,
+      width: cell.width,
+      textWidth: text.width,
+      textEdge: getComputedStyle(c).textAlign === 'right' ? text.right : text.left,
+    }
+  }))
 
 /** Width of each header column, in order (Name, Value, Default, Description). */
 const headerColWidths = () =>
@@ -37,15 +48,22 @@ const widthOf = async (selector) => {
 }
 
 const assertAligned = async (label) => {
-  const head = await originsOf(page.locator('.p-thead'))
-  const row = await originsOf(page.locator('.p-row').first())
+  const head = await columnsOf(page.locator('.p-thead'))
+  const row = await columnsOf(page.locator('.p-row').first())
   assert.equal(head.length, 4, `${label}: header has four columns`)
   assert.equal(row.length, 4, `${label}: row has four columns`)
   for (let i = 0; i < 4; i++) {
     assert.ok(
-      Math.abs(head[i] - row[i]) <= 1,
-      `${label}: column ${i} origin off by ${(head[i] - row[i]).toFixed(1)} px (header ${head[i].toFixed(1)}, row ${row[i].toFixed(1)})`,
+      Math.abs(head[i].x - row[i].x) <= 1,
+      `${label}: column ${i} origin off by ${(head[i].x - row[i].x).toFixed(1)} px (header ${head[i].x.toFixed(1)}, row ${row[i].x.toFixed(1)})`,
     )
+    assert.ok(Math.abs(head[i].width - row[i].width) <= 1, `${label}: column ${i} widths match`)
+    if ((i === 1 || i === 2) && row[i].textWidth <= row[i].width) {
+      assert.ok(
+        Math.abs(head[i].textEdge - row[i].textEdge) <= 1,
+        `${label}: column ${i} text alignment off by ${(head[i].textEdge - row[i].textEdge).toFixed(1)} px`,
+      )
+    }
   }
 }
 
@@ -61,6 +79,8 @@ const assertNoOverflow = async (label) => {
     y: document.documentElement.scrollHeight - window.innerHeight,
   }))
   assert.ok(o.x <= 1 && o.y <= 1, `${label}: no document overflow (${o.x}, ${o.y})`)
+  const tableOverflow = await page.locator('.p-scroll').evaluate((el) => el.scrollWidth - el.clientWidth)
+  assert.ok(tableOverflow <= 1, `${label}: all table columns fit (${tableOverflow} px horizontal overflow)`)
 }
 
 try {
@@ -154,6 +174,10 @@ try {
   // At the declared minimum size, collapsing both panes must grow the table
   // while keeping it above MIN_CENTER_W and free of overflow.
   await setSize(900, 600, '900x600 (collapsed)')
+  await page.locator('.p-split.left').focus()
+  for (let i = 0; i < 50; i++) await page.keyboard.press('ArrowRight')
+  await assertNoOverflow('900x600 (widest group pane)')
+  await assertAligned('900x600 (widest group pane)')
   const centerOpen = await widthOf('.p-tablewrap')
   await page.getByRole('button', { name: 'Hide group pane' }).click()
   await page.locator('.p-rail.left .rail-toggle').waitFor()
@@ -274,7 +298,7 @@ try {
   if (shots) await page.screenshot({ path: join(shots, 'params-staged-tray.png') })
 
   assert.deepEqual(errors, [])
-  console.log('PASS: header/body column origins align within 1 px at all sizes and scroll states')
+  console.log('PASS: header/body columns and value text align within 1 px; columns fit at all sizes and scroll states')
 } finally {
   await browser.close()
 }

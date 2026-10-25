@@ -1,281 +1,132 @@
-//! RTCM injection service (comprehensive plan R2/R3): takes byte chunks from
-//! an [`RtcmSource`](super::source::RtcmSource), reassembles RTCM3 frames,
-//! fragments them into `GPS_RTCM_DATA` (R0: PX4 writes the fragments
-//! verbatim to the GNSS serial port in arrival order — order is what
-//! matters, flags are advisory) and sends them on the MAVLink link. Single
-//! active source; a bounded queue drops oldest on overflow; 1 Hz stats
-//! (B/s, per-RTCM-type counts, drops) plus an injection-stall alarm.
+//! Link-owned correction forwarding from an application-owned base receiver.
+//!
+//! Whole CRC-validated frames arrive on a bounded, oldest-first broadcast
+//! queue. Forwarding is immediate; only statistics run at 1 Hz. Every frame
+//! has one deadline and one transport generation for all of its fragments.
 
 use std::collections::HashMap;
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc, watch};
 
+use super::base::{
+    BaseError, BaseMode, BasePhase, BaseSessionId, Cancellation, RtkBaseServiceHandle,
+    MAX_CORRECTION_AGE,
+};
 use super::forward;
-use super::rtcm::RtcmFramer;
-use super::source::{RtcmSource, SerialSource, SerialSourceConfig, SourceError};
-use crate::mavlink::connection::ConnectionHandle;
+use super::source::{RtcmSource, SerialSourceConfig};
+use crate::mavlink::connection::{ConnectionHandle, LinkState};
 use crate::mavlink::message::MavMessage;
 
-/// Queue capacity between the reader thread and the service task. Full =
-/// drop the oldest chunk and count it (a slow link must not buffer up
-/// minutes of stale corrections; R2).
-pub const QUEUE_CAPACITY: usize = 64;
-/// Seconds without any RTCM data before the stall alarm fires (R3; matches
-/// the 5 s link-switch timeout in the PX4 GPS driver).
+pub const QUEUE_CAPACITY: usize = super::base::CORRECTION_CAPACITY;
 pub const STALL_ALARM_S: u64 = 5;
-/// Stats emission period (R3).
+pub const FRAME_WRITE_TIMEOUT: Duration = Duration::from_millis(500);
 const STATS_TICK: Duration = Duration::from_secs(1);
+const SERVICE_STOP_TIMEOUT: Duration = Duration::from_secs(1);
 
-/// What the UI sees each second (R3), and the app layer forwards.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 #[ts(export)]
-#[serde(rename_all = "snake_case")]
 pub struct RtkStats {
-    /// The active source label, `None` when injection is off.
     pub source: Option<String>,
-    /// Bytes pushed into the link over the last second.
+    /// Complete valid RTCM bytes whose local transport writes succeeded, per
+    /// elapsed second. This is not a rover receipt or an RTK-fix indication.
     pub bytes_per_second: f64,
-    /// RTCM frames sent per message type over the last second
-    /// (e.g. MSM4 = 1074/1084/1124, base position = 1005/1006).
     pub frames_per_type: HashMap<u16, u32>,
-    /// Chunks dropped because the queue was full since start.
+    /// Oldest-first queue losses, expired frames and failed frame sends.
+    /// Queue units are whole corrections, never arbitrary serial slices.
     pub dropped_chunks: u64,
-    /// RTCM frames forwarded since start.
     pub total_frames: u64,
-    /// No data from the source for more than [`STALL_ALARM_S`].
     pub stalled: bool,
-    /// Seconds since the last data chunk, `None` = none ever received.
     pub seconds_since_data: Option<f64>,
+    #[serde(default)]
+    pub base_session_id: Option<BaseSessionId>,
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub connection_generation: u64,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
-/// Lifecycle errors surfaced through command replies.
+/// Ordered desktop snapshots: a retired link cannot revive the UI through a
+/// delayed event or cached command reply.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[ts(export)]
+pub struct RtkLinkStatus {
+    #[ts(type = "number")]
+    pub revision: u64,
+    pub stats: Option<RtkStats>,
+    pub foreign: super::multi::ForeignState,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum RtkError {
     #[error(transparent)]
-    Source(#[from] SourceError),
-    /// The service task ended (link or app shutdown).
+    Base(#[from] BaseError),
     #[error("RTK injection service stopped")]
     ServiceStopped,
-    /// Creating the blocking source reader failed.
-    #[error("could not start RTK source reader: {0}")]
-    ReaderSpawn(String),
-    /// The blocking source reader failed to join during stop.
-    #[error("RTK source reader failed to stop: {0}")]
-    ReaderStop(String),
+    #[error("RTK send cancelled")]
+    Cancelled,
+    #[error("RTCM frame write timed out")]
+    WriteTimeout,
+    #[error("RTCM transport write failed: {0}")]
+    Write(String),
 }
 
-/// Shared queue between the blocking reader thread and the async task.
-#[derive(Default)]
-struct ChunkQueue {
-    inner: Mutex<QueueState>,
-}
-
-#[derive(Default)]
-struct QueueState {
-    chunks: VecDeque<Vec<u8>>,
-    dropped: u64,
-}
-
-impl ChunkQueue {
-    /// Push a chunk; when full, drop the oldest (R2: 丢旧并计数).
-    fn push(&self, chunk: Vec<u8>) {
-        let mut state = self.inner.lock().expect("queue poisoned");
-        while state.chunks.len() >= QUEUE_CAPACITY {
-            state.chunks.pop_front();
-            state.dropped += 1;
-        }
-        state.chunks.push_back(chunk);
-    }
-
-    fn drain(&self) -> (VecDeque<Vec<u8>>, u64) {
-        let mut state = self.inner.lock().expect("queue poisoned");
-        let chunks = std::mem::take(&mut state.chunks);
-        (chunks, state.dropped)
-    }
-}
-
-/// A live source session: the reader thread plus its stop flag.
-struct SourceSession {
-    label: String,
-    stop: Arc<AtomicBool>,
-    queue: Arc<ChunkQueue>,
-    reader: Option<std::thread::JoinHandle<()>>,
-}
-
-impl SourceSession {
-    /// Signal the blocking reader and join it on Tokio's blocking pool.
-    async fn stop(mut self) -> Result<(), RtkError> {
-        self.stop.store(true, Ordering::Relaxed);
-        let Some(reader) = self.reader.take() else {
-            return Ok(());
-        };
-        tokio::task::spawn_blocking(move || reader.join())
-            .await
-            .map_err(|error| RtkError::ReaderStop(error.to_string()))?
-            .map_err(|_| RtkError::ReaderStop("RTK reader thread panicked".to_string()))
-    }
-}
-
-impl Drop for SourceSession {
-    fn drop(&mut self) {
-        // Also signal the reader if the owning service task is aborted during
-        // a bounded shutdown. The source's bounded-read contract lets it exit.
-        self.stop.store(true, Ordering::Relaxed);
-    }
-}
-
-#[cfg(test)]
-mod session_tests {
-    use super::*;
-    use std::sync::atomic::AtomicBool;
-
-    struct DropSource(Arc<AtomicBool>);
-
-    impl RtcmSource for DropSource {
-        fn read(&mut self) -> Result<Option<Vec<u8>>, SourceError> {
-            std::thread::sleep(Duration::from_millis(2));
-            Ok(None)
-        }
-    }
-
-    impl Drop for DropSource {
-        fn drop(&mut self) {
-            self.0.store(true, Ordering::SeqCst);
-        }
-    }
-
-    #[tokio::test]
-    async fn stopping_session_joins_reader_and_releases_source() {
-        let dropped = Arc::new(AtomicBool::new(false));
-        let session = SourceSession::start("test".into(), Box::new(DropSource(dropped.clone())))
-            .expect("reader thread starts");
-        tokio::time::timeout(Duration::from_secs(1), session.stop())
-            .await
-            .expect("reader stop is bounded")
-            .expect("reader joined");
-        assert!(dropped.load(Ordering::SeqCst), "source must be released");
-    }
-}
-
-impl SourceSession {
-    /// Spawn the blocking reader thread for `source`.
-    fn start(label: String, mut source: Box<dyn RtcmSource>) -> Result<Self, RtkError> {
-        let stop = Arc::new(AtomicBool::new(false));
-        let queue = Arc::new(ChunkQueue::default());
-        let thread_stop = Arc::clone(&stop);
-        let thread_queue = Arc::clone(&queue);
-        let reader = std::thread::Builder::new()
-            .name(format!("rtk-reader-{label}"))
-            .spawn(move || {
-                while !thread_stop.load(Ordering::Relaxed) {
-                    match source.read() {
-                        Ok(Some(chunk)) => thread_queue.push(chunk),
-                        Ok(None) => continue,
-                        Err(_) => break, // source died; the stall alarm covers it
-                    }
-                }
-            })
-            .map_err(|error| RtkError::ReaderSpawn(error.to_string()))?;
-        Ok(Self {
-            label,
-            stop,
-            queue,
-            reader: Some(reader),
-        })
-    }
-}
-
-/// Handle to the running injection service.
 #[derive(Clone)]
 pub struct RtkServiceHandle {
-    cmd_tx: mpsc::Sender<SourceRequest>,
-    /// Stop flag of the currently active session, so `stop()` works without
-    /// a round-trip through the task.
-    active_stop: Arc<Mutex<Option<Arc<AtomicBool>>>>,
-}
-
-enum SourceRequest {
-    /// Start injecting from a source; the reply reports the outcome.
-    Start {
-        label: String,
-        source: Box<dyn RtcmSource>,
-        reply: tokio::sync::oneshot::Sender<Result<(), RtkError>>,
-    },
-    /// Stop the active source (idempotent).
-    Stop {
-        reply: tokio::sync::oneshot::Sender<Result<(), RtkError>>,
-    },
-    Shutdown {
-        reply: tokio::sync::oneshot::Sender<Result<(), RtkError>>,
-    },
+    base: RtkBaseServiceHandle,
+    owns_base: bool,
+    shutdown: Cancellation,
+    done: watch::Receiver<bool>,
 }
 
 impl RtkServiceHandle {
-    /// Start injecting from the F9P serial port. Any previously active
-    /// source is stopped first (single-source mutual exclusion, R2).
+    /// Compatibility entry for an already-configured serial receiver.
     pub async fn start_serial(&self, config: SerialSourceConfig) -> Result<(), RtkError> {
-        let source = SerialSource::open(config.clone())?;
-        self.start(Box::new(source), config.port_name).await
+        self.stop().await?;
+        self.base
+            .start_serial(config, BaseMode::Preconfigured)
+            .await?;
+        Ok(())
     }
 
-    /// Start injecting from an arbitrary source (tests use this with the
-    /// [`FakeSource`](super::source::FakeSource) double).
     pub async fn start(&self, source: Box<dyn RtcmSource>, label: String) -> Result<(), RtkError> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.cmd_tx
-            .send(SourceRequest::Start {
-                label,
-                source,
-                reply: reply_tx,
-            })
-            .await
-            .map_err(|_| RtkError::ServiceStopped)?;
-        reply_rx.await.map_err(|_| RtkError::ServiceStopped)?
-    }
-
-    /// Stop the active source (idempotent, also safe from the reader side).
-    pub async fn stop(&self) -> Result<(), RtkError> {
-        // Signal the reader immediately so a blocked read exits fast.
-        if let Some(stop) = self
-            .active_stop
-            .lock()
-            .expect("active stop lock poisoned")
-            .clone()
-        {
-            stop.store(true, Ordering::Relaxed);
+        if self.shutdown.is_cancelled() {
+            return Err(RtkError::ServiceStopped);
         }
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.cmd_tx
-            .send(SourceRequest::Stop { reply: reply_tx })
-            .await
-            .map_err(|_| RtkError::ServiceStopped)?;
-        reply_rx.await.map_err(|_| RtkError::ServiceStopped)?
+        self.stop().await?;
+        self.base.start_source(source, label).await?;
+        Ok(())
     }
 
-    /// Stop the active source and terminate the per-link injection task.
+    pub async fn stop(&self) -> Result<(), RtkError> {
+        if let Some(id) = self.base.snapshot().session_id {
+            self.base.stop(id).await?;
+        }
+        Ok(())
+    }
+
+    /// Detaching a vehicle stops only its forwarder. Standalone instances
+    /// created by `spawn_with_task` also own and stop their receiver.
     pub async fn shutdown(&self) -> Result<(), RtkError> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.cmd_tx
-            .send(SourceRequest::Shutdown { reply: reply_tx })
+        self.shutdown.cancel();
+        if self.owns_base {
+            self.stop().await?;
+        }
+        let mut done = self.done.clone();
+        tokio::time::timeout(SERVICE_STOP_TIMEOUT, done.wait_for(|done| *done))
             .await
+            .map_err(|_| RtkError::WriteTimeout)?
             .map_err(|_| RtkError::ServiceStopped)?;
-        reply_rx.await.map_err(|_| RtkError::ServiceStopped)?
+        Ok(())
     }
 }
 
-/// Spawn the injection service on the link. The stats receiver ticks at
-/// 1 Hz while a source is active.
 pub fn spawn(handle: ConnectionHandle) -> (RtkServiceHandle, mpsc::Receiver<RtkStats>) {
     let (service, stats, _task) = spawn_with_task(handle);
     (service, stats)
 }
 
-/// Spawn the injection service and retain its task handle for link lifecycle
-/// ownership. Existing callers can continue using [`spawn`].
 pub fn spawn_with_task(
     handle: ConnectionHandle,
 ) -> (
@@ -283,155 +134,362 @@ pub fn spawn_with_task(
     mpsc::Receiver<RtkStats>,
     tokio::task::JoinHandle<()>,
 ) {
-    let (stats_tx, stats_rx) = mpsc::channel(8);
-    let (cmd_tx, mut cmd_rx) = mpsc::channel(4);
-    let active_stop = Arc::new(Mutex::new(None));
-    let task_active_stop = Arc::clone(&active_stop);
-    let task = tokio::spawn(async move {
-        let mut framer = RtcmFramer::new();
-        let mut session: Option<SourceSession> = None;
-        let mut stats_base = StatsBase::default();
-        let mut stats_tick = tokio::time::interval(STATS_TICK);
-        stats_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    spawn_forwarder(RtkBaseServiceHandle::default(), handle, true)
+}
 
-        'service: loop {
+/// Subscribe to fresh corrections without taking ownership of the receiver.
+pub fn spawn_for_base(
+    base: RtkBaseServiceHandle,
+    handle: ConnectionHandle,
+) -> (
+    RtkServiceHandle,
+    mpsc::Receiver<RtkStats>,
+    tokio::task::JoinHandle<()>,
+) {
+    spawn_forwarder(base, handle, false)
+}
+
+fn spawn_forwarder(
+    base: RtkBaseServiceHandle,
+    handle: ConnectionHandle,
+    owns_base: bool,
+) -> (
+    RtkServiceHandle,
+    mpsc::Receiver<RtkStats>,
+    tokio::task::JoinHandle<()>,
+) {
+    let (stats_tx, stats_rx) = mpsc::channel(8);
+    let (done_tx, done) = watch::channel(false);
+    let shutdown = Cancellation::new();
+    let service = RtkServiceHandle {
+        base: base.clone(),
+        owns_base,
+        shutdown: shutdown.clone(),
+        done,
+    };
+    // Subscribe before the caller can start its source, including fast fixtures.
+    let mut corrections = base.corrections();
+    let mut status = base.subscribe();
+    use ::mavlink::MessageData;
+    let mut link_events =
+        handle.subscribe_route(crate::mavlink::router::MessageRoute::messages(&[
+            ::mavlink::common::HEARTBEAT_DATA::ID,
+        ]));
+    let task = tokio::spawn(async move {
+        let mut active = None;
+        let mut counters = StatsBase::new(Instant::now());
+        let mut pending_stats = None;
+        let mut tick = tokio::time::interval(STATS_TICK);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            let snapshot = status.borrow_and_update().clone();
+            let generation = handle.generation();
+            let connected = handle.state().await == LinkState::Connected;
+            let current = snapshot
+                .session_id
+                .filter(|_| snapshot.phase == BasePhase::Ready && connected && generation != 0)
+                .map(|id| (id, generation));
+            if current != active {
+                active = current;
+                counters = StatsBase::new(Instant::now());
+                tick.reset();
+                pending_stats = Some(match active {
+                    Some((id, generation)) => counters.snapshot(
+                        snapshot.source.as_deref().unwrap_or("Base receiver"),
+                        id,
+                        generation,
+                        Instant::now(),
+                    ),
+                    None => RtkStats::default(),
+                });
+            }
             tokio::select! {
-                cmd = cmd_rx.recv() => {
-                    let Some(cmd) = cmd else { break };
-                    match cmd {
-                        SourceRequest::Start { label, source, reply } => {
-                            if let Some(old) = session.take() {
-                                *task_active_stop.lock().expect("active stop lock poisoned") = None;
-                                if let Err(error) = old.stop().await {
-                                    let _ = reply.send(Err(error));
-                                    continue;
-                                }
-                            }
-                            stats_base = StatsBase::default();
-                            framer.reset();
-                            let opened = match SourceSession::start(label.clone(), source) {
-                                Ok(opened) => opened,
-                                Err(error) => {
-                                    let _ = reply.send(Err(error));
-                                    continue;
-                                }
-                            };
-                            *task_active_stop.lock().expect("active stop lock poisoned") = Some(opened.stop.clone());
-                            let _ = reply.send(Ok(()));
-                            session = Some(opened);
-                            stats_base.label = Some(label);
-                            stats_base.last_data = None;
+                biased;
+                _ = shutdown.cancelled() => break,
+                changed = status.changed() => { if changed.is_err() { break; } }
+                event = link_events.recv() => {
+                    if matches!(event, Err(broadcast::error::RecvError::Closed)) { break; }
+                }
+                correction = corrections.recv() => {
+                    let correction = match correction {
+                        Ok(correction) => correction,
+                        Err(broadcast::error::RecvError::Lagged(count)) => {
+                            counters.dropped_chunks = counters.dropped_chunks.saturating_add(count);
+                            continue;
                         }
-                        SourceRequest::Stop { reply } => {
-                            let result = if let Some(old) = session.take() {
-                                *task_active_stop.lock().expect("active stop lock poisoned") = None;
-                                stats_base = StatsBase::default();
-                                framer.reset();
-                                old.stop().await
-                            } else {
-                                Ok(())
-                            };
-                            let _ = stats_tx
-                                .send(RtkStats {
-                                    source: None,
-                                    ..RtkStats::default()
-                                })
-                                .await;
-                            let _ = reply.send(result);
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    };
+                    let Some((id, generation)) = active else { continue };
+                    if correction.session_id != id || correction.cancel.is_cancelled() { continue; }
+                    // A surviving ConnectionHandle may have reopened its port.
+                    // Even recent corrections captured before that open are old.
+                    let opened_at = handle.connected_since().await;
+                    if !opened_at.is_some_and(|at| correction.received_at >= at)
+                        || correction.received_at.elapsed() > MAX_CORRECTION_AGE
+                    {
+                        counters.dropped_chunks = counters.dropped_chunks.saturating_add(1);
+                        continue;
+                    }
+                    let bytes = correction.frame.to_bytes();
+                    let deadline = tokio::time::Instant::from_std(correction.received_at + MAX_CORRECTION_AGE)
+                        .min(tokio::time::Instant::now() + FRAME_WRITE_TIMEOUT);
+                    let result = forward_frame(&handle, &bytes, &mut counters.sequence, generation, deadline, &correction.cancel, &shutdown).await;
+                    match result {
+                        Ok(()) => {
+                            counters.bytes_forwarded += bytes.len() as u64;
+                            *counters.frames_per_type.entry(correction.frame.message_type).or_insert(0) += 1;
+                            counters.total_frames += 1;
+                            counters.error = None;
                         }
-                        SourceRequest::Shutdown { reply } => {
-                            let result = if let Some(old) = session.take() {
-                                *task_active_stop.lock().expect("active stop lock poisoned") = None;
-                                framer.reset();
-                                old.stop().await
-                            } else {
-                                Ok(())
-                            };
-                            let _ = reply.send(result);
-                            break;
+                        Err(RtkError::Cancelled) => {}
+                        Err(error) => {
+                            counters.dropped_chunks = counters.dropped_chunks.saturating_add(1);
+                            counters.error = Some(error.to_string());
                         }
                     }
                 }
-                _ = stats_tick.tick() => {
-                    if let Some(active) = &session {
-                        let (chunks, dropped) = active.queue.drain();
-                        stats_base.dropped_chunks = dropped;
-                        for chunk in &chunks {
-                            stats_base.bytes_seen += chunk.len() as u64;
-                            for frame in framer.push(chunk) {
-                                let bytes = frame.to_bytes();
-                                let ftype = super::rtcm::message_type(&bytes);
-                                if forward(&handle, &bytes, &mut stats_base.sequence).await.is_err() {
-                                    break 'service; // link gone: stop with the connection
-                                }
-                                *stats_base.frames_per_type.entry(ftype).or_insert(0) += 1;
-                                stats_base.total_frames += 1;
-                                stats_base.last_data = Some(Instant::now());
-                            }
-                        }
-                        if !chunks.is_empty() {
-                            // Fresh data arrived: chunks themselves count as
-                            // "the source is alive" even between frames.
-                            stats_base.last_data = Some(Instant::now());
-                        }
-                        let elapsed = stats_base.last_data.map(|t| t.elapsed().as_secs_f64());
-                        let stats = RtkStats {
-                            source: Some(active.label.clone()),
-                            bytes_per_second: stats_base.bytes_seen as f64,
-                            frames_per_type: stats_base.frames_per_type.clone(),
-                            dropped_chunks: stats_base.dropped_chunks,
-                            total_frames: stats_base.total_frames,
-                            stalled: elapsed.is_none_or(|s| s > STALL_ALARM_S as f64),
-                            seconds_since_data: elapsed,
-                        };
-                        stats_base.bytes_seen = 0;
-                        stats_base.frames_per_type.clear();
-                        if stats_tx.send(stats).await.is_err() {
-                            break 'service; // subscriber gone
-                        }
+                permit = stats_tx.reserve(), if pending_stats.is_some() => {
+                    match permit {
+                        Ok(permit) => { if let Some(stats) = pending_stats.take() { permit.send(stats); } }
+                        Err(_) => break,
+                    }
+                }
+                _ = tick.tick() => {
+                    if let Some((id, generation)) = active {
+                        counters.last_data = base.last_data(id);
+                        pending_stats = Some(counters.snapshot(snapshot.source.as_deref().unwrap_or("Base receiver"), id, generation, Instant::now()));
                     }
                 }
             }
         }
-        *task_active_stop.lock().expect("active stop lock poisoned") = None;
-        if let Some(active) = session.take() {
-            let _ = active.stop().await;
-        }
-        drop(stats_tx);
+        done_tx.send_replace(true);
     });
-
-    (
-        RtkServiceHandle {
-            cmd_tx,
-            active_stop,
-        },
-        stats_rx,
-        task,
-    )
+    (service, stats_rx, task)
 }
 
-/// Fragment one RTCM frame and send every `GPS_RTCM_DATA` packet on the
-/// link. Returns an error when the link is gone.
-async fn forward(handle: &ConnectionHandle, frame: &[u8], sequence: &mut u8) -> Result<(), ()> {
-    let fragments = forward::fragment(frame, *sequence).map_err(|_| ())?;
-    *sequence = sequence.wrapping_add(1);
-    for fragment in fragments {
-        handle
-            .send(MavMessage::GPS_RTCM_DATA(fragment.to_message()))
-            .await
-            .map_err(|_| ())?;
+async fn forward_frame(
+    handle: &ConnectionHandle,
+    frame: &[u8],
+    sequence: &mut u8,
+    generation: u64,
+    deadline: tokio::time::Instant,
+    source_stop: &Cancellation,
+    shutdown: &Cancellation,
+) -> Result<(), RtkError> {
+    let batch = forward::packetize_px4(frame, *sequence)
+        .map_err(|error| RtkError::Write(error.to_string()))?;
+    *sequence = batch.next_sequence_id;
+    tokio::select! {
+        biased;
+        _ = shutdown.cancelled() => Err(RtkError::Cancelled),
+        _ = source_stop.cancelled() => Err(RtkError::Cancelled),
+        _ = tokio::time::sleep_until(deadline) => Err(RtkError::WriteTimeout),
+        result = async {
+            for fragment in batch.packets {
+                handle.send_in_generation(MavMessage::GPS_RTCM_DATA(fragment.to_message()), generation, deadline)
+                    .await.map_err(|error| RtkError::Write(error.to_string()))?;
+            }
+            Ok(())
+        } => result,
     }
-    Ok(())
 }
 
-/// Per-session counters the stats tick consumes and resets.
-#[derive(Default)]
 struct StatsBase {
-    label: Option<String>,
-    bytes_seen: u64,
+    started_at: Instant,
+    window_started_at: Instant,
+    bytes_forwarded: u64,
     frames_per_type: HashMap<u16, u32>,
     dropped_chunks: u64,
     total_frames: u64,
     sequence: u8,
     last_data: Option<Instant>,
+    error: Option<String>,
+}
+
+impl StatsBase {
+    fn new(now: Instant) -> Self {
+        Self {
+            started_at: now,
+            window_started_at: now,
+            bytes_forwarded: 0,
+            frames_per_type: HashMap::new(),
+            dropped_chunks: 0,
+            total_frames: 0,
+            sequence: 0,
+            last_data: None,
+            error: None,
+        }
+    }
+
+    fn snapshot(
+        &mut self,
+        source: &str,
+        session: BaseSessionId,
+        generation: u64,
+        now: Instant,
+    ) -> RtkStats {
+        let seconds = now
+            .saturating_duration_since(self.window_started_at)
+            .as_secs_f64();
+        let stats = RtkStats {
+            source: Some(source.into()),
+            bytes_per_second: if seconds > 0.0 {
+                self.bytes_forwarded as f64 / seconds
+            } else {
+                0.0
+            },
+            frames_per_type: std::mem::take(&mut self.frames_per_type),
+            dropped_chunks: self.dropped_chunks,
+            total_frames: self.total_frames,
+            stalled: now.saturating_duration_since(self.last_data.unwrap_or(self.started_at))
+                > Duration::from_secs(STALL_ALARM_S),
+            seconds_since_data: self
+                .last_data
+                .map(|at| now.saturating_duration_since(at).as_secs_f64()),
+            base_session_id: Some(session),
+            connection_generation: generation,
+            error: self.error.clone(),
+        };
+        self.bytes_forwarded = 0;
+        self.window_started_at = now;
+        stats
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn id() -> BaseSessionId {
+        serde_json::from_str("\"1\"").expect("ID")
+    }
+
+    #[tokio::test]
+    async fn blocked_transport_does_not_hold_rtk_stop_or_shutdown() {
+        let (connection, _held_queue) = crate::mavlink::connection::stalled_test_connection();
+        let (service, _stats, task) = spawn_with_task(connection);
+        let frame = super::super::rtcm::encode_frame(&vec![0x55; 1023]).expect("maximum RTCM");
+        service
+            .start(
+                Box::new(super::super::source::FakeSource::new(
+                    vec![frame],
+                    Duration::ZERO,
+                )),
+                "blocked".into(),
+            )
+            .await
+            .expect("start");
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        tokio::time::timeout(Duration::from_secs(1), async {
+            service.stop().await.expect("stop under write backpressure");
+            service
+                .shutdown()
+                .await
+                .expect("shutdown under backpressure");
+            task.await.expect("joined");
+        })
+        .await
+        .expect("whole teardown bounded");
+    }
+
+    #[tokio::test]
+    async fn frame_write_deadline_bounds_an_unanswered_transport() {
+        let (connection, _held_queue) = crate::mavlink::connection::stalled_test_connection();
+        let frame = super::super::rtcm::encode_frame(&[0x3e, 0xd0]).expect("RTCM");
+        let result = tokio::time::timeout(
+            Duration::from_millis(200),
+            forward_frame(
+                &connection,
+                &frame,
+                &mut 0,
+                1,
+                tokio::time::Instant::now() + Duration::from_millis(25),
+                &Cancellation::new(),
+                &Cancellation::new(),
+            ),
+        )
+        .await
+        .expect("caller has a finite bound");
+        assert!(matches!(
+            result,
+            Err(RtkError::WriteTimeout | RtkError::Write(_))
+        ));
+    }
+
+    #[test]
+    fn startup_grace_does_not_invent_an_arrival() {
+        let now = Instant::now();
+        let mut stats = StatsBase::new(now);
+        for age in [Duration::ZERO, Duration::from_secs(STALL_ALARM_S)] {
+            let snapshot = stats.snapshot("silent", id(), 1, now + age);
+            assert!(!snapshot.stalled);
+            assert_eq!(snapshot.seconds_since_data, None);
+        }
+        assert!(
+            stats
+                .snapshot(
+                    "silent",
+                    id(),
+                    1,
+                    now + Duration::from_secs(STALL_ALARM_S + 1)
+                )
+                .stalled
+        );
+    }
+
+    #[test]
+    fn rates_use_elapsed_time_and_only_interval_counters_reset() {
+        let now = Instant::now();
+        let mut stats = StatsBase::new(now);
+        stats.bytes_forwarded = 900;
+        stats.frames_per_type.insert(1074, 2);
+        stats.total_frames = 2;
+        stats.dropped_chunks = 3;
+        stats.last_data = Some(now + Duration::from_millis(500));
+        let snapshot = stats.snapshot("base", id(), 1, now + Duration::from_secs(3));
+        assert_eq!(snapshot.bytes_per_second, 300.0);
+        assert_eq!(snapshot.frames_per_type, HashMap::from([(1074, 2)]));
+        assert_eq!(snapshot.seconds_since_data, Some(2.5));
+        let next = stats.snapshot("base", id(), 1, now + Duration::from_secs(4));
+        assert_eq!(next.bytes_per_second, 0.0);
+        assert!(next.frames_per_type.is_empty());
+        assert_eq!((next.total_frames, next.dropped_chunks), (2, 3));
+    }
+
+    #[tokio::test]
+    async fn correction_overflow_drops_oldest_whole_frames() {
+        let base = RtkBaseServiceHandle::default();
+        let mut corrections = base.corrections();
+        let frames: Vec<_> = (0..QUEUE_CAPACITY + 3)
+            .map(|index| {
+                super::super::rtcm::encode_frame(&[0x3e, 0xd0, index as u8]).expect("RTCM")
+            })
+            .collect();
+        base.start_source(
+            Box::new(super::super::source::FakeSource::new(
+                frames,
+                Duration::ZERO,
+            )),
+            "overflow".into(),
+        )
+        .await
+        .expect("start");
+        // One source chunk per read; wait for the deterministic fixture to drain.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(matches!(
+            corrections.try_recv(),
+            Err(broadcast::error::TryRecvError::Lagged(3))
+        ));
+        assert_eq!(
+            corrections
+                .try_recv()
+                .expect("oldest retained")
+                .frame
+                .payload[2],
+            3
+        );
+        base.stop(base.snapshot().session_id.expect("session"))
+            .await
+            .expect("stop");
+    }
 }

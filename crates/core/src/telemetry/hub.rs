@@ -215,6 +215,7 @@ async fn pump(
                 }
                 Ok(ConnectionEvent::Connected {
                     endpoint: connected,
+                    ..
                 }) => {
                     endpoint = connected.to_address_string();
                     alive = false;
@@ -434,6 +435,8 @@ mod tests {
         let (events_tx, events_rx) = broadcast::channel(16);
         events_tx
             .send(ConnectionEvent::Connected {
+                generation: 1,
+                started_at: std::time::Instant::now(),
                 endpoint: Endpoint::UdpListener {
                     addr: "0.0.0.0:14550".parse().expect("static addr"),
                 },

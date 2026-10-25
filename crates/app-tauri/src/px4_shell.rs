@@ -80,15 +80,17 @@ pub(crate) fn shell_frames(
 
 pub(crate) async fn send_lines(
     handle: &ConnectionHandle,
+    generation: u64,
     target_system_id: u8,
     target_component_id: u8,
     lines: Vec<String>,
 ) -> Result<(), SdCaptureError> {
+    let deadline = tokio::time::Instant::now() + SHELL_WRITE_TIMEOUT;
     tokio::time::timeout(SHELL_WRITE_TIMEOUT, async {
         for line in lines {
             for frame in shell_frames(&line, target_system_id, target_component_id) {
                 handle
-                    .send_confirmed(frame)
+                    .send_in_generation(frame, generation, deadline)
                     .await
                     .map_err(|error| SdCaptureError::Transport {
                         message: error.to_string(),
@@ -121,6 +123,7 @@ pub(crate) async fn exchange(
     );
     send_lines(
         handle,
+        handle.generation(),
         target_system_id,
         target_component_id,
         vec![String::new(), command.to_string(), format!("echo {marker}")],
@@ -211,8 +214,10 @@ pub(crate) async fn probe_shell(
     target_component_id: u8,
     route: &mut RoutedEvents,
 ) -> Result<ShellKind, SdCaptureError> {
+    let generation = handle.generation();
     send_lines(
         handle,
+        generation,
         target_system_id,
         target_component_id,
         vec![String::new()],
@@ -223,6 +228,7 @@ pub(crate) async fn probe_shell(
     read_shell_text(route, handle, SHELL_WARMUP, false).await?;
     send_lines(
         handle,
+        generation,
         target_system_id,
         target_component_id,
         vec![SHELL_PROBE_COMMAND.to_string()],

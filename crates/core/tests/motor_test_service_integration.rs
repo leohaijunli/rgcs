@@ -218,6 +218,60 @@ async fn wait_event(
 }
 
 #[tokio::test]
+async fn old_motor_session_cannot_write_to_a_reconnected_transport() {
+    let Harness {
+        handle,
+        svc,
+        mut evt,
+        peer,
+    } = harness().await;
+    let previous = handle.generation();
+    let mut connection_events = handle.subscribe();
+    handle.reconnect().await.expect("reconnect");
+    timeout(Duration::from_secs(3), async {
+        loop {
+            if matches!(connection_events.recv().await, Ok(ConnectionEvent::Connected { generation, .. }) if generation > previous) {
+                break;
+            }
+        }
+    }).await.expect("transport generation changes");
+    let peer = std::sync::Arc::new(tokio::sync::Mutex::new(peer));
+    let heartbeat_task = {
+        let peer = peer.clone();
+        tokio::spawn(async move {
+            loop {
+                let _ = peer
+                    .lock()
+                    .await
+                    .send(&fc_header(1), &heartbeat(false))
+                    .await;
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    svc.send(MotorTestCommand::StartManual)
+        .await
+        .expect("late old-session start");
+    wait_event(&mut evt, Duration::from_secs(2), |event| {
+        *event == MotorTestEvent::StateChanged(SessionState::ManualRunning)
+    })
+    .await;
+    assert!(
+        next_actuator_frame(&peer, Duration::from_millis(500))
+            .await
+            .is_none(),
+        "neither active demands nor old releases may migrate to a new serial generation"
+    );
+    assert!(
+        svc.stop_and_wait().await.is_err(),
+        "obsolete transport is not a release receipt"
+    );
+    heartbeat_task.abort();
+    handle.shutdown().await;
+}
+
+#[tokio::test]
 async fn stop_and_wait_confirms_release_frames_before_returning() {
     let Harness {
         handle,

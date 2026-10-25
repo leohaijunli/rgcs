@@ -133,6 +133,53 @@ impl OutputMap {
             .find(|assignment| assignment.motor == motor)
             .and_then(|assignment| assignment.channel)
     }
+
+    /// Number of configured motors in the contiguous M1..MN prefix. Zero means
+    /// there is no startable motor set (including "M2 only" and an empty map).
+    pub fn active_count(&self) -> u8 {
+        let mut count = 0;
+        for assignment in &self.motors {
+            if assignment.motor != count + 1 || assignment.channel.is_none() {
+                break;
+            }
+            count = assignment.motor;
+        }
+        count
+    }
+
+    /// The configured M1..MN prefix. Unconfigured trailing slots are excluded.
+    pub fn active_motors(&self) -> &[OutputAssignment] {
+        &self.motors[..usize::from(self.active_count()).min(self.motors.len())]
+    }
+
+    /// True when a motor is assigned after a missing one (for example M1 and
+    /// M3, with M2 absent). Such a map is partial and must not start.
+    pub fn has_gap(&self) -> bool {
+        let active = self.active_count();
+        self.motors
+            .iter()
+            .any(|assignment| assignment.motor > active && assignment.channel.is_some())
+    }
+}
+
+/// Result of reading one output-function parameter.
+///
+/// `Absent` is used only when the FC's parameter inventory proves the channel
+/// does not exist on this board; it is not interchangeable with a failed read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FunctionRead {
+    Value(i64),
+    Absent,
+    Unreadable,
+}
+
+impl From<Option<i64>> for FunctionRead {
+    fn from(value: Option<i64>) -> Self {
+        match value {
+            Some(value) => Self::Value(value),
+            None => Self::Unreadable,
+        }
+    }
 }
 
 /// Build the mapping from raw `PWM_MAIN_FUNC1..8` / `PWM_AUX_FUNC1..8`
@@ -143,8 +190,22 @@ pub fn build_output_map(
     main_functions: &[Option<i64>; SERVO_CHANNELS_PER_PORT as usize],
     aux_functions: &[Option<i64>; SERVO_CHANNELS_PER_PORT as usize],
 ) -> OutputMap {
+    let main = std::array::from_fn(|index| FunctionRead::from(main_functions[index]));
+    let aux = std::array::from_fn(|index| FunctionRead::from(aux_functions[index]));
+    build_output_map_checked(motors, &main, &aux)
+}
+
+/// Build the mapping with explicit `Absent` channels. A failed read anywhere
+/// keeps the map at most `Partial`: a hidden duplicate or a lower motor cannot
+/// be ruled out until every existing channel is known.
+pub fn build_output_map_checked(
+    motors: u8,
+    main_functions: &[FunctionRead; SERVO_CHANNELS_PER_PORT as usize],
+    aux_functions: &[FunctionRead; SERVO_CHANNELS_PER_PORT as usize],
+) -> OutputMap {
     let mut issues = Vec::new();
     let mut readable = 0usize;
+    let mut unreadable = false;
     let mut assignments = Vec::with_capacity(motors as usize);
     let mut invalid = false;
 
@@ -153,13 +214,16 @@ pub fn build_output_map(
         (ServoPort::Aux, aux_functions),
     ] {
         for (index, value) in values.iter().enumerate() {
-            if value.is_some() {
-                readable += 1;
-            } else {
-                issues.push(MappingIssue::Unreadable {
-                    port,
-                    channel: index as u8 + 1,
-                });
+            match value {
+                FunctionRead::Value(_) => readable += 1,
+                FunctionRead::Unreadable => {
+                    unreadable = true;
+                    issues.push(MappingIssue::Unreadable {
+                        port,
+                        channel: index as u8 + 1,
+                    });
+                }
+                FunctionRead::Absent => {}
             }
         }
     }
@@ -172,7 +236,7 @@ pub fn build_output_map(
             (ServoPort::Aux, aux_functions),
         ] {
             for (index, value) in values.iter().enumerate() {
-                if *value == Some(function) {
+                if *value == FunctionRead::Value(function) {
                     if let Some(channel) = ServoChannel::new(port, index as u8 + 1) {
                         channels.push(channel);
                     }
@@ -200,21 +264,26 @@ pub fn build_output_map(
         .iter()
         .filter(|assignment| assignment.channel.is_some())
         .count();
-    let state = if invalid {
+    let mut map = OutputMap {
+        motors: assignments,
+        state: OutputMapState::Unknown,
+        issues,
+    };
+    map.state = if invalid {
         OutputMapState::Invalid
     } else if readable == 0 {
         OutputMapState::Unknown
-    } else if assigned == usize::from(motors) {
-        OutputMapState::Complete
-    } else {
+    } else if unreadable || assigned == 0 || map.has_gap() {
+        // A failed read may hide a duplicate or an earlier motor, so the
+        // active set cannot be called complete. Gaps and empty maps are
+        // partial for the same reason.
         OutputMapState::Partial
+    } else {
+        // A contiguous M1..MN prefix is complete for N in 1..=4; trailing
+        // unassigned (or provably absent) slots are not configured motors.
+        OutputMapState::Complete
     };
-
-    OutputMap {
-        motors: assignments,
-        state,
-        issues,
-    }
+    map
 }
 
 /// The feedback PWM for one motor, taken from its mapped physical output.
@@ -330,6 +399,88 @@ mod tests {
 
         let unknown = build_output_map(1, &empty(), &empty());
         assert_eq!(unknown.state, OutputMapState::Unknown);
+    }
+
+    #[test]
+    fn an_unreadable_function_prevents_a_complete_map() {
+        // R4 regression: M1 = 101 on MAIN1, MAIN2 unreadable, everything else
+        // read as disabled. The unreadable channel could hide a duplicate.
+        let mut main = [Some(0); 8];
+        main[0] = Some(101);
+        main[1] = None;
+        let map = build_output_map(4, &main, &[Some(0); 8]);
+        assert_eq!(map.state, OutputMapState::Partial);
+        assert_eq!(map.active_count(), 1);
+        assert!(map.issues.iter().any(|issue| matches!(
+            issue,
+            MappingIssue::Unreadable {
+                port: ServoPort::Main,
+                channel: 2
+            }
+        )));
+    }
+
+    #[test]
+    fn provably_absent_trailing_channels_do_not_block_completion() {
+        let main = [
+            FunctionRead::Value(101),
+            FunctionRead::Absent,
+            FunctionRead::Absent,
+            FunctionRead::Absent,
+            FunctionRead::Absent,
+            FunctionRead::Absent,
+            FunctionRead::Absent,
+            FunctionRead::Absent,
+        ];
+        let aux = [FunctionRead::Absent; 8];
+        let map = build_output_map_checked(4, &main, &aux);
+        assert_eq!(map.state, OutputMapState::Complete);
+        assert_eq!(map.active_count(), 1);
+        assert!(map.issues.is_empty(), "absence is not a read failure");
+    }
+
+    #[test]
+    fn a_single_configured_motor_is_complete() {
+        let mut main = [Some(0); 8];
+        main[0] = Some(101);
+        let map = build_output_map(4, &main, &[Some(0); 8]);
+        assert_eq!(map.state, OutputMapState::Complete);
+        assert_eq!(map.active_count(), 1);
+        assert_eq!(map.active_motors().len(), 1);
+        assert!(!map.has_gap());
+    }
+
+    #[test]
+    fn a_two_motor_configuration_ignores_trailing_empty_slots() {
+        let mut main = [Some(0); 8];
+        main[0] = Some(101);
+        main[1] = Some(102);
+        let map = build_output_map(4, &main, &[Some(0); 8]);
+        assert_eq!(map.state, OutputMapState::Complete);
+        assert_eq!(map.active_count(), 2);
+        assert_eq!(map.active_motors().len(), 2);
+        assert!(!map.has_gap());
+    }
+
+    #[test]
+    fn a_missing_middle_motor_is_partial() {
+        let mut main = [Some(0); 8];
+        main[0] = Some(101);
+        main[2] = Some(103);
+        let map = build_output_map(4, &main, &[Some(0); 8]);
+        assert_eq!(map.state, OutputMapState::Partial);
+        assert_eq!(map.active_count(), 1);
+        assert!(map.has_gap());
+    }
+
+    #[test]
+    fn a_motor_two_without_motor_one_has_no_active_set() {
+        let mut main = [Some(0); 8];
+        main[1] = Some(102);
+        let map = build_output_map(4, &main, &[Some(0); 8]);
+        assert_eq!(map.state, OutputMapState::Partial);
+        assert_eq!(map.active_count(), 0);
+        assert!(map.has_gap());
     }
 
     #[test]

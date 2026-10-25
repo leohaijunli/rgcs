@@ -309,9 +309,10 @@ impl SdCapture {
                 self.begin_start(sdlog_mode, sdlog_backend, test_id, now)
             }
             SdCaptureCommand::Stop => {
-                // The caller has already confirmed motor release. Never rely
-                // on our cached phase for logger off: a timeout or a reconnect
-                // may have left a real file recording while the local state failed.
+                // Capture is independent of manual motor control. Coordinated
+                // callers separately order this after release and post-roll.
+                // Never rely on our cached phase: a timeout or reconnect may
+                // have left a real file recording while the local state failed.
                 self.phase = CapturePhase::Stopping;
                 self.reset_exchange();
                 self.deadline = Some(now + self.config.finalize_timeout);

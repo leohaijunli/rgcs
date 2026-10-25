@@ -8,6 +8,10 @@ use std::time::Duration;
 /// Reasons a source cannot be used.
 #[derive(Debug, thiserror::Error)]
 pub enum SourceError {
+    #[error(transparent)]
+    Discovery(#[from] crate::devices::SerialDiscoveryError),
+    #[error("receiver I/O: {0}")]
+    Io(#[from] std::io::Error),
     #[error("serial port {port}: {source}")]
     Serial {
         port: String,
@@ -60,6 +64,8 @@ pub struct SerialSource {
     // (not Debug: the port handle is opaque)
     #[allow(dead_code)] // kept for the stats source label
     config: SerialSourceConfig,
+    // Fields drop in declaration order: the OS port closes before its lease.
+    _lease: Option<crate::devices::SerialLease>,
 }
 
 impl SerialSource {
@@ -79,7 +85,61 @@ impl SerialSource {
                 port: config.port_name.clone(),
                 source,
             })?;
-        Ok(Self { port, config })
+        Ok(Self {
+            port,
+            config,
+            _lease: None,
+        })
+    }
+
+    pub fn open_leased(
+        config: SerialSourceConfig,
+        lease: crate::devices::SerialLease,
+    ) -> Result<Self, SourceError> {
+        if !lease.matches_path(std::path::Path::new(&config.port_name)) {
+            return Err(crate::devices::SerialDiscoveryError::DeviceChanged {
+                instance: lease.port().instance_id,
+            }
+            .into());
+        }
+        let mut source = Self::open(config)?;
+        lease.set_phase(crate::devices::LeasePhase::Active)?;
+        source._lease = Some(lease);
+        Ok(source)
+    }
+
+    pub(crate) async fn validate_attachment(&self) -> Result<(), SourceError> {
+        if let Some(lease) = &self._lease {
+            lease.revalidate().await?;
+        }
+        Ok(())
+    }
+}
+
+impl std::io::Read for SerialSource {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        self.port.read(bytes)
+    }
+}
+
+impl std::io::Write for SerialSource {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.port.write(bytes)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.port.flush()
+    }
+}
+
+impl super::ubx::ReceiverIo for SerialSource {
+    fn set_baud_rate(&mut self, baud: u32) -> Result<(), SourceError> {
+        self.port
+            .set_baud_rate(baud)
+            .map_err(|source| SourceError::Serial {
+                port: self.config.port_name.clone(),
+                source,
+            })
     }
 }
 
@@ -148,7 +208,7 @@ mod tests {
         }
         // Operator-named ports pass the filter and fail on the (absent)
         // hardware with a Serial error instead.
-        for port in ["/dev/ttyUSB0", "/dev/ttyACM1", "COM7"] {
+        for port in ["/dev/ttyUSB99999999", "/dev/ttyACM99999999", "COM99999999"] {
             let err = SerialSource::open(SerialSourceConfig {
                 port_name: port.into(),
                 baud_rate: 38400,

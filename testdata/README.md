@@ -1,4 +1,4 @@
-# Test data: small DEM, .plan, RTCM recordings.
+# Test data: small DEM and .plan fixtures.
 
 Committed test fixtures for unit/SITL tests.
 
@@ -20,6 +20,10 @@ Committed test fixtures for unit/SITL tests.
   inflates the total (the observed 80 000 nT). The identity calibration documents
   that no further correction is needed; `domain` `"px4_calibrated"` records the
   values are against PX4's corrected output. Load it via *Load mag calibration…*.
+
+- No recorded RTCM base-station capture is committed yet. RTCM unit and
+  integration tests generate frames with `core::rtk::rtcm::encode_frame`;
+  a real F9P capture remains part of RTK hardware acceptance.
 
 - No `.ulg` fixture is committed. ULog replay is tested against a minimal
   ULog writer in `crates/core/src/ulog/mod.rs` (`#[cfg(test)]`), which builds

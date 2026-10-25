@@ -3,7 +3,7 @@
 use thiserror::Error;
 
 /// Device layer errors.
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum DeviceError {
     /// Serial port enumeration failed.
     #[error("serial port enumeration failed: {0}")]

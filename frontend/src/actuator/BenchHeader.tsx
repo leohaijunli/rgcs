@@ -2,7 +2,11 @@
 // actions. It stays sticky at narrow widths, so Stop and Emergency Stop are
 // always reachable while the workspace scrolls.
 
-import type { ActuatorStatus } from './benchTypes'
+import {
+  activeProtocolSummary,
+  outputConfigurationIssue,
+  type ActuatorStatus,
+} from './benchTypes'
 import AppLogo from '../components/AppLogo'
 
 export interface BenchFailure {
@@ -33,23 +37,11 @@ function armedLabel(status: ActuatorStatus): { text: string; tone: string } {
     : { text: 'DISARMED', tone: 'text-ok' }
 }
 
-function sdLabel(status: ActuatorStatus): { text: string; tone: string } {
-  switch (status.sd_capture.phase) {
-    case 'recording':
-      return { text: 'RECORDING', tone: 'text-ok' }
-    case 'existing_recording':
-      return { text: 'EXISTING REC', tone: 'text-muted' }
-    case 'failed':
-      return { text: 'CAPTURE FAILED', tone: 'text-error' }
-    default:
-      return { text: 'SD —', tone: '' }
-  }
-}
-
 export default function BenchHeader(props: BenchHeaderProps) {
   const { status } = props
   const armed = armedLabel(status)
-  const sd = sdLabel(status)
+  const protocol = activeProtocolSummary(status)
+  const outputIssue = outputConfigurationIssue(status)
   const target = status.target_connected
     ? `PX4 · ID ${status.target_system_id ?? '?'}`
     : 'No PX4 target'
@@ -85,24 +77,14 @@ export default function BenchHeader(props: BenchHeaderProps) {
         <span className={`mono ${armed.tone}`}>{armed.text}</span>
       </span>
 
-      <span className="header-chip" title="Firmware release is not reported by this link">
-        <span className="section-title">FW</span>
-        <span className="mono text-muted">Unknown</span>
-      </span>
-
-      <span className="header-chip">
-        <span className="section-title">SD</span>
-        <span className={`mono ${sd.tone}`}>{sd.text}</span>
-      </span>
-
       <span
-        className="header-chip"
-        title={`Measured command rate unavailable; configured ${status.tick_hz.toFixed(0)} Hz`}
+        className={`header-chip ${outputIssue ? 'text-warn' : ''}`}
+        title={outputIssue ?? `Active PX4 output protocol: ${protocol}`}
+        data-testid="motor-active-protocol"
       >
-        <span className="section-title">Rate</span>
-        <span className="mono">
-          — <span className="text-muted">cfg {status.tick_hz.toFixed(0)} Hz</span>
-        </span>
+        <span className="section-title">Output</span>
+        <span className="mono">{protocol}</span>
+        {outputIssue && <span className="header-blocked">BLOCKED</span>}
       </span>
 
       <span
@@ -126,28 +108,32 @@ export default function BenchHeader(props: BenchHeaderProps) {
         </span>
       ) : props.stopReason ? (
         <span className="header-note">Stopped: {props.stopReason}</span>
+      ) : outputIssue ? (
+        <span className="header-note text-warn" data-testid="motor-output-warning">
+          {outputIssue}
+        </span>
       ) : (
         <span />
       )}
 
       <div className="header-actions">
         {props.emergency && (
-          <button className="mode-btn header-btn" onClick={props.onResetEmergency}>
+          <button className="mode-btn header-btn" onClick={props.onResetEmergency} title="Clear the Motor Test emergency latch after release is confirmed. This never starts motors.">
             RESET
           </button>
         )}
         <button
           className="mode-btn header-btn stop-tab"
           onClick={() => void props.onStop()}
-          disabled={!props.running && !props.releasing}
-          title="Release all configured motor outputs"
+          disabled={!props.running && !props.releasing && !props.starting}
+          title={props.starting ? 'Cancel the pending Motor Test start.' : props.running || props.releasing ? 'Release outputs owned by Motor Test. Manual recording continues; the flight controller is not disarmed.' : 'No Motor Test output is currently owned. STOP does not take control from another controller.'}
         >
           STOP
         </button>
         <button
           className={`estop-btn ${props.emergency ? 'latched' : ''}`}
           onClick={props.onEmergencyStop}
-          title="Release all motors immediately (Esc)"
+          title="Latch Motor Test emergency stop (Esc). Release only this tool’s owned outputs; do not arm or disarm the flight controller."
         >
           EMERGENCY STOP
         </button>

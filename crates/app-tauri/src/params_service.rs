@@ -113,8 +113,13 @@ impl ParamsState {
         app: &AppHandle<R>,
         handle: ConnectionHandle,
     ) -> ParamsRuntime {
-        let sys = handle.config().target_system_id;
-        let comp = handle.config().target_component_id;
+        let (sys, comp) = handle
+            .target_identity()
+            .map(|id| (id.system_id, id.component_id))
+            .unwrap_or((
+                handle.config().target_system_id,
+                handle.config().target_component_id,
+            ));
         let (svc, evt_rx, protocol_task) = ParamService::spawn_with_task(handle, sys, comp);
         *self.last_cache.lock().expect("params cache lock") = Some(svc.cache());
         let forwarder = tauri::async_runtime::spawn(forward_events(app.clone(), evt_rx));

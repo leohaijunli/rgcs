@@ -21,6 +21,8 @@ use ts_rs::TS;
 use crate::plan::GeoPoint;
 use crate::safety::SafetyConfig;
 
+pub mod serial;
+
 /// Schema version written into every file. Bump this when a field changes
 /// meaning or is removed, and add an arm to [`AppConfig::migrate`].
 pub const CONFIG_VERSION: u32 = 1;

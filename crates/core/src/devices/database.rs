@@ -90,7 +90,8 @@ impl DeviceDatabase {
             ),
             // u-blox ZED-F9P RTK receiver (base station).
             known(0x1546, 0x01A9, "u-blox ZED-F9P", DeviceRole::RtkBaseStation),
-            known(0x1546, 0x01A8, "u-blox ZED-F9R", DeviceRole::RtkBaseStation),
+            // F9R/HPS is a rover with sensor fusion, not a survey-in base.
+            known(0x1546, 0x01A8, "u-blox ZED-F9R", DeviceRole::Other),
             known(0x1546, 0x01A2, "u-blox NEO-M8P", DeviceRole::RtkBaseStation),
             // USB-serial bridges commonly found on FCs and radios.
             known(0x0403, 0x6001, "FTDI FT232R", DeviceRole::Other),

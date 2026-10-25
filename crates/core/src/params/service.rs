@@ -157,6 +157,7 @@ pub struct ParamService {
     cmd_tx: mpsc::Sender<Command>,
     cache: ParamCache,
     fc_version: FcVersion,
+    events: broadcast::Sender<ParamEvent>,
 }
 
 /// The FC's reported AUTOPILOT_VERSION, invalidated when the link is lost.
@@ -208,6 +209,7 @@ impl ParamService {
         let (evt_tx, evt_rx) = broadcast::channel(256);
         let cache = ParamCache::default();
         let fc_version = FcVersion::default();
+        let service_events = evt_tx.clone();
         let task = tokio::spawn(run(
             handle,
             cmd_rx,
@@ -222,6 +224,7 @@ impl ParamService {
                 cmd_tx: tx,
                 cache,
                 fc_version,
+                events: service_events,
             },
             evt_rx,
             task,
@@ -236,6 +239,39 @@ impl ParamService {
     /// Read-only cache view (other services use this, PM9).
     pub fn cache(&self) -> ParamCache {
         self.cache.clone()
+    }
+
+    /// Subscribe to this service's protocol events (pull completion etc.).
+    pub fn subscribe(&self) -> broadcast::Receiver<ParamEvent> {
+        self.events.subscribe()
+    }
+
+    /// Run a full parameter pull and wait for its completion report.
+    ///
+    /// `pull()` only acknowledges that the request was started; callers that
+    /// need the FC's parameter inventory must wait for `PullDone`.
+    pub async fn pull_and_wait(
+        &self,
+        timeout: Duration,
+    ) -> Result<super::session::PullReport, ParamError> {
+        let mut events = self.subscribe();
+        self.pull().await?;
+        tokio::time::timeout(timeout, async {
+            loop {
+                match events.recv().await {
+                    Ok(ParamEvent::PullDone { received, total }) => {
+                        return Ok(super::session::PullReport { received, total });
+                    }
+                    Ok(_) => {}
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => {
+                        return Err(ParamError::NotConnected);
+                    }
+                }
+            }
+        })
+        .await
+        .map_err(|_| ParamError::Timeout)?
     }
 
     /// Start a full pull; `Err` when a transaction is already running.
@@ -294,13 +330,24 @@ impl ParamService {
 
     /// Read one parameter by name (lazy load); resolves with the FC's value.
     pub async fn read(&self, name: &str) -> Result<ParamEntry, ParamError> {
+        self.read_with_timeout(name, TRANSACTION_TIMEOUT).await
+    }
+
+    /// Read one parameter with a caller-chosen deadline. Used for capability
+    /// probes where a missing name must not stall for the full transaction
+    /// timeout.
+    pub async fn read_with_timeout(
+        &self,
+        name: &str,
+        timeout: Duration,
+    ) -> Result<ParamEntry, ParamError> {
         validate_name(name)?;
         let (tx, rx) = oneshot::channel();
         let req = ReadRequest {
             name: name.to_string(),
             reply: tx,
         };
-        tokio::time::timeout(TRANSACTION_TIMEOUT, async {
+        tokio::time::timeout(timeout, async {
             if self
                 .cmd_tx
                 .send(Command::Read(Box::new(req)))

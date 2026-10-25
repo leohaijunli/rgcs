@@ -91,6 +91,7 @@ struct AppInner {
 /// Shared application state managed by Tauri.
 #[derive(Default)]
 pub struct AppState {
+    pub serial: tokio::sync::OnceCell<Arc<crate::serial_service::SerialService>>,
     inner: Mutex<AppInner>,
     /// Signal Inspector tap/catalog/batcher (survives link swaps, ADR-016).
     pub inspector: InspectorState,
@@ -207,12 +208,6 @@ impl AppState {
         &self,
     ) -> Option<tokio::sync::mpsc::Sender<crate::logs_service::LogCommand>> {
         self.with_primary(|link| link.logs.as_ref().and_then(LogsRuntime::sender))
-            .flatten()
-    }
-
-    /// RTK injection handle for the primary link.
-    pub(crate) fn primary_rtk(&self) -> Option<maggcs_core::rtk::service::RtkServiceHandle> {
-        self.with_primary(|link| link.rtk.as_ref().map(RtkRuntime::service))
             .flatten()
     }
 

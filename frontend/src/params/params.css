@@ -472,6 +472,11 @@ html.field-mode {
   background: var(--mg-bg-raised);
 }
 
+/* Match the values' right edge, not the next column's left edge. */
+.p-numeric-head {
+  text-align: right;
+}
+
 .p-scroll {
   flex: 1;
   /* `scroll` (not `auto`) reserves the gutter at all times, so the header's
@@ -591,6 +596,31 @@ html.field-mode {
   font-weight: 700;
   font-size: 12px;
   margin-bottom: 6px;
+}
+
+/* Keep both values above long descriptions, with the whole pane available
+ * for wrapping enum meanings, units and long numeric representations. */
+.p-detail-values {
+  margin: 0 0 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--mg-border);
+}
+
+.p-detail-values > div + div {
+  margin-top: 8px;
+}
+
+.p-detail-values dt {
+  margin-bottom: 2px;
+  color: var(--mg-muted);
+  font-size: 11px;
+}
+
+.p-detail-values dd {
+  margin: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
 }
 
 .p-detail-desc {

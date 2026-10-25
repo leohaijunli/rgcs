@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent } from 'rea
 
 interface StartStopButtonProps {
   running: boolean
+  pending?: boolean
   disabled: boolean
   holdMs: number
   title: string
@@ -28,7 +29,7 @@ export default function StartStopButton(props: StartStopButtonProps) {
   }, [])
 
   const start = async () => {
-    if (inFlight.current || current.current.disabled || current.current.running) return
+    if (inFlight.current || current.current.disabled || current.current.running || current.current.pending) return
     inFlight.current = true
     setStarting(true)
     try {
@@ -42,7 +43,7 @@ export default function StartStopButton(props: StartStopButtonProps) {
   const pointerDown = (event: PointerEvent<HTMLButtonElement>) => {
     // A new STOP gesture is distinct from releasing the preceding START hold.
     suppressReleaseClick.current = false
-    if (event.button !== 0 || props.running || props.disabled || starting || props.holdMs === 0) return
+    if (event.button !== 0 || props.running || props.pending || props.disabled || starting || props.holdMs === 0) return
     suppressReleaseClick.current = true
     event.currentTarget.setPointerCapture(event.pointerId)
     const started = performance.now()
@@ -75,8 +76,8 @@ export default function StartStopButton(props: StartStopButtonProps) {
     <button
       className={`start-btn${props.running ? ' stop' : ''}`}
       style={{ marginTop: 8, position: 'relative' }}
-      disabled={!props.running && (props.disabled || starting)}
-      title={props.running ? 'Stop sending' : props.title}
+      disabled={!props.running && !starting && !props.pending && props.disabled}
+      title={props.running ? 'Stop Motor Test and release its owned outputs. Manual recording continues.' : starting || props.pending ? 'Cancel the pending start; an already dispatched short tone may finish, but motors will not start.' : props.title}
       onPointerDown={pointerDown}
       onPointerUp={cancelHold}
       onPointerCancel={cancelHold}
@@ -91,14 +92,14 @@ export default function StartStopButton(props: StartStopButtonProps) {
           suppressReleaseClick.current = false
           return
         }
-        if (props.running) {
+        if (props.running || starting || props.pending) {
           void props.onStop()
         } else if (props.holdMs === 0) {
           void start()
         }
       }}
     >
-      {props.running ? 'STOP' : starting ? 'STARTING…' : 'START'}
+      {props.running ? 'STOP' : starting || props.pending ? 'CANCEL START' : 'START'}
       {progress > 0 && <span className="hold-fill" style={{ width: `${progress * 100}%` }} aria-hidden />}
     </button>
   )

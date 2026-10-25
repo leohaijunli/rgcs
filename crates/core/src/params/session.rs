@@ -45,6 +45,21 @@ pub enum Outbound {
     },
 }
 
+/// Final tally of one full parameter pull.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PullReport {
+    pub received: u16,
+    pub total: u16,
+}
+
+impl PullReport {
+    /// The FC's complete parameter inventory was received. An empty inventory
+    /// is not usable as a capability proof.
+    pub fn is_complete(self) -> bool {
+        self.total > 0 && self.received >= self.total
+    }
+}
+
 /// Pull lifecycle events, batched for the UI channel.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PullUpdate {

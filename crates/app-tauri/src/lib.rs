@@ -17,17 +17,22 @@ mod inspector_service;
 mod instruments_service;
 mod lifecycle_service;
 mod logs_service;
+mod main_link_service;
 mod map_service;
 mod mission_service;
+mod motor_control_service;
 mod motor_test_state;
+mod motor_tone_service;
 mod params_service;
 mod project_service;
 mod px4_shell;
 mod recorder_service;
 mod rtk_service;
 mod run_service;
+mod serial_service;
 mod shared_state_service;
 mod state;
+mod stream_service;
 mod telemetry_pump;
 mod terrain_server;
 mod terrain_service;
@@ -58,6 +63,12 @@ pub fn run() {
             alert_service::alert_clear_acknowledged,
             commands::get_snapshot,
             commands::enumerate_devices,
+            serial_service::serial_inventory,
+            serial_service::serial_resolve_endpoint,
+            serial_service::serial_auto_connect_status,
+            serial_service::serial_auto_connect_save,
+            serial_service::serial_auto_connect_pause,
+            serial_service::serial_auto_connect_resume,
             commands::set_sitl_home,
             config_service::config_load,
             config_service::config_save,
@@ -120,6 +131,9 @@ pub fn run() {
             rtk_service::rtk_stop,
             rtk_service::rtk_last_stats,
             rtk_service::rtk_foreign_state,
+            rtk_service::rtk_serial_ports,
+            rtk_service::rtk_base_status,
+            rtk_service::rtk_link_status,
             commands::send_command,
             commands::send_goto,
             commands::send_set_home,
@@ -131,11 +145,17 @@ pub fn run() {
             actuator_service::actuator_open,
             actuator_service::actuator_close,
             actuator_service::actuator_status,
+            motor_tone_service::actuator_set_tones,
+            motor_control_service::actuator_set_motor_control,
+            stream_service::actuator_stream_catalog,
+            stream_service::actuator_stream_status,
+            stream_service::actuator_stream_set_rate,
             actuator_service::actuator_start_manual,
             actuator_service::actuator_start_preset,
             actuator_service::actuator_connect_sitl,
             actuator_service::actuator_disconnect_sitl,
             actuator_service::actuator_connect_target,
+            main_link_service::actuator_use_main_target,
             actuator_service::actuator_disconnect_target,
             actuator_service::actuator_refresh_mapping,
             actuator_service::actuator_start_forward,
@@ -206,6 +226,7 @@ pub fn run() {
             // config, so load it before the first command can run.
             let config = config_service::load_at_startup(app.handle());
             app.state::<AppState>().set_config(config);
+            app.state::<AppState>().rtk.ensure_base_events(app.handle());
             // L8: the mag calibration survives restarts via its sidecar file.
             calibration_service::load_at_startup(app.handle(), &app.state::<AppState>());
             // A10: the rolling file log + panic hook; the guard lives forever.
@@ -227,29 +248,16 @@ pub fn run() {
                 tauri::async_runtime::spawn(alert_service::pump(alert_app, alerts));
             }
 
-            // Serial hotplug watcher (issues.md #40): pushes a fresh device
-            // list to the frontend whenever a port appears or disappears, so
-            // the connection dropdown stays live without a manual refresh.
+            // One shared inventory/ownership and auto-link service per process.
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                use maggcs_core::devices::{DeviceDatabase, DeviceManager};
-                use tauri::Emitter;
-                let watcher = DeviceManager::new(DeviceDatabase::builtin()).spawn_watcher();
-                let mut events = watcher.subscribe();
-                loop {
-                    match events.recv().await {
-                        Ok(_) => {
-                            let manager = DeviceManager::new(DeviceDatabase::builtin());
-                            match manager.enumerate() {
-                                Ok(devices) => {
-                                    let _ = app_handle.emit("devices_changed", &devices);
-                                }
-                                Err(_) => continue,
-                            }
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
-                    }
+                let state = app_handle.state::<AppState>();
+                if let Err(error) = serial_service::ensure(&app_handle, &state).await {
+                    state.alerts().raise(maggcs_core::alerts::AlertInput::new(
+                        maggcs_core::alerts::AlertSource::System,
+                        maggcs_core::alerts::Severity::Warn,
+                        format!("serial discovery unavailable: {error}"),
+                    ));
                 }
             });
             Ok(())
@@ -275,6 +283,14 @@ pub fn run() {
                     match lifecycle_service::run(&app, StopReason::WindowClose).await {
                         Ok(_) => {
                             actuator_service::stop_auxiliary_links(&app, &state).await;
+                            if let Some(serial) = state.serial.get() {
+                                if let Err(error) = serial.shutdown().await {
+                                    state.cancel_close();
+                                    state.set_close_refusal(error.clone());
+                                    let _ = app.emit("teardown_refused", error);
+                                    return;
+                                }
+                            }
                             app.exit(0)
                         }
                         Err(err) => {

@@ -3,15 +3,17 @@
 //
 //   Header: target identity, test state, Stop and Emergency Stop
 //   Left: SITL input, unlock/start controls and magnetic alarm
-//   Mid: load/source settings, motor comparison and realtime curves
+//   Mid: safety/source settings, motor comparison and realtime curves
 //   Right: serial target and recording/log retrieval
 //
-// One primary action per state: START (hold for full props) dispatches by
-// source — manual sliders or a preset waveform; STOP while running. The
-// safety gate (unlock → [typed phrase] → hold) applies to every source.
+// One primary action per state: START (3 s hold) dispatches by source —
+// manual sliders or a preset waveform; STOP while running. The gate
+// (unlock → hold) applies to every source; there is no lighter bench mode.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { serialPortForEndpoint } from '../stores/devices'
+import { useSerialSelection } from '../hooks/useSerialSelection'
 import { listen } from '@tauri-apps/api/event'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { readTextFile } from '@tauri-apps/plugin-fs'
@@ -21,8 +23,16 @@ import { isTauri } from '../inspector/mock'
 import BenchHeader, { type BenchFailure } from './BenchHeader'
 import {
   IDLE,
+  IDLE_TONES,
   MOTOR_COUNT,
+  activeProtocolSummary,
+  activeMotorCount,
   channelLabel,
+  isDShot,
+  outputUnits,
+  mappingHasGap,
+  outputConfigurationIssue,
+  protocolLabel,
   type ActuatorStatus,
   type RunStatus,
   type SdCaptureError,
@@ -32,23 +42,14 @@ import {
 import MotorTrackingTable from './MotorTrackingTable'
 import SignalScope, { useScopeFeed } from './SignalScope'
 import StartStopButton from './StartStopButton'
+import MotorToneControls from './MotorToneControls'
+import StreamManager from './StreamManager'
 import { scopeStore } from './scopeStore'
 
 /** The parameter that gates motor tests on the FC (parameters plan PM9). */
 const MOT_TEST_EN = 'COM_MOT_TEST_EN'
 /** Poll period for the parameter cache check. */
 const MOT_TEST_EN_POLL_MS = 2000
-
-/** Prop load selected for this test. Operator-declared — there is no
- * sensor that can tell the types apart (operator decision 2026-10-10). */
-type Load = 'none' | 'plate' | 'props'
-
-const LOADS: Array<{ id: Load; label: string }> = [
-  { id: 'none', label: 'No props' },
-  { id: 'plate', label: 'Flat plate' },
-  { id: 'props', label: 'Full props' },
-]
-
 /** PX4 v1.17 SDLOG_MODE meanings shown read-only in the capture panel. */
 const SDLOG_MODE_LABELS: Record<number, string> = {
   0: 'armed→disarm',
@@ -80,6 +81,24 @@ function captureErrorLabel(error: SdCaptureError | null): string {
   return [error.kind.replaceAll('_', ' '), ...details].join(': ')
 }
 
+interface LoggingAttentionInput {
+  captureBusy: boolean
+  captureActive: boolean
+  captureSettling: boolean
+  captureFailed: boolean
+  captureError: boolean
+  logsError: boolean
+}
+
+export function loggingNeedsAttention(input: LoggingAttentionInput): boolean {
+  return input.captureBusy
+    || input.captureActive
+    || input.captureSettling
+    || input.captureFailed
+    || input.captureError
+    || input.logsError
+}
+
 /** Command sources. Manual = live sliders; Preset = bounded waveform
  * (self-stopping); Forward = realtime SITL→FC forwarding (design pending). */
 type Source = 'manual' | 'preset' | 'forward'
@@ -104,9 +123,7 @@ const PRESETS: Array<{ id: PresetKind; label: string }> = [
   { id: 'sine', label: 'Sine' },
 ]
 
-/** The typed phrase for full props (a deliberate gesture, not a click). */
-const PROPS_PHRASE = 'START PROPS'
-/** Hold duration that arms Start under full props. */
+/** Hold duration that arms Start under the full-prop envelope. */
 const PROPS_HOLD_MS = 3000
 
 /** Slider updates are merged at ~30 Hz — never queued (plan §8.1). */
@@ -225,16 +242,49 @@ function SitlSourceFields(props: SitlSourceFieldsProps) {
   )
 }
 
+/** Secondary card section: collapsed by default, opened by a warning, and
+ * kept open once the operator opens it (a warning never closes it). */
+function FoldSection({
+  title,
+  defaultOpen = false,
+  forceOpen = false,
+  children,
+}: {
+  title: string
+  defaultOpen?: boolean
+  forceOpen?: boolean
+  children: ReactNode
+}) {
+  const [open, setOpen] = useState(defaultOpen)
+  const visible = forceOpen || open
+  return (
+    <section className="fold-section">
+      <button
+        type="button"
+        className="fold-head"
+        aria-expanded={visible}
+        disabled={forceOpen}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span className="section-title">{title}</span>
+        <span className="fold-state mono">
+          {forceOpen ? 'required' : visible ? 'fold' : 'unfold'}
+        </span>
+      </button>
+      <div hidden={!visible}>{children}</div>
+    </section>
+  )
+}
+
 export function ActuatorApp() {
   const tauri = isTauri()
   // Collect scope samples for the window's whole lifetime, so the history
   // is there when the operator looks at the scope below the controls.
   useScopeFeed()
   const [status, setStatus] = useState<ActuatorStatus>(IDLE)
-  const [load, setLoad] = useState<Load>('none')
   const [source, setSource] = useState<Source>('manual')
-  /** Unlocked = the operator removed the safety cover. Any load change
-   * re-locks instantly (§8.2: the confirmation binds to session+load). */
+  /** Ordinary STOP retains the local unlock. Idle command edits and emergency
+   * reset re-lock it; every start still requires the full 3 s hold. */
   const [unlocked, setUnlocked] = useState(false)
   /** Latched emergency: stays until an explicit reset, never auto-clears. */
   const [emergency, setEmergency] = useState(false)
@@ -243,6 +293,25 @@ export function ActuatorApp() {
   const [failure, setFailure] = useState<BenchFailure | null>(null)
   /** A start command is in flight (backend readiness/transport). */
   const [starting, setStarting] = useState(false)
+  const [tonesReady, setTonesReady] = useState(false)
+  const [controlBusy, setControlBusy] = useState(true)
+  const [controlError, setControlError] = useState<string | null>(null)
+  const controlEnabled = status.motor_control?.enabled ?? false
+  const setMotorControl = useCallback(async (enabled: boolean) => {
+    setControlBusy(true)
+    setControlError(null)
+    setUnlocked(false)
+    if (!enabled) setStatus((current) => ({ ...current, motor_control: { enabled: false } }))
+    try {
+      const control = tauri
+        ? await invoke<{ enabled: boolean }>('actuator_set_motor_control', { enabled })
+        : { enabled }
+      setStatus((current) => ({ ...current, motor_control: control }))
+    } catch (error) {
+      setControlError(String(error))
+    } finally { setControlBusy(false) }
+  }, [tauri])
+  useEffect(() => { void setMotorControl(false) }, [setMotorControl])
   /** `COM_MOT_TEST_EN` from the parameter cache: true/false, null = unknown
    * (never pulled). false disables motor tests and offers the jump. */
   const [motTestEn, setMotTestEn] = useState<boolean | null>(null)
@@ -265,12 +334,12 @@ export function ActuatorApp() {
   // The motor test's own target link: the real PX4 over serial (the main
   // GCS keeps its own link, e.g. UDP SITL).
   const [targetEndpoint, setTargetEndpoint] = useState('serial:/dev/ttyACM0:115200')
+  const targetSerialSelection = useSerialSelection(targetEndpoint)
+  const sitlSerialSelection = useSerialSelection(sitlEndpoint)
   const [targetSystemId, setTargetSystemId] = useState(1)
   const [targetConnectError, setTargetConnectError] = useState<string | null>(null)
   // Why the last session stopped (armed / heartbeat_stale / acks_denied / …).
   const [stopReason, setStopReason] = useState<string | null>(null)
-  // Confirmation state.
-  const [phrase, setPhrase] = useState('')
   // Mag alarm (A4b): enable + threshold are operator inputs; the debounce/
   // hysteresis/cooldown state machine runs in core. `magAlarm` mirrors the
   // core state via the actuator_telemetry/alarm events.
@@ -296,6 +365,7 @@ export function ActuatorApp() {
   // stay visible while optional input and retrieval details can be expanded.
   const [sitlExpanded, setSitlExpanded] = useState(false)
   const [legendOpen, setLegendOpen] = useState(true)
+  const [loggingDrawerOpen, setLoggingDrawerOpen] = useState(false)
   const [loggingExpanded, setLoggingExpanded] = useState(false)
   const audioCtxRef = useRef<AudioContext | null>(null)
   const beepTimer = useRef<number | undefined>(undefined)
@@ -306,6 +376,12 @@ export function ActuatorApp() {
 
   const running = status.session === 'running' || status.session === 'stopping'
   const releasing = status.session === 'stopping'
+  const pendingStart = starting || Boolean(status.tones?.starting)
+  // Only the configured, contiguous M1..MN prefix is a motor bench. Empty
+  // trailing slots and mapping gaps never become interactive controls.
+  const activeMotors = activeMotorCount(status.output_map)
+  const activeModels = status.pwm_models.slice(0, activeMotors)
+  const mapGap = mappingHasGap(status.output_map)
 
   useEffect(() => {
     setSitlExpanded(source === 'forward')
@@ -343,6 +419,8 @@ export function ActuatorApp() {
     const poll = async () => {
       try {
         const s = await invoke<ActuatorStatus>('actuator_status')
+        const configured = scopeStore.configureOutputs(s.scope_outputs)
+        if (!configured.ok) return
         setStatus(s)
         if (s.target_connected && s.target_system_id !== null) {
           setTargetSystemId(s.target_system_id)
@@ -768,9 +846,11 @@ export function ActuatorApp() {
       const now = performance.now()
       if (now - lastSend.current < SET_VALUES_MIN_INTERVAL_MS) return
       lastSend.current = now
-      void invoke('actuator_set_values', { values: next }).catch(() => {})
+      void invoke('actuator_set_values', {
+        values: next.slice(0, activeMotors),
+      }).catch(() => {})
     },
-    [tauri, running],
+    [tauri, running, activeMotors],
   )
 
   const setMotor = (index: number, v: number) => {
@@ -783,12 +863,6 @@ export function ActuatorApp() {
   /** Any idle change to what will be commanded invalidates the start cover. */
   const resetConfirmation = () => {
     setUnlocked(false)
-    setPhrase('')
-  }
-
-  const changeLoad = (next: Load) => {
-    setLoad(next)
-    resetConfirmation()
   }
 
   const changeSource = (next: Source) => {
@@ -838,14 +912,13 @@ export function ActuatorApp() {
     }
   }
 
-  /** What still gates Start: unlock → (props: typed phrase) → hold. */
+  /** What still gates Start: unlock → 3 s hold. No prop-load choice. */
   const gate = useMemo(() => {
+    if (!controlEnabled) return 'control_off' as const
     if (emergency) return 'emergency' as const
     if (!unlocked) return 'unlock' as const
-    if (load === 'props' && phrase.trim().toUpperCase() !== PROPS_PHRASE)
-      return 'phrase' as const
     return 'ready' as const
-  }, [emergency, unlocked, load, phrase])
+  }, [controlEnabled, emergency, unlocked])
 
   /** The one start action — dispatches by the selected source. */
   const start = async () => {
@@ -857,10 +930,11 @@ export function ActuatorApp() {
     setStarting(true)
     try {
       if (source === 'manual') {
-        await invoke('actuator_start_manual', { load, values: valuesRef.current })
+        await invoke('actuator_start_manual', {
+          values: valuesRef.current.slice(0, activeMotors),
+        })
       } else if (source === 'preset') {
         await invoke('actuator_start_preset', {
-        load,
         preset: {
           kind: preset,
           amplitude,
@@ -869,9 +943,10 @@ export function ActuatorApp() {
         },
         })
       } else if (source === 'forward') {
-        await invoke('actuator_start_forward', { load })
+        await invoke('actuator_start_forward')
       }
     } catch (error) {
+      if (String(error).includes('motor start/tone cancelled')) return
       setFailure({
         operation: 'start',
         message: typeof error === 'string' ? error : String(error),
@@ -885,14 +960,16 @@ export function ActuatorApp() {
     if (!tauri) return
     resetConfirmation()
     setSitlConnectError(null)
-    void invoke('actuator_connect_sitl', {
+    if (sitlSerialSelection.changed) { setSitlConnectError('The serial attachment changed. Re-enter its endpoint.'); return }
+    void (sitlSerialSelection.port ? Promise.resolve(sitlSerialSelection.port) : serialPortForEndpoint(sitlEndpoint)).then((expectedSerial) => invoke('actuator_connect_sitl', {
+      expectedSerial,
       source: {
         endpoint: sitlEndpoint,
         system_id: sitlSystemId,
         component_id: sitlComponentId,
         port: sitlPort,
       },
-    }).catch((error: unknown) => {
+    })).catch((error: unknown) => {
       setSitlConnectError(String(error))
     })
   }
@@ -908,10 +985,12 @@ export function ActuatorApp() {
     if (!tauri) return
     resetConfirmation()
     setTargetConnectError(null)
-    void invoke('actuator_connect_target', {
+    if (targetSerialSelection.changed) { setTargetConnectError('The serial attachment changed. Re-enter its endpoint.'); return }
+    void (targetSerialSelection.port ? Promise.resolve(targetSerialSelection.port) : serialPortForEndpoint(targetEndpoint)).then((expectedSerial) => invoke('actuator_connect_target', {
+      expectedSerial,
       endpoint: targetEndpoint,
       targetSystemId,
-    }).catch((error: unknown) => {
+    })).catch((error: unknown) => {
       setTargetConnectError(String(error))
     })
   }
@@ -919,6 +998,14 @@ export function ActuatorApp() {
     if (!tauri) return
     resetConfirmation()
     void invoke('actuator_disconnect_target').catch((error: unknown) => {
+      setTargetConnectError(String(error))
+    })
+  }
+  const useMainTarget = () => {
+    if (!tauri || !status.main_serial_target) return
+    resetConfirmation()
+    setTargetConnectError(null)
+    void invoke('actuator_use_main_target', { expected: status.main_serial_target }).catch((error: unknown) => {
       setTargetConnectError(String(error))
     })
   }
@@ -953,11 +1040,29 @@ export function ActuatorApp() {
       run.phase,
     )
   const runLabel = run ? run.phase.replaceAll('_', ' ') : 'no run'
-  // Motors whose PWM range was NOT read from the PX4 (fallback) block the start.
-  const fallbackMotors = Array.from({ length: MOTOR_COUNT }, (_, index) =>
-    status.pwm_models[index]?.range_source !== 'fc' ? index + 1 : 0,
-  )
+  // Only the active prefix can block a start: its range must be FC-read and
+  // its PX4 output protocol must be known.
+  const fallbackMotors = activeModels
+    .map((model, index) => (model.range_source !== 'fc' ? index + 1 : 0))
     .filter((motor) => motor !== 0)
+  const unknownProtocolMotors = activeModels
+    .map((model, index) => (model.protocol.kind === 'unknown' ? index + 1 : 0))
+    .filter((motor) => motor !== 0)
+  const dshotActive = activeModels.some((model) => isDShot(model.protocol))
+  const dshot3dBlocked = dshotActive && status.dshot_3d_enable !== 0
+  const rpmLive = status.esc_rpm.filter((row) => row.rpm != null && !row.stale).length
+  const noActiveMotors = status.target_connected && activeMotors === 0
+  const missingModels =
+    status.target_connected && status.pwm_models.length < activeMotors
+  const outputConfigurationBlocked =
+    noActiveMotors ||
+    missingModels ||
+    mapGap ||
+    fallbackMotors.length > 0 ||
+    unknownProtocolMotors.length > 0 ||
+    dshot3dBlocked
+  const outputSummary = activeProtocolSummary(status)
+  const outputIssue = outputConfigurationIssue(status)
   const runHint =
     run?.phase === 'preroll'
       ? 'Recording — waiting for the 1 s pre-roll before START.'
@@ -970,13 +1075,26 @@ export function ActuatorApp() {
             : run?.error
               ? String(run.error.kind).replaceAll('_', ' ')
               : null
+  const loggingAttention = loggingNeedsAttention({
+    captureBusy,
+    captureActive,
+    captureSettling,
+    captureFailed: sdCapture.phase === 'failed',
+    captureError:
+      captureError != null || (sdCapture.last_error != null && !captureErrorDismissed),
+    logsError: logsError != null,
+  })
+
+  useEffect(() => {
+    if (loggingAttention) setLoggingDrawerOpen(true)
+  }, [loggingAttention])
 
   return (
     <div className={`actuator-grid ${magAlarm && alarmEnabled ? 'mag-alarm-flash' : ''}`}>
       <BenchHeader
         status={status}
         running={running}
-        starting={starting}
+        starting={pendingStart}
         releasing={releasing}
         emergency={emergency}
         unlocked={unlocked}
@@ -1021,7 +1139,7 @@ export function ActuatorApp() {
             port={sitlPort}
             onPort={changeSitlPort}
             connected={status.sitl_connected}
-            locked={running}
+            locked={running || pendingStart}
             error={sitlConnectError}
             onDismissError={() => setSitlConnectError(null)}
             onConnect={connectSitl}
@@ -1042,7 +1160,7 @@ export function ActuatorApp() {
             </span>
           </div>
           <div className="motor-bars" style={{ marginTop: 6 }}>
-            {Array.from({ length: MOTOR_COUNT }, (_, i) => {
+            {Array.from({ length: activeMotors }, (_, i) => {
               const v = status.input_values[i] ?? 0
               const us = status.input_pwm[i]
               return (
@@ -1069,68 +1187,93 @@ export function ActuatorApp() {
         <div className="card test-control-card" data-testid="motor-test-controls">
           <h3>Test controls</h3>
           <button
+            className={`mode-btn motor-control-switch ${controlEnabled ? 'active' : ''}`}
+            role="switch"
+            aria-label="Motor control"
+            aria-checked={controlEnabled}
+            disabled={controlBusy || (!controlEnabled && (!status.target_connected || emergency || releasing))}
+            title={controlEnabled
+              ? 'Turn motor control OFF: cancel pending starts and release only outputs owned by this Motor Test session.'
+              : !status.target_connected
+                ? 'Connect a PX4 target first. OFF is monitor-only and sends no motor test or ESC tone commands.'
+                : 'Enable Motor Test commands for this connection. This does not start motors; unlock and hold START separately.'}
+            onClick={() => { void setMotorControl(!controlEnabled) }}
+          >Motor control <strong>{controlEnabled ? 'ON' : 'OFF'}</strong></button>
+          {!controlEnabled && <div className="estop-note" data-testid="motor-control-off">Monitor only · no motor or ESC tone commands</div>}
+          {controlError && <div className="estop-note text-error" role="alert">{controlError}</div>}
+          <button
             className="mode-btn unlock-btn"
             onClick={() => (emergency ? undefined : setUnlocked((u) => !u))}
-            disabled={emergency || running}
+            disabled={!controlEnabled || controlBusy || emergency || running || pendingStart}
             aria-pressed={unlocked}
+            title={!controlEnabled ? 'Motor control is OFF. Enable it before unlocking START.' : unlocked ? 'Re-lock START without changing the flight controller arming state.' : 'Unlock this test. Motors stay stopped until the full START hold completes.'}
           >
             {unlocked ? 'Re-lock test' : 'Unlock test'}
           </button>
-          {load === 'props' && unlocked && !running && (
-            <input
-              className="phrase-input"
-              placeholder={PROPS_PHRASE}
-              value={phrase}
-              onChange={(e) => setPhrase(e.target.value)}
-              autoComplete="off"
-              spellCheck={false}
-              aria-label="Full-props start confirmation"
-            />
-          )}
           <StartStopButton
             running={running}
-            holdMs={load === 'props' ? PROPS_HOLD_MS : 0}
+            pending={pendingStart}
+            holdMs={PROPS_HOLD_MS}
             onStart={start}
             onStop={stop}
             disabled={
               gate !== 'ready' ||
+              controlBusy ||
+              !tonesReady ||
               (source === 'forward' && !status.sitl_connected) ||
               !status.target_connected ||
               !status.target_fc_alive ||
               status.armed ||
               runBlocksStart ||
-              fallbackMotors.length > 0
+              outputConfigurationBlocked
             }
             title={
-              gate === 'emergency'
+              gate === 'control_off'
+                ? 'Motor control is OFF. Enable it to allow this tool to command motors.'
+                : gate === 'emergency'
                 ? 'Reset the emergency latch first'
                 : gate === 'unlock'
                   ? 'Unlock the test first'
-                  : gate === 'phrase'
-                    ? `Type ${PROPS_PHRASE} first`
-                    : !status.target_connected
+                  : !status.target_connected
                       ? 'Connect the serial PX4 first'
                       : !status.target_fc_alive
                         ? 'Waiting for the target PX4 heartbeat'
                         : status.armed
                           ? 'Disarm the target PX4 first'
-                          : fallbackMotors.length > 0
-                            ? `PWM range not read from the PX4 for M${fallbackMotors.join(', M')} — refresh the mapping first`
-                            : runBlocksStart
+                          : noActiveMotors
+                            ? 'No configured motor outputs — assign PWM_MAIN/AUX_FUNCn and refresh'
+                            : missingModels
+                              ? 'Output models are not loaded — refresh the mapping'
+                              : mapGap
+                              ? 'Output mapping has a gap — fix PWM_MAIN/AUX_FUNCn and refresh'
+                              : fallbackMotors.length > 0
+                                ? `Output range not read from the PX4 for M${fallbackMotors.join(', M')} — refresh the mapping first`
+                                : unknownProtocolMotors.length > 0
+                                  ? `Output protocol unknown for M${unknownProtocolMotors.join(', M')} — check PWM_MAIN/AUX_TIMn`
+                                  : dshot3dBlocked
+                                    ? 'DSHOT_3D_ENABLE is not 0 — 3D mode changes the throttle range'
+                                    : runBlocksStart
                             ? runHint ?? 'Wait for the active test run'
                             : source === 'forward' && !status.sitl_connected
                               ? 'Connect the SITL source first'
-                              : load === 'props'
-                                ? 'Hold for 3 seconds'
-                                : 'Start sending'
+                              : 'Hold for 3 seconds'
             }
           />
           <div className="estop-note" style={{ marginTop: 6 }}>
             {running
               ? 'Sending — Esc or the red button stops everything.'
-              : 'No arming required: the test runs while the FC is disarmed.'}
+              : !controlEnabled ? 'Telemetry stays available. Enable motor control only when you intend to test.' : 'No arming required: the test runs while the FC is disarmed.'}
           </div>
         </div>
+
+        <MotorToneControls
+          tauri={tauri}
+          supported={activeModels.some((model) => isDShot(model.protocol))}
+          locked={running || pendingStart || emergency}
+          status={status.tones ?? IDLE_TONES}
+          onReady={setTonesReady}
+          onChange={resetConfirmation}
+        />
 
         {/* The alarm observes the total field; its watchdog remains in core. */}
         <div className={`card mag-alarm-card ${magAlarm && alarmEnabled ? 'mag-alarm-active' : ''}`} data-testid="motor-mag-alarm">
@@ -1204,30 +1347,10 @@ export function ActuatorApp() {
       <main className="actuator-mid">
         <div className="controls-grid">
           <div className="card">
-            <h3>Prop load</h3>
-            <div className="btn-row">
-              {LOADS.map((l) => (
-                <button
-                  key={l.id}
-                  className={`mode-btn ${load === l.id ? 'active' : ''}`}
-                  onClick={() => changeLoad(l.id)}
-                  disabled={running}
-                  title={
-                    running
-                      ? 'Stop the test before changing the load'
-                      : 'Declared by the operator; there is no sensor to detect it'
-                  }
-                >
-                  {l.label}
-                </button>
-              ))}
-            </div>
-            <div className="estop-note" style={{ marginTop: 6 }}>
-              {load === 'props'
-                ? 'Full props: type START PROPS, then hold Start for 3 s. Vehicle must be fixed to a rig.'
-                : load === 'plate'
-                  ? 'Flat plates: same start path as no props.'
-                  : 'No props: safest configuration.'}
+            <h3>Safety</h3>
+            <div className="estop-note">
+              Every start uses the full-prop envelope: 30% maximum, 2.0/s slew,
+              and a 3 s hold. There is no lighter bench mode.
             </div>
           </div>
 
@@ -1238,7 +1361,7 @@ export function ActuatorApp() {
                 <button
                   key={s.id}
                   className={`mode-btn ${source === s.id ? 'active' : ''}`}
-                  disabled={running}
+                  disabled={running || pendingStart}
                   onClick={() => changeSource(s.id)}
                   title={running ? 'Stop the test before switching source' : s.hint}
                 >
@@ -1253,32 +1376,41 @@ export function ActuatorApp() {
 
         {/* Source panel: only the selected source's controls. */}
         {source === 'manual' && (
-          <div className="card">
+          <div className="card motor-controls-card">
             <h3>Motors</h3>
             <label className="row" style={{ marginBottom: 6 }}>
               <span>Synchronize all</span>
               <input
                 type="checkbox"
                 checked={sync}
-                disabled={emergency}
+                disabled={!controlEnabled || emergency || pendingStart}
                 onChange={(e) => setSync(e.target.checked)}
               />
             </label>
-            {values.map((v, i) => (
-              <label key={i} className="motor-row">
-                <span className="mono motor-label">M{i + 1}</span>
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  value={v}
-                  disabled={emergency}
-                  onChange={(e) => setMotor(i, Number(e.target.value))}
-                />
-                <span className="mono motor-value">{(v * 100).toFixed(0)}%</span>
-              </label>
-            ))}
+            {activeMotors === 0 ? (
+              <div className="estop-note text-warn">
+                No configured motor outputs yet. Connect the serial PX4 and
+                refresh the mapping.
+              </div>
+            ) : (
+              <div className="motor-control-grid">
+                {values.slice(0, activeMotors).map((v, i) => (
+                  <label key={i} className="motor-row motor-control-row">
+                    <span className="mono motor-label">M{i + 1}</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={v}
+                      disabled={!controlEnabled || emergency || pendingStart}
+                      onChange={(e) => setMotor(i, Number(e.target.value))}
+                    />
+                    <span className="mono motor-value">{(v * 100).toFixed(0)}%</span>
+                  </label>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -1290,6 +1422,7 @@ export function ActuatorApp() {
                 <button
                   key={p.id}
                   className={`mode-btn ${preset === p.id ? 'active' : ''}`}
+                  disabled={!controlEnabled || emergency || pendingStart}
                   onClick={() => {
                     setPreset(p.id)
                     resetConfirmation()
@@ -1307,7 +1440,7 @@ export function ActuatorApp() {
                 max={1}
                 step={0.01}
                 value={amplitude}
-                disabled={emergency}
+                disabled={!controlEnabled || emergency || pendingStart}
                 onChange={(e) => {
                   setAmplitude(Number(e.target.value))
                   resetConfirmation()
@@ -1325,7 +1458,7 @@ export function ActuatorApp() {
                 max={20}
                 step={0.1}
                 value={frequency}
-                disabled={emergency}
+                disabled={!controlEnabled || emergency || pendingStart}
                 onChange={(e) => {
                   setFrequency(Number(e.target.value))
                   resetConfirmation()
@@ -1343,7 +1476,7 @@ export function ActuatorApp() {
                 max={300}
                 step={0.5}
                 value={duration}
-                disabled={emergency}
+                disabled={!controlEnabled || emergency || pendingStart}
                 onChange={(e) => {
                   setDuration(Number(e.target.value))
                   resetConfirmation()
@@ -1391,6 +1524,7 @@ export function ActuatorApp() {
         running={running}
       />
       <SignalScope
+        tools={<StreamManager tauri={tauri} />}
         sitlConnected={status.sitl_connected}
         targetConnected={status.target_connected}
         calLoaded={calLoaded}
@@ -1402,36 +1536,56 @@ export function ActuatorApp() {
       {/* Right: the actuator output to the real PX4 (serial). */}
       <aside className="actuator-right">
         <div className="section-title">Output — PX4 (serial)</div>
-        <div className="card">
-          <h3>Actuator output (ACTUATOR_TEST)</h3>
-          <input
-            className="phrase-input"
-            style={{ width: '100%', margin: 0 }}
-            value={targetEndpoint}
-            onChange={(e) => changeTargetEndpoint(e.target.value)}
-            placeholder="serial:/dev/ttyACM0:115200"
-            aria-label="Target PX4 serial endpoint"
-            spellCheck={false}
-            disabled={running}
-          />
-          <label className="motor-row" style={{ marginTop: 6 }}>
-            <span className="motor-label" style={{ width: 92 }}>System ID</span>
-            <input
-              className="phrase-input"
-              style={{ flex: 1, margin: 0 }}
-              type="number"
-              min={1}
-              max={255}
-              step={1}
-              value={targetSystemId}
-              onChange={(e) => changeTargetSystemId(Number(e.target.value))}
-              aria-label="Target MAVLink system ID"
-              disabled={status.target_connected || running}
-            />
-          </label>
-          <div className="estop-note" style={{ marginTop: 4 }}>
-            Routing only — this does not change the vehicle's configured ID.
+        <div className="card target-card">
+          <div className="card-heading">
+            <h3>PX4 target</h3>
+            <span className={`chip ${status.target_connected ? 'chip-ok' : 'chip-warn'}`}>
+              {status.target_connected ? 'connected' : 'offline'}
+            </span>
           </div>
+          {status.target_connected ? (
+            <div className="target-endpoint mono" title={status.target_endpoint ?? targetEndpoint}>
+              {status.target_origin === 'main_serial' && <div className="text-ok" data-testid="main-serial-attached">Using main serial link</div>}
+              {status.target_endpoint ?? targetEndpoint}
+            </div>
+          ) : (
+            <div className="target-connect-fields">
+              {status.main_serial_target && <div className="card">
+                <div className="estop-note">Main connection · PX4 {status.main_serial_target.target.target_system_id}</div>
+                <div className="target-endpoint mono">{status.main_serial_target.endpoint}</div>
+                <button className="mode-btn target-link-action" type="button" onClick={useMainTarget} disabled={running || pendingStart}
+                  title="Attach to the main window's existing serial link. Motor control starts OFF; detaching keeps the main connection open.">
+                  Use main serial link
+                </button>
+              </div>}
+              <input
+                className="phrase-input"
+                value={targetEndpoint}
+                onChange={(e) => changeTargetEndpoint(e.target.value)}
+                placeholder="serial:/dev/ttyACM0:115200"
+                aria-label="Target PX4 serial endpoint"
+                spellCheck={false}
+                disabled={running || pendingStart}
+              />
+              <label className="motor-row">
+                <span className="motor-label">System ID</span>
+                <input
+                  className="phrase-input"
+                  type="number"
+                  min={1}
+                  max={255}
+                  step={1}
+                  value={targetSystemId}
+                  onChange={(e) => changeTargetSystemId(Number(e.target.value))}
+                  aria-label="Target MAVLink system ID"
+                  disabled={running || pendingStart}
+                />
+              </label>
+              <div className="estop-note">
+                Routing only; this does not change the vehicle ID.
+              </div>
+            </div>
+          )}
           {targetConnectError && (
             <InlineError
               message={targetConnectError}
@@ -1440,38 +1594,31 @@ export function ActuatorApp() {
           )}
           {status.target_connected ? (
             <button
-              className="mode-btn"
-              style={{ width: '100%', marginTop: 6 }}
+              className="mode-btn target-link-action"
               onClick={disconnectTarget}
-              disabled={running}
-              title={running ? 'Stop the motor test before changing the target' : undefined}
+              title={running || pendingStart ? 'Stop or cancel the motor test before changing its target link.' : status.target_origin === 'main_serial' ? 'Detach Motor Test after releasing its outputs; keep the main serial connection open.' : 'Detach the Motor Test target after releasing this tool’s outputs.'}
+              disabled={running || pendingStart}
             >
-              Disconnect PX4
+              {status.target_origin === 'main_serial' ? 'Detach main link' : 'Disconnect'}
             </button>
           ) : (
             <button
-              className="mode-btn"
-              style={{ width: '100%', marginTop: 6 }}
+              className="mode-btn target-link-action"
               onClick={connectTarget}
+              title="Connect the selected target link for telemetry. Motor control starts OFF."
               disabled={
                 running ||
+                pendingStart ||
                 !Number.isInteger(targetSystemId) ||
                 targetSystemId < 1 ||
                 targetSystemId > 255
               }
-              title={running ? 'Stop the motor test before changing the target' : undefined}
             >
-              Connect PX4 (serial)
+              Connect PX4
             </button>
           )}
-          <div className="row" style={{ marginTop: 6 }}>
-            <span className="text-muted">Target link</span>
-            <span className={`mono ${status.target_connected ? 'text-ok' : 'text-error'}`}>
-              {status.target_connected ? 'connected' : 'down'}
-            </span>
-          </div>
-          <div className="row">
-            <span className="text-muted">Target heartbeat</span>
+          <div className="row target-summary-row">
+            <span className="text-muted">FC</span>
             <span
               className={`mono ${
                 !status.target_connected
@@ -1484,29 +1631,11 @@ export function ActuatorApp() {
               {!status.target_connected
                 ? '—'
                 : status.target_fc_alive
-                  ? 'alive'
+                  ? status.armed
+                    ? 'alive · ARMED'
+                    : 'alive · disarmed'
                   : 'lost'}
             </span>
-          </div>
-          <div className="row">
-            <span className="text-muted">Primary GCS link</span>
-            <span className="mono">{status.fc_alive ? 'heartbeat alive' : 'heartbeat lost'}</span>
-          </div>
-          <div className="row">
-            <span className="text-muted">Target system ID</span>
-            <span className="mono">
-              {status.target_connected ? status.target_system_id : 'primary link default (1)'}
-            </span>
-          </div>
-          <div className="row">
-            <span className="text-muted">FC mode</span>
-            <span className="mono">
-              {status.autopilot_px4 && status.mode_label ? status.mode_label : '—'}
-            </span>
-          </div>
-          <div className="row">
-            <span className="text-muted">Armed</span>
-            <span className="mono">{status.armed ? 'YES — sending forbidden' : 'no'}</span>
           </div>
           <div className="row">
             <span className="text-muted">COM_MOT_TEST_EN</span>
@@ -1532,75 +1661,206 @@ export function ActuatorApp() {
               </span>
             </span>
           </div>
-          <div className="row" style={{ marginTop: 6 }}>
-            <span className="text-muted">Output map</span>
+          <div className="row target-summary-row">
+            <span className="text-muted">Output</span>
             <span
               className={`mono ${
-                status.output_map.state === 'complete'
+                outputIssue == null
                   ? 'text-ok'
-                  : status.output_map.state === 'invalid'
-                    ? 'text-error'
-                    : ''
+                  : 'text-warn'
               }`}
             >
-              {status.output_map.state}
+              {status.output_map.state} · {outputSummary}
             </span>
           </div>
-          <div className="estop-note" style={{ marginTop: 2 }}>
-            {status.output_map.motors.length === 0
-              ? 'not read yet'
-              : status.output_map.motors
-                  .map((assignment) =>
-                    assignment.channel
-                      ? `M${assignment.motor} ${channelLabel(assignment.channel)}`
-                      : `M${assignment.motor} unmapped`,
-                  )
-                  .join(' · ')}
-          </div>
-          {status.pwm_models.length > 0 && (
-            <div className="estop-note" style={{ marginTop: 2 }}>
-              {status.pwm_models
-                .map(
-                  (model, i) =>
-                    `M${i + 1} ${model.min_us}–${model.max_us}${
-                      model.reversed ? ' rev' : ''
-                    } a=${model.thrust_factor.toFixed(2)}${
-                      model.disabled ? ' dis' : ''
-                    }`,
-                )
-                .join(' · ')}
+          {outputIssue && <div className="estop-note text-warn">{outputIssue}</div>}
+          <FoldSection
+            title="Connection & output details"
+            forceOpen={outputConfigurationBlocked || status.output_map.issues.length > 0}
+          >
+            <div className="row target-detail-first">
+              <span className="text-muted">System ID / mode</span>
+              <span className="mono">
+                {status.target_system_id ?? '—'} · {status.autopilot_px4 && status.mode_label ? status.mode_label : '—'}
+              </span>
             </div>
-          )}
-          {status.output_map.issues.length > 0 && (
-            <div className="estop-note" style={{ marginTop: 2 }}>
-              {status.output_map.issues.length} assignment issue
-              {status.output_map.issues.length === 1 ? '' : 's'} — refresh after
-              checking PWM_MAIN/AUX_FUNCx.
+            <div className="row">
+              <span className="text-muted">Primary GCS</span>
+              <span className="mono">{status.fc_alive ? 'alive' : 'lost'}</span>
             </div>
-          )}
+            <div className="row">
+              <span className="text-muted">PX4 banks</span>
+              <span className="protocol-pair mono">
+                <span className="protocol-chip">
+                  MAIN {protocolLabel(status.output_protocols.main)}
+                </span>
+                <span className="protocol-chip">
+                  AUX {protocolLabel(status.output_protocols.aux)}
+                </span>
+              </span>
+            </div>
+            {dshotActive && <div className="row">
+              <span className="text-muted">DShot 3D / bidir</span>
+              <span className={`mono ${dshot3dBlocked ? 'text-error' : ''}`}>
+                {status.dshot_3d_enable == null
+                  ? '3D unread'
+                  : status.dshot_3d_enable === 0
+                    ? 'off'
+                    : `on (${status.dshot_3d_enable})`}
+                {' / '}
+                {status.dshot_bidir_en == null
+                  ? 'bidir unread'
+                  : status.dshot_bidir_en === 0
+                    ? 'bidir off'
+                  : 'bidir on'}
+              </span>
+            </div>}
+            <div className="target-output-list">
+              <div className="estop-note">
+                {status.output_map.motors.length === 0
+                  ? 'Outputs not read'
+                  : status.output_map.motors
+                      .slice(0, activeMotors)
+                      .map((assignment) => assignment.channel
+                        ? `M${assignment.motor} ${channelLabel(assignment.channel)}`
+                        : `M${assignment.motor} unmapped`)
+                      .join(' · ')}
+              </div>
+              {activeModels.length > 0 && (
+                <div className="estop-note">
+                  {activeModels.map((model, i) => {
+                    const units = outputUnits(model)
+                    const range = units === 'raw' ? 'unit unknown' : `${model.min_us}–${model.max_us} ${units}`
+                    return `M${i + 1} ${range}${model.reversed ? ' rev' : ''}`
+                  }).join(' · ')}
+                </div>
+              )}
+            </div>
+            {status.output_map.issues.length > 0 && (
+              <div className="estop-note text-error">
+                {status.output_map.issues.length} output assignment issue
+                {status.output_map.issues.length === 1 ? '' : 's'}
+              </div>
+            )}
+            <button
+              className="mode-btn target-refresh"
+              onClick={refreshMapping}
+              disabled={!status.target_connected || running || pendingStart}
+            >
+              Refresh output configuration
+            </button>
+          </FoldSection>
           {mappingError && (
             <InlineError
               message={mappingError}
               onDismiss={() => setMappingError(null)}
             />
           )}
-          <button
-            className="mode-btn"
-            style={{ width: '100%', marginTop: 6 }}
-            onClick={refreshMapping}
-            disabled={!status.target_connected || running}
-          >
-            Refresh mapping
-          </button>
-          <div className="estop-note" style={{ marginTop: 6 }}>
-            Every ACTUATOR_TEST goes out over this serial link to the real PX4.
-            Per-motor source, expected and reported pulses are in Motor tracking.
+          <MotTestEnGate
+            motTestEn={
+              status.com_mot_test_en != null
+                ? status.com_mot_test_en !== 0
+                : motTestEn
+            }
+          />
+        </div>
+        {/* Display-only ESC telemetry, indexed independently of motor outputs. */}
+        <div className="card rpm-card">
+          <h3>ESC RPM feedback</h3>
+          <div className="row">
+            <span className="text-muted">ESC_STATUS</span>
+            <span className={`mono ${rpmLive > 0 ? 'text-ok' : ''}`}>
+              {status.esc_rpm.length === 0
+                ? 'no telemetry'
+                : rpmLive > 0
+                  ? `${rpmLive} live`
+                  : 'stale / missing'}
+            </span>
           </div>
+          <div className="row">
+            <span className="text-muted">DSHOT_BIDIR_EN</span>
+            <span className={`mono ${status.dshot_bidir_en === 1 ? 'text-ok' : 'text-warn'}`}>
+              {status.dshot_bidir_en == null
+                ? 'unread'
+                : status.dshot_bidir_en === 0
+                  ? 'off'
+                  : status.dshot_bidir_en === 1
+                    ? 'enabled'
+                    : `on (${status.dshot_bidir_en})`}
+            </span>
+          </div>
+          {status.esc_rpm.length > 0 && (
+            <div className="rpm-grid">
+              {status.esc_rpm.map((row) => (
+                <span
+                  key={row.esc}
+                  className={`rpm-chip ${
+                    row.rpm == null ? 'is-missing' : row.stale ? 'is-stale' : 'is-live'
+                  }`}
+                  title={
+                    row.age_s == null
+                      ? 'this ESC has not reported'
+                      : `${row.age_s.toFixed(1)} s old`
+                  }
+                >
+                  <b>ESC{row.esc}</b>
+                  {row.rpm == null ? ' —' : ` ${Math.round(row.rpm)}`}
+                  {row.stale ? ' stale' : ''}
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="estop-note" style={{ marginTop: 4 }}>
+            Display-only telemetry. ESC indices are not motor assignments.
+          </div>
+          {dshotActive && status.dshot_bidir_en !== 1 && (
+            <div className="estop-note text-warn" style={{ marginTop: 4 }}>
+              Bidirectional DShot RPM needs DSHOT_BIDIR_EN=1. Other ESC telemetry
+              depends on what the connected PX4 exposes.
+            </div>
+          )}
         </div>
         {/* On-board SD-card log: read the restart-required SD parameters and
          * control the target's file logger; list/download the FC's SD logs. */}
-        <div className="card logging-card">
-          <h3>Logging</h3>
+        <div className={`card logging-card logging-drawer ${loggingDrawerOpen ? 'is-open' : ''}`}>
+          <div className="logging-drawer-bar">
+            <button
+              className="logging-drawer-toggle"
+              aria-expanded={loggingDrawerOpen}
+              aria-controls="motor-logging-drawer"
+              onClick={() => setLoggingDrawerOpen((open) => !open)}
+            >
+              <span>Capture & logs</span>
+              <span className="mono text-muted">
+                {sdCapture.phase.replaceAll('_', ' ')} · {logEntries.length} files
+                <span aria-hidden="true"> {loggingDrawerOpen ? '▾' : '▴'}</span>
+              </span>
+            </button>
+            <div className="logging-drawer-actions">
+              <button
+                className="mode-btn"
+                onClick={() => void startCapture()}
+                title={!status.target_connected ? 'Connect the PX4 target first.' : captureBusy ? 'Wait for the current capture request.' : 'Start a new PX4 SD recording. This is independent of motor START and motor control.'}
+                disabled={
+                  !status.target_connected ||
+                  captureBusy ||
+                  captureActive ||
+                  captureSettling
+                }
+              >
+                Start capture
+              </button>
+              <button
+                className="mode-btn"
+                onClick={() => void captureCommand('stop')}
+                title="Stop the PX4 SD recording and wait for confirmation. This does not stop the motor test."
+                disabled={!status.target_connected || captureBusy || !captureCanStop}
+              >
+                Stop capture
+              </button>
+            </div>
+          </div>
+          <div id="motor-logging-drawer" className="logging-drawer-body" hidden={!loggingDrawerOpen}>
           <div className="section-title logging-section">PX4 SD capture</div>
 
           <div className="row" style={{ marginTop: 8 }}>
@@ -1664,39 +1924,20 @@ export function ActuatorApp() {
               }}
             />
           )}
-          <div className="btn-row" style={{ marginTop: 4 }}>
+          <div className="btn-row logging-check-row" style={{ marginTop: 4 }}>
             <button
               className="mode-btn"
               onClick={() => void captureCommand('check')}
-              disabled={!status.target_connected || captureBusy || running || captureSettling}
+              title="Read the target logger status and logging parameters without starting or stopping motors."
+              disabled={!status.target_connected || captureBusy || captureSettling}
             >
               Check logger
-            </button>
-            <button
-              className="mode-btn"
-              onClick={() => void startCapture()}
-              disabled={
-                !status.target_connected ||
-                captureBusy ||
-                running ||
-                captureActive ||
-                captureSettling
-              }
-            >
-              Start capture
-            </button>
-            <button
-              className="mode-btn"
-              onClick={() => void captureCommand('stop')}
-              disabled={!status.target_connected || captureBusy || running || !captureCanStop}
-            >
-              Stop capture
             </button>
           </div>
           <div className="estop-note" style={{ marginTop: 4 }}>
             SD capture is optional and controlled manually. START and STOP do
-            not start or stop logging. Stop the motor test before stopping the
-            capture or deleting SD logs.
+            not start or stop logging; capture can start or stop while the motor
+            test runs. Delete logs only after capture has stopped.
           </div>
 
           <details className="logger-configuration">
@@ -1816,25 +2057,7 @@ export function ActuatorApp() {
             )}
           </ul>
           </div>
-        </div>
-        <div className="card">
-          <div className="row">
-            <span className="text-muted">Command transport</span>
-            <span className="mono">{status.session}</span>
           </div>
-        </div>
-
-        <MotTestEnGate
-          motTestEn={
-            status.com_mot_test_en != null
-              ? status.com_mot_test_en !== 0
-              : motTestEn
-          }
-        />
-
-        <div className="estop-note">
-          Tests run while the FC is disarmed; PX4 denies ACTUATOR_TEST otherwise.
-          Enable COM_MOT_TEST_EN=1 in the target Parameters window if needed.
         </div>
       </aside>
     </div>

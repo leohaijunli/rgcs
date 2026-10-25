@@ -14,9 +14,11 @@
 //! MAVLink does not expose the channel → timer mapping, so detection is
 //! **per bank**: every readable `TIMn` value on the mapped bank is folded into
 //! one protocol. PX4 leaves unassigned timer groups at the 400 Hz default, so
-//! a lone `400` never outvotes a DShot/OneShot group; two different non-PWM
-//! protocols (or two different non-default PWM rates) mean the bank is mixed
-//! and the result is [`OutputProtocol::Unknown`].
+//! a lone `400` never outvotes a DShot/OneShot group. A configured non-400 PWM
+//! rate next to a non-PWM group, or two different non-PWM protocols, mean the
+//! bank mixes fundamentally different signalling and the result is
+//! [`OutputProtocol::Unknown`]. Mixed PWM rates remain PWM, with an unknown
+//! rate (`rate_hz: None`).
 
 use serde::{Deserialize, Serialize};
 
@@ -24,8 +26,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DShotRate {
+    #[serde(rename = "r150")]
     R150,
+    #[serde(rename = "r300")]
     R300,
+    #[serde(rename = "r600")]
     R600,
 }
 
@@ -48,22 +53,29 @@ impl DShotRate {
 }
 
 /// Physical protocol PX4 applies to a bank of outputs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum OutputProtocol {
     /// PWM; `rate_hz` is `None` when the bank mixes non-default rates.
-    Pwm {
-        rate_hz: Option<u16>,
-    },
+    #[serde(rename = "pwm")]
+    Pwm { rate_hz: Option<u16> },
+    #[serde(rename = "oneshot")]
     OneShot,
-    DShot {
-        rate: DShotRate,
-    },
-    BDShot {
-        rate: DShotRate,
-    },
+    #[serde(rename = "dshot")]
+    DShot { rate: DShotRate },
+    #[serde(rename = "bdshot")]
+    BDShot { rate: DShotRate },
     /// No readable `TIMn` parameter, or conflicting groups on one bank.
+    #[default]
+    #[serde(rename = "unknown")]
     Unknown,
+}
+
+/// Detected protocol of both physical output banks (`pwm_timer_param`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct OutputProtocols {
+    pub main: OutputProtocol,
+    pub aux: OutputProtocol,
 }
 
 /// Unit of the numbers in [`crate::motor_test::PwmModel::min_us`] /
@@ -168,6 +180,11 @@ pub fn detect_bank_protocol(tim_values: &[Option<i64>]) -> OutputProtocol {
     if mixed_non_pwm {
         return OutputProtocol::Unknown;
     }
+    // A configured PWM rate next to a DShot/OneShot group is a real mixed
+    // bank: the 400 Hz default is the only value PX4 leaves untouched.
+    if non_pwm.is_some() && pwm_rates.iter().any(|rate| *rate != 400) {
+        return OutputProtocol::Unknown;
+    }
     if let Some(protocol) = non_pwm {
         return protocol;
     }
@@ -186,6 +203,17 @@ pub fn detect_bank_protocol(tim_values: &[Option<i64>]) -> OutputProtocol {
         [] => OutputProtocol::Unknown,
         _ => OutputProtocol::Pwm { rate_hz: None },
     }
+}
+
+/// Protocol plus whether every supplied timer parameter was readable.
+///
+/// The caller passes only channels known to exist (absent channels are
+/// excluded using the FC's parameter inventory). A single failed read keeps
+/// the protocol incomplete even when the remaining values agree, so a start
+/// cannot infer a protocol from a partial bank.
+pub fn detect_bank_protocol_checked(tim_values: &[Option<i64>]) -> (OutputProtocol, bool) {
+    let complete = tim_values.iter().all(Option::is_some);
+    (detect_bank_protocol(tim_values), complete)
 }
 
 #[cfg(test)]
@@ -302,6 +330,45 @@ mod tests {
     }
 
     #[test]
+    fn dshot_next_to_a_configured_pwm_rate_is_unknown() {
+        for pwm in [50, 100, 200] {
+            assert_eq!(
+                detect_bank_protocol(&[Some(-3), Some(pwm)]),
+                OutputProtocol::Unknown,
+                "DShot + PWM {pwm} must not be reported as DShot"
+            );
+        }
+        // The untouched 400 Hz default is not a configured PWM group.
+        assert_eq!(
+            detect_bank_protocol(&[Some(-3), Some(400)]),
+            OutputProtocol::DShot {
+                rate: DShotRate::R600
+            }
+        );
+    }
+
+    #[test]
+    fn an_unreadable_timer_makes_the_bank_incomplete() {
+        assert_eq!(
+            detect_bank_protocol_checked(&[Some(-3), Some(-3)]),
+            (
+                OutputProtocol::DShot {
+                    rate: DShotRate::R600
+                },
+                true
+            )
+        );
+        let (protocol, complete) = detect_bank_protocol_checked(&[Some(-3), None]);
+        assert_eq!(
+            protocol,
+            OutputProtocol::DShot {
+                rate: DShotRate::R600
+            }
+        );
+        assert!(!complete, "a failed timer read must block the start gate");
+    }
+
+    #[test]
     fn unreadable_or_undocumented_values_do_not_claim_a_protocol() {
         assert_eq!(detect_bank_protocol(&[]), OutputProtocol::Unknown);
         assert_eq!(detect_bank_protocol(&[None, None]), OutputProtocol::Unknown);
@@ -314,6 +381,37 @@ mod tests {
             OutputProtocol::DShot {
                 rate: DShotRate::R600
             }
+        );
+    }
+
+    #[test]
+    fn protocols_serialize_to_the_frontend_contract() {
+        let dshot = serde_json::to_value(OutputProtocol::DShot {
+            rate: DShotRate::R300,
+        })
+        .expect("dshot JSON");
+        assert_eq!(
+            dshot,
+            serde_json::json!({ "kind": "dshot", "rate": "r300" })
+        );
+        let bdshot = serde_json::to_value(OutputProtocol::BDShot {
+            rate: DShotRate::R600,
+        })
+        .expect("bdshot JSON");
+        assert_eq!(
+            bdshot,
+            serde_json::json!({ "kind": "bdshot", "rate": "r600" })
+        );
+        let pwm =
+            serde_json::to_value(OutputProtocol::Pwm { rate_hz: Some(400) }).expect("pwm JSON");
+        assert_eq!(pwm, serde_json::json!({ "kind": "pwm", "rate_hz": 400 }));
+        assert_eq!(
+            serde_json::to_value(OutputProtocol::OneShot).expect("oneshot JSON"),
+            serde_json::json!({ "kind": "oneshot" })
+        );
+        assert_eq!(
+            serde_json::to_value(OutputProtocol::Unknown).expect("unknown JSON"),
+            serde_json::json!({ "kind": "unknown" })
         );
     }
 

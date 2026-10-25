@@ -36,7 +36,11 @@ pub fn is_operator_port(port_name: &str) -> bool {
             return true;
         }
     }
-    port_name.starts_with("/dev/ttyACM") || port_name.starts_with("/dev/ttyUSB")
+    ["/dev/ttyACM", "/dev/ttyUSB"].into_iter().any(|prefix| {
+        port_name
+            .strip_prefix(prefix)
+            .is_some_and(|index| !index.is_empty() && index.chars().all(|c| c.is_ascii_digit()))
+    })
 }
 
 /// Manages serial device enumeration and hotplug watching.
@@ -248,6 +252,9 @@ mod tests {
         assert!(!is_operator_port("/dev/ttyS31"));
         assert!(!is_operator_port("/dev/pts/3"));
         assert!(!is_operator_port("/dev/cu.usbmodem123"));
+        for invalid in ["/dev/ttyACM", "/dev/ttyUSBfoo", "/dev/ttyACM0/../ttyS0"] {
+            assert!(!is_operator_port(invalid), "{invalid}");
+        }
         // Windows: COM ports with a numeric index.
         assert!(is_operator_port("COM3"));
         assert!(!is_operator_port("COM"));

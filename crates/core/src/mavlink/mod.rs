@@ -6,6 +6,7 @@
 //! - [`heartbeat`] — heartbeat tracking for a single node.
 //! - [`message`] — inbound frame envelope with routing metadata.
 //! - [`router`] — inbound message routing predicates for subscribers.
+//! - [`streams`] — generated standard-message metadata and exact selection.
 //!
 //! The MAVLink dialect is `common` (PX4/ArduPilot) from the `mavlink` crate.
 //! Coexistence with QGC follows ADR-003: independent system/component IDs,
@@ -17,6 +18,9 @@ pub mod error;
 pub mod heartbeat;
 pub mod message;
 pub mod router;
+pub mod serial;
+pub mod stream_control;
+pub mod streams;
 
 pub use connection::{
     ConnectionConfig, ConnectionEvent, ConnectionHandle, LinkErrorKind, LinkFailure, LinkState,

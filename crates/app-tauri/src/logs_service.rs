@@ -3,6 +3,7 @@
 //! command/params services), forwards events onto `logs_event`, and
 //! persists finished downloads through a save-dialog path.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -18,8 +19,16 @@ use crate::state::AppState;
 
 #[derive(Default)]
 pub struct LogsState {
+    busy: AtomicBool,
     last_error: std::sync::Mutex<Option<String>>,
     last_list: std::sync::Mutex<Option<Vec<maggcs_core::logs::LogEntryInfo>>>,
+}
+
+struct ClearBusy(Arc<LogsState>);
+impl Drop for ClearBusy {
+    fn drop(&mut self) {
+        self.0.busy.store(false, Ordering::Release);
+    }
 }
 
 /// Runtime owned by one active link; its task is joined before link shutdown.
@@ -98,6 +107,10 @@ pub enum LogsEventPayload {
 }
 
 impl LogsState {
+    pub(crate) fn is_busy(&self) -> bool {
+        self.busy.load(Ordering::Acquire)
+    }
+
     /// Spawn a protocol runtime bound to one active link.
     pub fn spawn<R: Runtime>(
         self: &Arc<Self>,
@@ -106,11 +119,13 @@ impl LogsState {
     ) -> LogsRuntime {
         *self.last_error.lock().expect("logs err lock") = None;
         *self.last_list.lock().expect("logs list lock") = None;
+        self.busy.store(false, Ordering::Release);
         let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel::<LogCommand>(4);
 
         let mut route: RoutedEvents = handle.subscribe_log_messages();
         let state = Arc::clone(self);
         let task = tauri::async_runtime::spawn(async move {
+            let _clear_busy = ClearBusy(state.clone());
             let mut protocol = LogProtocol::new(1, 1);
             let mut save_paths: std::collections::HashMap<u16, String> =
                 std::collections::HashMap::new();
@@ -137,6 +152,7 @@ impl LogsState {
                         for f in frames {
                             if handle.send(f).await.is_err() { return; }
                         }
+                        if !protocol.is_busy() { state.busy.store(false, Ordering::Release); }
                     }
                     msg = route.recv() => {
                         let envelope = match classify_route(msg) {
@@ -146,12 +162,15 @@ impl LogsState {
                             RouteStep::Skip => continue,
                             RouteStep::Closed => return,
                         };
+                        let was_busy = protocol.is_busy();
                         let (events, frames) = match protocol.handle(
                             &envelope.message,
                             std::time::Instant::now(),
                         ) {
                             Ok(v) => v,
                             Err(e) => {
+                                protocol.cancel();
+                                if was_busy { state.busy.store(false, Ordering::Release); }
                                 emit_failed(&state, &app, e.to_string());
                                 continue;
                             }
@@ -179,6 +198,7 @@ impl LogsState {
                                 }
                             }
                         }
+                        if was_busy && !protocol.is_busy() { state.busy.store(false, Ordering::Release); }
                     }
                     _ = tick.tick() => {
                         match protocol.tick(std::time::Instant::now()) {
@@ -189,6 +209,7 @@ impl LogsState {
                             }
                             Err(e) => {
                                 let _ = protocol.cancel();
+                                state.busy.store(false, Ordering::Release);
                                 emit_failed(&state, &app, e.to_string());
                             }
                         }
@@ -205,6 +226,24 @@ impl LogsState {
 
 fn sender(state: &AppState) -> Option<tokio::sync::mpsc::Sender<LogCommand>> {
     state.primary_logs_sender()
+}
+
+async fn submit(state: &AppState, command: LogCommand) -> Result<(), String> {
+    let _ops = state.ops().lock().await;
+    crate::main_link_service::ensure_primary_tools_available(state)?;
+    let tx = sender(state).ok_or("not connected")?;
+    let starts = !matches!(command, LogCommand::Cancel);
+    if !starts && !state.logs.is_busy() {
+        return Ok(());
+    }
+    if starts && state.logs.busy.swap(true, Ordering::AcqRel) {
+        return Err("a main-window log operation is already active; cancel it first".into());
+    }
+    if tx.send(command).await.is_err() {
+        state.logs.busy.store(false, Ordering::Release);
+        return Err("service stopped".into());
+    }
+    Ok(())
 }
 
 // Non-Debug fields are behind the Mutexes; a manual Debug keeps State usable
@@ -242,12 +281,7 @@ pub(crate) fn classify_route(
 /// "not connected" when the link is down.
 #[tauri::command]
 pub async fn logs_request_list(state: State<'_, AppState>) -> Result<(), String> {
-    let Some(tx) = sender(&state) else {
-        return Err("not connected".into());
-    };
-    tx.send(LogCommand::List)
-        .await
-        .map_err(|_| "service stopped".to_string())
+    submit(&state, LogCommand::List).await
 }
 
 /// Download one log into a save-dialog path.
@@ -272,27 +306,21 @@ pub async fn logs_download(
         .blocking_save_file()
         .and_then(|p| p.into_path().ok());
     let Some(path) = path else { return Ok(()) };
-    let Some(tx) = sender(&state) else {
-        return Err("not connected".into());
-    };
-    tx.send(LogCommand::Download {
-        id,
-        size,
-        save_path: path.display().to_string(),
-    })
+    submit(
+        &state,
+        LogCommand::Download {
+            id,
+            size,
+            save_path: path.display().to_string(),
+        },
+    )
     .await
-    .map_err(|_| "service stopped".to_string())
 }
 
 /// Cancel any running list/download.
 #[tauri::command]
 pub async fn logs_cancel(state: State<'_, AppState>) -> Result<(), String> {
-    let Some(tx) = sender(&state) else {
-        return Err("not connected".into());
-    };
-    tx.send(LogCommand::Cancel)
-        .await
-        .map_err(|_| "service stopped".to_string())
+    submit(&state, LogCommand::Cancel).await
 }
 
 // ---------------------------------------------------------------------------

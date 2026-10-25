@@ -19,6 +19,8 @@ pub const HEADER_LEN: usize = 3;
 pub const CRC_LEN: usize = 3;
 /// Largest payload the 10-bit length word can express.
 pub const MAX_PAYLOAD_LEN: usize = 1023;
+/// Largest complete RTCM3 frame, including header and CRC.
+pub const MAX_FRAME_LEN: usize = HEADER_LEN + MAX_PAYLOAD_LEN + CRC_LEN;
 /// Reserved bits of the length word; a valid frame leaves them zero.
 const RESERVED_MASK: u8 = 0xFC;
 /// CRC-24Q polynomial (0x1864CFB); the implicit bit 24 is dropped.

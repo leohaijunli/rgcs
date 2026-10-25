@@ -239,7 +239,11 @@ fn spawn_ticker(app: AppHandle) -> tauri::async_runtime::JoinHandle<()> {
 
 /// Apply one coordinator step: persist boundaries, emit status and schedule
 /// the stop action. Returns actions for the async caller.
-fn apply_step(app: &AppHandle, run: &mut ActuatorRun, step: RunStep) -> Vec<RunAction> {
+fn apply_step<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    run: &mut ActuatorRun,
+    step: RunStep,
+) -> Vec<RunAction> {
     if step.changed {
         if let Some(status) = &step.status {
             run.last_status = Some(status.clone());
@@ -350,6 +354,11 @@ pub fn actuator_run_status(state: State<'_, AppState>) -> RunSnapshot {
 
 /// Start a new run: begin the capture, then arm the coordinator's pre-roll.
 /// Kept separate from the low-level capture command so the UI has one action.
+pub(crate) fn ensure_coordinated_run_start(state: &AppState) -> Result<(), String> {
+    ensure_no_active_run(state)?;
+    crate::actuator_service::ensure_idle_session(state)
+}
+
 #[tauri::command]
 pub async fn actuator_run_start(
     app: AppHandle,
@@ -358,7 +367,7 @@ pub async fn actuator_run_start(
 ) -> Result<RunSnapshot, String> {
     validate_test_id(&test_id)?;
     let _ops = state.ops().lock().await;
-    ensure_no_active_run(&state)?;
+    ensure_coordinated_run_start(&state)?;
     let capture = crate::capture_service::start_capture_locked(&state, test_id).await?;
     if capture.phase != CapturePhase::Recording {
         return Err("the target logger is already recording another file".into());
@@ -421,7 +430,10 @@ pub(crate) fn ensure_no_active_run(state: &AppState) -> Result<(), String> {
 
 /// Gate the operator's START: only after the confirmed recording has finished
 /// its pre-roll. Advances the timer first so a start at the boundary works.
-pub(crate) fn authorize_motor_start(app: &AppHandle, state: &AppState) -> Result<(), String> {
+pub(crate) fn authorize_motor_start<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+) -> Result<(), String> {
     let mut run = state.motor_test.run.lock();
     let Some(active) = run.active.as_mut() else {
         // SD capture is optional: with no run, the motor test is standalone.
@@ -446,7 +458,10 @@ pub(crate) fn authorize_motor_start(app: &AppHandle, state: &AppState) -> Result
 }
 
 /// Record the transport-confirmed motor start.
-pub(crate) fn confirm_motor_started(app: &AppHandle, state: &AppState) -> Result<(), String> {
+pub(crate) fn confirm_motor_started<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+) -> Result<(), String> {
     let mut run = state.motor_test.run.lock();
     let Some(active) = run.active.as_mut() else {
         // No SD capture/run: the motor test is standalone, nothing to record.
@@ -462,7 +477,11 @@ pub(crate) fn confirm_motor_started(app: &AppHandle, state: &AppState) -> Result
 }
 
 /// Record a transport-confirmed release; the ticker owns the post-roll.
-pub(crate) fn note_motor_released(app: &AppHandle, state: &AppState, reason: StopReason) {
+pub(crate) fn note_motor_released<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    reason: StopReason,
+) {
     let mut run = state.motor_test.run.lock();
     let Some(active) = run.active.as_mut() else {
         return;
@@ -474,7 +493,11 @@ pub(crate) fn note_motor_released(app: &AppHandle, state: &AppState, reason: Sto
 }
 
 /// Mark the active run interrupted (target/link teardown) and persist it.
-pub(crate) fn interrupt_active(app: &AppHandle, state: &AppState, reason: &str) {
+pub(crate) fn interrupt_active<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    reason: &str,
+) {
     let mut run = state.motor_test.run.lock();
     let Some(active) = run.active.as_mut() else {
         return;
@@ -498,7 +521,7 @@ pub(crate) fn validate_test_id(test_id: &str) -> Result<(), String> {
     }
 }
 
-fn manifests_dir(app: &AppHandle) -> Result<PathBuf, String> {
+fn manifests_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     app.path()
         .app_data_dir()
         .map(|dir| dir.join(MANIFEST_DIR))
@@ -521,8 +544,14 @@ fn build_manifest(
     let target = target
         .as_ref()
         .ok_or("no serial PX4 target — connect it first")?;
-    let mapping = target.target.output_map.lock().clone();
-    let pwm_models = target.target.pwm_models.lock().clone();
+    let config = target
+        .target
+        .config
+        .lock()
+        .clone()
+        .ok_or("output configuration has not been read yet — refresh the mapping first")?;
+    let mapping = config.map;
+    let pwm_models = config.models;
     let _ = app;
     Ok(TestRunManifest {
         schema_version: MANIFEST_SCHEMA_VERSION,
@@ -596,7 +625,7 @@ pub(crate) fn read_manifest(path: &Path) -> Option<TestRunManifest> {
     }
 }
 
-fn pending_manifests(app: &AppHandle) -> Vec<(PathBuf, TestRunManifest)> {
+fn pending_manifests<R: tauri::Runtime>(app: &AppHandle<R>) -> Vec<(PathBuf, TestRunManifest)> {
     let Ok(dir) = manifests_dir(app) else {
         return Vec::new();
     };
@@ -653,7 +682,10 @@ pub(crate) fn reconcile_manifest(
 
 /// Reconcile after a target reconnect. Runs only for pending manifests, so a
 /// healthy completed run is never rewritten.
-pub(crate) async fn reconcile_target(app: AppHandle, target: MotorTestTargetRef) {
+pub(crate) async fn reconcile_target<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    target: MotorTestTargetRef,
+) {
     let pending = pending_manifests(&app);
     if pending.is_empty() {
         return;
@@ -728,6 +760,78 @@ mod tests {
         assert!(validate_test_id("a/b").is_err());
         assert!(validate_test_id("").is_err());
         assert!(validate_test_id(&"x".repeat(97)).is_err());
+    }
+
+    #[test]
+    fn coordinated_start_requires_an_idle_motor_session() {
+        use maggcs_core::motor_test::SessionState;
+
+        let state = AppState::default();
+        assert!(ensure_coordinated_run_start(&state).is_ok());
+        for session in [
+            SessionState::ManualRunning,
+            SessionState::Stopping,
+            SessionState::Emergency,
+        ] {
+            state.motor_test.note_state(session);
+            assert!(ensure_coordinated_run_start(&state).is_err(), "{session:?}");
+        }
+        state.motor_test.note_state(SessionState::Idle);
+        assert!(ensure_coordinated_run_start(&state).is_ok());
+    }
+
+    #[test]
+    fn coordinated_start_cannot_replace_an_active_run_with_idle_motors() {
+        let state = AppState::default();
+        let now = Instant::now();
+        let (coordinator, _) = RunCoordinator::begin(RunConfig::new("existing-run"), now);
+        state.motor_test.run.lock().active = Some(ActiveRun {
+            target: MotorTestTargetRef {
+                connection_id: 1,
+                target_system_id: 42,
+                target_component_id: TARGET_COMPONENT_ID,
+            },
+            coordinator,
+            manifest: manifest("existing-run"),
+            manifest_path: temp_dir("active-guard").join(MANIFEST_FILE),
+            ticker: None,
+        });
+        assert!(
+            ensure_coordinated_run_start(&state).is_err(),
+            "capture startup reserves the run"
+        );
+        {
+            let mut run = state.motor_test.run.lock();
+            let active = run.active.as_mut().expect("active run");
+            active.coordinator.observe_capture(
+                &live(CapturePhase::Recording, Some("/fs/microsd/log/1.ulg")),
+                now,
+            );
+        }
+        assert!(
+            ensure_coordinated_run_start(&state).is_err(),
+            "pre-roll still owns the run"
+        );
+        {
+            let mut run = state.motor_test.run.lock();
+            let active = run.active.as_mut().expect("active run");
+            active.coordinator.abort(now);
+        }
+        assert!(
+            ensure_coordinated_run_start(&state).is_err(),
+            "capture finalization still owns the run"
+        );
+        {
+            let mut run = state.motor_test.run.lock();
+            let active = run.active.as_mut().expect("active run");
+            active
+                .coordinator
+                .observe_capture(&live(CapturePhase::Complete, None), now);
+        }
+        assert!(
+            ensure_coordinated_run_start(&state).is_ok(),
+            "a terminal run can be replaced"
+        );
     }
 
     #[test]

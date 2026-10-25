@@ -2,6 +2,7 @@
 //! value comes from. A2 ships `ManualSource` (slider values, latest wins);
 //! Profile replay (A6) and speed functions (A7) implement the same trait.
 
+use super::protocol::OutputUnits;
 use super::pwm::PwmModel;
 
 /// One motor the sender drives. `function` is the 1-based motor function PX4
@@ -276,9 +277,22 @@ impl ForwardSource {
         let Some(model) = self.models.get(motor) else {
             return state.values.get(motor).copied();
         };
-        let raw = state.raw_pwm.get(motor).copied().unwrap_or(0);
-        let pulse = f32::from(raw).clamp(f32::from(model.min_us), f32::from(model.max_us));
-        Some(model.fraction_for_pulse(pulse).unwrap_or(0.0))
+        match model.units() {
+            // A DShot target is addressed in normalized mixer demand, not
+            // microseconds: feeding a PWM pulse into its 0…1999 range would
+            // turn 1000 µs idle into a large nonzero throttle.
+            OutputUnits::DShotThrottle => {
+                state.values.get(motor).copied().map(|v| v.clamp(0.0, 1.0))
+            }
+            // PWM/OneShot targets keep the source's physical pulse: the
+            // fraction is expressed in the *target* channel's range, so PX4
+            // reproduces the same pulse after applying its own model.
+            OutputUnits::Microseconds => {
+                let raw = state.raw_pwm.get(motor).copied().unwrap_or(0);
+                let pulse = f32::from(raw).clamp(f32::from(model.min_us), f32::from(model.max_us));
+                Some(model.fraction_for_pulse(pulse).unwrap_or(0.0))
+            }
+        }
     }
 }
 
@@ -497,6 +511,87 @@ mod tests {
         let models = vec![PwmModel::new(1100, 1900, false, 0.0).expect("model")];
         let mut s = ForwardSource::with_models(slot, 1, models);
         assert_eq!(s.value(0.0, 0), Some(0.0));
+    }
+
+    fn dshot_model(dshot_min: f32) -> PwmModel {
+        PwmModel::dshot(
+            dshot_min,
+            false,
+            0.0,
+            super::super::protocol::OutputProtocol::DShot {
+                rate: super::super::protocol::DShotRate::R600,
+            },
+        )
+        .expect("dshot model")
+    }
+
+    #[test]
+    fn dshot_forward_uses_the_normalized_demand_not_the_source_pulse() {
+        // Regression (R1): 1000 µs is the source's idle pulse. Treating it
+        // as a DShot mixer count produced 1000/1999 ≈ 0.5 throttle.
+        for (raw, normalized) in [(1000, 0.0), (1500, 0.5), (2000, 1.0)] {
+            let slot = forward_slot(1);
+            {
+                let mut st = slot.lock().unwrap();
+                st.values = vec![normalized];
+                st.raw_pwm = vec![raw];
+                st.last_update_s = Some(epoch_now());
+            }
+            let mut s = ForwardSource::with_models(slot, 1, vec![dshot_model(0.055)]);
+            assert_eq!(s.value(0.0, 0), Some(normalized), "raw {raw} µs");
+        }
+    }
+
+    #[test]
+    fn dshot_forward_is_monotonic_for_one_two_and_four_motors() {
+        for motors in [1usize, 2, 4] {
+            let slot = forward_slot(motors);
+            let values: Vec<f32> = [0.0, 0.25, 0.5, 1.0][..motors].to_vec();
+            {
+                let mut st = slot.lock().unwrap();
+                st.values = values.clone();
+                st.raw_pwm = vec![1000; motors];
+                st.last_update_s = Some(epoch_now());
+            }
+            let models = vec![dshot_model(0.055); motors];
+            let mut s = ForwardSource::with_models(slot, motors, models);
+            let forwards = s.values(0.0);
+            for (motor, expected) in values.iter().enumerate() {
+                let forwarded = forwards[motor].expect("demand");
+                assert!(
+                    (forwarded - expected).abs() < 1e-6,
+                    "{motors} motors: M{} {forwarded} != {expected}",
+                    motor + 1
+                );
+                if motor > 0 {
+                    assert!(
+                        forwarded >= forwards[motor - 1].expect("previous"),
+                        "{motors} motors: not monotonic"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pwm_and_oneshot_forward_preserve_the_source_pulse() {
+        let slot = forward_slot(2);
+        {
+            let mut st = slot.lock().unwrap();
+            st.values = vec![0.4, 0.4];
+            st.raw_pwm = vec![1400, 1400];
+            st.last_update_s = Some(epoch_now());
+        }
+        let models = vec![
+            PwmModel::new(1000, 2000, false, 0.0).expect("PWM"),
+            PwmModel::new(1100, 1900, false, 0.0)
+                .expect("OneShot")
+                .with_protocol(super::super::protocol::OutputProtocol::OneShot),
+        ];
+        let mut s = ForwardSource::with_models(slot, 2, models);
+        let values = s.values(0.0);
+        assert!((values[0].expect("PWM") - 0.4).abs() < 1e-6);
+        assert!((values[1].expect("OneShot") - 0.375).abs() < 1e-6);
     }
 
     #[test]

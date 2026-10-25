@@ -30,6 +30,8 @@ import type { ThemePref } from '../../design-system/theme'
 import { hasInboundPackets, lastPacketAgeMs, linkLevel, linkLevelTone } from '../../util/linkLevel'
 import AboutContent from './AboutContent'
 import AppLogo from '../AppLogo'
+import SerialAutoControls from '../SerialAutoControls'
+import { useSerialSelection } from '../../hooks/useSerialSelection'
 
 const KINDS: EndpointKind[] = ['udpin', 'udpout', 'tcpin', 'tcpout', 'serial']
 
@@ -145,6 +147,7 @@ function ConnectionTab() {
   const droppedFrames = useLinkStore((s) => s.droppedFrames)
   const fieldAges = useTelemetryStore((s) => s.snapshot?.field_ages)
   const devices = useDevicesStore((s) => s.devices)
+  const serialSelection = useSerialSelection(formatEndpoint(draft))
 
   const fieldError = endpointError(draft)
   const update = (patch: Partial<EndpointDraft>) => setDraft((d) => ({ ...d, ...patch }))
@@ -160,7 +163,7 @@ function ConnectionTab() {
     try {
       const endpoint = formatEndpoint(draft)
       usePrefsStore.getState().setEndpoint(endpoint)
-      await connectEndpoint(endpoint)
+      await connectEndpoint(endpoint, draft.kind === 'serial' ? serialSelection.port : undefined)
     } catch (e) {
       reportConnectError(e)
     } finally {
@@ -175,10 +178,13 @@ function ConnectionTab() {
 
   return (
     <div className="space-y-3 text-sm">
+      <SerialAutoControls role="primary_fc" />
+      <h3 className="text-xs font-medium text-ink">{t('serialAuto.manualConnection')}</h3>
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className="mb-1 block text-xs text-muted">{t('settings.endpoint.type')}</label>
           <select
+            data-testid="manual-link-kind"
             value={draft.kind}
             onChange={(e) => update({ kind: e.target.value as EndpointKind })}
             className={inputClass(false)}
@@ -229,7 +235,9 @@ function ConnectionTab() {
               : t('settings.endpoint.host')}
           </label>
           {draft.kind === 'serial' ? (
+            <>
             <select
+              data-testid="manual-link-port"
               value={draft.host}
               onChange={(e) => update({ host: e.target.value })}
               className={inputClass(fieldError === 'host')}
@@ -237,10 +245,15 @@ function ConnectionTab() {
               {devices.length === 0 && <option value="">{t('settings.endpoint.noSerial')}</option>}
               {devices.map((d) => (
                 <option key={d.port_name} value={d.port_name}>
-                  {d.port_name}
+                  {d.port_name}{d.product ? ` · ${d.product}` : ''}
                 </option>
               ))}
             </select>
+            {serialSelection.changed && <div className="mt-1 text-xs text-error">
+              {t('serialAuto.deviceChanged')}
+              <button type="button" className="ml-2 underline" onClick={serialSelection.reselect}>{t('serialAuto.reselect')}</button>
+            </div>}
+            </>
           ) : (
             <input
               value={draft.host}
@@ -272,8 +285,9 @@ function ConnectionTab() {
 
       <div className="flex gap-2">
         <button
+          data-testid="manual-link-connect"
           onClick={connect}
-          disabled={busy || fieldError !== null}
+          disabled={busy || fieldError !== null || (draft.kind === 'serial' && serialSelection.changed)}
           className="touch-target h-11 rounded bg-accent px-4 text-accent-ink disabled:opacity-50"
         >
           {busy ? '…' : t('map.connect')}

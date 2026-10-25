@@ -17,6 +17,7 @@ import type { ParamValue } from '../generated-types/ParamValue'
 import type { LinkStatus } from '../generated-types/LinkStatus'
 import AppLogo from '../components/AppLogo'
 import { useParamsStore, type ParamMeta, type ParamsIpcEvent } from './store'
+import { confirmDeleteTwice } from '../util/confirmDelete'
 
 /** Refresh link state and retry an unanswered version request without reloading. */
 const CONNECTION_POLL_MS = 1000
@@ -93,8 +94,9 @@ const LAYOUT_KEY = 'maggcs.params.layout'
 const MIN_PANE_W = 140
 /** A pane never widens past this, so the table keeps most of the width. */
 const MAX_PANE_W = 420
-/** The table keeps at least this width so the `--p-param-cols` minimums fit. */
-const MIN_CENTER_W = 460
+/** Table content minimum: 440 px of columns + 18 px gaps + 16 px padding.
+ * The live scrollbar gutter is added when clamping the side panes. */
+const MIN_CENTER_W = 474
 
 const RAIL_W = 24
 const SPLITTER_W = 4
@@ -229,7 +231,6 @@ export function ParamsApp() {
   const [groupPane, setGroupPane] = useState<'px4' | 'custom'>('px4')
   const [leftTab, setLeftTab] = useState<'px4' | 'custom'>('px4')
   const [notice, setNotice] = useState<string | null>(null)
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   /** Value fetch state per name: 'idle' | 'loading' | 'done' | 'missing'. */
   const [readState, setReadState] = useState<
     Map<string, 'loading' | 'done' | 'missing'>
@@ -246,6 +247,7 @@ export function ParamsApp() {
   const [rebootNeeded, setRebootNeeded] = useState<string[]>([])
   const [rebooting, setRebooting] = useState(false)
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const detailRef = useRef<HTMLElement | null>(null)
   const [scrollTop, setScrollTop] = useState(0)
   const [viewH, setViewH] = useState(400)
   /** Scrollbar gutter width, so the fixed header can match the body's content
@@ -300,9 +302,9 @@ export function ParamsApp() {
   /** Largest width a pane may take while the table keeps MIN_CENTER_W. */
   const maxPane = useCallback((otherW: number, otherCollapsed: boolean) => {
     const other = otherCollapsed ? RAIL_W : otherW
-    const avail = window.innerWidth - MIN_CENTER_W - other - 2 * SPLITTER_W
+    const avail = window.innerWidth - MIN_CENTER_W - gutter - other - 2 * SPLITTER_W
     return clamp(avail, MIN_PANE_W, MAX_PANE_W)
-  }, [])
+  }, [gutter])
   const resizeLeft = useCallback(
     (px: number) => setLeftW(clamp(px, MIN_PANE_W, maxPane(rightWRef.current, rightCollapsedRef.current))),
     [maxPane],
@@ -464,6 +466,11 @@ export function ParamsApp() {
     setDraft(selectedNumber != null ? String(selectedNumber) : '')
     setDraftError(null)
   }, [selected, selectedNumber])
+
+  // A new selection starts at its values, even after reading a long description.
+  useEffect(() => {
+    if (detailRef.current) detailRef.current.scrollTop = 0
+  }, [selected])
 
   // Serialize row reads: the protocol permits one parameter transaction at a
   // time. A reconnect invalidates both queued work and delayed old replies.
@@ -835,7 +842,16 @@ export function ParamsApp() {
                     title="Delete group"
                     onClick={(e) => {
                       e.stopPropagation()
-                      setConfirmDelete(g.id)
+                      if (
+                        !confirmDeleteTwice(
+                          `Delete the custom group “${g.name}”? Parameters stay on the FC.`,
+                          `Last confirmation: delete the group “${g.name}”?`,
+                        )
+                      ) {
+                        return
+                      }
+                      store.getState().deleteGroup(g.id)
+                      if (activeGroup === g.id) setActiveGroup(null)
                     }}
                   >
                     ×
@@ -851,21 +867,6 @@ export function ParamsApp() {
                 <div className="p-cgroup-info" title="Members">
                   {groupCounts.get(g.id) ?? 0} members
                 </div>
-                {confirmDelete === g.id && (
-                  <div className="p-cgroup-confirm">
-                    <span>Delete?</span>
-                    <button
-                      onClick={() => {
-                        store.getState().deleteGroup(g.id)
-                        setConfirmDelete(null)
-                        if (activeGroup === g.id) setActiveGroup(null)
-                      }}
-                    >
-                      Delete
-                    </button>
-                    <button onClick={() => setConfirmDelete(null)}>Keep</button>
-                  </div>
-                )}
               </div>
             ))}
             {groups.length === 0 && (
@@ -1009,8 +1010,8 @@ export function ParamsApp() {
         <div className="p-tablewrap">
           <div className="p-thead" style={{ paddingRight: 8 + gutter }}>
             <span>Name</span>
-            <span>Value</span>
-            <span>Default</span>
+            <span className="p-numeric-head">Current value</span>
+            <span className="p-numeric-head">Default</span>
             <span>Description</span>
           </div>
           <div
@@ -1110,7 +1111,7 @@ export function ParamsApp() {
               onResize={resizeRight}
               onReset={() => resizeRight(DEFAULT_LAYOUT.rightW)}
             />
-            <aside className="p-detail">
+            <aside className="p-detail" ref={detailRef}>
               <div className="p-detail-head">
                 <button
                   className="p-pane-collapse"
@@ -1124,30 +1125,32 @@ export function ParamsApp() {
           {selected ? (
             <>
               <div className="p-detail-title mono">{selected}</div>
+              <dl className="p-detail-values">
+                <div>
+                  <dt>Current value</dt>
+                  <dd>
+                    {selectedValue
+                      ? fmtValue(selectedMeta, valueNumber(selectedValue.value))
+                      : readState.get(selected) === 'loading'
+                        ? 'Fetching…'
+                        : connected ? 'Not available; click the row to retry' : 'Waiting for FC reconnect'}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Default</dt>
+                  <dd>{fmtDefault(selectedMeta)}</dd>
+                </div>
+              </dl>
               <div className="p-detail-desc">
                 {selectedMeta?.longDesc ?? selectedMeta?.shortDesc ?? 'No description.'}
               </div>
               <dl className="p-detail-list">
-                <div>
-                  <dt>Value</dt>
-                  <dd>
-                     {selectedValue
-                       ? fmtValue(selectedMeta, valueNumber(selectedValue.value))
-                       : readState.get(selected) === 'loading'
-                         ? 'Fetching…'
-                         : connected ? 'Not available; click the row to retry' : 'Waiting for FC reconnect'}
-                  </dd>
-                </div>
                 {selectedMeta?.units && (
                   <div>
                     <dt>Unit</dt>
                     <dd>{selectedMeta.units}</dd>
                   </div>
                 )}
-                <div>
-                  <dt>Default</dt>
-                  <dd>{fmtDefault(selectedMeta)}</dd>
-                </div>
                 <div>
                   <dt>Type</dt>
                   <dd>{selectedMeta?.type ?? '—'}</dd>

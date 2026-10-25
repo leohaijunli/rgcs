@@ -146,6 +146,7 @@ where
 }
 
 async fn stop_running_motor_test(state: &AppState, deadline: Duration) -> StopOutcome {
+    crate::motor_control_service::revoke(state);
     let service = match state.motor_test.running.lock().as_ref() {
         Some(running) => running.svc.clone(),
         None => return StopOutcome::NotRunning,
@@ -172,6 +173,7 @@ async fn stop_running_motor_test(state: &AppState, deadline: Duration) -> StopOu
 /// Stop the RTK source and link-owned service/observer tasks.
 struct RtkStage<R: Runtime> {
     app: AppHandle<R>,
+    stop_base: bool,
 }
 
 impl<R: Runtime> ManagedService for RtkStage<R> {
@@ -185,8 +187,25 @@ impl<R: Runtime> ManagedService for RtkStage<R> {
     ) -> Pin<Box<dyn Future<Output = StopOutcome> + Send + 'a>> {
         Box::pin(async move {
             let state = self.app.state::<AppState>();
+            let started = Instant::now();
+            if self.stop_base {
+                if let Some(id) = state.rtk.base.snapshot().session_id {
+                    if let Err(error) = state.rtk.base.stop(id).await {
+                        return StopOutcome::Failed {
+                            message: error.to_string(),
+                        };
+                    }
+                }
+            }
             match state.take_primary_rtk() {
-                Some(runtime) => runtime.stop(deadline).await,
+                Some(runtime) => {
+                    runtime
+                        .stop(deadline.saturating_sub(started.elapsed()))
+                        .await
+                }
+                None if self.stop_base => StopOutcome::Stopped {
+                    elapsed_ms: elapsed_ms(started),
+                },
                 None => StopOutcome::NotRunning,
             }
         })
@@ -307,15 +326,20 @@ impl<R: Runtime> ManagedService for LinkStage<R> {
 
     fn stop<'a>(
         &'a self,
-        _deadline: Duration,
+        deadline: Duration,
     ) -> Pin<Box<dyn Future<Output = StopOutcome> + Send + 'a>> {
         Box::pin(async move {
             let state = self.app.state::<AppState>();
             let started = Instant::now();
+            crate::main_link_service::cleanup(&self.app, &state).await;
             let Some(link) = state.take_primary_link() else {
                 return StopOutcome::NotRunning;
             };
-            link.connection.shutdown().await;
+            if let Err(error) = link.connection.shutdown_and_wait(deadline).await {
+                return StopOutcome::Failed {
+                    message: error.to_string(),
+                };
+            }
             StopOutcome::Stopped {
                 elapsed_ms: elapsed_ms(started),
             }
@@ -365,7 +389,7 @@ pub fn policy() -> LifecyclePolicy {
 
 /// Build a fresh registry from what is attached right now. Called once per
 /// teardown: a handle taken here is never reused by a later teardown.
-fn build<R: Runtime>(app: &AppHandle<R>) -> Lifecycle {
+fn build<R: Runtime>(app: &AppHandle<R>, reason: StopReason) -> Lifecycle {
     let lifecycle = Lifecycle::new(policy());
     let state = app.state::<AppState>();
     // Only registered while a session exists: an idle motor-test window owns
@@ -376,7 +400,13 @@ fn build<R: Runtime>(app: &AppHandle<R>) -> Lifecycle {
             Arc::new(MotorTestStage { app: app.clone() }),
         );
     }
-    lifecycle.register(Stage::Rtk, Arc::new(RtkStage { app: app.clone() }));
+    lifecycle.register(
+        Stage::Rtk,
+        Arc::new(RtkStage {
+            app: app.clone(),
+            stop_base: !reason.is_link_scope(),
+        }),
+    );
     lifecycle.register(Stage::Logs, Arc::new(LogsStage { app: app.clone() }));
     lifecycle.register(Stage::Params, Arc::new(ParamsStage { app: app.clone() }));
     lifecycle.register(
@@ -400,12 +430,32 @@ pub async fn run<R: Runtime>(
     app: &AppHandle<R>,
     reason: StopReason,
 ) -> Result<ShutdownReport, ShutdownError> {
-    let lifecycle = build(app);
+    let lifecycle = build(app, reason);
     let state = app.state::<AppState>();
     let vehicle = vehicle_state(&state);
+    // Use the same captured preflight state as the supervisor. A refused
+    // teardown leaves automatic policy intact; an approved teardown first
+    // prevents a late probe from installing a replacement link.
+    if lifecycle.refusal(vehicle).is_none() {
+        if let Some(serial) = state.serial.get() {
+            if reason.is_link_scope() {
+                let _ = serial.pause_memory(
+                    maggcs_core::config::serial::AutoConnectRole::PrimaryFc,
+                    None,
+                );
+            } else {
+                serial.quiesce();
+            }
+        }
+    }
     let report = match lifecycle.shutdown(reason, vehicle).await {
         Ok(report) => report,
         Err(err) => {
+            if !reason.is_link_scope() {
+                if let Some(serial) = state.serial.get() {
+                    serial.resume_after_refusal();
+                }
+            }
             state.alerts().raise(AlertInput::new(
                 AlertSource::System,
                 Severity::Warn,

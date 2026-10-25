@@ -2,7 +2,7 @@
 //!
 //! Same shape as `commands::service` — a task driven by a command channel,
 //! an inbound frame stream and a ticker — but the high-rate path sends
-//! directly (`ConnectionHandle::send`) and only *counts* acks, never waits
+//! directly with bounded, generation-bound transport writes and only *counts* acks, never waits
 //! for them (plan D4: this traffic must not go through the single-slot
 //! `CommandService`).
 
@@ -30,6 +30,7 @@ const WATCHED_MESSAGES: &[u32] = &[
 
 /// Overall stop budget, including command queueing and release writes.
 pub const MOTOR_TEST_STOP_TIMEOUT: Duration = Duration::from_secs(2);
+const CONTROL_WRITE_TIMEOUT: Duration = Duration::from_millis(200);
 
 /// Transport evidence for a completed release pass. This is not a PX4 ACK
 /// or a physical-output measurement. Zero releases means already stopped.
@@ -62,20 +63,33 @@ trait MotorTestTransport: Send + Sync + 'static {
     ) -> impl Future<Output = Result<(), MavlinkError>> + Send;
 }
 
-impl MotorTestTransport for ConnectionHandle {
+struct BoundTransport {
+    handle: ConnectionHandle,
+    generation: u64,
+}
+
+impl MotorTestTransport for BoundTransport {
     fn subscribe_route(&self, route: MessageRoute) -> RoutedEvents {
-        ConnectionHandle::subscribe_route(self, route)
+        self.handle.subscribe_route(route)
     }
 
     fn send(&self, frame: MavMessage) -> impl Future<Output = Result<(), MavlinkError>> + Send {
-        ConnectionHandle::send(self, frame)
+        self.handle.send_in_generation(
+            frame,
+            self.generation,
+            tokio::time::Instant::now() + CONTROL_WRITE_TIMEOUT,
+        )
     }
 
     fn send_confirmed(
         &self,
         frame: MavMessage,
     ) -> impl Future<Output = Result<(), MavlinkError>> + Send {
-        ConnectionHandle::send_confirmed(self, frame)
+        self.handle.send_in_generation(
+            frame,
+            self.generation,
+            tokio::time::Instant::now() + MOTOR_TEST_STOP_TIMEOUT,
+        )
     }
 }
 
@@ -112,6 +126,11 @@ pub enum MotorTestCommand {
     /// app-side SITL tap feeds it with normalized actuator outputs).
     StartForward {
         slot: super::source::ForwardSlot,
+    },
+    /// Resize the idle session to the configured M1..MN prefix before a
+    /// start. Ignored while sending; the app sends this before every start.
+    SetMotorCount {
+        motors: usize,
     },
     /// Per-motor PWM models for the next start (sent after every mapping
     /// refresh and before every start).
@@ -172,7 +191,8 @@ impl MotorTestService {
         mpsc::Receiver<MotorTestEvent>,
         tokio::sync::watch::Receiver<Vec<f32>>,
     ) {
-        spawn_on_transport(handle, limits)
+        let generation = handle.generation();
+        spawn_on_transport(BoundTransport { handle, generation }, limits)
     }
 
     /// Stop and await all release transport writes within the overall budget.
@@ -286,6 +306,9 @@ async fn run(
                     MotorTestCommand::StartForward { slot } => {
                         session.start_forward(slot, Instant::now())
                     }
+                    MotorTestCommand::SetMotorCount { motors } => {
+                        session.set_motor_count(motors);
+                    }
                     MotorTestCommand::SetPwmModels { models } => session.set_pwm_models(models),
                     MotorTestCommand::SetValues(values) => session.set_any_values(values),
                     MotorTestCommand::Stop => session.stop(StopReason::Command),
@@ -317,7 +340,8 @@ async fn run(
                         }
                         _ => {}
                     },
-                    Ok(ConnectionEvent::Failed(_)) | Ok(ConnectionEvent::HeartbeatLost { .. }) => {
+                    Ok(ConnectionEvent::Failed(_)) | Ok(ConnectionEvent::LinkError(_))
+                        | Ok(ConnectionEvent::Connected { .. }) | Ok(ConnectionEvent::HeartbeatLost { .. }) => {
                         session.interlock_mut().link_lost();
                         session.stop(StopReason::LinkLost);
                     }
@@ -699,6 +723,24 @@ mod stop_tests {
             events.recv().await,
             Some(MotorTestEvent::StateChanged(SessionState::Idle))
         );
+    }
+
+    #[tokio::test]
+    async fn idle_emergency_never_releases_unowned_outputs() {
+        let (transport, mut writes) = transport();
+        let controls = transport.controls.clone();
+        let (service, _events, _) = spawn_on_transport(transport, limits());
+        let receipt = service
+            .emergency_stop_and_wait()
+            .await
+            .expect("local latch");
+        assert_eq!(receipt.state, SessionState::Emergency);
+        assert_eq!(receipt.released_motors, 0);
+        assert!(
+            writes.try_recv().is_err(),
+            "an idle observer must not release another controller's outputs"
+        );
+        assert!(controls.lock().expect("controls").is_empty());
     }
 
     #[tokio::test]

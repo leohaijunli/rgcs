@@ -30,8 +30,9 @@ body,
 /* Bounded workspaces: content scrolls inside its pane instead of growing a
  * grid row beyond the window's hidden document overflow. */
 .actuator-grid {
+  position: relative;
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr) 320px;
+  grid-template-columns: 236px minmax(0, 1fr) 250px;
   grid-template-rows: minmax(44px, auto) minmax(0, 1fr);
   height: 100%;
   min-height: 0;
@@ -60,12 +61,33 @@ body,
   border-right: 1px solid var(--mg-border);
 }
 
+.motor-tone-row {
+  display: grid;
+  grid-template-columns: 60px minmax(0, 1fr);
+  gap: 6px;
+  align-items: center;
+  margin-top: 6px;
+  font-size: 11px;
+}
+
+.motor-control-switch {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  margin-bottom: 6px;
+}
+.motor-tone-row .phrase-input {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+}
+
 .actuator-mid {
   position: relative;
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
-  padding: 10px;
+  padding: 10px 10px 64px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -106,9 +128,9 @@ body,
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
-  padding: 10px;
+  padding: 10px 10px 64px;
   border-left: 1px solid var(--mg-border);
-  font-size: 12px;
+  font-size: 11.5px;
 }
 
 .actuator-left > .card,
@@ -324,6 +346,22 @@ body,
   accent-color: var(--mg-accent);
 }
 
+.motor-control-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 320px));
+  gap: 8px 18px;
+  justify-content: start;
+}
+
+.motor-control-row {
+  margin: 0;
+}
+
+.motor-control-row input[type='range'] {
+  width: 100%;
+  max-width: 260px;
+}
+
 .motor-value {
   width: 38px;
   text-align: right;
@@ -489,7 +527,7 @@ body,
   opacity: 0.5;
 }
 
-/* ---- Scope tab (signal list left, stacked plots right) ------------------ */
+/* ---- Signal Inspector-style analysis workspace ------------------------- */
 
 .view-tabs {
   margin-left: auto;
@@ -510,18 +548,80 @@ body,
 }
 
 .scope-grid {
-  flex: 1 0 260px;
-  min-height: 260px;
+  position: relative;
+  flex: 1 1 460px;
+  min-height: 460px;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   border: 1px solid var(--mg-border);
   border-radius: 6px;
   overflow: hidden;
 }
 
 .scope-grid.legend-open {
-  grid-template-columns: 250px minmax(0, 1fr);
+  /* The inline style uses the persisted drag width; this is the no-state
+   * fallback for the first paint. */
+  grid-template-columns: minmax(220px, min(300px, calc(100% - 248px))) 8px minmax(0, 1fr);
 }
+
+.scope-grid:has(.stream-panel) {
+  flex: 0 0 auto;
+  height: clamp(360px, 60vh, 560px);
+  min-height: 360px;
+}
+
+.actuator-mid:has(.stream-panel) {
+  padding-bottom: max(64px, var(--stream-bottom-clearance, 0px));
+}
+
+.stream-panel {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--mg-bg-raised);
+  padding: 10px;
+  font-size: 12px;
+  overflow: hidden;
+}
+.stream-panel-heading, .stream-row-heading, .stream-add-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.stream-panel-heading > div, .stream-row-heading > strong { min-width: 0; overflow-wrap: anywhere; }
+.stream-notice, .stream-error { margin: 6px 0; overflow-wrap: anywhere; }
+.stream-columns {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.65fr) minmax(0, 1fr);
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+}
+.stream-search-pane, .stream-settings-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.stream-results, .stream-request-list { overflow-y: auto; min-height: 0; }
+.stream-result.mode-btn { display: flex; gap: 8px; justify-content: space-between; text-align: left; width: 100%; margin-bottom: 4px; }
+.stream-result > span:first-child { overflow-wrap: anywhere; min-width: 0; }
+.stream-selection { flex-shrink: 0; max-height: 65%; overflow-y: auto; margin-bottom: 8px; }
+.stream-fields { margin: 4px 0; }
+.stream-fields summary { cursor: pointer; padding: 4px 0; }
+html.field-mode .stream-fields summary { min-height: 44px; display: flex; align-items: center; }
+.stream-fields > div { overflow-wrap: anywhere; padding: 2px 0; }
+.stream-unknown { display: flex; gap: 6px; align-items: center; }
+.stream-row { border-top: 1px solid var(--mg-border); padding: 7px 0; }
+.stream-row-data { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 5px; }
+.stream-add-row label, .stream-row-data label { display: flex; align-items: center; gap: 6px; }
+.stream-panel .phrase-input { width: 88px; min-width: 44px; margin: 0; }
+.stream-panel .mode-btn { flex: 0 0 auto; }
 
 .scope-grid > .signal-list {
   display: none;
@@ -531,17 +631,87 @@ body,
   display: block;
 }
 
+.scope-resizer {
+  position: relative;
+  min-width: 8px;
+  cursor: col-resize;
+  touch-action: none;
+  background: var(--mg-bg-raised);
+  border-left: 1px solid var(--mg-border);
+  border-right: 1px solid var(--mg-border);
+}
+
+.scope-resizer::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  width: 2px;
+  height: 28px;
+  transform: translateY(-50%);
+  border-radius: 1px;
+  background: var(--mg-muted);
+  opacity: 0.45;
+}
+
+.scope-resizer:hover::after,
+.scope-resizer:focus-visible::after {
+  opacity: 0.9;
+}
+
+.scope-resizer:focus-visible {
+  outline: 2px solid var(--mg-accent);
+  outline-offset: -2px;
+}
+
+html.scope-resizing,
+html.scope-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
 .signal-list {
+  min-width: 0;
   overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
   padding: 8px;
   border-right: 1px solid var(--mg-border);
   background: var(--mg-bg-raised);
   font-size: 12px;
 }
 
+.signal-list-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .signal-list-title {
-  margin-bottom: 6px;
   font-weight: 600;
+}
+
+.signal-pane-switch {
+  display: flex;
+  gap: 4px;
+}
+
+.signal-pane-note {
+  margin: 5px 0 7px;
+  color: var(--mg-muted);
+  font-size: 11px;
+}
+
+.signal-search {
+  width: 100%;
+  margin: 0 0 7px;
+  padding: 5px 7px;
+  border: 1px solid var(--mg-border);
+  border-radius: 4px;
+  background: var(--mg-bg);
+  color: var(--mg-ink);
+  font: inherit;
 }
 
 .signal-group {
@@ -601,6 +771,27 @@ body,
   cursor: pointer;
 }
 
+.signal-color {
+  width: 20px;
+  height: 18px;
+  min-width: 20px !important;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--mg-border);
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.signal-color::-webkit-color-swatch-wrapper {
+  padding: 1px;
+}
+
+.signal-color::-webkit-color-swatch {
+  border: 0;
+  border-radius: 2px;
+}
+
 .signal-row.dim {
   opacity: 0.55;
 }
@@ -614,6 +805,7 @@ body,
 }
 
 .signal-value {
+  flex: none;
   min-width: 64px;
   text-align: right;
   color: var(--mg-muted);
@@ -697,15 +889,18 @@ body,
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  display: flex;
-  flex-direction: column;
+  scrollbar-gutter: stable;
+  display: grid;
+  /* Two independent, always-present plots: top and bottom. Each keeps useful
+   * drawing space; the container scrolls on very short windows instead of
+   * compressing a curve into a strip. */
+  grid-template-rows: repeat(2, minmax(200px, 1fr));
 }
 
 .scope-pane {
-  flex: 1 1 0;
-  /* Leave useful drawing space after the axes, title and legend. Extra
-   * panes scroll instead of compressing their curves into a thin strip. */
-  min-height: 176px;
+  min-width: 0;
+  min-height: 200px;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   border-bottom: 1px solid var(--mg-border);
@@ -715,21 +910,53 @@ body,
   border-bottom: 0;
 }
 
-.scope-pane-title {
+.scope-pane-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
   padding: 3px 8px 0;
+}
+
+.scope-pane-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
   color: var(--mg-muted);
   font-size: 11px;
+  text-overflow: ellipsis;
   text-transform: uppercase;
   letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.scope-pane-count {
+  flex: none;
+  color: var(--mg-muted);
+  font-size: 11px;
 }
 
 .scope-pane-plot {
+  position: relative;
   flex: 1;
+  min-width: 0;
   min-height: 0;
-  padding: 0 4px;
+  margin: 0 4px;
+  overflow: hidden;
+}
+
+.scope-pane-plot > .uplot {
+  /* Canvas/legend dimensions must not feed back into grid row sizing. */
+  position: absolute;
+  inset: 0 auto auto 0;
 }
 
 .scope-pane-plot .u-legend {
+  width: 100%;
+  max-height: 44px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
   font-size: 11px;
   color: var(--mg-ink);
 }
@@ -739,8 +966,10 @@ body,
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 12px;
   color: var(--mg-muted);
   font-size: 12px;
+  text-align: center;
 }
 
 /* On-board log card: SD log list + download progress (features 1–3). */
@@ -789,6 +1018,15 @@ body,
   align-items: baseline;
   gap: 5px;
   white-space: nowrap;
+}
+
+.header-blocked {
+  padding: 1px 5px;
+  border: 1px solid color-mix(in srgb, var(--mg-warn) 60%, var(--mg-border));
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
 }
 
 .bench-state {
@@ -864,6 +1102,12 @@ body,
   border-color: var(--mg-accent);
 }
 
+.link-btn:disabled {
+  border-color: transparent;
+  color: var(--mg-muted);
+  cursor: default;
+}
+
 /* Comparison table: the flexible plot pane stays below it. */
 .motor-tracking {
   display: flex;
@@ -909,6 +1153,121 @@ body,
 
 .logging-section {
   margin-top: 10px;
+}
+
+.logging-drawer {
+  position: fixed;
+  z-index: 8;
+  right: 10px;
+  bottom: 10px;
+  left: 246px;
+  max-height: calc(100% - 64px);
+  padding: 0;
+  overflow: hidden;
+  border-color: color-mix(in srgb, var(--mg-accent) 35%, var(--mg-border));
+  box-shadow: 0 -8px 28px color-mix(in srgb, var(--mg-bg) 72%, transparent);
+}
+
+.target-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.target-endpoint {
+  overflow: hidden;
+  padding: 5px 7px;
+  border: 1px solid var(--mg-border);
+  border-radius: 4px;
+  color: var(--mg-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.target-connect-fields {
+  display: grid;
+  gap: 5px;
+}
+
+.target-connect-fields .phrase-input {
+  width: 100%;
+  margin: 0;
+}
+
+.target-connect-fields .motor-row {
+  margin: 0;
+}
+
+.target-connect-fields .motor-label {
+  width: 64px;
+}
+
+.target-link-action,
+.target-refresh {
+  width: 100%;
+  margin-top: 1px;
+}
+
+.target-summary-row {
+  min-height: 20px;
+}
+
+.target-detail-first {
+  margin-top: 4px;
+}
+
+.target-output-list {
+  display: grid;
+  gap: 3px;
+  margin: 5px 0;
+}
+
+.logging-drawer-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  padding: 5px 8px;
+  background: var(--mg-bg-raised);
+}
+
+.logging-drawer-toggle {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 6px;
+  border: 0;
+  background: transparent;
+  color: var(--mg-ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.logging-drawer-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+.logging-drawer-actions .mode-btn {
+  min-width: 96px;
+  padding-inline: 10px;
+}
+
+.logging-drawer-body {
+  max-height: min(55vh, 430px);
+  padding: 0 10px 10px;
+  overflow: auto;
+  border-top: 1px solid var(--mg-border);
+  background: var(--mg-bg-raised);
+}
+
+.logging-check-row {
+  max-width: 180px;
 }
 
 .motor-table-wrap {
@@ -995,6 +1354,22 @@ body,
     border: 0;
     border-bottom: 1px solid var(--mg-border);
   }
+  .actuator-mid,
+  .actuator-right {
+    padding-bottom: 10px;
+  }
+  .actuator-mid:has(.stream-panel) {
+    padding-bottom: 10px;
+  }
+  .logging-drawer {
+    position: static;
+    max-height: none;
+    margin-top: 8px;
+    box-shadow: none;
+  }
+  .logging-drawer-body {
+    max-height: none;
+  }
   /* The sidebar now owns start controls and the alarm: keep that workflow
    * ahead of the plots and secondary target/logging details when stacked. */
   .actuator-left {
@@ -1029,7 +1404,13 @@ body,
    * remains beside the plots rather than displacing them below a tall list. */
   .scope-grid {
     flex: none;
-    height: 360px;
+    height: 460px;
+  }
+}
+
+@media (max-width: 720px) {
+  .motor-control-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -1070,7 +1451,174 @@ html.field-mode .actuator-grid input[type='checkbox'] {
   flex: none;
 }
 
+html.field-mode .actuator-grid .signal-color {
+  width: 44px;
+  height: 44px;
+  min-width: 44px !important;
+}
+
 html.field-mode .actuator-grid label:has(input[type='checkbox']) {
   min-height: 44px;
   cursor: pointer;
+}
+
+/* ---- Configured-motor bench (1..4) and protocol chips -------------------- */
+.tracking-title,
+.tracking-actions,
+.protocol-pair {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.tracking-title {
+  flex: none;
+}
+
+.tracking-actions {
+  flex: 1;
+  justify-content: flex-end;
+}
+
+.tracking-hint {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip {
+  padding: 1px 6px;
+  border: 1px solid var(--mg-border);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--mg-muted);
+  background: var(--mg-bg);
+}
+
+.chip-ok {
+  border-color: color-mix(in srgb, var(--mg-ok) 55%, var(--mg-border));
+  color: var(--mg-ok);
+}
+
+.chip-warn {
+  border-color: color-mix(in srgb, var(--mg-warn) 55%, var(--mg-border));
+  color: var(--mg-warn);
+}
+
+.protocol-chip {
+  display: inline-block;
+  padding: 0 5px;
+  border: 1px solid var(--mg-border);
+  border-radius: 4px;
+  font-size: 10px;
+  line-height: 16px;
+  color: var(--mg-muted);
+  background: color-mix(in srgb, var(--mg-bg) 70%, transparent);
+}
+
+.protocol-dshot {
+  border-color: color-mix(in srgb, var(--mg-accent) 60%, var(--mg-border));
+  color: var(--mg-accent);
+}
+
+.protocol-pair {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.motor-table .empty-row {
+  padding: 10px 6px;
+  color: var(--mg-muted);
+  font-style: italic;
+  white-space: normal;
+}
+
+.tracking-head {
+  align-items: center;
+}
+
+/* ---- Display-only ESC RPM telemetry ---------------------------------- */
+.rpm-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.rpm-chip {
+  display: flex;
+  gap: 3px;
+  align-items: baseline;
+  padding: 2px 5px;
+  border: 1px solid var(--mg-border);
+  border-radius: 4px;
+  font-size: 10px;
+  line-height: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--mg-muted);
+  background: color-mix(in srgb, var(--mg-bg) 70%, transparent);
+}
+
+.rpm-chip b {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.rpm-chip.is-live {
+  border-color: color-mix(in srgb, var(--mg-ok) 50%, var(--mg-border));
+  color: var(--mg-ok);
+}
+
+.rpm-chip.is-stale {
+  border-color: color-mix(in srgb, var(--mg-warn) 50%, var(--mg-border));
+  color: var(--mg-warn);
+}
+
+.rpm-chip.is-missing {
+  opacity: 0.55;
+}
+
+/* Secondary right-column sections: collapsed by default, opened by warnings. */
+.fold-section {
+  margin-top: 6px;
+}
+
+.fold-head {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 0 0;
+  border: 0;
+  border-top: 1px solid var(--mg-border);
+  background: none;
+  color: var(--mg-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.fold-head .section-title {
+  margin: 0;
+}
+
+.fold-state {
+  color: var(--mg-muted);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.fold-head:disabled {
+  cursor: default;
+  opacity: 1;
 }

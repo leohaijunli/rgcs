@@ -26,6 +26,7 @@ pub mod run;
 pub mod scope;
 pub mod service;
 pub mod source;
+pub mod tone;
 
 pub use interlock::{Interlock, SafetyLimits, HEARTBEAT_STALE};
 pub use mag_alarm::{MagAlarm, MagAlarmConfig, MagAlarmState};
@@ -33,7 +34,7 @@ pub use mapping::{
     build_output_map, mapped_feedback_pwm, MappingIssue, OutputAssignment, OutputMap,
     OutputMapState, ServoChannel, ServoPort, MOTOR_FUNCTION_BASE, SERVO_CHANNELS_PER_PORT,
 };
-pub use protocol::{detect_bank_protocol, DShotRate, OutputProtocol, OutputUnits};
+pub use protocol::{detect_bank_protocol, DShotRate, OutputProtocol, OutputProtocols, OutputUnits};
 pub use pwm::{OutputRange, PwmModel, PwmModelError, DSHOT_MAX_THROTTLE, PWM_US_MAX};
 pub use run::{
     RunAction, RunConfig, RunCoordinator, RunError, RunPhase, RunStatus, RunStep, POST_ROLL,
@@ -357,9 +358,10 @@ impl<S: RpmSource> MotorTestSession<S> {
         if self.state == SessionState::Emergency {
             return;
         }
+        let owns_outputs = self.state.is_sending() || self.release_pending;
         self.state = SessionState::Emergency;
-        self.stop_reason = Some(StopReason::Emergency);
-        self.release_pending = true;
+        self.stop_reason = owns_outputs.then_some(StopReason::Emergency);
+        self.release_pending = owns_outputs;
     }
 
     pub fn reset_emergency(&mut self) {
@@ -382,6 +384,25 @@ impl MotorTestSession<ManualSource> {
 }
 
 impl MotorTestSession<source::AnySource> {
+    /// Resize the bench to the configured M1..MN prefix. Only valid while
+    /// idle: a running preset/release still references the old width. The
+    /// app calls this before every start, then sends that start's values.
+    pub fn set_motor_count(&mut self, motors: usize) -> bool {
+        if motors == 0 || motors > 16 || self.state != SessionState::Idle {
+            return false;
+        }
+        if self.last_values.len() == motors {
+            return true;
+        }
+        self.last_demands = vec![0.0; motors];
+        self.last_values = vec![0.0; motors];
+        self.pwm_models = vec![PwmModel::default(); motors];
+        self.source = source::AnySource::Manual(ManualSource::new(vec![0.0; motors]));
+        self.started_at = None;
+        self.busy_streak = 0;
+        true
+    }
+
     /// Manual start: keep (or restore) the slider source and begin sending.
     pub fn start_manual(&mut self, now: Instant) {
         if matches!(self.state, SessionState::Stopping | SessionState::Emergency) {
@@ -449,6 +470,22 @@ mod tests {
     }
 
     #[test]
+    fn resizing_to_the_active_motor_prefix_resets_idle_slots() {
+        let mut s =
+            MotorTestSession::new(AnySource::Manual(ManualSource::new(vec![0.0; 4])), limits());
+        assert!(s.set_motor_count(2));
+        assert_eq!(s.output_values().len(), 2);
+        assert_eq!(s.release_frames().len(), 2);
+
+        s.start_manual(Instant::now());
+        assert!(!s.set_motor_count(1), "never resize a running session");
+        s.stop(StopReason::Command);
+        s.complete_release();
+        assert!(s.set_motor_count(1));
+        assert_eq!(s.output_values().len(), 1);
+    }
+
+    #[test]
     fn idle_session_sends_nothing() {
         let mut s = session(&[0.0]);
         assert_eq!(s.state(), SessionState::Idle);
@@ -464,6 +501,86 @@ mod tests {
         let frames = s.tick(now);
         assert_eq!(frames.len(), 2, "one frame per motor");
         assert_eq!(s.state(), SessionState::ManualRunning);
+    }
+
+    #[test]
+    fn dshot_forward_sends_normalized_demand_and_never_commands_idle_motors() {
+        // R1 acceptance: a source's 1000 µs idle is normalized demand 0 (not
+        // 1000 mixer counts); demands stay monotonic, and only demanded
+        // motors are activated, incl. 1/2/4 motors with reversal/thrust model.
+        for motors in [1usize, 2, 4] {
+            let slot = std::sync::Arc::new(std::sync::Mutex::new(
+                super::source::ForwardState::new(motors),
+            ));
+            let values: Vec<f32> = [0.0, 0.5, 1.0, 0.5][..motors].to_vec();
+            let raw: Vec<u16> = [1000, 1500, 2000, 1500][..motors].to_vec();
+            {
+                let mut st = slot.lock().expect("slot");
+                st.values = values.clone();
+                st.raw_pwm = raw;
+                st.last_update_s = Some(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .expect("clock")
+                        .as_secs_f64(),
+                );
+            }
+            let models: Vec<PwmModel> = (0..motors)
+                .map(|motor| {
+                    PwmModel::dshot(
+                        0.055,
+                        motor % 2 == 1,
+                        if motor == 2 { 0.5 } else { 0.0 },
+                        OutputProtocol::DShot {
+                            rate: DShotRate::R600,
+                        },
+                    )
+                    .expect("dshot model")
+                })
+                .collect();
+            let mut s = MotorTestSession::new(
+                AnySource::Manual(ManualSource::new(vec![0.0; motors])),
+                limits(),
+            );
+            s.set_pwm_models(models);
+            let now = Instant::now();
+            s.interlock_mut().observe_heartbeat(false, now);
+            s.start_forward(slot, now);
+            let frames = s.tick(now);
+            let expected: Vec<u8> = values
+                .iter()
+                .enumerate()
+                .filter(|(_, value)| **value > 0.0)
+                .map(|(motor, _)| (motor + 1) as u8)
+                .collect();
+            let mut commanded = Vec::new();
+            for frame in &frames {
+                let MavMessage::COMMAND_LONG(command) = frame else {
+                    panic!("ACTUATOR_TEST frame");
+                };
+                commanded.push(command.param5 as u8);
+                assert_eq!(command.param2, COMMAND_TIMEOUT_S);
+            }
+            assert_eq!(commanded, expected, "{motors} motors: commanded functions");
+            assert!(
+                !commanded.contains(&1) || values[0] > 0.0,
+                "{motors} motors: idle motor 1 was activated"
+            );
+            let outputs = s.output_values();
+            for (motor, value) in values.iter().enumerate() {
+                if *value == 0.0 {
+                    assert_eq!(outputs[motor], 0.0, "idle motor {motor}");
+                } else if !(motor % 2 == 1 && *value == 1.0) {
+                    // A reversed maximum legitimately maps to command 0.
+                    assert!(
+                        (outputs[motor] - value).abs() < 1e-6,
+                        "{motors} motors: M{} output {} != demand {value}",
+                        motor + 1,
+                        outputs[motor]
+                    );
+                }
+            }
+        }
     }
 
     #[test]
