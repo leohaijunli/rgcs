@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900" role="img" aria-labelledby="title desc">
+  <title id="title">Q-Mag navigation and engineering menu concept</title>
+  <desc id="desc">Two stable top rows separate aircraft state and commands from survey stages and task context. Three menu panels show independent examples for application, survey task, and selected segment scopes. This is a static design for owner review, not an implemented interface.</desc>
+  <defs>
+    <style>
+      svg{--mg-bg:#0b1220;--mg-bg-raised:#111b2e;--mg-border:#22314d;--mg-ink:#dbe4f5;--mg-muted:#8aa0c4;--mg-accent:#22d3ee;--mg-ok:#22c55e;--mg-warn:#eab308;--mg-error:#ef4444;font-family:Inter,Arial,sans-serif;background:var(--mg-bg)}
+      text{fill:var(--mg-ink);font-size:14px}.bg{fill:var(--mg-bg)}.panel{fill:var(--mg-bg-raised)}.edge{stroke:var(--mg-border);stroke-width:1}.input{fill:var(--mg-bg);stroke:var(--mg-border);stroke-width:1}.muted{fill:var(--mg-muted)}.small{font-size:12px}.bold{font-weight:600}.title{font-size:22px;font-weight:600}.accent{fill:var(--mg-accent)}.ok{fill:var(--mg-ok)}.warn{fill:var(--mg-warn)}.error{fill:var(--mg-error)}.mono{font-family:"JetBrains Mono",Consolas,monospace;font-variant-numeric:tabular-nums}.eyebrow{font-size:11px;letter-spacing:1.3px;fill:var(--mg-muted)}
+    </style>
+  </defs>
+  <rect width="1440" height="900" class="bg"/>
+  <rect width="1440" height="56" class="panel"/>
+  <path d="M0 56H1440" class="edge"/>
+  <rect x="12" y="12" width="34" height="32" rx="4" fill="#22d3ee" opacity=".10"/>
+  <path d="M21 21H37M21 28H37M21 35H37" stroke="#22d3ee" stroke-width="1.8"/>
+  <text x="59" y="34" style="font-size:18px;font-weight:600">Q-Mag</text>
+  <path d="M142 17V40" class="edge"/>
+  <text x="158" y="33">Saanich project ⌄</text>
+  <text x="392" y="33" class="small muted">GLOBAL · identity, aircraft state and commands</text>
+  <circle cx="742" cy="28" r="3.5" class="ok"/><text x="754" y="33" class="small">PX4</text>
+  <text x="805" y="33" class="small muted">DISARMED</text><text x="902" y="33" class="small">Hold mode ⌄</text>
+  <text x="1014" y="33" class="small ok">RTK FIX</text><text x="1099" y="33" class="mono bold">87%</text>
+  <rect x="1152" y="12" width="54" height="32" rx="4" class="input"/><text x="1165" y="33" class="small">Hold</text>
+  <rect x="1214" y="12" width="48" height="32" rx="4" class="input"/><text x="1226" y="33" class="small">RTL</text>
+  <text x="1276" y="33" class="small">Commands ⌄</text><text x="1374" y="33" class="small warn">Alerts 2</text>
+  <path d="M0 112H1440" class="edge"/>
+  <text x="20" y="89" class="muted">1 Prepare</text><circle cx="104" cy="84" r="3" class="ok"/>
+  <rect x="124" y="68" width="81" height="32" rx="4" fill="#22d3ee" opacity=".10"/><text x="142" y="89" class="accent bold">2 Plan</text>
+  <text x="226" y="89" class="muted">3 Preflight</text><text x="314" y="89" class="small warn">2</text><text x="349" y="89" class="muted">4 Fly</text><text x="420" y="89" class="muted">5 Review</text>
+  <path d="M518 70V98" class="edge"/><text x="538" y="89" class="bold">West block ⌄</text><text x="665" y="89" class="small muted">Draft r07 / Aircraft r06</text>
+  <text x="893" y="89" class="small">Terrain · HRDEM 1 m ⌄</text><text x="1113" y="89" class="small muted">Compare</text>
+  <rect x="1220" y="68" width="204" height="32" rx="4" fill="#22d3ee"/><text x="1260" y="89" style="fill:#04242e;font-weight:600">Review 2 issues →</text>
+
+  <text x="32" y="164" class="title">A clear place for every command</text>
+  <text x="32" y="191" class="muted">Three independent menu states for review · shared command definitions · explicit object scope</text>
+
+  <!-- Application menu example. -->
+  <text x="32" y="229" class="eyebrow">A · APPLICATION SCOPE</text>
+  <rect x="32" y="246" width="424" height="476" rx="5" class="panel" stroke="#22314d"/>
+  <text x="52" y="278" class="bold">Application menu</text><text x="329" y="278" class="small muted">Always available</text>
+  <path d="M32 294H456" class="edge"/>
+  <text x="56" y="326" class="bold">Project</text><text x="429" y="326" class="muted">›</text>
+  <text x="56" y="350" class="small muted">New · Open · Recent · Import / export</text>
+  <rect x="44" y="369" width="400" height="59" rx="3" fill="#22d3ee" opacity=".07"/><path d="M44 372V425" stroke="#22d3ee" stroke-width="2"/>
+  <text x="56" y="392" class="accent bold">Resources</text><text x="429" y="392" class="muted">›</text>
+  <text x="56" y="416" class="small muted">Maps · Elevation · Profiles · Survey recipes</text>
+  <text x="56" y="458" class="bold">Tools</text><text x="429" y="458" class="muted">›</text>
+  <text x="56" y="482" class="small muted">Parameters · Inspector · Motor test · Flight logs</text>
+  <text x="56" y="524" class="bold">View</text><text x="429" y="524" class="muted">›</text>
+  <text x="56" y="548" class="small muted">Outline · Inspector · Profile · Field / theme</text>
+  <text x="56" y="590" class="bold">Settings</text><text x="429" y="590" class="muted">›</text>
+  <text x="56" y="614" class="small muted">Connection · Devices · Application preferences</text>
+  <path d="M52 636H436" class="edge"/>
+  <text x="56" y="668" class="bold">Help</text><text x="429" y="668" class="muted">›</text>
+  <text x="56" y="692" class="small muted">Shortcuts · Documentation · About</text>
+
+  <!-- Active task menu example. -->
+  <text x="508" y="229" class="eyebrow">B · ACTIVE SURVEY SCOPE</text>
+  <rect x="508" y="246" width="424" height="476" rx="5" class="panel" stroke="#22314d"/>
+  <text x="528" y="278" class="bold">West block</text><text x="808" y="278" class="small muted">Survey menu</text>
+  <path d="M508 294H932" class="edge"/>
+  <text x="532" y="325">New survey</text><text x="532" y="357">Rename survey</text><text x="532" y="389">Duplicate survey</text><text x="532" y="421">Save as recipe</text>
+  <path d="M528 438H912" class="edge"/>
+  <text x="532" y="467">Import boundary</text><text x="532" y="499">Import mission</text><text x="532" y="531">Export mission</text>
+  <path d="M528 548H912" class="edge"/>
+  <text x="532" y="577">Compare revisions</text><text x="532" y="609">Flight sessions</text><text x="532" y="641">Archive survey</text>
+  <path d="M528 658H912" class="edge"/>
+  <text x="532" y="689">Aircraft mission</text><text x="739" y="689" class="small muted">PX4 · read / clear</text><text x="905" y="689" class="muted">›</text>
+
+  <!-- Selected object menu example. -->
+  <text x="984" y="229" class="eyebrow">C · SELECTED OBJECT SCOPE</text>
+  <rect x="984" y="246" width="424" height="476" rx="5" class="panel" stroke="#22314d"/>
+  <text x="1004" y="278" class="bold">Survey A / S07</text><text x="1280" y="278" class="small muted">Segment actions</text>
+  <path d="M984 294H1408" class="edge"/>
+  <text x="1008" y="325">Insert before</text><text x="1008" y="357">Insert after</text><text x="1008" y="389">Duplicate</text><text x="1008" y="421">Move / rotate</text><text x="1380" y="421" class="muted">›</text><text x="1008" y="453">Reverse traversal</text>
+  <path d="M1004 470H1388" class="edge"/>
+  <text x="1008" y="499">Edit actions</text><text x="1008" y="531">Show compiled points</text><text x="1008" y="563">Reset overrides</text>
+  <path d="M1004 580H1388" class="edge"/>
+  <text x="1008" y="609">Hide in editor</text><text x="1282" y="609" class="small muted">Display only</text>
+  <text x="1008" y="641">Include in mission</text><text x="1374" y="641" class="accent">✓</text>
+  <path d="M1004 658H1388" class="edge"/>
+  <text x="1008" y="689" class="error">Delete selected segment</text>
+
+  <!-- Review principles beneath the example states. -->
+  <path d="M32 758H1408" class="edge"/>
+  <text x="32" y="792" class="bold">Stable positions</text>
+  <text x="32" y="818" class="small muted">Aircraft state, battery, Hold and RTL retain priority.</text>
+  <text x="508" y="792" class="bold">Explicit meaning</text>
+  <text x="508" y="818" class="small muted">Fly changes the view; Commands operate the aircraft.</text>
+  <text x="984" y="792" class="bold">Quiet hierarchy</text>
+  <text x="984" y="818" class="small muted">Aligned labels, restrained color, one stage action.</text>
+  <text x="32" y="873" class="small muted">Static design concept · menus shown as separate examples · implementation on hold for owner review</text>
+</svg>

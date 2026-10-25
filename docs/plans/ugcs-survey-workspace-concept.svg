@@ -1,0 +1,155 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="960" viewBox="0 0 1440 960" role="img" aria-labelledby="title desc">
+  <title id="title">Q-Mag Survey workspace — engineering layout concept</title>
+  <desc id="desc">A two-row navigation system, stable aircraft status and commands, a collapsible route outline, a central survey map, a contextual inspector and a linked terrain profile. This is a static design illustration with schematic geometry and illustrative values, awaiting owner review.</desc>
+  <defs>
+    <style>
+      svg{--mg-bg:#0b1220;--mg-bg-raised:#111b2e;--mg-border:#22314d;--mg-ink:#dbe4f5;--mg-muted:#8aa0c4;--mg-accent:#22d3ee;--mg-ok:#22c55e;--mg-warn:#eab308;--mg-error:#ef4444;--mg-mag:#c084fc;font-family:Inter,Arial,sans-serif;background:var(--mg-bg)}
+      text{fill:var(--mg-ink);font-size:14px} .muted{fill:var(--mg-muted)} .small{font-size:12px} .mono{font-family:"JetBrains Mono",Consolas,monospace;font-variant-numeric:tabular-nums} .title{font-size:18px;font-weight:600} .bold{font-weight:600} .eyebrow{font-size:11px;letter-spacing:1.3px;fill:var(--mg-muted)}
+      .bg{fill:var(--mg-bg)} .panel{fill:var(--mg-bg-raised)} .edge{stroke:var(--mg-border);stroke-width:1} .input{fill:var(--mg-bg);stroke:var(--mg-border);stroke-width:1} .accent{fill:var(--mg-accent)} .ok{fill:var(--mg-ok)} .warn{fill:var(--mg-warn)} .error{fill:var(--mg-error)} .mag{fill:var(--mg-mag)}
+      .contour{fill:none;stroke:var(--mg-muted);stroke-width:1;opacity:.12} .survey{fill:none;stroke:var(--mg-accent);stroke-width:2;opacity:.58} .transit{fill:none;stroke:var(--mg-muted);stroke-width:2;stroke-dasharray:6 5} .tie{fill:none;stroke:var(--mg-warn);stroke-width:2;stroke-dasharray:9 4}
+    </style>
+    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse"><path d="M48 0H0V48" fill="none" stroke="#22314d" stroke-width=".6" opacity=".32"/></pattern>
+    <clipPath id="aoi"><path d="M354 236L837 193L1001 475L477 555L332 386Z"/></clipPath>
+  </defs>
+  <rect width="1440" height="960" class="bg"/>
+
+  <!-- Global row: status and commands occupy stable positions. -->
+  <rect width="1440" height="56" class="panel"/>
+  <path d="M0 56H1440" class="edge"/>
+  <path d="M20 21H38M20 28H38M20 35H38" fill="none" stroke="#8aa0c4" stroke-width="1.8"/>
+  <text x="56" y="34" class="title">Q-Mag</text>
+  <path d="M137 16V40" class="edge"/>
+  <text x="152" y="33">Saanich project</text><text x="270" y="33" class="muted">⌄</text>
+  <text x="411" y="33" class="small muted">CONCEPT · AWAITING REVIEW</text>
+  <circle cx="653" cy="28" r="3.5" class="ok"/><text x="665" y="33" class="small">PX4 · connected</text>
+  <text x="787" y="33" class="small muted">DISARMED</text>
+  <text x="889" y="33" class="small">Mode: Hold ⌄</text>
+  <circle cx="1005" cy="28" r="3.5" class="ok"/><text x="1017" y="33" class="small">RTK FIX</text>
+  <text x="1099" y="33" class="mono bold">87%</text>
+  <rect x="1152" y="12" width="54" height="32" rx="4" class="input"/><text x="1165" y="33" class="small">Hold</text>
+  <rect x="1214" y="12" width="48" height="32" rx="4" class="input"/><text x="1226" y="33" class="small">RTL</text>
+  <text x="1276" y="33" class="small">Commands ⌄</text>
+  <text x="1362" y="33" class="small muted">Alerts</text>
+  <circle cx="1410" cy="27" r="10" fill="none" stroke="#eab308"/><text x="1406" y="32" class="small warn">2</text>
+
+  <!-- Task row: views, active object, resources, one primary action. -->
+  <rect y="56" width="1440" height="56" class="bg"/><path d="M0 112H1440" class="edge"/>
+  <text x="20" y="89" class="muted">1 Prepare</text><circle cx="104" cy="84" r="3" class="ok"/>
+  <rect x="124" y="68" width="81" height="32" rx="4" fill="#22d3ee" opacity=".10"/>
+  <text x="142" y="89" class="accent bold">2 Plan</text><path d="M142 105H188" stroke="#22d3ee" stroke-width="2"/>
+  <text x="226" y="89" class="muted">3 Preflight</text><text x="314" y="89" class="small warn">2</text>
+  <text x="349" y="89" class="muted">4 Fly</text><text x="420" y="89" class="muted">5 Review</text>
+  <path d="M518 70V98" class="edge"/>
+  <text x="538" y="89" class="bold">West block ⌄</text>
+  <text x="665" y="89" class="small muted">Draft r07 / Aircraft r06</text>
+  <rect x="866" y="68" width="181" height="32" rx="4" class="input"/><circle cx="880" cy="84" r="3" class="ok"/><text x="891" y="89" class="small">Terrain · HRDEM 1 m ⌄</text>
+  <text x="1064" y="89" class="small muted">Undo</text><text x="1113" y="89" class="small muted">Compare</text>
+  <rect x="1220" y="68" width="204" height="32" rx="4" fill="#22d3ee"/>
+  <text x="1260" y="89" style="fill:#04242e;font-weight:600">Review 2 issues →</text>
+
+  <!-- Map is the primary working surface. -->
+  <rect x="0" y="112" width="1088" height="538" fill="url(#grid)"/>
+  <path d="M253 182C390 120 444 269 569 221S832 117 1041 179M251 220C401 151 448 312 579 258S843 153 1060 220M255 259C408 193 455 352 591 297S851 191 1077 259M258 300C416 232 463 392 601 338S863 231 1078 300M269 342C421 278 477 435 610 381S871 273 1078 342M282 385C435 321 484 477 628 423S883 315 1080 386M287 427C453 365 497 519 641 467S896 358 1080 429M301 470C467 408 512 561 655 512S909 403 1081 471M305 513C478 449 521 604 670 553S925 446 1080 514M299 555C488 491 539 646 685 596S938 489 1080 556" class="contour"/>
+  <path d="M354 236L837 193L1001 475L477 555L332 386Z" fill="#22d3ee" fill-opacity=".035" stroke="#22d3ee" stroke-opacity=".5" stroke-width="1.5"/>
+  <g clip-path="url(#aoi)">
+    <path d="M325 241L867 210M333 266L895 232M341 292L925 257M353 317L941 282M366 342L961 307M381 367L975 331M397 392L986 355M414 417L997 380M432 442L1002 405M450 467L1001 430M469 492L989 455M489 517L976 480" class="survey"/>
+    <path d="M570 200L673 553M752 180L869 540" class="tie"/>
+    <path d="M397 392L986 355" stroke="#0b1220" stroke-width="8" fill="none"/>
+    <path d="M397 392L986 355" stroke="#22d3ee" stroke-width="3.5" fill="none"/>
+    <path d="M678 374L731 371" stroke="#ef4444" stroke-width="5"/>
+  </g>
+  <g fill="#0b1220" stroke="#22d3ee" stroke-width="1.5"><circle cx="354" cy="236" r="4"/><circle cx="837" cy="193" r="4"/><circle cx="1001" cy="475" r="4"/><circle cx="477" cy="555" r="4"/><circle cx="332" cy="386" r="4"/></g>
+  <rect x="522" y="178" width="178" height="30" rx="4" class="panel"/><text x="536" y="198" class="small">Survey A · 12 primary lines</text>
+  <rect x="419" y="357" width="90" height="27" rx="4" class="panel"/><text x="432" y="375" class="small accent bold">S07 selected</text>
+  <path d="M702 353l8 14h-16Z" fill="#ef4444"/><text x="699" y="364" style="font-size:10px;fill:#0b1220;font-weight:700">!</text>
+  <path d="M713 360L762 338" stroke="#8aa0c4" stroke-width="1"/>
+  <rect x="762" y="283" width="221" height="65" rx="4" class="panel" stroke="#22314d"/>
+  <text x="776" y="305" class="small bold">S07 · climb constraint</text>
+  <text x="776" y="328" class="small mono muted">2.8 m/s needed · 2.0 limit</text>
+  <path d="M291 583L329 552L366 566L349 519L362 458L352 237" class="transit"/>
+  <path d="M489 516L458 583L324 608" class="transit"/>
+  <path d="M366 566C341 534 387 535 366 566C340 592 340 545 366 566C396 592 392 544 366 566C390 541 342 540 366 566" fill="none" stroke="#c084fc" stroke-width="2"/>
+  <circle cx="291" cy="583" r="10" class="panel" stroke="#22c55e"/><text x="287" y="588" class="small ok">T</text>
+  <circle cx="324" cy="608" r="10" class="panel" stroke="#8aa0c4"/><text x="320" y="613" class="small muted">L</text>
+  <text x="389" y="603" class="small muted">Approach and return are part of the plan</text>
+  <path d="M1046 163V132M1046 132l-5 9m5-9 5 9" stroke="#8aa0c4" fill="none"/><text x="1041" y="179" class="small muted">N</text>
+  <rect x="820" y="603" width="251" height="31" rx="4" class="panel"/><text x="835" y="624" class="small muted">Select  ·  Boundary  ·  Line  ·  2D / 3D</text>
+
+  <!-- Outline: semantic objects, not a wall of raw waypoints. -->
+  <rect x="16" y="132" width="222" height="504" rx="5" class="panel" stroke="#22314d"/>
+  <text x="32" y="158" class="bold">Route outline</text><text x="211" y="158" class="muted">‹</text>
+  <text x="32" y="180" class="small muted">Flight order · draft r07</text>
+  <path d="M16 192H238" class="edge"/>
+  <circle cx="36" cy="215" r="4" class="ok"/><text x="51" y="220">Takeoff</text>
+  <path d="M31 247H41" stroke="#8aa0c4" stroke-dasharray="3 2"/><text x="51" y="252">Approach</text>
+  <circle cx="36" cy="279" r="4" class="mag"/><text x="51" y="284">Calibration</text>
+  <text x="31" y="316" class="accent">⌄</text><text x="51" y="316" class="bold">Survey A</text><text x="202" y="316" class="small muted">12</text>
+  <text x="51" y="348" class="small muted">› S01–S06</text>
+  <rect x="24" y="359" width="206" height="32" rx="3" fill="#22d3ee" opacity=".10"/>
+  <path d="M24 361V389" stroke="#22d3ee" stroke-width="2"/><text x="51" y="380" class="mono accent">S07</text><text x="109" y="380" class="small muted">240 m</text><text x="207" y="380" class="small error">!</text>
+  <text x="51" y="412" class="small muted">› S08–S12</text>
+  <path d="M31 439H41" stroke="#eab308" stroke-width="2"/><text x="51" y="444">Tie lines</text><text x="209" y="444" class="small muted">2</text>
+  <path d="M31 471H41" stroke="#8aa0c4" stroke-dasharray="3 2"/><text x="51" y="476">Return</text>
+  <circle cx="36" cy="503" r="4" fill="none" stroke="#8aa0c4"/><text x="51" y="508">Landing</text>
+  <path d="M32 528H222" class="edge"/>
+  <rect x="32" y="544" width="190" height="32" rx="4" class="input"/><text x="78" y="565" class="small">+ Add segment</text>
+  <text x="32" y="600" class="small muted">Hide ≠ exclude from mission</text>
+  <text x="32" y="620" class="small muted">Source IDs survive regeneration</text>
+
+  <!-- Context inspector. -->
+  <rect x="1088" y="112" width="352" height="800" class="panel"/><path d="M1088 112V912" class="edge"/>
+  <text x="1108" y="145" class="eyebrow">SELECTED LINE</text><text x="1405" y="145" class="muted">×</text>
+  <text x="1108" y="177" class="title">S07 / Survey A</text>
+  <text x="1108" y="201" class="small muted">Primary · 240 m · magnetic recipe</text>
+  <text x="1113" y="238" class="accent bold">Basic</text><text x="1176" y="238" class="small muted">Advanced</text><text x="1267" y="238" class="small muted">Actions</text><text x="1343" y="238" class="small muted">Checks 2</text>
+  <path d="M1108 249H1420" class="edge"/><path d="M1108 249H1153" stroke="#22d3ee" stroke-width="2"/>
+  <text x="1108" y="278" class="small muted">Target AGL</text><text x="1270" y="278" class="small muted">Survey speed</text>
+  <rect x="1108" y="291" width="146" height="36" rx="4" class="input"/><text x="1120" y="315" class="mono">50.0</text><text x="1231" y="315" class="small muted">m</text>
+  <rect x="1270" y="291" width="150" height="36" rx="4" class="input"/><text x="1282" y="315" class="mono">5.0</text><text x="1384" y="315" class="small muted">m/s</text>
+  <text x="1108" y="354" class="small muted">Line spacing</text><text x="1270" y="354" class="small muted">Azimuth</text>
+  <rect x="1108" y="367" width="146" height="36" rx="4" class="input"/><text x="1120" y="391" class="mono">20.0</text><text x="1231" y="391" class="small muted">m</text>
+  <rect x="1270" y="367" width="150" height="36" rx="4" class="input"/><text x="1282" y="391" class="mono">73.0</text><text x="1400" y="391" class="small muted">°</text>
+  <text x="1108" y="435" class="small muted">Height reference</text>
+  <rect x="1108" y="448" width="312" height="36" rx="4" class="input"/><text x="1120" y="472">Terrain · AGL above DTM</text><text x="1400" y="472" class="muted">⌄</text>
+  <text x="1108" y="509" class="small muted">HRDEM · 1 m · CGVD2013 → EGM96</text>
+  <text x="1108" y="541" class="small muted">Minimum DSM clearance</text><text x="1334" y="541" class="mono">12.0 m</text>
+  <path d="M1108 560H1420" class="edge"/>
+  <text x="1108" y="586" class="small muted">Inherited from recipe</text><text x="1108" y="610" class="small">Lead-in 30 m · Lead-out 30 m</text>
+  <rect x="1108" y="630" width="312" height="88" rx="4" class="bg"/><path d="M1108 633V715" stroke="#ef4444" stroke-width="2"/>
+  <text x="1122" y="654" class="small bold">S07 · climb limit</text>
+  <text x="1122" y="677" class="small mono muted">Required 2.8 / allowed 2.0 m/s</text>
+  <text x="1122" y="702" class="small accent">Locate span and edit constraint →</text>
+  <text x="1108" y="744" class="small warn">Return · DEM coverage needs review</text>
+  <path d="M1108 768H1420" class="edge"/>
+  <text x="1108" y="796" class="small muted">Calculated r07 · 2 issues to resolve</text>
+  <rect x="1108" y="814" width="312" height="36" rx="4" class="input"/><text x="1217" y="838">Recalculate</text>
+  <text x="1108" y="878" class="small muted">Preview, fields and checks share r07</text>
+
+  <!-- Shared, linked profile. -->
+  <rect x="0" y="650" width="1088" height="262" class="panel"/><path d="M0 650H1088" class="edge"/>
+  <text x="20" y="678" class="bold">Terrain profile</text>
+  <text x="169" y="678" class="small muted">Whole route</text><rect x="268" y="660" width="126" height="29" rx="4" class="bg"/><text x="282" y="679" class="small accent">Selected line S07</text><text x="415" y="678" class="small muted">Live</text>
+  <text x="690" y="678" class="small muted">DTM</text><path d="M667 674H683" stroke="#8aa0c4" stroke-width="2"/>
+  <text x="757" y="678" class="small muted">DSM</text><path d="M734 674H750" stroke="#eab308" stroke-width="2"/>
+  <text x="836" y="678" class="small muted">Plan</text><path d="M813 674H829" stroke="#22d3ee" stroke-width="2"/>
+  <text x="913" y="678" class="small muted">AGL band ±3 m</text>
+  <text x="20" y="711" class="small muted">AMSL (EGM96), m</text><text x="789" y="711" class="small mono muted">s = 145 m · revision r07</text>
+  <path d="M75 738H1050M75 778H1050M75 818H1050M75 850H1050" class="edge"/>
+  <text x="36" y="742" class="small mono muted">120</text><text x="43" y="782" class="small mono muted">80</text><text x="43" y="822" class="small mono muted">40</text>
+  <path d="M75 826L170 818L245 824L330 809L420 782L490 784L565 800L640 810L715 813L790 803L875 813L980 831L1050 829V850H75Z" fill="#8aa0c4" opacity=".07"/>
+  <path d="M75 826L170 818L245 824L330 809L420 782L490 784L565 800L640 810L715 813L790 803L875 813L980 831L1050 829" fill="none" stroke="#8aa0c4" stroke-width="1.8"/>
+  <path d="M75 821L170 813L245 819L330 804L420 777L490 779L565 785L580 785L590 801L640 805L715 808L790 798L875 808L980 826L1050 824" fill="none" stroke="#eab308" stroke-width="1.4" opacity=".6"/>
+  <path d="M75 776L170 768L245 774L330 759L420 732L490 734L565 750L640 760L715 763L790 753L875 763L980 781L1050 779" fill="none" stroke="#22d3ee" stroke-width="8" opacity=".10"/>
+  <path d="M75 776L170 768L245 774L330 759L420 732L490 734L565 750L640 760L715 763L790 753L875 763L980 781L1050 779" fill="none" stroke="#22d3ee" stroke-width="2.2"/>
+  <rect x="330" y="728" width="92" height="121" fill="#ef4444" opacity=".055"/><path d="M330 759L420 732" stroke="#ef4444" stroke-width="3"/>
+  <path d="M663 727V850" stroke="#dbe4f5" stroke-width="1" stroke-dasharray="3 3" opacity=".5"/><circle cx="663" cy="761" r="4" fill="#111b2e" stroke="#22d3ee" stroke-width="2"/>
+  <text x="73" y="871" class="small mono muted">0</text><text x="313" y="871" class="small mono muted">60</text><text x="553" y="871" class="small mono muted">120</text><text x="793" y="871" class="small mono muted">180</text><text x="1023" y="871" class="small mono muted">240 m</text>
+  <text x="20" y="897" class="small muted">Click a profile span to select the same line and field on the map</text>
+
+  <!-- One task summary; all values are illustrative. -->
+  <rect y="912" width="1440" height="48" class="bg"/><path d="M0 912H1440" class="edge"/>
+  <text x="20" y="940" class="small">6.2 ha</text><text x="96" y="940" class="small muted">12 primary + 2 tie</text>
+  <text x="244" y="940" class="small">3.8 km total</text><text x="363" y="940" class="small">ETA 16:30</text><text x="467" y="940" class="small">142 / 500 items · profile limit</text>
+  <text x="729" y="940" class="small warn">2 checks to resolve</text>
+  <text x="981" y="940" class="small muted">Static concept · schematic geometry / illustrative values</text>
+</svg>
