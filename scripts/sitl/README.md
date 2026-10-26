@@ -2,6 +2,9 @@
 
 Added in Phase 0 (task 5), acceptance per docs/ARCHITECTURE.md.
 
+- `setup_px4_sitl.sh` — Docker-only PX4 SIH workflow for developer setup,
+  build, launch, shell, update and clean (`sim` builds and runs). It mirrors
+  Settings → Vehicle into `PX4_HOME_*` and mounts `px4-rc.mavlink` on v1.17.
 - `run_sitl_docker.sh` — headless PX4 SITL in Docker. `PX4_GCS_BROADCAST=1`
   turns it into a LAN SITL server reachable by an unchanged MagGCS
   (`udpin:0.0.0.0:14550`) — see docs/sitl-server.md.

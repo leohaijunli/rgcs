@@ -31,7 +31,8 @@ cargo build --release -p maggcs-app
 
 Development: `npm --prefix frontend run dev` (Vite on :5173/5199) plus
 `cargo run -p maggcs-app`; the desktop shell serves the built `dist/` in
-release mode. PX4 SITL: `scripts/sitl/run_sitl_docker.sh`.
+release mode. PX4 SITL: `scripts/sitl/setup_px4_sitl.sh sim` (or
+`scripts/sitl/run_sitl_docker.sh` for headless integration tests).
 
 ### Windows tool-window verification
 
