@@ -81,6 +81,11 @@ active run, confirm a new recording, wait 1 s pre-roll, accept the operator's
 motor start, then wait 1 s post-roll after confirmed release before stopping
 capture. Its stop request remains bound to the original target connection.
 
+Schema-v1 motor-test manifests remain readable when their PWM snapshots predate
+`range_source`, `protocol` and `dshot_min`. Those missing fields deserialize as
+`Fallback`, `Unknown` and `0.0`; recorded endpoints and flags are preserved.
+Malformed values and missing original required fields still fail to load.
+
 MR-16 regression commands:
 
 ```bash
@@ -128,6 +133,18 @@ permission survival across reload. Hardware behavior remains part of the
 props-off acceptance session.
 
 ## Main serial target reuse
+
+The selected Motor Test target is its FC: either the dedicated serial PX4 or
+the explicitly borrowed main serial PX4. A dedicated connection passively probes
+the selected port for a PX4, adopts its actual system/component IDs, and keeps
+MagGCS's own IDs distinct; the operator does not supply a routing ID.
+`actuator_status` connection, endpoint, heartbeat, armed/mode and parameter
+fields describe that selected FC. The retained target heartbeat is seeded at
+transport handoff, so status is available before the next heartbeat arrives. A
+dedicated target works with no primary connection; a borrowed target uses the
+primary transport and parameter worker. Only a fresh matching PX4 heartbeat
+counts as alive, and unrelated primary-link state never fills missing target
+data. The UI guide names the next gate and pulses its matching control.
 
 `main_link_service::actuator_use_main_target` borrows the primary serial
 connection and its existing parameter worker. The UI echoes the offered

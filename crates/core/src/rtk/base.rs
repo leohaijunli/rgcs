@@ -492,7 +492,7 @@ impl RtkBaseServiceHandle {
         }
         let id = BaseSessionId(
             NEXT_SESSION
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
                 .map_err(|_| BaseError::Worker("session IDs exhausted".into()))?,
         );
         self.inner.activity.send_replace(None);

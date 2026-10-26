@@ -157,7 +157,7 @@ impl InventoryRegistry {
         }
         let id = SerialLeaseId(
             NEXT_LEASE
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
                 .map_err(|_| SerialDiscoveryError::IdExhausted)?,
         );
         let revision = next_revision()?;

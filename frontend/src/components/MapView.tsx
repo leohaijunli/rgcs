@@ -13,8 +13,6 @@ import { useLinkStore } from '../stores/link'
 import { useTelemetryStore } from '../stores/telemetry'
 import { useUiStore } from '../stores/ui'
 import { useTerrainStore } from '../stores/terrain'
-import { TRAIL_AGL_HI_M, TRAIL_AGL_LO_M } from '../cesium/constants'
-import { TRAIL_BELOW_GROUND, TRAIL_RAMP } from '../cesium/trail'
 import MapToolbar from './MapToolbar'
 
 /** Live vehicle ground sampling: at most one sample per this interval, or
@@ -48,7 +46,7 @@ export default function MapView() {
     x: number
     y: number
   } | null>(null)
-  const { initError, setSnapshot, setMeshOffset, setVehicleGround, setTrailByAgl, setMission, setTerrainOverlay, setTerrain3d, setSurveyCoverage, sampleMeshGround, setLayers, setImageryStyle, focusWaypoint, fitMission, goHome, lookNorth } =
+  const { initError, setSnapshot, setMeshOffset, setVehicleGround, setMission, setTerrainOverlay, setTerrain3d, setSurveyCoverage, sampleMeshGround, setLayers, setImageryStyle, focusWaypoint, fitMission, goHome, lookNorth } =
     useCesiumViewer(containerRef, {
       onContextMenu: (ground, screen) =>
         setCtxMenu(ground ? { ...ground, x: screen.x, y: screen.y } : null),
@@ -106,10 +104,6 @@ export default function MapView() {
       ),
     [waypoints, altitudeMode, home, blocks, planBase],
   )
-  const trailByAgl = useUiStore((s) => s.trailByAgl)
-  useEffect(() => {
-    setTrailByAgl(trailByAgl)
-  }, [trailByAgl, setTrailByAgl])
   const showGrid = useUiStore((s) => s.showGrid)
   const imageryStyle = useUiStore((s) => s.imageryStyle)
   useEffect(() => {
@@ -560,7 +554,6 @@ export default function MapView() {
           {t('map.polygonHint')}
         </div>
       )}
-      {trailByAgl && <TrailLegend />}
       <CoordinateReadout />
       {ctxMenu && (
         <div
@@ -630,26 +623,6 @@ function CoordinateReadout() {
       {pos.latitude_deg.toFixed(5)} · {pos.longitude_deg.toFixed(5)}
       <br />
       {Math.round(pos.altitude.meters)} m
-    </div>
-  )
-}
-
-/** Colour key for the flown track (shown while "track colour by height" is on). */
-function TrailLegend() {
-  const { t } = useTranslation()
-  const gradient = `linear-gradient(to right, ${TRAIL_RAMP.map(([stop, css]) => `${css} ${stop * 100}%`).join(', ')})`
-  return (
-    <div className="mono pointer-events-none absolute bottom-12 right-3 w-36 rounded border border-line bg-panel/85 px-2 py-1 text-[10px] leading-tight text-muted shadow-lg">
-      <div>{t('map.trailLegend')}</div>
-      <div className="mt-1 h-1.5 rounded" style={{ background: gradient }} />
-      <div className="mt-0.5 flex justify-between">
-        <span>{TRAIL_AGL_LO_M}</span>
-        <span>{TRAIL_AGL_HI_M}+</span>
-      </div>
-      <div className="mt-0.5 flex items-center gap-1">
-        <span className="inline-block h-1.5 w-3 rounded" style={{ background: TRAIL_BELOW_GROUND }} />
-        <span>&lt; 0</span>
-      </div>
     </div>
   )
 }

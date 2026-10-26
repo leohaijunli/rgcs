@@ -907,7 +907,7 @@ async fn drive(
                 if !worker_service.is_current(&expected) { let _ = state.rtk.base.stop(id).await; return Ok(()); }
                 worker_service.running(&expected, SerialSessionRef::Base { id }, Some(selected), None);
             } else {
-                let probed = probe_fc_serial(lease, FcProbeConfig { baud: settings.fc.baud, local_system_id: maggcs_core::mavlink::ConnectionConfig::default().system_id,
+                let probed = probe_fc_serial(lease, FcProbeConfig { baud: settings.fc.baud, local_system_id: Some(maggcs_core::mavlink::ConnectionConfig::default().system_id),
                     expected_target: settings.fc.expected_target.or(learned) }, cancel.clone()).await
                     .map_err(|e| SerialFailure::discovery(&e))?;
                 let target = probed.target().clone();

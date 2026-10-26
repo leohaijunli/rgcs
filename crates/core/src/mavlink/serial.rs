@@ -32,7 +32,9 @@ pub struct FcIdentity {
 #[derive(Debug, Clone)]
 pub struct FcProbeConfig {
     pub baud: BaudSelection,
-    pub local_system_id: u8,
+    /// None for passive discovery before choosing a distinct GCS identity.
+    /// A configured ID is checked for conflicts before handoff.
+    pub local_system_id: Option<u8>,
     pub expected_target: Option<FcIdentity>,
 }
 
@@ -272,7 +274,7 @@ async fn observe_fc(
         if !matches!(raw.version(), ::mavlink::MavlinkVersion::V2) {
             return Err(SerialDiscoveryError::UnsupportedMavlinkVersion);
         }
-        if identity.system_id == config.local_system_id {
+        if config.local_system_id == Some(identity.system_id) {
             return Err(SerialDiscoveryError::LocalSystemIdConflict {
                 system_id: identity.system_id,
             });

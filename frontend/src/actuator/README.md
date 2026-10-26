@@ -13,10 +13,12 @@ magnetic monitoring, and manually controlled SD capture/log retrieval.
   ESC start/stop tones, and the magnetic alarm.
   SITL details open when Forward is selected and collapse for Manual/Preset;
   the operator can also toggle them explicitly.
-- **Center:** safety limits and command source, 2×2 compact motor controls,
-  motor tracking, and signal plots (servo commands, total field, ESC, and the
-  total battery current from `BATTERY_STATUS`). Desktop sliders are capped at
-  260 px and fall back to one column on narrow screens.
+- **Center:** a persistent **Next step** strip, safety limits and command
+  source, 2×2 compact motor controls, motor tracking, and signal plots (servo
+  commands, total field, ESC, and the total battery current from
+  `BATTERY_STATUS`). The strip names the current gate and pulses only the
+  matching enabled control. Desktop sliders are capped at 260 px and fall back
+  to one column on narrow screens.
 - **Right:** a three-row healthy PX4 target summary, collapsed connection/output
   details and display-only ESC RPM. Endpoint inputs appear while disconnected.
 - **Bottom utility drawer:** capture state, Start/Stop and log count remain
@@ -50,10 +52,12 @@ view and color changes do not.
 The header distinguishes `LOCKED`, `UNLOCKED`, `STARTING`, `RUNNING`,
 `RELEASING`, and `EMERGENCY`. Unlocking is a local confirmation state; the
 target, heartbeat and armed-state checks determine whether START is available.
-START requires an unlocked test and a 3 s hold, with fixed limits of 0.3
-maximum normalized demand and 2.0/s slew. Ordinary STOP retains the local unlock;
-an idle command/source/tone edit or emergency reset re-locks it. The backend's raw command-session state is labelled
-separately as **Command transport**.
+START requires an unlocked test and a 3 s hold. Demand spans the full normalized
+0–1 range of each FC-read output model, with 2.0/s slew. For an 1100–1900 µs
+channel, 50% requests 1500 µs and 100% requests 1900 µs; there is no application
+30% cap clipping a preset's peak at 1340 µs. Ordinary STOP retains the local
+unlock; an idle command/source/tone edit or emergency reset re-locks it. The
+backend's raw command-session state is labelled separately as **Command transport**.
 
 **Motor control** is a separate permission switch, OFF by default and never
 restored from preferences. Enabling it only binds the current target and
@@ -67,6 +71,16 @@ window close also revoke the permission. Primary buttons carry native `title`
 descriptions of these actions.
 
 ### Main serial connection
+
+The selected PX4 target is Motor Test's FC. A dedicated serial target supplies
+its own connection status, heartbeat, armed/mode state and parameters; a separate
+main-window FC connection is not required. Connecting it probes the selected port
+and adopts the PX4's actual system/component IDs, so there is no routing-ID field
+to type. It also snapshots that target's heartbeat at handoff, so FC status is
+known before the next heartbeat arrives. When the main link is a hardware PX4 on
+serial, **Use main serial link** selects that FC instead. All FC indicators then
+describe the borrowed target. `COM_MOT_TEST_EN` is always read from the selected
+target, and an unknown value never falls back to another FC's cache.
 
 When the main window has a compatible, live PX4 serial connection, the target
 card offers **Use main serial link**. It reuses that connection and parameter
@@ -86,6 +100,42 @@ Manual review: connect the main serial PX4, attach, verify monitor-only mode and
 matching telemetry, detach and verify the main telemetry/Parameters still work;
 reattach then reconnect the main link and verify control is OFF and target is
 detached. Repeat tool close in the packaged desktop runtime.
+
+### Selected FC and full-range verification — 2026-10-26
+
+Passed numerical acceptance: 100% manual demand reaches the FC-read maximum,
+and 50%/100% sine presets retain their requested shape and peak within 1 µs.
+Readiness checks accept the selected target with no primary link and reject
+foreign/stale heartbeats. Serial PTY checks cover a standalone target and a
+borrowed main link, including detach preserving the main connection.
+
+```bash
+cargo test -p maggcs-app --lib motor_test_state::output_limits_tests
+cargo test -p maggcs-app --lib actuator_service::start_readiness_tests
+cargo test -p maggcs-app --lib main_link_service::tests
+MOTOR_FC_RANGE_ONLY=1 node scripts/check-motor-controls.mjs \
+  http://127.0.0.1:1420/actuator.html screenshots/motor-test
+```
+
+The real-React IPC check verifies target-only parameter status, 100% demands at
+the command API, a 1900 µs sine peak visible on the chart, main-link reuse, and
+the guide's connect/enable actions with their pulsing controls.
+Screenshots: [dedicated FC and full range](../../screenshots/motor-test/motor-dedicated-fc-full-range-1920x1080.png),
+[borrowed main FC](../../screenshots/motor-test/motor-borrowed-main-fc-1366x768.png).
+
+Manual verification:
+
+1. Connect the serial PX4 on Motor Test with the main window disconnected;
+   confirm there is no system-ID field, the detected ID appears in the target
+   card, and the guide moves from connect to enable.
+2. Enable motor control and unlock; confirm the guide pulses each matching
+   control and then asks for the 3 s START hold.
+3. Connect a hardware PX4 on the main serial link, select **Use main serial
+   link**, and check the matching FC identity. Detach and confirm main telemetry
+   and Parameters continue working.
+4. During a motor test, request 50% and 100% or use a sine preset. For an
+   1100–1900 µs model, Command PWM should reach 1500 and 1900 µs, respectively.
+   STOP should release the output and insert a command-curve gap.
 
 Magnetic monitoring displays **Disabled**, **No data**, **Monitoring**, or
 **ALARM**. Threshold, calibration, and acknowledgement remain connected to the

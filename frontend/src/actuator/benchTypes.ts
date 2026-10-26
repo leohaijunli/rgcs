@@ -120,10 +120,130 @@ export function outputConfigurationIssue(status: ActuatorStatus): string | null 
   return null
 }
 
+export type MotorGuideAction =
+  | 'reset'
+  | 'connect'
+  | 'wait'
+  | 'disarm'
+  | 'refresh'
+  | 'enable'
+  | 'unlock'
+  | 'cancel'
+  | 'stop'
+  | 'sitl'
+  | 'start'
+
+export interface MotorGuide {
+  action: MotorGuideAction
+  title: string
+  detail: string
+  tone: 'normal' | 'warn'
+}
+
+export interface MotorGuideInput {
+  targetConnected: boolean
+  targetFcAlive: boolean
+  armed: boolean
+  emergency: boolean
+  running: boolean
+  pendingStart: boolean
+  outputBlocked: boolean
+  outputIssue: string | null
+  controlEnabled: boolean
+  unlocked: boolean
+  runBlocksStart: boolean
+  tonesReady: boolean
+  sourceNeedsSitl: boolean
+}
+
+/** The single next action, in the order the operator must take it. */
+export function motorGuide(input: MotorGuideInput): MotorGuide {
+  if (input.emergency) {
+    return {
+      action: 'reset', tone: 'warn', title: 'Reset emergency stop',
+      detail: 'Outputs are latched off. Confirm they are safe, then clear the latch.',
+    }
+  }
+  if (!input.targetConnected) {
+    return {
+      action: 'connect', tone: 'warn', title: 'Connect the serial PX4',
+      detail: 'Enter the dedicated serial port, or attach the main window’s serial link.',
+    }
+  }
+  if (!input.targetFcAlive) {
+    return {
+      action: 'wait', tone: 'warn', title: 'Waiting for the PX4 heartbeat',
+      detail: 'Check the selected serial link. FC status updates automatically.',
+    }
+  }
+  if (input.armed) {
+    return {
+      action: 'disarm', tone: 'warn', title: 'Disarm the PX4',
+      detail: 'Motor Test only runs while the selected PX4 is disarmed. Disarm it in QGC, then return here.',
+    }
+  }
+  if (input.running) {
+    return {
+      action: 'stop', tone: 'warn', title: 'Stop the test',
+      detail: 'Release every output owned by Motor Test. The PX4 stays disarmed.',
+    }
+  }
+  if (input.pendingStart) {
+    return {
+      action: 'cancel', tone: 'warn', title: 'Cancel the pending start',
+      detail: 'The start request is still in flight. Cancel it if this was not intended.',
+    }
+  }
+  if (input.outputBlocked) {
+    return {
+      action: 'refresh', tone: 'warn', title: 'Fix the output configuration',
+      detail: input.outputIssue
+        ? `${input.outputIssue}. Refresh output configuration after fixing it.`
+        : 'Check the motor mapping and timers, then refresh output configuration.',
+    }
+  }
+  if (!input.controlEnabled) {
+    return {
+      action: 'enable', tone: 'normal', title: 'Enable motor control',
+      detail: 'Telemetry is monitor-only until motor control is ON. Enabling does not start motors.',
+    }
+  }
+  if (!input.unlocked) {
+    return {
+      action: 'unlock', tone: 'normal', title: 'Unlock the test',
+      detail: 'START stays locked until you explicitly unlock this session.',
+    }
+  }
+  if (input.runBlocksStart) {
+    return {
+      action: 'wait', tone: 'normal', title: 'Wait for the active run',
+      detail: 'Motor Test cannot start until the current run releases its outputs.',
+    }
+  }
+  if (input.sourceNeedsSitl) {
+    return {
+      action: 'sitl', tone: 'warn', title: 'Connect the SITL source',
+      detail: 'Forward mode needs its input link connected before START.',
+    }
+  }
+  if (!input.tonesReady) {
+    return {
+      action: 'wait', tone: 'normal', title: 'Preparing ESC tones',
+      detail: 'Wait for the tone check to finish before START.',
+    }
+  }
+  return {
+    action: 'start', tone: 'normal', title: 'Hold START for 3 seconds',
+    detail: 'Keep the button held until the full 3 s cover completes. Release early to cancel.',
+  }
+}
+
 export interface ActuatorStatus {
   motor_control: { enabled: boolean }
   tones: MotorToneStatus
+  /** The selected dedicated or borrowed Motor Test FC is attached. */
   connected: boolean
+  /** Fresh matching PX4 heartbeat from the selected Motor Test FC. */
   fc_alive: boolean
   armed: boolean
   /** Raw PX4 custom-mode bitmask; decoded for display via util/px4mode. */
@@ -142,7 +262,7 @@ export interface ActuatorStatus {
   sitl_feed_age_s: number | null
   /** The motor test's own target link (real PX4, serial). */
   target_connected: boolean
-  /** The serial target PX4's heartbeat is fresh (not the primary link). */
+  /** Explicit target alias for fc_alive. */
   target_fc_alive: boolean
   target_endpoint: string | null
   target_system_id: number | null

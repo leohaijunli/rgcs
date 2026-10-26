@@ -49,7 +49,7 @@ fn px4(system: u8, sequence: u8) -> MessageEnvelope {
 fn config() -> FcProbeConfig {
     FcProbeConfig {
         baud: BaudSelection::Fixed(115_200),
-        local_system_id: 250,
+        local_system_id: Some(250),
         expected_target: None,
     }
 }
@@ -131,6 +131,26 @@ async fn valid_wire_heartbeats_allow_sequence_wrap_and_probe_writes_nothing() {
     let mut bytes = [0; 512];
     assert_eq!(
         peer.try_recv(&mut bytes).expect_err("passive probe").kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+}
+
+#[tokio::test]
+async fn passive_discovery_can_choose_a_distinct_gcs_id_after_learning_the_fc() {
+    let (conn, peer, address) = transport().await;
+    send(&peer, address, &px4(250, 1), false, false).await;
+    send(&peer, address, &px4(250, 2), false, false).await;
+    let mut config = config();
+    config.local_system_id = None;
+    let (identity, _) = observe_fc(&conn, &config, WINDOW)
+        .await
+        .expect("passive discovery");
+    assert_eq!(identity.system_id, 250);
+    let mut bytes = [0; 512];
+    assert_eq!(
+        peer.try_recv(&mut bytes)
+            .expect_err("no probe writes")
+            .kind(),
         std::io::ErrorKind::WouldBlock
     );
 }
@@ -277,10 +297,19 @@ async fn handoff_uses_the_probed_transport_and_releases_its_lease_after_shutdown
         handle.target_identity().expect("seeded evidence").system_id,
         42
     );
+    let retained = handle
+        .target_heartbeat()
+        .expect("heartbeat survives handoff");
+    assert_eq!(retained.header.system_id, 42);
+    assert_eq!(retained.header.sequence, 2);
     handle
         .shutdown_and_wait(TEST_BUDGET)
         .await
         .expect("actual close");
+    assert!(
+        handle.target_heartbeat().is_none(),
+        "retired heartbeat is unavailable"
+    );
     assert!(discovery.snapshot().ports[0].lease.is_none());
     discovery
         .shutdown(TEST_BUDGET)

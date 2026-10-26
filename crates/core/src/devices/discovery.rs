@@ -489,7 +489,7 @@ async fn cancelled(shutdown: &mut watch::Receiver<bool>) {
 
 fn next_id(counter: &AtomicU64) -> Result<u64, SerialDiscoveryError> {
     counter
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
         .map_err(|_| SerialDiscoveryError::IdExhausted)
 }
 

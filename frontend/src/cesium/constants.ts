@@ -15,9 +15,6 @@ export const TRAIL_CHUNK_POINTS = 200
 /** Minimum gap between rebuilds of the newest chunk. */
 export const TRAIL_TAIL_REBUILD_MS = 150
 export const TRAIL_WIDTH_PX = 3
-/** Height above ground mapped to the two ends of the colour ramp. */
-export const TRAIL_AGL_LO_M = 0
-export const TRAIL_AGL_HI_M = 120
 
 // Forward projection drawn ahead of the vehicle. Constant-velocity estimate
 // from the live NED velocity; it is rebuilt from the current fix on every

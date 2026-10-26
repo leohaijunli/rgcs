@@ -39,6 +39,19 @@ fourth supported protocol. Different known families on MAIN/AUX are supported.
   (2026-10-24). ESC RPM is display-only telemetry.
 - Manual SD capture start/stop remains independent of motor start/stop.
 
+### Operator correction — 2026-10-26
+
+The unrequested fixed 0.3 demand cap is removed. Manual, preset and Forward
+inputs use the full FC-read output range: an 1100–1900 µs model reaches 1500 µs
+at 50% and 1900 µs at 100%. This supersedes the fixed-cap part of MR-04a and the
+capped sine expectation recorded under MR-17.
+
+The selected PX4 target is Motor Test's FC. A dedicated serial target supplies
+its own heartbeat and parameters with no primary connection; **Use main serial
+link** selects the hardware PX4 already on the main serial transport. Numerical
+session tests, dedicated/borrowed serial PTY checks and the focused real-React
+IPC regression pass. See the [verification and screenshots](../../frontend/src/actuator/README.md#selected-fc-and-full-range-verification--2026-10-26).
+
 ### Current support within this boundary
 
 | PX4 output family | Output model and display | Current control support | Remaining acceptance |

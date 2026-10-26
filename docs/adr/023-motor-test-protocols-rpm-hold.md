@@ -42,7 +42,7 @@
 4. **Motor Test remains operator-controlled.** START is gated by connection,
    valid target, complete required configuration, known/supported protocol and
    the agreed long-press. Each source drives the configured active motor set
-   with fixed bench limits (0.3 maximum normalized demand, 2.0/s slew, 3 s
+   across the full FC-read output range (0–1 normalized demand, 2.0/s slew, 3 s
    long-press). STOP and E-STOP always release every output the session owns.
 5. **No speed-tracking verdict.** Command-versus-reported-output may be plotted,
    and raw ESC RPM may be shown when available. The GCS does not report
@@ -100,6 +100,31 @@
 - No mapping is persisted because no mapping is created.
 - RPM-hold, calibration and performance-metric controls, commands and modules
   are removed by MR-06; the ordinary motor-test stop/release path is unchanged.
+
+### Operator correction — 2026-10-26
+
+The fixed 0.3 demand cap was not requested by the operator and is removed.
+Manual, preset and forwarded inputs use the full FC-read output range. For an
+1100–1900 µs channel, the previous cap flattened every request above 1340 µs;
+50% now reaches 1500 µs and 100% reaches 1900 µs. Slew conditioning operates on
+the requested waveform without imposing an additional lower peak. Numerical
+session tests check full-range manual demand, reversal/thrust compensation and
+the complete sine shape at 50% and 100% amplitude.
+
+The selected target is also Motor Test's FC. A dedicated serial target supplies
+all FC status and parameters independently of the primary link. The connection
+passively discovers the PX4 on the selected serial port and adopts its actual
+system/component IDs rather than trusting a typed routing ID; the received
+heartbeat is retained across transport handoff. GCS IDs stay distinct, including
+the alternate ID when the PX4 itself uses 250. Explicitly borrowing a compatible
+main serial PX4 selects that main-link FC and shares its transport/parameter
+worker. Connection and heartbeat indicators follow the selected target; missing
+target state is not substituted from another link.
+
+A visible **Next step** guide names the current gate and pulses only the matching
+enabled control. Its order is connect/heartbeat/disarm, output configuration,
+motor control, unlock, then START/STOP or cancel; it never advertises an action
+that the underlying safety interlocks still block.
 
 ## Verification
 

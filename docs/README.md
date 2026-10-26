@@ -16,6 +16,11 @@
 
 ## Linux troubleshooting
 
+- **`ignoring unreadable manifest … missing field range_source`** — older
+  motor-test recordings predate the PWM provenance/protocol fields. The current
+  loader accepts these schema-v1 snapshots with explicit unknown/fallback
+  metadata and preserves their recorded ranges and flags.
+
 - **No alert sounds / `GStreamer element autoaudiosink not found`** — the
   WebKitGTK webview plays the alert audio through GStreamer. Install the
   audio plugins:

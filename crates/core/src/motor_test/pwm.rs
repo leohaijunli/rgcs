@@ -27,13 +27,15 @@ pub const FALLBACK_MAX_US: u16 = 1900;
 
 /// Where a model's PWM range came from: read from the PX4, or the operator
 /// fallback (which disallows starting until the mapping is refreshed).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PwmRangeSource {
     /// `PWM_*_MINn`/`MAXn` were read from the FC this session targets.
     Fc,
     /// Not read (unreadable parameters or an unmapped motor); the fallback
-    /// range applies and starting is blocked at the app boundary.
+    /// range applies and starting is blocked at the app boundary. Legacy
+    /// recordings with no provenance also use this marker.
+    #[default]
     Fallback,
 }
 
@@ -72,11 +74,15 @@ pub struct PwmModel {
     /// not evidence that the active motor function is disabled.
     pub disabled: bool,
     /// Whether the range was read from the FC or is the fallback default.
+    /// Legacy recordings without provenance remain explicitly unverified.
+    #[serde(default)]
     pub range_source: PwmRangeSource,
     /// Protocol detected (or overridden) for the bank carrying this output.
+    #[serde(default)]
     pub protocol: OutputProtocol,
     /// PX4 `DSHOT_MIN` (0…1); the idle throttle fraction for DShot. Unused
     /// for PWM/OneShot.
+    #[serde(default)]
     pub dshot_min: f32,
 }
 
@@ -384,6 +390,71 @@ mod tests {
         assert_eq!(model.range_source, PwmRangeSource::Fc);
         // with_disabled only flips the flag; the source marker is kept.
         assert_eq!(model.with_disabled(true).range_source, PwmRangeSource::Fc);
+    }
+
+    fn legacy_snapshot() -> serde_json::Value {
+        serde_json::json!({
+            "min_us": 1000,
+            "max_us": 2000,
+            "reversed": true,
+            "thrust_factor": 0.5,
+            "disabled": true
+        })
+    }
+
+    #[test]
+    fn legacy_pwm_snapshots_load_without_inventing_fc_provenance() {
+        let model: PwmModel = serde_json::from_value(legacy_snapshot()).expect("legacy snapshot");
+        assert_eq!((model.min_us, model.max_us), (1000, 2000));
+        assert!(model.reversed && model.disabled);
+        assert_eq!(model.thrust_factor, 0.5);
+        assert_eq!(model.range_source, PwmRangeSource::Fallback);
+        assert_eq!(model.protocol, OutputProtocol::Unknown);
+        assert_eq!(model.dshot_min, 0.0);
+    }
+
+    #[test]
+    fn current_snapshots_preserve_explicit_provenance_protocol_and_dshot_min() {
+        let models = [
+            PwmModel::new(1150, 1850, true, 0.5).expect("PWM model"),
+            PwmModel::dshot(
+                0.055,
+                false,
+                0.0,
+                OutputProtocol::BDShot {
+                    rate: super::super::protocol::DShotRate::R600,
+                },
+            )
+            .expect("BDShot model"),
+            PwmModel::default(),
+        ];
+        for model in models {
+            let json = serde_json::to_string(&model).expect("serialize model");
+            let loaded: PwmModel = serde_json::from_str(&json).expect("current snapshot");
+            assert_eq!(loaded, model);
+        }
+    }
+
+    #[test]
+    fn legacy_defaults_do_not_accept_malformed_or_missing_required_fields() {
+        for (field, invalid) in [
+            ("range_source", serde_json::json!("unverified")),
+            ("range_source", serde_json::Value::Null),
+            ("protocol", serde_json::json!({ "kind": "unsupported" })),
+            ("protocol", serde_json::Value::Null),
+            ("dshot_min", serde_json::json!("0.055")),
+            ("dshot_min", serde_json::Value::Null),
+        ] {
+            let mut json = legacy_snapshot();
+            json[field] = invalid;
+            assert!(serde_json::from_value::<PwmModel>(json).is_err(), "{field}");
+        }
+        let mut missing_range = legacy_snapshot();
+        missing_range
+            .as_object_mut()
+            .expect("snapshot object")
+            .remove("min_us");
+        assert!(serde_json::from_value::<PwmModel>(missing_range).is_err());
     }
 
     #[test]

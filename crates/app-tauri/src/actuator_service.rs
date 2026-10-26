@@ -42,6 +42,9 @@ const MOTOR_TEST_STOP_TIMEOUT: Duration = Duration::from_secs(2);
 /// How old the last target-FC heartbeat may be before the window shows the
 /// serial target as "heartbeat lost". PX4 streams HEARTBEAT at 1 Hz.
 const TARGET_HEARTBEAT_STALE: Duration = Duration::from_secs(3);
+const MOTOR_GCS_SYSTEM_ID: u8 = 250;
+const MOTOR_GCS_ALTERNATE_SYSTEM_ID: u8 = 251;
+const MOTOR_GCS_COMPONENT_ID: u8 = 250;
 /// Motor functions the window displays and the forward slot carries.
 const MOTOR_TEST_MOTOR_COUNT: u8 = 4;
 /// Older SERVO_OUTPUT_RAW samples are not shown as live feedback.
@@ -66,10 +69,11 @@ pub struct ActuatorStatus {
     pub motor_control: crate::motor_control_service::MotorControlStatus,
     pub streams: crate::stream_service::StreamSnapshot,
     pub tones: crate::motor_tone_service::MotorToneStatus,
+    /// The selected Motor Test FC is attached, on a dedicated or borrowed link.
     pub connected: bool,
+    /// A matching PX4 heartbeat from the selected FC is fresh.
     pub fc_alive: bool,
-    /// The serial target PX4's heartbeat is fresh (`false` when no target is
-    /// connected). Distinct from `fc_alive`, which describes the primary link.
+    /// Explicit target alias for `fc_alive`; never describes another FC.
     pub target_fc_alive: bool,
     /// The one hard interlock: sending is only ever allowed while disarmed.
     pub armed: bool,
@@ -343,41 +347,47 @@ pub(crate) fn ensure_target_disarmed(
     state: &AppState,
     target: MotorTestTargetRef,
 ) -> Result<(), String> {
-    if !state
-        .motor_test
-        .target
-        .lock()
-        .as_ref()
-        .is_some_and(|runtime| runtime.target.target_ref() == target)
-    {
-        return Err(maggcs_core::logs::capture::SdCaptureError::TargetChanged.to_string());
-    }
-    let (armed, heartbeat_age) = {
-        let telemetry = state.motor_test.telemetry.lock();
-        let telemetry = telemetry
+    let handle = {
+        let selected = state.motor_test.target.lock();
+        selected
             .as_ref()
-            .ok_or("target telemetry is not attached — reconnect the serial PX4")?;
-        let heartbeat = telemetry
-            .hb
-            .as_ref()
-            .ok_or("waiting for the target PX4 heartbeat — connect it first")?;
-        if heartbeat.system_id != target.target_system_id
-            || heartbeat.component_id != target.target_component_id
-        {
-            return Err("target heartbeat identity changed — reconnect the serial PX4".into());
-        }
-        if heartbeat.autopilot != maggcs_core::telemetry::Autopilot::Px4 {
-            return Err("target is not a PX4 autopilot".into());
-        }
-        let at = telemetry
-            .last_heartbeat_at
-            .ok_or("waiting for the target PX4 heartbeat — connect it first")?;
-        (heartbeat.base_mode.safety_armed, at.elapsed())
+            .filter(|runtime| {
+                runtime.target.target_ref() == target && runtime.generation_is_current()
+            })
+            .map(|runtime| runtime.target.handle.clone())
+            .ok_or_else(|| maggcs_core::logs::capture::SdCaptureError::TargetChanged.to_string())?
     };
-    if heartbeat_age > TARGET_HEARTBEAT_STALE {
+    let env = handle
+        .target_heartbeat()
+        .ok_or("waiting for the selected serial PX4 heartbeat")?;
+    let heartbeat = maggcs_core::telemetry::Heartbeat::try_from(&env)
+        .map_err(|error| format!("cannot decode the selected PX4 heartbeat: {error}"))?;
+    validate_target_heartbeat(
+        target,
+        &heartbeat,
+        env.received_at,
+        std::time::Instant::now(),
+    )
+}
+
+fn validate_target_heartbeat(
+    target: MotorTestTargetRef,
+    heartbeat: &maggcs_core::telemetry::Heartbeat,
+    received_at: std::time::Instant,
+    now: std::time::Instant,
+) -> Result<(), String> {
+    if heartbeat.system_id != target.target_system_id
+        || heartbeat.component_id != target.target_component_id
+    {
+        return Err("target heartbeat identity changed — reconnect the serial PX4".into());
+    }
+    if heartbeat.autopilot != maggcs_core::telemetry::Autopilot::Px4 {
+        return Err("target is not a PX4 autopilot".into());
+    }
+    if now.saturating_duration_since(received_at) > TARGET_HEARTBEAT_STALE {
         return Err("target heartbeat is stale — check the serial PX4 link".into());
     }
-    if armed {
+    if heartbeat.base_mode.safety_armed {
         return Err("target is armed — disarm it before starting".into());
     }
     Ok(())
@@ -564,7 +574,7 @@ async fn send_pwm_models(
         .map_err(|error| error.to_string())
 }
 
-/// Start manual sending with the one full-prop safety envelope (0.3 cap,
+/// Start manual sending across the full FC-read output range (normalized 0…1,
 /// 2.0/s slew). The long-press confirmation happened in the UI.
 #[tauri::command]
 pub async fn actuator_start_manual(
@@ -922,15 +932,59 @@ pub async fn actuator_disconnect_sitl(state: State<'_, AppState>) -> Result<(), 
     .await
 }
 
-/// The link the motor test sends to: its dedicated serial target (the real
-/// PX4) when one is connected, else the app's primary link (backward
-/// compatible with the old single-link setup).
+/// A selected target must have a non-broadcast MAVLink system ID.
 fn validate_target_system_id(target_system_id: u8) -> Result<u8, String> {
     if target_system_id == 0 {
         Err("target system ID must be between 1 and 255".into())
     } else {
         Ok(target_system_id)
     }
+}
+
+/// Identify the PX4 on the reserved port without writes, then transfer that
+/// same transport into the connection worker using its observed IDs.
+pub(crate) async fn connect_motor_serial_target(
+    config: maggcs_core::mavlink::ConnectionConfig,
+    lease: maggcs_core::devices::SerialLease,
+    cancel: maggcs_core::devices::SerialCancellation,
+) -> Result<maggcs_core::mavlink::connection::SpawnedConnection, String> {
+    let maggcs_core::mavlink::Endpoint::Serial { baudrate, .. } = &config.endpoint else {
+        return Err("Motor Test's PX4 target must use a serial connection".into());
+    };
+    let probed = maggcs_core::mavlink::serial::probe_fc_serial(
+        lease,
+        maggcs_core::mavlink::serial::FcProbeConfig {
+            baud: maggcs_core::devices::BaudSelection::Fixed(*baudrate),
+            local_system_id: None,
+            expected_target: None,
+        },
+        cancel,
+    )
+    .await
+    .map_err(|error| format!("cannot identify the PX4 on the selected serial port: {error}"))?;
+    let config = motor_serial_target_config(config, probed.target(), probed.endpoint())?;
+    probed
+        .connect(config)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+fn motor_serial_target_config(
+    mut config: maggcs_core::mavlink::ConnectionConfig,
+    identity: &maggcs_core::mavlink::serial::FcIdentity,
+    endpoint: maggcs_core::mavlink::Endpoint,
+) -> Result<maggcs_core::mavlink::ConnectionConfig, String> {
+    config.target_system_id = validate_target_system_id(identity.system_id)?;
+    config.target_component_id = identity.component_id;
+    config.system_id = if config.target_system_id == MOTOR_GCS_SYSTEM_ID {
+        MOTOR_GCS_ALTERNATE_SYSTEM_ID
+    } else {
+        MOTOR_GCS_SYSTEM_ID
+    };
+    config.component_id = MOTOR_GCS_COMPONENT_ID;
+    config.endpoint = endpoint;
+    config.auto_discover_target = false;
+    Ok(config)
 }
 
 /// Connect the motor test to the **real PX4** over a serial interface: a
@@ -942,22 +996,22 @@ pub async fn actuator_connect_target(
     app: AppHandle,
     state: State<'_, AppState>,
     endpoint: String,
-    target_system_id: u8,
     expected_serial: Option<maggcs_core::devices::SerialPortRef>,
 ) -> Result<(), String> {
-    let target_system_id = validate_target_system_id(target_system_id)?;
     crate::motor_control_service::revoke(&state);
     let config = maggcs_core::mavlink::ConnectionConfig {
         endpoint: maggcs_core::mavlink::Endpoint::try_from(endpoint.as_str())
             .map_err(|e| e.to_string())?,
-        system_id: 250,
-        component_id: 250,
-        target_system_id,
-        target_component_id: 1,
         auto_discover_target: false,
         heartbeat_timeout: Duration::from_secs(30),
         ..Default::default()
     };
+    if !matches!(
+        &config.endpoint,
+        maggcs_core::mavlink::Endpoint::Serial { .. }
+    ) {
+        return Err("Motor Test's PX4 target must use a serial connection".into());
+    }
     crate::main_link_service::ensure_port_not_primary(&state, &config.endpoint)?;
     let serial = crate::serial_service::ensure(&app, &state).await?;
     let _manual = serial
@@ -969,18 +1023,14 @@ pub async fn actuator_connect_target(
             expected_serial,
             maggcs_core::devices::SerialOwner::MotorTestTarget,
         )
-        .await?;
+        .await?
+        .ok_or("Motor Test's PX4 target requires a serial reservation")?;
     let _ops = state.ops().lock().await;
     _manual.check()?;
     crate::main_link_service::ensure_port_not_primary(&state, &config.endpoint)?;
     crate::rtk_service::ensure_port_not_base(&state, &config.endpoint)?;
-    let spawned = match lease {
-        Some(lease) => {
-            maggcs_core::mavlink::connection::spawn_leased_serial_connection(config, lease).await
-        }
-        None => spawn_connection(config).await,
-    };
-    let (handle, _events_rx, first_result) = spawned.map_err(|e| e.to_string())?;
+    let (handle, _events_rx, first_result) =
+        connect_motor_serial_target(config, lease, _manual.cancel.clone()).await?;
     match tokio::time::timeout(Duration::from_secs(3), first_result).await {
         Ok(Ok(Ok(()))) => {}
         Ok(Ok(Err(failure))) => {
@@ -998,6 +1048,8 @@ pub async fn actuator_connect_target(
             .await;
         return Err(error);
     }
+    let target_system_id = handle.config().target_system_id;
+    let endpoint = handle.config().endpoint.to_address_string();
     // A session retains the old target handle. Release it before replacing
     // that target; on timeout preserve the old target and close the new link.
     if let Err(error) = stop_before_auxiliary_close(
@@ -1206,7 +1258,7 @@ pub async fn actuator_disconnect_target<R: tauri::Runtime>(
 
 /// Start realtime forwarding: the live SITL actuator outputs (already
 /// normalized into the slot by the tap) drive the real FC's motors. The
-/// full-prop envelope still caps the forwarded demand.
+/// target model bounds the forwarded demand to its configured output range.
 #[tauri::command]
 pub async fn actuator_start_forward(
     app: AppHandle,
@@ -1988,52 +2040,36 @@ fn pin_window<R: tauri::Runtime>(app: &AppHandle<R>, on_top: bool) {
 }
 
 impl AppState {
-    /// Snapshot the link + FC state for the actuator window.
+    /// Snapshot the selected Motor Test FC, whether dedicated or borrowed.
     pub fn actuator_status(&self) -> ActuatorStatus {
-        let link = self.link_status();
-        // Armed/mode gates the START button, so it must come from the link
-        // that actually receives the commands: the serial target PX4 when one
-        // is connected, else the app's primary link.
-        let target_system_id = self
+        let target = self
             .motor_test
             .target
             .lock()
             .as_ref()
-            .map(|runtime| runtime.target.target_system_id);
-        let target_hb = self
-            .motor_test
-            .telemetry
-            .lock()
+            .filter(|runtime| runtime.generation_is_current())
+            .map(|runtime| (runtime.target.target_ref(), runtime.target.handle.clone()));
+        // FC state comes directly from the selected connection's retained
+        // heartbeat, even before the window's mag/ESC observer attaches.
+        let target_hb = target.and_then(|(target, handle)| {
+            let env = handle.target_heartbeat()?;
+            let heartbeat = maggcs_core::telemetry::Heartbeat::try_from(&env).ok()?;
+            (heartbeat.system_id == target.target_system_id
+                && heartbeat.component_id == target.target_component_id
+                && heartbeat.autopilot == maggcs_core::telemetry::Autopilot::Px4)
+                .then_some((heartbeat, env.received_at))
+        });
+        let target_fc_alive = target_hb
             .as_ref()
-            .and_then(|t| t.hb.clone())
-            .filter(|heartbeat| {
-                target_system_id.is_none_or(|system_id| heartbeat.system_id == system_id)
-            });
-        // The serial target's heartbeat age, so the window can show the link
-        // it actually commands instead of only the primary link.
-        let target_fc_alive = self
-            .motor_test
-            .telemetry
-            .lock()
-            .as_ref()
-            .and_then(|t| t.last_heartbeat_at)
-            .is_some_and(|at| at.elapsed() <= TARGET_HEARTBEAT_STALE);
+            .is_some_and(|(_, at)| at.elapsed() <= TARGET_HEARTBEAT_STALE);
         let (armed, custom_mode, autopilot_px4, mode_label) = match target_hb {
-            Some(hb) => (
+            Some((hb, _)) => (
                 hb.base_mode.safety_armed,
                 hb.custom_mode,
                 hb.autopilot == maggcs_core::telemetry::Autopilot::Px4,
                 hb.mode_label,
             ),
-            None => match self.hub().and_then(|h| h.snapshot().heartbeat) {
-                Some(hb) if target_system_id.is_none() => (
-                    hb.base_mode.safety_armed,
-                    hb.custom_mode,
-                    hb.autopilot == maggcs_core::telemetry::Autopilot::Px4,
-                    hb.mode_label,
-                ),
-                _ => (false, 0, false, String::new()),
-            },
+            None => (false, 0, false, String::new()),
         };
         let session = match self.motor_test.session() {
             Some(SessionState::ManualRunning) => "running",
@@ -2229,17 +2265,14 @@ impl AppState {
             motor_control: crate::motor_control_service::status(self),
             streams: crate::stream_service::snapshot(self),
             tones: self.motor_test.tones.snapshot(),
-            connected: link
-                .as_ref()
-                .map(|l| l.link_state == maggcs_core::mavlink::LinkState::Connected)
-                .unwrap_or(false),
-            fc_alive: link.as_ref().map(|l| l.fc_alive).unwrap_or(false),
+            connected: target_connected,
+            fc_alive: target_fc_alive,
             target_fc_alive,
             armed,
             custom_mode,
             autopilot_px4,
             mode_label,
-            endpoint: link.map(|l| l.endpoint),
+            endpoint: target_endpoint.clone(),
             tick_hz: DEFAULT_TICK_HZ,
             session: session.to_string(),
             sitl_connected,
@@ -2691,6 +2724,12 @@ pub fn attach_motor_telemetry<R: tauri::Runtime>(
     let state = app.state::<AppState>();
     // (Re)attach resets the alarm clock; the loaded calibration survives
     // (it is a file, not link state). The target runtime owns the task.
+    let events = handle.subscribe_route(
+        MessageRoute::messages(&[0, 36, 105, 147, 291]).from(target_system_id, TARGET_COMPONENT_ID),
+    );
+    let retained = handle.target_heartbeat().filter(|env| {
+        env.header.system_id == target_system_id && env.header.component_id == TARGET_COMPONENT_ID
+    });
     *state.motor_test.telemetry.lock() = Some(crate::motor_test_state::MotorTelemetry {
         esc: maggcs_core::signals::derived::EscAggregator::new(scope::MAX_ESC),
         alarm: maggcs_core::motor_test::MagAlarm::new(Default::default()),
@@ -2698,14 +2737,20 @@ pub fn attach_motor_telemetry<R: tauri::Runtime>(
         // and is re-applied here on every attach.
         calib: state.calibration.get(),
         last_mag_total_nt: None,
-        hb: None,
+        hb: retained
+            .as_ref()
+            .and_then(|env| maggcs_core::telemetry::Heartbeat::try_from(env).ok()),
         fc_outputs: [None, None],
-        last_heartbeat_at: None,
+        last_heartbeat_at: retained.as_ref().map(|env| env.received_at),
         esc_seen_at: [None; scope::MAX_ESC],
     });
     let tap_app = app.clone();
-    let telemetry_task =
-        tauri::async_runtime::spawn(run_motor_telemetry_tap(tap_app, handle, target_system_id));
+    let telemetry_task = tauri::async_runtime::spawn(run_motor_telemetry_tap(
+        tap_app,
+        handle,
+        target_system_id,
+        events,
+    ));
     {
         let mut target = state.motor_test.target.lock();
         if let Some(target) = target.as_mut() {
@@ -2752,6 +2797,7 @@ async fn run_motor_telemetry_tap<R: tauri::Runtime>(
     app: AppHandle<R>,
     handle: maggcs_core::mavlink::ConnectionHandle,
     target_system_id: u8,
+    mut events: maggcs_core::mavlink::router::RoutedEvents,
 ) {
     let target = MotorTestTargetRef {
         connection_id: handle.handle_id(),
@@ -2760,8 +2806,6 @@ async fn run_motor_telemetry_tap<R: tauri::Runtime>(
     };
     // Only telemetry from the configured target may gate motor-test safety
     // or feed the target's plots and alarm.
-    let mut events = handle
-        .subscribe_route(MessageRoute::messages(&[0, 36, 105, 147, 291]).from(target_system_id, 1));
     let mut last_emit = tokio::time::Instant::now();
     let Some(bus) = app
         .try_state::<AppState>()
@@ -2790,8 +2834,8 @@ async fn run_motor_telemetry_tap<R: tauri::Runtime>(
                         // armed/mode state (not the main GCS's link).
                         if let Ok(hb) = maggcs_core::telemetry::Heartbeat::try_from(&*env) {
                             telemetry.hb = Some(hb);
+                            telemetry.last_heartbeat_at = Some(env.received_at);
                         }
-                        telemetry.last_heartbeat_at = Some(std::time::Instant::now());
                     }
                     MavMessage::HIGHRES_IMU(imu) => {
                         // HIGHRES_IMU mag fields are gauss on the wire; the
@@ -3016,6 +3060,37 @@ mod auxiliary_link_lifecycle_tests {
         );
         assert_eq!(validate_target_system_id(1), Ok(1));
         assert_eq!(validate_target_system_id(255), Ok(255));
+    }
+
+    #[test]
+    fn detected_serial_fc_identity_replaces_the_hint_and_keeps_gcs_ids_distinct() {
+        for system_id in [42, 250] {
+            let endpoint = maggcs_core::mavlink::Endpoint::Serial {
+                port: "/dev/ttyACM900123".into(),
+                baudrate: 115_200,
+            };
+            let identity = maggcs_core::mavlink::serial::FcIdentity {
+                system_id,
+                component_id: 1,
+                autopilot: maggcs_core::telemetry::Autopilot::Px4,
+                vehicle: maggcs_core::telemetry::VehicleType::Quadrotor,
+            };
+            let config = super::motor_serial_target_config(
+                maggcs_core::mavlink::ConnectionConfig {
+                    target_system_id: 1,
+                    ..Default::default()
+                },
+                &identity,
+                endpoint.clone(),
+            )
+            .expect("detected target configuration");
+            assert_eq!(config.target_system_id, system_id);
+            assert_eq!(config.target_component_id, 1);
+            assert_eq!(config.endpoint, endpoint);
+            assert_ne!(config.system_id, system_id);
+            assert_ne!(config.system_id, 255, "QGC's ID is not claimed");
+            assert!(!config.auto_discover_target);
+        }
     }
     use maggcs_core::mavlink::connection::{spawn_connection, ConnectionConfig, ConnectionHandle};
     use maggcs_core::mavlink::endpoint::Endpoint;
@@ -3452,6 +3527,8 @@ mod start_readiness_tests {
                         .parse()
                         .expect("listener address"),
                 },
+                target_system_id: system_id,
+                auto_discover_target: false,
                 ..Default::default()
             })
             .await
@@ -3509,6 +3586,62 @@ mod start_readiness_tests {
         }
     }
 
+    async fn send_target_heartbeat(handle: &ConnectionHandle, system_id: u8, armed: bool) {
+        let Endpoint::UdpListener { addr } = handle.config().endpoint else {
+            panic!("loopback target");
+        };
+        let mut events = handle.subscribe();
+        let peer = tokio::net::UdpSocket::bind("127.0.0.1:0")
+            .await
+            .expect("peer");
+        let message =
+            maggcs_core::mavlink::MavMessage::HEARTBEAT(::mavlink::common::HEARTBEAT_DATA {
+                custom_mode: 2 << 16,
+                mavtype: ::mavlink::common::MavType::MAV_TYPE_QUADROTOR,
+                autopilot: ::mavlink::common::MavAutopilot::MAV_AUTOPILOT_PX4,
+                base_mode: if armed {
+                    ::mavlink::common::MavModeFlag::MAV_MODE_FLAG_SAFETY_ARMED
+                } else {
+                    ::mavlink::common::MavModeFlag::empty()
+                },
+                system_status: ::mavlink::common::MavState::MAV_STATE_STANDBY,
+                mavlink_version: 3,
+            });
+        let mut bytes = Vec::new();
+        ::mavlink::write_v2_msg(
+            &mut bytes,
+            maggcs_core::mavlink::MavHeader {
+                system_id,
+                component_id: TARGET_COMPONENT_ID,
+                sequence: 7,
+            },
+            &message,
+        )
+        .expect("wire heartbeat");
+        peer.send_to(&bytes, addr).await.expect("send heartbeat");
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if let Ok(maggcs_core::mavlink::ConnectionEvent::Message(env)) = events.recv().await
+                {
+                    if env.header.system_id == system_id {
+                        break;
+                    }
+                }
+            }
+        })
+        .await
+        .expect("heartbeat observed by the connection");
+    }
+
+    async fn seed_target_heartbeat(state: &AppState, armed: bool) {
+        let (handle, system_id) = {
+            let selected = state.motor_test.target.lock();
+            let target = &selected.as_ref().expect("target").target;
+            (target.handle.clone(), target.target_system_id)
+        };
+        send_target_heartbeat(&handle, system_id, armed).await;
+    }
+
     fn install_telemetry(state: &AppState, hb: Option<Heartbeat>, age: Option<Duration>) {
         *state.motor_test.telemetry.lock() = Some(MotorTelemetry {
             esc: EscAggregator::new(MAX_ESC),
@@ -3520,6 +3653,75 @@ mod start_readiness_tests {
             last_heartbeat_at: age.map(|age| Instant::now() - age),
             esc_seen_at: [None; MAX_ESC],
         });
+    }
+
+    #[tokio::test]
+    async fn selected_target_supplies_fc_status_and_readiness_without_a_primary_link() {
+        let state = AppState::default();
+        let handle = install_target(&state, 42).await;
+        seed_target_heartbeat(&state, false).await;
+
+        assert!(state.connection().is_none());
+        assert!(state.primary_params().is_none());
+        assert!(
+            state.motor_test.telemetry.lock().is_none(),
+            "FC state does not depend on the window observer"
+        );
+        let status = state.actuator_status();
+        assert!(status.connected && status.target_connected);
+        assert!(status.fc_alive && status.target_fc_alive);
+        assert!(!status.armed);
+        assert!(status.autopilot_px4);
+        assert_eq!(status.mode_label, "Altitude");
+        assert_eq!(status.endpoint, status.target_endpoint);
+        assert_eq!(status.target_system_id, Some(42));
+        assert_eq!(
+            prepare_start(&state)
+                .expect("selected FC is ready")
+                .handle
+                .handle_id(),
+            handle.handle_id()
+        );
+
+        let target = state.motor_test.target.lock().take().expect("target");
+        target.stop().await;
+    }
+
+    #[tokio::test]
+    async fn fc_status_rejects_unselected_foreign_and_stale_heartbeats() {
+        let state = AppState::default();
+        install_telemetry(&state, Some(heartbeat(42, true)), Some(Duration::ZERO));
+        let unselected = state.actuator_status();
+        assert!(!unselected.fc_alive && !unselected.target_fc_alive);
+        assert!(!unselected.armed && !unselected.autopilot_px4);
+
+        let handle = install_target(&state, 42).await;
+        assert!(
+            !state.actuator_status().fc_alive,
+            "an observer's synthetic state cannot supply the FC heartbeat"
+        );
+        seed_target_heartbeat(&state, false).await;
+        send_target_heartbeat(&handle, 99, true).await;
+        let selected = state.actuator_status();
+        assert!(
+            selected.fc_alive && !selected.armed,
+            "foreign traffic cannot replace the selected serial FC"
+        );
+        *state.motor_test.telemetry.lock() = None;
+        assert!(
+            state.actuator_status().fc_alive,
+            "resetting the window observer retains FC state"
+        );
+        tokio::time::sleep(TARGET_HEARTBEAT_STALE + Duration::from_millis(20)).await;
+        assert!(
+            !state.actuator_status().fc_alive,
+            "received_at controls freshness"
+        );
+        seed_target_heartbeat(&state, false).await;
+        assert!(state.actuator_status().fc_alive);
+
+        let target = state.motor_test.target.lock().take().expect("target");
+        target.stop().await;
     }
 
     fn esc_frame(index: u8) -> ESC_STATUS_DATA {
@@ -3708,51 +3910,15 @@ mod start_readiness_tests {
         let handle = install_target(&state, 1).await;
         assert_eq!(
             refusal(&state),
-            "target telemetry is not attached — reconnect the serial PX4"
+            "waiting for the selected serial PX4 heartbeat"
         );
-
-        install_telemetry(&state, Some(heartbeat(1, false)), None);
-        assert_eq!(
-            refusal(&state),
-            "waiting for the target PX4 heartbeat — connect it first"
-        );
-
-        install_telemetry(&state, Some(heartbeat(1, true)), Some(Duration::ZERO));
+        seed_target_heartbeat(&state, true).await;
         assert_eq!(
             refusal(&state),
             "target is armed — disarm it before starting"
         );
 
-        install_telemetry(
-            &state,
-            Some(heartbeat(1, false)),
-            Some(TARGET_HEARTBEAT_STALE + Duration::from_millis(1)),
-        );
-        assert_eq!(
-            refusal(&state),
-            "target heartbeat is stale — check the serial PX4 link"
-        );
-
-        install_telemetry(&state, Some(heartbeat(99, false)), Some(Duration::ZERO));
-        assert_eq!(
-            refusal(&state),
-            "target heartbeat identity changed — reconnect the serial PX4"
-        );
-
-        let mut wrong_component = heartbeat(1, false);
-        wrong_component.component_id = 2;
-        install_telemetry(&state, Some(wrong_component), Some(Duration::ZERO));
-        assert_eq!(
-            refusal(&state),
-            "target heartbeat identity changed — reconnect the serial PX4"
-        );
-
-        let mut ardupilot = heartbeat(1, false);
-        ardupilot.autopilot = Autopilot::ArduPilot;
-        install_telemetry(&state, Some(ardupilot), Some(Duration::ZERO));
-        assert_eq!(refusal(&state), "target is not a PX4 autopilot");
-
-        install_telemetry(&state, Some(heartbeat(1, false)), Some(Duration::ZERO));
+        seed_target_heartbeat(&state, false).await;
         let custom_model = PwmModel::new(1100, 1900, true, 0.5)
             .expect("model")
             .with_disabled(true);
@@ -3771,7 +3937,7 @@ mod start_readiness_tests {
         assert_eq!(prepared.target.connection_id, handle.handle_id());
         assert_eq!(prepared.target.target_system_id, 1);
         assert_eq!(prepared.target.target_component_id, 1);
-        assert_eq!(prepared.limits.max_value, 0.3);
+        assert_eq!(prepared.limits.max_value, 1.0);
         assert_eq!(prepared.limits.max_slew_per_s, 2.0);
         assert_eq!(
             prepared.limits.heartbeat_timeout,
@@ -3785,13 +3951,51 @@ mod start_readiness_tests {
         *state.motor_test.telemetry.lock() = None;
     }
 
+    #[test]
+    fn target_heartbeat_validation_requires_matching_disarmed_px4_and_fresh_receive_time() {
+        let target = MotorTestTargetRef {
+            connection_id: 1,
+            target_system_id: 42,
+            target_component_id: 1,
+        };
+        let now = Instant::now();
+        assert!(super::validate_target_heartbeat(target, &heartbeat(42, false), now, now).is_ok());
+        assert_eq!(
+            super::validate_target_heartbeat(target, &heartbeat(42, true), now, now),
+            Err("target is armed — disarm it before starting".into())
+        );
+        assert_eq!(
+            super::validate_target_heartbeat(
+                target,
+                &heartbeat(42, false),
+                now - TARGET_HEARTBEAT_STALE - Duration::from_millis(1),
+                now
+            ),
+            Err("target heartbeat is stale — check the serial PX4 link".into())
+        );
+        let mut wrong_component = heartbeat(42, false);
+        wrong_component.component_id = 2;
+        for hb in [heartbeat(99, false), wrong_component] {
+            assert_eq!(
+                super::validate_target_heartbeat(target, &hb, now, now),
+                Err("target heartbeat identity changed — reconnect the serial PX4".into())
+            );
+        }
+        let mut other_autopilot = heartbeat(42, false);
+        other_autopilot.autopilot = Autopilot::ArduPilot;
+        assert_eq!(
+            super::validate_target_heartbeat(target, &other_autopilot, now, now),
+            Err("target is not a PX4 autopilot".into())
+        );
+    }
+
     /// A start uses exactly one published revision; a snapshot read from a
     /// different link or no snapshot at all is refused before telemetry.
     #[tokio::test(flavor = "multi_thread")]
     async fn prepare_start_binds_one_published_configuration_revision() {
         let state = AppState::default();
         install_target(&state, 1).await;
-        install_telemetry(&state, Some(heartbeat(1, false)), Some(Duration::ZERO));
+        seed_target_heartbeat(&state, false).await;
         let prepared = prepare_start(&state).expect("start prepared");
         let published = {
             let guard = state.motor_test.target.lock();
@@ -3907,7 +4111,7 @@ mod start_readiness_tests {
     async fn prepare_start_does_not_require_an_sd_capture() {
         let state = AppState::default();
         install_target(&state, 1).await;
-        install_telemetry(&state, Some(heartbeat(1, false)), Some(Duration::ZERO));
+        seed_target_heartbeat(&state, false).await;
         for phase in [
             CapturePhase::Idle,
             CapturePhase::Ready,
@@ -3934,7 +4138,7 @@ mod start_readiness_tests {
     async fn unread_pwm_ranges_refuse_a_start() {
         let state = AppState::default();
         install_target(&state, 1).await;
-        install_telemetry(&state, Some(heartbeat(1, false)), Some(Duration::ZERO));
+        seed_target_heartbeat(&state, false).await;
         {
             let runtime = state.motor_test.target.lock();
             runtime
@@ -3979,11 +4183,17 @@ mod start_readiness_tests {
     async fn replacing_the_target_changes_the_bound_identity() {
         let state = AppState::default();
         install_target(&state, 1).await;
-        install_telemetry(&state, Some(heartbeat(1, false)), Some(Duration::ZERO));
+        seed_target_heartbeat(&state, false).await;
         mark_capture_recording(&state);
         let first = prepare_start(&state).expect("first target");
 
         let second_handle = install_target(&state, 1).await;
+        assert_eq!(
+            refusal(&state),
+            "waiting for the selected serial PX4 heartbeat",
+            "the old connection cannot authorize its replacement"
+        );
+        seed_target_heartbeat(&state, false).await;
         let second = prepare_start(&state).expect("replacement target");
         assert_ne!(first.target.connection_id, second.target.connection_id);
         assert_eq!(second.target.connection_id, second_handle.handle_id());

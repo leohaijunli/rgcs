@@ -6,6 +6,7 @@ interface StartStopButtonProps {
   disabled: boolean
   holdMs: number
   title: string
+  highlight?: boolean
   onStart: () => Promise<void>
   onStop: () => Promise<void>
 }
@@ -74,7 +75,7 @@ export default function StartStopButton(props: StartStopButtonProps) {
 
   return (
     <button
-      className={`start-btn${props.running ? ' stop' : ''}`}
+      className={`start-btn${props.running ? ' stop' : ''}${props.highlight ? ' guide-target' : ''}`}
       style={{ marginTop: 8, position: 'relative' }}
       disabled={!props.running && !starting && !props.pending && props.disabled}
       title={props.running ? 'Stop Motor Test and release its owned outputs. Manual recording continues.' : starting || props.pending ? 'Cancel the pending start; an already dispatched short tone may finish, but motors will not start.' : props.title}

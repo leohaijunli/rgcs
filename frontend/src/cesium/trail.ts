@@ -1,20 +1,16 @@
-// Recorded flight track: distance-decimated, optionally coloured by height
-// above ground. Replaces the single `CallbackProperty` polyline, which kept
-// ~50 s of track (512 points, every 2nd of 20 Hz) and rebuilt the whole
-// geometry every frame.
+// Recorded flight track: distance-decimated and drawn in one solid accent
+// colour. Replaces the single `CallbackProperty` polyline, which kept ~50 s of
+// track (512 points, every 2nd of 20 Hz) and rebuilt the whole geometry every
+// frame.
 //
-// Entities cannot colour a polyline per vertex, so the track is drawn as
-// `Primitive` polylines with per-vertex colours, split into fixed-size chunks:
+// The track is drawn as `Primitive` polylines split into fixed-size chunks:
 // a finished chunk is built once and never touched again, only the short tail
 // chunk is rebuilt (throttled), so cost per update stays flat however long the
 // flight is.
 
 import * as Cesium from 'cesium'
 import { cssVar } from '../design-system/theme'
-import { isBelowGround } from './heights'
 import {
-  TRAIL_AGL_HI_M,
-  TRAIL_AGL_LO_M,
   TRAIL_CHUNK_POINTS,
   TRAIL_MAX_POINTS,
   TRAIL_MIN_STEP_M,
@@ -22,50 +18,16 @@ import {
   TRAIL_WIDTH_PX,
 } from './constants'
 
-/** Colour ramp, low → high AGL (also drawn by the map legend). */
-export const TRAIL_RAMP: ReadonlyArray<readonly [number, string]> = [
-  [0, cssVar('--mg-trail-lo')],
-  [0.33, cssVar('--mg-trail-mid')],
-  [0.66, cssVar('--mg-trail-hi')],
-  [1, cssVar('--mg-trail-top')],
-]
-/** Below the ground reference (negative AGL): distinct from the whole ramp. */
-export const TRAIL_BELOW_GROUND = cssVar('--mg-trail-below')
-
-const RAMP_COLORS = TRAIL_RAMP.map(([stop, css]) => [stop, Cesium.Color.fromCssColorString(css)] as const)
-const BELOW_COLOR = Cesium.Color.fromCssColorString(TRAIL_BELOW_GROUND)
-
-/** Ramp colour for a height above ground (m); below the ground band →
- *  [`TRAIL_BELOW_GROUND`], and the rest of the band is clamped to the ramp's
- *  low end so a landed vehicle colours as grounded, not as an error. */
-export function colorForAgl(aglM: number): Cesium.Color {
-  if (!Number.isFinite(aglM)) return RAMP_COLORS[0][1]
-  if (isBelowGround(aglM)) return BELOW_COLOR
-  const agl = Math.max(0, aglM)
-  const t = Math.min(1, Math.max(0, (agl - TRAIL_AGL_LO_M) / (TRAIL_AGL_HI_M - TRAIL_AGL_LO_M)))
-  for (let i = 1; i < RAMP_COLORS.length; i += 1) {
-    const [s1, c1] = RAMP_COLORS[i]
-    if (t <= s1) {
-      const [s0, c0] = RAMP_COLORS[i - 1]
-      return Cesium.Color.lerp(c0, c1, (t - s0) / (s1 - s0), new Cesium.Color())
-    }
-  }
-  return RAMP_COLORS[RAMP_COLORS.length - 1][1]
-}
-
 interface TrailPoint {
   lon: number
   lat: number
   amsl: number
-  agl: number
 }
 
 export interface TrailLayer {
-  /** Record a fix (AMSL metres, and height above ground for the colour).
-   * Fixes closer than `TRAIL_MIN_STEP_M` to the last kept one are dropped. */
-  push(lonDeg: number, latDeg: number, amslM: number, aglM: number): void
-  /** Colour by AGL (`true`) or one solid accent colour (`false`). */
-  setColorByAgl(byAgl: boolean): void
+  /** Record a fix (AMSL metres). Fixes closer than `TRAIL_MIN_STEP_M` to the
+   * last kept one are dropped. */
+  push(lonDeg: number, latDeg: number, amslM: number): void
   /** Geoid/mesh datum offset added to every rendered height. */
   setOffset(offsetM: number): void
   clear(): void
@@ -81,7 +43,6 @@ export function createTrailLayer(viewer: Cesium.Viewer): TrailLayer {
   let chunks: Cesium.Primitive[] = []
   let tail: Cesium.Primitive | null = null
   let offset = 0
-  let byAgl = true
   let lastCart: Cesium.Cartesian3 | null = null
   let dirty = false
   let lastTailBuild = 0
@@ -94,7 +55,7 @@ export function createTrailLayer(viewer: Cesium.Viewer): TrailLayer {
       geometryInstances: new Cesium.GeometryInstance({
         geometry: new Cesium.PolylineGeometry({
           positions: slice.map(cartOf),
-          colors: slice.map((p) => (byAgl ? colorForAgl(p.agl) : accent)),
+          colors: slice.map(() => accent),
           colorsPerVertex: true,
           width: TRAIL_WIDTH_PX,
           vertexFormat: Cesium.PolylineColorAppearance.VERTEX_FORMAT,
@@ -150,9 +111,9 @@ export function createTrailLayer(viewer: Cesium.Viewer): TrailLayer {
   scene.preRender.addEventListener(flush)
 
   return {
-    push(lon, lat, amsl, agl) {
+    push(lon, lat, amsl) {
       if (![lon, lat, amsl].every(Number.isFinite)) return
-      const point: TrailPoint = { lon, lat, amsl, agl }
+      const point: TrailPoint = { lon, lat, amsl }
       const cart = cartOf(point)
       if (lastCart && Cesium.Cartesian3.distance(cart, lastCart) < TRAIL_MIN_STEP_M) return
       lastCart = cart
@@ -165,11 +126,6 @@ export function createTrailLayer(viewer: Cesium.Viewer): TrailLayer {
         removeChunks(drop)
         points = points.slice(drop * stride)
       }
-    },
-    setColorByAgl(next) {
-      if (next === byAgl) return
-      byAgl = next
-      rebuildAll()
     },
     setOffset(next) {
       if (next === offset) return

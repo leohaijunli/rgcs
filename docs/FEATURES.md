@@ -376,11 +376,23 @@ See [Parameters verification and screenshots](../frontend/src/params/README.md).
 ## Motor / mag interference test (Tools ▸)
 
 Separate window, always-on-top while sending, Esc = emergency stop
-(latched until Reset). The serial target card accepts a MAVLink system ID
-(1–255, default 1) so this test can route to a specific vehicle when the
-serial bus carries multiple systems. This is an expected/routing ID only: it
-does not write or change the vehicle's own system-ID parameter; component ID
-remains the PX4 autopilot default (1).
+(latched until Reset). The serial target card discovers the PX4 on the selected
+port and adopts its actual MAVLink system/component ID; the operator no longer
+types a routing ID. MagGCS keeps its own IDs distinct and never writes or
+changes the vehicle's system-ID parameters.
+
+The selected serial PX4 is the FC for this window. Connecting it on the Motor
+Test page supplies FC status and parameters without a separate main-window FC
+connection. If the main link is a hardware PX4 on serial, **Use main serial link**
+selects that FC and shares its existing transport and parameter worker instead.
+All FC indicators refer to the selected target, including heartbeat freshness,
+armed/mode state and `COM_MOT_TEST_EN`.
+
+A **Next step** strip names the current gate and pulses only the matching
+enabled control: connect/discover the serial PX4, wait for its heartbeat,
+disarm it, refresh output configuration, enable motor control, unlock, hold
+START, or stop/cancel the test. Guidance follows the selected FC and never
+enables an action that its own interlocks still block.
 
 The window is responsive (Task 9): at 1366×768 and wider it keeps the
 three-region layout (input + start/alarm controls / setup + plots /
@@ -441,8 +453,9 @@ saved theme and Field mode at startup and follows changes from the main window. 
   stale or blocked; user-expanded motor details remain pinned when a temporary
   warning clears. Connection, mapping, capture and log errors persist until dismissed.
 - **Safety gate**: unlock → hold Start 3 s for every command source; a short
-  click never starts. All tests use a fixed 0.3 maximum normalized demand and
-  2.0/s slew. Any source/preset/target/mapping change or manual motor edit while
+  click never starts. All tests use the full normalized 0–1 demand range of
+  the FC-read output model and 2.0/s slew. Any source/preset/target/mapping
+  change or manual motor edit while
   idle re-locks. Ordinary STOP retains the unlock; emergency reset re-locks it.
   Start also requires a fresh
   heartbeat from the exact connected target showing PX4 and disarmed; no motor
@@ -453,7 +466,7 @@ saved theme and Field mode at startup and follows changes from the main window. 
   live actuator outputs (latest-value slot, stale feed auto-stops). The
   source connection also selects the MAVLink system/component ID and MAIN or
   AUX bank; channels 1–4 from any other node or bank are ignored. Forwarding
-  uses the same fixed output cap and slew limit.
+  uses the same FC-configured output range and slew limit.
 - **Output mapping and feedback**: the serial target's `PWM_MAIN_FUNC1..8`
   and `PWM_AUX_FUNC1..8` are read on connect and by Refresh mapping. PX4
   functions 101–104 correspond to Motor1–4, so feedback for each motor is
@@ -488,7 +501,7 @@ saved theme and Field mode at startup and follows changes from the main window. 
   and output-configuration revision: reconnecting the target or refreshing its
   configuration while idle replaces the session, while a sending session must
   be stopped first. FC-side timeout is 0.3 s per command (PX4 caps at 3 s),
-  with the fixed output cap and slew limit, a disarmed-only interlock
+  with the FC-configured output range and slew limit, a disarmed-only interlock
   (armed or stale heartbeat → immediate
   release), ACK denial stops the test. PX4 needs `COM_MOT_TEST_EN=1`.
 - **Main serial reuse**: explicitly borrow the main window's compatible PX4

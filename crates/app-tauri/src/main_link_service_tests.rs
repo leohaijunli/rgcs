@@ -105,6 +105,10 @@ impl Harness {
         actuator_use_main_target(self.app.handle().clone(), self.state(), expected.clone())
             .await
             .expect("attach");
+        assert!(
+            self.state().actuator_status().target_fc_alive,
+            "a borrowed serial FC is available before another heartbeat"
+        );
         expected
     }
 
@@ -143,26 +147,37 @@ async fn wait_until(mut ready: impl FnMut() -> bool) {
     .expect("fixture deadline");
 }
 
-fn send(master: &mut serialport::TTYPort, message: &MavMessage) {
+fn send(master: &mut serialport::TTYPort, message: &MavMessage, system_id: u8, sequence: &mut u8) {
     let mut bytes = Vec::new();
     mavlink::write_v2_msg(
         &mut bytes,
         mavlink::MavHeader {
-            system_id: FC_SYS,
+            system_id,
             component_id: 1,
-            sequence: 0,
+            sequence: *sequence,
         },
         message,
     )
     .expect("encode fixture frame");
+    *sequence = sequence.wrapping_add(1);
     let _ = master.write_all(&bytes); // No open slave yet during startup/reconnect.
 }
 
-fn fake_px4(mut master: serialport::TTYPort, stop: Arc<AtomicBool>, trace: Trace) {
+fn fake_px4(master: serialport::TTYPort, stop: Arc<AtomicBool>, trace: Trace) {
+    fake_px4_for_system(master, stop, trace, FC_SYS);
+}
+
+fn fake_px4_for_system(
+    mut master: serialport::TTYPort,
+    stop: Arc<AtomicBool>,
+    trace: Trace,
+    system_id: u8,
+) {
     use mavlink::common::*;
     let mut buffer = Vec::new();
     let mut bytes = [0; 2048];
     let mut last_heartbeat = Instant::now() - Duration::from_secs(1);
+    let mut sequence = 0;
     while !stop.load(Ordering::Acquire) {
         if last_heartbeat.elapsed() >= Duration::from_millis(50) {
             send(
@@ -175,6 +190,8 @@ fn fake_px4(mut master: serialport::TTYPort, stop: Arc<AtomicBool>, trace: Trace
                     mavlink_version: 3,
                     custom_mode: 0,
                 }),
+                system_id,
+                &mut sequence,
             );
             last_heartbeat = Instant::now();
         }
@@ -220,10 +237,106 @@ fn fake_px4(mut master: serialport::TTYPort, stop: Arc<AtomicBool>, trace: Trace
                         param_count: 100,
                         param_index: u16::MAX,
                     }),
+                    system_id,
+                    &mut sequence,
                 );
             }
         }
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dedicated_serial_target_is_the_fc_without_a_primary_connection() {
+    let (mut master, slave) = serialport::TTYPort::pair().expect("PTY pair");
+    master
+        .set_timeout(Duration::from_millis(10))
+        .expect("PTY timeout");
+    let port = slave.name().expect("PTY slave path");
+    drop(slave);
+    let stop = Arc::new(AtomicBool::new(false));
+    let reader_stop = stop.clone();
+    let trace = Trace::default();
+    let reader_trace = trace.clone();
+    let thread = std::thread::spawn(move || fake_px4(master, reader_stop, reader_trace));
+    let endpoint = Endpoint::Serial {
+        port: port.into(),
+        baudrate: 115_200,
+    };
+    let (handle, _events, first) =
+        maggcs_core::mavlink::connection::spawn_connection(ConnectionConfig {
+            endpoint: endpoint.clone(),
+            target_system_id: FC_SYS,
+            target_component_id: TARGET_COMPONENT_ID,
+            auto_discover_target: false,
+            ..Default::default()
+        })
+        .await
+        .expect("dedicated serial connection");
+    first.await.expect("first result").expect("serial opened");
+    wait_until(|| handle.target_heartbeat().is_some()).await;
+    let app = mock_app();
+    app.manage(AppState::default());
+    let state = app.state::<AppState>();
+    let (params, _param_events, parameter_task) =
+        maggcs_core::params::ParamService::spawn_with_task(
+            handle.clone(),
+            FC_SYS,
+            TARGET_COMPONENT_ID,
+        );
+    let runtime = AuxiliaryLinkRuntime::new(
+        handle.clone(),
+        [tauri::async_runtime::spawn(async move {
+            let _ = parameter_task.await;
+        })],
+    );
+    crate::actuator_service::install_target(
+        app.handle(),
+        &state,
+        handle,
+        endpoint.to_address_string(),
+        FC_SYS,
+        params,
+        runtime,
+    );
+    assert!(
+        state.actuator_status().target_fc_alive,
+        "the dedicated serial FC is known when its observer attaches"
+    );
+    wait_until(|| {
+        let status = state.actuator_status();
+        status.fc_alive
+            && status.com_mot_test_en == Some(1)
+            && status.output_map.state == maggcs_core::motor_test::mapping::OutputMapState::Complete
+    })
+    .await;
+    assert!(state.connection().is_none());
+    assert!(state.primary_params().is_none());
+    assert_eq!(candidate(&state), None);
+    let status = state.actuator_status();
+    assert!(status.connected && status.target_connected);
+    assert!(status.fc_alive && status.target_fc_alive);
+    assert_eq!(
+        status.endpoint.as_deref(),
+        Some(endpoint.to_address_string().as_str())
+    );
+    assert_eq!(status.target_system_id, Some(FC_SYS));
+    assert_eq!(status.target_origin, Some(TargetLinkOrigin::Dedicated));
+    let target = state
+        .motor_test
+        .target
+        .lock()
+        .as_ref()
+        .expect("dedicated target")
+        .target
+        .target_ref();
+    crate::actuator_service::ensure_target_disarmed(&state, target)
+        .expect("selected serial FC ready");
+    crate::actuator_service::actuator_disconnect_target(app.handle().clone(), state.clone())
+        .await
+        .expect("disconnect dedicated target");
+    assert!(!state.actuator_status().connected);
+    stop.store(true, Ordering::Release);
+    thread.join().expect("PTY peer joins");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -248,6 +361,11 @@ async fn borrowed_serial_target_reuses_worker_and_detach_keeps_primary_alive() {
             .is_some_and(|t| t.target.config.lock().is_some())
     })
     .await;
+    let status = h.state().actuator_status();
+    assert!(status.connected && status.fc_alive && status.target_fc_alive);
+    assert_eq!(status.endpoint.as_deref(), Some(offer.endpoint.as_str()));
+    assert_eq!(status.target_system_id, Some(FC_SYS));
+    assert_eq!(status.target_origin, Some(TargetLinkOrigin::MainSerial));
     let borrowed_params = h
         .state()
         .motor_test

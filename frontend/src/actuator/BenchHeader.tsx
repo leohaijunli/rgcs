@@ -6,6 +6,7 @@ import {
   activeProtocolSummary,
   outputConfigurationIssue,
   type ActuatorStatus,
+  type MotorGuideAction,
 } from './benchTypes'
 import AppLogo from '../components/AppLogo'
 
@@ -23,6 +24,7 @@ interface BenchHeaderProps {
   unlocked: boolean
   stopReason: string | null
   failure: BenchFailure | null
+  guideAction: MotorGuideAction
   onStop: () => Promise<void>
   onEmergencyStop: () => void
   onResetEmergency: () => void
@@ -118,12 +120,12 @@ export default function BenchHeader(props: BenchHeaderProps) {
 
       <div className="header-actions">
         {props.emergency && (
-          <button className="mode-btn header-btn" onClick={props.onResetEmergency} title="Clear the Motor Test emergency latch after release is confirmed. This never starts motors.">
+          <button className={`mode-btn header-btn${props.guideAction === 'reset' ? ' guide-target' : ''}`} onClick={props.onResetEmergency} title="Clear the Motor Test emergency latch after release is confirmed. This never starts motors.">
             RESET
           </button>
         )}
         <button
-          className="mode-btn header-btn stop-tab"
+          className={`mode-btn header-btn stop-tab${props.guideAction === 'stop' ? ' guide-target' : ''}`}
           onClick={() => void props.onStop()}
           disabled={!props.running && !props.releasing && !props.starting}
           title={props.starting ? 'Cancel the pending Motor Test start.' : props.running || props.releasing ? 'Release outputs owned by Motor Test. Manual recording continues; the flight controller is not disarmed.' : 'No Motor Test output is currently owned. STOP does not take control from another controller.'}

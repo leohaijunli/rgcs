@@ -10,6 +10,7 @@ const require = createRequire(import.meta.url)
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE ?? 'playwright')
 const url = process.argv[2] ?? 'http://127.0.0.1:1420/actuator.html'
 const shots = process.argv[3]
+const fcRangeOnly = process.env.MOTOR_FC_RANGE_ONLY === '1'
 const browser = await chromium.launch({ headless: true })
 const context = await browser.newContext({ viewport: { width: 1366, height: 768 } })
 const page = await context.newPage()
@@ -62,8 +63,8 @@ await page.addInitScript(() => {
       settings: { start: 'rising', stop: 'falling' }, starting: false, busy: false,
       phase: 'idle', trigger: null, error: null,
     },
-    connected: false, fc_alive: false, target_fc_alive: true, armed: false,
-    custom_mode: 0, autopilot_px4: true, mode_label: 'Manual', endpoint: null,
+    connected: true, fc_alive: true, target_fc_alive: true, armed: false,
+    custom_mode: 0, autopilot_px4: true, mode_label: 'Manual', endpoint: 'isolated IPC test',
     tick_hz: 10, session: 'idle', sitl_connected: false, sitl_endpoint: null,
     sitl_source: null, sitl_feed_age_s: null, target_connected: true,
     target_endpoint: 'isolated IPC test', target_system_id: 250,
@@ -134,7 +135,7 @@ await page.addInitScript(() => {
     return outputs
   }
   window.__bench = {
-    calls: [], dialogs: [], status, connectionId: 1, scopeOutputs, downloadResult: false,
+    calls: [], dialogs: [], status, mainConnected: false, connectionId: 1, scopeOutputs, downloadResult: false,
     startError: null, mappingError: null,
     holdCapture: null, pendingCapture: null,
     holdMotorStart: false, pendingMotorStart: null,
@@ -209,6 +210,9 @@ await page.addInitScript(() => {
         if (JSON.stringify(args.expected) !== JSON.stringify(status.main_serial_target)) throw new Error('main serial target changed')
         status.target_connected = true
         status.target_fc_alive = true
+        status.connected = true
+        status.fc_alive = true
+        status.endpoint = args.expected.endpoint
         status.target_origin = 'main_serial'
         status.target_endpoint = args.expected.endpoint
         status.target_system_id = args.expected.target.target_system_id
@@ -218,6 +222,9 @@ await page.addInitScript(() => {
       if (command === 'actuator_disconnect_target') {
         status.target_connected = false
         status.target_fc_alive = false
+        status.connected = false
+        status.fc_alive = false
+        status.endpoint = null
         status.target_origin = null
         status.motor_control.enabled = false
         return
@@ -343,7 +350,8 @@ await page.addInitScript(() => {
         }
         return complete()
       }
-      if (command === 'params_cache_get' || command === 'config_load') return null
+      if (command === 'params_cache_get') return { value: { int: 0 } }
+      if (command === 'config_load') return null
       return undefined
     },
   }
@@ -358,7 +366,7 @@ const ensureUnlocked = async () => {
   const unlock = page.getByRole('button', { name: 'Unlock test', exact: true })
   if ((await unlock.count()) > 0) await unlock.click()
 }
-/** Full-prop starts require a 3 s hold; a short click must do nothing. */
+/** Every start requires a 3 s hold; a short click must do nothing. */
 const holdStart = async (ms = 3150) => {
   await start().scrollIntoViewIfNeeded()
   const bounds = await start().boundingBox()
@@ -508,18 +516,94 @@ try {
   const motorControl = page.getByRole('switch', { name: 'Motor control', exact: true })
   assert.equal(await motorControl.getAttribute('aria-checked'), 'false', 'new window starts monitor-only')
   assert.equal(await start().isDisabled(), true)
+  const guide = page.getByTestId('motor-guide')
+  assert.equal(await guide.getAttribute('data-action'), 'enable', 'the guide names the next safe action')
+  assert.match(await guide.textContent(), /Enable motor control/)
+  assert.equal(await motorControl.evaluate((el) => el.classList.contains('guide-target')), true, 'the matching control pulses')
   assert.equal(await page.getByRole('button', { name: 'Unlock test', exact: true }).isDisabled(), true)
   assert.match(await start().getAttribute('title'), /Motor control is OFF/)
   assert.equal(await calls('actuator_start_manual'), 0)
-  if (shots) await page.screenshot({ path: join(shots, 'motor-controls-control-off-1366x768.png') })
-  await page.evaluate(() => Object.assign(window.__bench.status, { target_connected: false, target_fc_alive: false, target_origin: null }))
-  await page.getByRole('button', { name: 'Connect PX4', exact: true }).waitFor()
+  assert.equal(await calls('params_cache_get'), 0, 'FC parameters never come from an unrelated primary cache')
+  assert.equal(await page.getByText('Primary GCS', { exact: true }).count(), 0, 'no second FC indicator')
+  assert.equal(await page.evaluate(() => window.__bench.mainConnected), false, 'dedicated target needs no main FC')
+  assert.match(await page.locator('.actuator-header').textContent(), /DISARMED/)
+  assert.match(await page.locator('.controls-grid').textContent(), /full PX4-configured output range \(0–100%\)/)
+  if (shots && !fcRangeOnly) await page.screenshot({ path: join(shots, 'motor-controls-control-off-1366x768.png') })
+  if (fcRangeOnly) {
+    await page.evaluate(() => { window.__bench.status.com_mot_test_en = null })
+    await page.waitForFunction(() => document.querySelector('.mot-en-light')?.textContent.includes('unknown'))
+    assert.equal(await page.locator('.mot-en-gate').count(), 0, 'unknown target permission never falls back to the primary cache')
+    await page.evaluate(() => { window.__bench.status.com_mot_test_en = 0 })
+    await page.locator('.mot-en-gate').waitFor()
+    assert.equal(await page.getByRole('button', { name: 'Open Parameters', exact: true }).count(), 0, 'dedicated FC never opens another FC’s parameter editor')
+    await page.evaluate(() => { window.__bench.status.com_mot_test_en = 1 })
+    await page.locator('.mot-en-gate').waitFor({ state: 'detached' })
+    await ensureUnlocked()
+    const slider = page.locator('.motor-control-row input[type="range"]').first()
+    assert.equal(await slider.getAttribute('max'), '1', 'the control spans the full normalized range')
+    await slider.focus()
+    await page.keyboard.press('End')
+    assert.equal(await slider.inputValue(), '1')
+    await ensureUnlocked()
+    await holdStart()
+    await page.waitForFunction(() => document.querySelector('button.start-btn')?.textContent === 'STOP')
+    const request = await page.evaluate(() => window.__bench.calls.find((call) => call.command === 'actuator_start_manual'))
+    assert.deepEqual(request.args.values, [1, 1, 1, 1], '100% reaches the command API without a 30% cap')
+    await page.evaluate(() => {
+      const test = window.__bench
+      Object.assign(test.status, {
+        output_values: [1, 1, 0, 1], output_pwm: [1900, 2000, 2000, 2000],
+        fc_output_pwm: [1900, 2000, 2000, 2000],
+      })
+      const now = Date.now() / 1000
+      const samples = []
+      for (let i = 0; i <= 150; i++) {
+        const t = now - 15 + i / 10
+        const v = 1100 + 800 * 0.5 * (1 - Math.cos(i * Math.PI * 2 / 100))
+        samples.push({ id: 'fc.motor1', t, v })
+        samples.push(i % 100 === 0
+          ? { id: 'cmd.pwm1', t, v: null, gap: 'released' }
+          : { id: 'cmd.pwm1', t, v })
+      }
+      test.emit('actuator_samples', samples)
+    })
+    await page.waitForFunction(() => document.querySelector('[data-testid="motor-command-pwm-1"]')?.textContent === '1900 µs')
+    await waitForOutputPlot()
+    const peak = await page.evaluate(() => {
+      const plot = document.querySelector('.scope-pane[data-pane="top"] .scope-pane-plot').__maggcsScopePlot
+      const index = plot.series.findIndex((series) => series.label === 'Command PWM M 1')
+      return { value: Math.max(...plot.data[index].filter(Number.isFinite)), axisMax: plot.scales['µs'].max }
+    })
+    assert(Math.abs(peak.value - 1900) < 1, 'the displayed sine reaches the configured 1900 µs maximum')
+    assert(peak.axisMax >= 1900, 'the chart displays the full output range')
+    if (shots) {
+      await page.setViewportSize({ width: 1920, height: 1080 })
+      await waitForOutputPlot()
+      await page.screenshot({ path: join(shots, 'motor-dedicated-fc-full-range-1920x1080.png') })
+      await page.setViewportSize({ width: 1366, height: 768 })
+    }
+    await page.locator('.actuator-header .stop-tab').click()
+    await page.waitForFunction(() => document.querySelector('button.start-btn')?.textContent === 'START')
+    await motorControl.click()
+    await resetCalls()
+    console.log('PASS: dedicated target alone supplies FC status; target-only permission; 100% command and uncropped 1900 µs plot')
+  }
+  await page.evaluate(() => Object.assign(window.__bench.status, { connected: false, fc_alive: false, endpoint: null, target_connected: false, target_fc_alive: false, target_origin: null }))
+  const connectPx4 = page.getByRole('button', { name: 'Connect PX4', exact: true })
+  await connectPx4.waitFor()
+  await page.waitForFunction(() => document.querySelector('[data-testid="motor-guide"]')?.dataset.action === 'connect')
+  assert.match(await guide.textContent(), /Connect the serial PX4/)
+  assert.equal(await connectPx4.evaluate((el) => el.classList.contains('guide-target')), true, 'the connect action pulses')
+  assert.equal(await page.getByLabel('Target MAVLink system ID').count(), 0, 'the PX4 ID is discovered, not typed')
   assert.equal(await page.getByRole('button', { name: 'Use main serial link', exact: true }).count(), 0, 'UDP/unavailable main links keep the dedicated path')
   const mainOffer = { target: { connection_id: 1, target_system_id: 250, target_component_id: 1 }, transport_generation: 3, endpoint: 'serial:/dev/ttyACM0:115200' }
-  await page.evaluate((offer) => Object.assign(window.__bench.status, { connected: true, fc_alive: true, main_serial_target: offer }), mainOffer)
+  await page.evaluate((offer) => {
+    window.__bench.mainConnected = true
+    window.__bench.status.main_serial_target = offer
+  }, mainOffer)
   const useMain = page.getByRole('button', { name: 'Use main serial link', exact: true })
   await useMain.waitFor()
-  if (shots) {
+  if (shots && !fcRangeOnly) {
     await useMain.scrollIntoViewIfNeeded()
     await page.screenshot({ path: join(shots, 'motor-main-serial-offer-1366x768.png') })
   }
@@ -530,10 +614,18 @@ try {
   assert.equal(await motorControl.getAttribute('aria-checked'), 'false', 'attach starts monitor-only')
   const detachMain = page.getByRole('button', { name: 'Detach main link', exact: true })
   assert.match(await detachMain.getAttribute('title'), /keep the main serial connection open/)
-  if (shots) await page.screenshot({ path: join(shots, 'motor-main-serial-attached-1366x768.png') })
+  assert.match(await page.locator('.actuator-header').textContent(), /DISARMED/)
+  assert.equal(await calls('params_cache_get'), 0, 'borrowed FC permission also comes through the selected target status')
+  if (fcRangeOnly) {
+    await page.evaluate(() => { window.__bench.status.com_mot_test_en = 0 })
+    await page.getByRole('button', { name: 'Open Parameters', exact: true }).waitFor()
+    await page.evaluate(() => { window.__bench.status.com_mot_test_en = 1 })
+    await page.locator('.mot-en-gate').waitFor({ state: 'detached' })
+  }
+  if (shots) await page.screenshot({ path: join(shots, fcRangeOnly ? 'motor-borrowed-main-fc-1366x768.png' : 'motor-main-serial-attached-1366x768.png') })
   await detachMain.click()
   await useMain.waitFor()
-  assert.equal(await page.evaluate(() => window.__bench.status.connected), true)
+  assert.equal(await page.evaluate(() => window.__bench.mainConnected), true, 'detaching preserves the main FC connection')
   await page.evaluate(() => { window.__bench.mainLinkError = 'main serial target changed — refresh the target offer' })
   await useMain.click()
   await page.getByText(/main serial target changed — refresh/).waitFor()
@@ -541,7 +633,7 @@ try {
   await page.evaluate(() => Object.assign(window.__bench.status, { main_serial_target: null }))
   await page.waitForFunction(() => ![...document.querySelectorAll('button')].some((button) => button.textContent === 'Use main serial link'))
   console.log('PASS: main serial offer, exact generation IPC, no second open, passive attach, detach and stale-offer refusal')
-  if (process.env.MOTOR_TARGET_ONLY === '1') {
+  if (process.env.MOTOR_TARGET_ONLY === '1' || fcRangeOnly) {
     assert.deepEqual(errors, [])
     await browser.close()
     process.exit(0)

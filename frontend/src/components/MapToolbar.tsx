@@ -52,8 +52,6 @@ export default function MapToolbar({ onGoHome, onNorth }: Props) {
   const toggleGrid = useUiStore((s) => s.toggleGrid)
   const showHeights = useUiStore((s) => s.showHeights)
   const toggleHeights = useUiStore((s) => s.toggleHeights)
-  const trailByAgl = useUiStore((s) => s.trailByAgl)
-  const toggleTrailByAgl = useUiStore((s) => s.toggleTrailByAgl)
   const showCoverage = useUiStore((s) => s.showCoverage)
   const toggleCoverage = useUiStore((s) => s.toggleCoverage)
   const hillshadeOpacity = useUiStore((s) => s.hillshadeOpacity)
@@ -196,9 +194,6 @@ export default function MapToolbar({ onGoHome, onNorth }: Props) {
           )}
           <PopoverToggle label={t('map.heights')} on={showHeights} onLabel={t('layers.on')} offLabel={t('layers.off')} onToggle={toggleHeights} />
           <div className="px-1 text-[10px] text-muted">{t('layers.vehicleAlwaysOn')}</div>
-
-          <PopoverSection label={t('layers.vehicle')} />
-          <PopoverToggle label={t('map.trailByAgl')} on={trailByAgl} onLabel={t('layers.on')} offLabel={t('layers.off')} onToggle={toggleTrailByAgl} />
 
           <button
             data-testid="layers-reset"

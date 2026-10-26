@@ -8,7 +8,7 @@
 //
 // One primary action per state: START (3 s hold) dispatches by source —
 // manual sliders or a preset waveform; STOP while running. The gate
-// (unlock → hold) applies to every source; there is no lighter bench mode.
+// (unlock → hold) applies to every source, across the full configured output range.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { invoke } from '@tauri-apps/api/core'
@@ -17,7 +17,6 @@ import { useSerialSelection } from '../hooks/useSerialSelection'
 import { listen } from '@tauri-apps/api/event'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { readTextFile } from '@tauri-apps/plugin-fs'
-import type { ParamEntry } from '../generated-types/ParamEntry'
 import type { LogEntryInfo } from '../generated-types/LogEntryInfo'
 import { isTauri } from '../inspector/mock'
 import BenchHeader, { type BenchFailure } from './BenchHeader'
@@ -31,6 +30,7 @@ import {
   isDShot,
   outputUnits,
   mappingHasGap,
+  motorGuide,
   outputConfigurationIssue,
   protocolLabel,
   type ActuatorStatus,
@@ -39,6 +39,7 @@ import {
   type SdCaptureStatus,
   type ServoPort,
 } from './benchTypes'
+import MotorGuideCard from './MotorGuide'
 import MotorTrackingTable from './MotorTrackingTable'
 import SignalScope, { useScopeFeed } from './SignalScope'
 import StartStopButton from './StartStopButton'
@@ -46,10 +47,6 @@ import MotorToneControls from './MotorToneControls'
 import StreamManager from './StreamManager'
 import { scopeStore } from './scopeStore'
 
-/** The parameter that gates motor tests on the FC (parameters plan PM9). */
-const MOT_TEST_EN = 'COM_MOT_TEST_EN'
-/** Poll period for the parameter cache check. */
-const MOT_TEST_EN_POLL_MS = 2000
 /** PX4 v1.17 SDLOG_MODE meanings shown read-only in the capture panel. */
 const SDLOG_MODE_LABELS: Record<number, string> = {
   0: 'armed→disarm',
@@ -123,7 +120,7 @@ const PRESETS: Array<{ id: PresetKind; label: string }> = [
   { id: 'sine', label: 'Sine' },
 ]
 
-/** Hold duration that arms Start under the full-prop envelope. */
+/** Hold duration required before starting a motor test. */
 const PROPS_HOLD_MS = 3000
 
 /** Slider updates are merged at ~30 Hz — never queued (plan §8.1). */
@@ -145,6 +142,7 @@ interface SitlSourceFieldsProps {
   /** Routing is frozen while the motor test is sending. */
   locked: boolean
   error: string | null
+  highlightConnect?: boolean
   onDismissError: () => void
   onConnect: () => void
   onDisconnect: () => void
@@ -229,7 +227,7 @@ function SitlSourceFields(props: SitlSourceFieldsProps) {
         </button>
       ) : (
         <button
-          className="mode-btn"
+          className={`mode-btn${props.highlightConnect ? ' guide-target' : ''}`}
           style={{ width: '100%', marginTop: 6 }}
           onClick={props.onConnect}
           disabled={!validIds || props.endpoint.trim() === '' || props.locked}
@@ -312,9 +310,6 @@ export function ActuatorApp() {
     } finally { setControlBusy(false) }
   }, [tauri])
   useEffect(() => { void setMotorControl(false) }, [setMotorControl])
-  /** `COM_MOT_TEST_EN` from the parameter cache: true/false, null = unknown
-   * (never pulled). false disables motor tests and offers the jump. */
-  const [motTestEn, setMotTestEn] = useState<boolean | null>(null)
   // Manual source state.
   const [values, setValues] = useState<number[]>(() => new Array(MOTOR_COUNT).fill(0))
   const [sync, setSync] = useState(true)
@@ -331,12 +326,10 @@ export function ActuatorApp() {
   const [sitlPort, setSitlPort] = useState<ServoPort>('main')
   const [sitlConnectError, setSitlConnectError] = useState<string | null>(null)
   const [mappingError, setMappingError] = useState<string | null>(null)
-  // The motor test's own target link: the real PX4 over serial (the main
-  // GCS keeps its own link, e.g. UDP SITL).
+  // The selected FC: a dedicated serial PX4 or the borrowed main serial link.
   const [targetEndpoint, setTargetEndpoint] = useState('serial:/dev/ttyACM0:115200')
   const targetSerialSelection = useSerialSelection(targetEndpoint)
   const sitlSerialSelection = useSerialSelection(sitlEndpoint)
-  const [targetSystemId, setTargetSystemId] = useState(1)
   const [targetConnectError, setTargetConnectError] = useState<string | null>(null)
   // Why the last session stopped (armed / heartbeat_stale / acks_denied / …).
   const [stopReason, setStopReason] = useState<string | null>(null)
@@ -422,9 +415,6 @@ export function ActuatorApp() {
         const configured = scopeStore.configureOutputs(s.scope_outputs)
         if (!configured.ok) return
         setStatus(s)
-        if (s.target_connected && s.target_system_id !== null) {
-          setTargetSystemId(s.target_system_id)
-        }
         if (s.session === 'emergency') setEmergency(true)
         if (prevTargetConnectedRef.current && !s.target_connected) {
           scopeStore.clear()
@@ -468,26 +458,6 @@ export function ActuatorApp() {
       disposed = true
       un?.()
     }
-  }, [tauri])
-
-  // PM9 (parameters plan): read COM_MOT_TEST_EN from the parameter cache —
-  // the value lands there after a Pull all or a lazy read in the Parameters
-  // window. null = not in the cache yet (never pulled), false = disabled.
-  useEffect(() => {
-    if (!tauri) return
-    const poll = async () => {
-      try {
-        const entry = await invoke<ParamEntry | null>('params_cache_get', {
-          name: MOT_TEST_EN,
-        })
-        setMotTestEn(entry ? Number('int' in entry.value ? entry.value.int : entry.value.real) !== 0 : null)
-      } catch {
-        /* not connected: keep the last known state */
-      }
-    }
-    void poll()
-    const id = setInterval(poll, MOT_TEST_EN_POLL_MS)
-    return () => clearInterval(id)
   }, [tauri])
 
   /** Alarm beep: a synthesized square wave through WebAudio — works on
@@ -890,11 +860,6 @@ export function ActuatorApp() {
     setTargetEndpoint(value)
     resetConfirmation()
   }
-  const changeTargetSystemId = (value: number) => {
-    setTargetSystemId(value)
-    setTargetConnectError(null)
-    resetConfirmation()
-  }
 
   const resetEmergency = () => {
     setEmergency(false)
@@ -989,7 +954,6 @@ export function ActuatorApp() {
     void (targetSerialSelection.port ? Promise.resolve(targetSerialSelection.port) : serialPortForEndpoint(targetEndpoint)).then((expectedSerial) => invoke('actuator_connect_target', {
       expectedSerial,
       endpoint: targetEndpoint,
-      targetSystemId,
     })).catch((error: unknown) => {
       setTargetConnectError(String(error))
     })
@@ -1075,6 +1039,21 @@ export function ActuatorApp() {
             : run?.error
               ? String(run.error.kind).replaceAll('_', ' ')
               : null
+  const guide = motorGuide({
+    targetConnected: status.target_connected,
+    targetFcAlive: status.target_fc_alive,
+    armed: status.armed,
+    emergency,
+    running,
+    pendingStart,
+    outputBlocked: outputConfigurationBlocked,
+    outputIssue,
+    controlEnabled,
+    unlocked,
+    runBlocksStart,
+    tonesReady,
+    sourceNeedsSitl: source === 'forward' && !status.sitl_connected,
+  })
   const loggingAttention = loggingNeedsAttention({
     captureBusy,
     captureActive,
@@ -1100,6 +1079,7 @@ export function ActuatorApp() {
         unlocked={unlocked}
         stopReason={stopReason}
         failure={failure}
+        guideAction={guide.action}
         onStop={stop}
         onEmergencyStop={estop}
         onResetEmergency={resetEmergency}
@@ -1141,6 +1121,7 @@ export function ActuatorApp() {
             connected={status.sitl_connected}
             locked={running || pendingStart}
             error={sitlConnectError}
+            highlightConnect={guide.action === 'sitl'}
             onDismissError={() => setSitlConnectError(null)}
             onConnect={connectSitl}
             onDisconnect={disconnectSitl}
@@ -1187,7 +1168,7 @@ export function ActuatorApp() {
         <div className="card test-control-card" data-testid="motor-test-controls">
           <h3>Test controls</h3>
           <button
-            className={`mode-btn motor-control-switch ${controlEnabled ? 'active' : ''}`}
+            className={`mode-btn motor-control-switch ${controlEnabled ? 'active' : ''}${guide.action === 'enable' ? ' guide-target' : ''}`}
             role="switch"
             aria-label="Motor control"
             aria-checked={controlEnabled}
@@ -1202,7 +1183,7 @@ export function ActuatorApp() {
           {!controlEnabled && <div className="estop-note" data-testid="motor-control-off">Monitor only · no motor or ESC tone commands</div>}
           {controlError && <div className="estop-note text-error" role="alert">{controlError}</div>}
           <button
-            className="mode-btn unlock-btn"
+            className={`mode-btn unlock-btn${guide.action === 'unlock' ? ' guide-target' : ''}`}
             onClick={() => (emergency ? undefined : setUnlocked((u) => !u))}
             disabled={!controlEnabled || controlBusy || emergency || running || pendingStart}
             aria-pressed={unlocked}
@@ -1214,6 +1195,7 @@ export function ActuatorApp() {
             running={running}
             pending={pendingStart}
             holdMs={PROPS_HOLD_MS}
+            highlight={guide.action === 'start' || guide.action === 'cancel'}
             onStart={start}
             onStop={stop}
             disabled={
@@ -1345,12 +1327,13 @@ export function ActuatorApp() {
 
       {/* Middle: command setup, motor feedback and the flexible plot workspace. */}
       <main className="actuator-mid">
+        <MotorGuideCard guide={guide} />
         <div className="controls-grid">
           <div className="card">
             <h3>Safety</h3>
             <div className="estop-note">
-              Every start uses the full-prop envelope: 30% maximum, 2.0/s slew,
-              and a 3 s hold. There is no lighter bench mode.
+              Motor demand uses the full PX4-configured output range (0–100%),
+              with 2.0/s slew and a 3 s START hold.
             </div>
           </div>
 
@@ -1567,22 +1550,9 @@ export function ActuatorApp() {
                 spellCheck={false}
                 disabled={running || pendingStart}
               />
-              <label className="motor-row">
-                <span className="motor-label">System ID</span>
-                <input
-                  className="phrase-input"
-                  type="number"
-                  min={1}
-                  max={255}
-                  step={1}
-                  value={targetSystemId}
-                  onChange={(e) => changeTargetSystemId(Number(e.target.value))}
-                  aria-label="Target MAVLink system ID"
-                  disabled={running || pendingStart}
-                />
-              </label>
               <div className="estop-note">
-                Routing only; this does not change the vehicle ID.
+                MagGCS identifies the PX4 on this port automatically and keeps its
+                own MAVLink ID separate.
               </div>
             </div>
           )}
@@ -1603,16 +1573,10 @@ export function ActuatorApp() {
             </button>
           ) : (
             <button
-              className="mode-btn target-link-action"
+              className={`mode-btn target-link-action${guide.action === 'connect' ? ' guide-target' : ''}`}
               onClick={connectTarget}
               title="Connect the selected target link for telemetry. Motor control starts OFF."
-              disabled={
-                running ||
-                pendingStart ||
-                !Number.isInteger(targetSystemId) ||
-                targetSystemId < 1 ||
-                targetSystemId > 255
-              }
+              disabled={running || pendingStart}
             >
               Connect PX4
             </button>
@@ -1685,10 +1649,6 @@ export function ActuatorApp() {
               </span>
             </div>
             <div className="row">
-              <span className="text-muted">Primary GCS</span>
-              <span className="mono">{status.fc_alive ? 'alive' : 'lost'}</span>
-            </div>
-            <div className="row">
               <span className="text-muted">PX4 banks</span>
               <span className="protocol-pair mono">
                 <span className="protocol-chip">
@@ -1743,7 +1703,7 @@ export function ActuatorApp() {
               </div>
             )}
             <button
-              className="mode-btn target-refresh"
+              className={`mode-btn target-refresh${guide.action === 'refresh' ? ' guide-target' : ''}`}
               onClick={refreshMapping}
               disabled={!status.target_connected || running || pendingStart}
             >
@@ -1760,8 +1720,9 @@ export function ActuatorApp() {
             motTestEn={
               status.com_mot_test_en != null
                 ? status.com_mot_test_en !== 0
-                : motTestEn
+                : null
             }
+            mainSerial={status.target_origin === 'main_serial'}
           />
         </div>
         {/* Display-only ESC telemetry, indexed independently of motor outputs. */}
@@ -2075,11 +2036,9 @@ function InlineError({ message, onDismiss }: { message: string; onDismiss: () =>
   )
 }
 
-/** PM9 gate: when the parameter cache says COM_MOT_TEST_EN=0, motor tests
- * are FC-denied anyway — say so up front and offer the jump to the
- * Parameters window (open-or-focus, same entry the TopBar uses). Unknown
- * (never pulled) renders nothing: the estop note below covers it. */
-function MotTestEnGate({ motTestEn }: { motTestEn: boolean | null }) {
+/** The selected target's motor-test permission, never another FC's cache.
+ * The main Parameters window is relevant only for a borrowed main target. */
+function MotTestEnGate({ motTestEn, mainSerial }: { motTestEn: boolean | null; mainSerial: boolean }) {
   if (motTestEn !== false) return null
   const openParams = () => {
     void invoke('params_open').catch(() => {})
@@ -2087,12 +2046,12 @@ function MotTestEnGate({ motTestEn }: { motTestEn: boolean | null }) {
   return (
     <div className="mot-en-gate">
       <span>
-        COM_MOT_TEST_EN=0 — the FC rejects every motor-test command. Automatic
-        enable did not take; set it to 1 in Parameters (reboot after Apply).
+        COM_MOT_TEST_EN=0 — the selected PX4 rejects motor-test commands.
+        Set this parameter to 1 on that flight controller before starting.
       </span>
-      <button className="mode-btn" style={{ width: '100%', marginTop: 6 }} onClick={openParams}>
+      {mainSerial && <button className="mode-btn" style={{ width: '100%', marginTop: 6 }} onClick={openParams}>
         Open Parameters
-      </button>
+      </button>}
     </div>
   )
 }

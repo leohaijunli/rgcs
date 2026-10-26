@@ -76,7 +76,7 @@ const panel = (page) => page.locator('[data-testid="layers-reset"]').locator('..
   await mkdir(shotsDir, { recursive: true })
   // Section labels are CSS-uppercased, so compare case-insensitively.
   const text = (await panel(page).innerText()).toLowerCase()
-  for (const group of ['base map', 'terrain', 'mission & survey', 'vehicle & track']) {
+  for (const group of ['base map', 'terrain', 'mission & survey']) {
     check(text.includes(group), `the "${group}" group renders`)
   }
   check(text.includes('always shown'), 'the panel states the always-on safety layers')
@@ -125,15 +125,15 @@ const panel = (page) => page.locator('[data-testid="layers-reset"]').locator('..
   await boot(page)
   await page.evaluate(() => {
     window.__mgUi.getState().setHillshadeOpacity(0.9)
-    window.__mgUi.setState({ showHeights: false, trailByAgl: false })
+    window.__mgUi.setState({ showHeights: false })
   })
   await page.locator('[data-testid="layers-reset"]').click()
   const after = await page.evaluate(() => {
     const s = window.__mgUi.getState()
-    return { op: s.hillshadeOpacity, heights: s.showHeights, trail: s.trailByAgl, stored: localStorage.getItem('maggcs.layers') }
+    return { op: s.hillshadeOpacity, heights: s.showHeights, stored: localStorage.getItem('maggcs.layers') }
   })
   check(after.op === 0.65, `reset restores the default opacity (got ${after.op})`)
-  check(after.heights === true && after.trail === true, 'reset restores the default toggles')
+  check(after.heights === true, 'reset restores the default toggles')
   check(after.stored != null && JSON.parse(after.stored).hillshadeOpacity === 0.65, 'reset persists')
   await page.close()
 }

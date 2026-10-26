@@ -850,6 +850,49 @@ mod tests {
         );
     }
 
+    #[test]
+    fn legacy_manifest_models_load_and_survive_reconciliation() {
+        use maggcs_core::motor_test::protocol::OutputProtocol;
+        use maggcs_core::motor_test::pwm::PwmRangeSource;
+
+        let dir = temp_dir("legacy-models");
+        let path = dir.join(MANIFEST_FILE);
+        let mut json = serde_json::to_value(manifest("legacy-run")).expect("manifest fixture");
+        json["pwm_models"] = serde_json::json!([
+            { "min_us": 1000, "max_us": 2000, "reversed": true, "thrust_factor": 0.5, "disabled": true },
+            { "min_us": 1100, "max_us": 1900, "reversed": false, "thrust_factor": 0.0, "disabled": false }
+        ]);
+        fs::create_dir_all(&dir).expect("fixture directory");
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&json).expect("legacy JSON"),
+        )
+        .expect("write legacy fixture");
+        let loaded = read_manifest(&path).expect("legacy manifest is readable");
+        assert_eq!(loaded.pwm_models.len(), 2);
+        let first = loaded.pwm_models[0];
+        assert_eq!((first.min_us, first.max_us), (1000, 2000));
+        assert!(first.reversed && first.disabled);
+        assert_eq!(first.thrust_factor, 0.5);
+        for model in &loaded.pwm_models {
+            assert_eq!(model.range_source, PwmRangeSource::Fallback);
+            assert_eq!(model.protocol, OutputProtocol::Unknown);
+            assert_eq!(model.dshot_min, 0.0);
+        }
+        let expected_models = loaded.pwm_models.clone();
+        let updated = reconcile_manifest(loaded, &live(CapturePhase::Complete, None), 20);
+        assert_eq!(updated.status, RunManifestStatus::Reconciled);
+        assert_eq!(updated.pwm_models, expected_models);
+        write_manifest(&path, &updated).expect("persist reconciled legacy manifest");
+        assert_eq!(
+            read_manifest(&path)
+                .expect("read current format")
+                .pwm_models,
+            expected_models
+        );
+        fs::remove_dir_all(&dir).expect("remove fixture");
+    }
+
     fn live(phase: CapturePhase, path: Option<&str>) -> SdCaptureStatus {
         SdCaptureStatus {
             phase,

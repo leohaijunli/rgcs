@@ -299,6 +299,7 @@ struct ConnectionInner {
     state: Mutex<LinkState>,
     stopped: watch::Receiver<bool>,
     target_identity: watch::Sender<Option<super::serial::FcIdentity>>,
+    target_heartbeat: watch::Sender<Option<(u64, MessageEnvelope)>>,
 }
 
 /// Handle for driving a MAVLink connection.
@@ -368,6 +369,17 @@ impl ConnectionHandle {
 
     pub fn target_identity(&self) -> Option<super::serial::FcIdentity> {
         self.inner.target_identity.borrow().clone()
+    }
+
+    /// Latest autopilot heartbeat on this connection's selected node and
+    /// transport generation. Retained for observers attaching after discovery;
+    /// callers use `received_at` to check freshness. Retired links return None.
+    pub fn target_heartbeat(&self) -> Option<MessageEnvelope> {
+        if *self.inner.shutdown.borrow() || *self.inner.stopped.borrow() {
+            return None;
+        }
+        let (generation, heartbeat) = self.inner.target_heartbeat.borrow().clone()?;
+        (generation != 0 && generation == self.generation()).then_some(heartbeat)
     }
 
     /// Current link state.
@@ -577,6 +589,7 @@ pub(crate) async fn spawn_with_serial(
         state: Mutex::new(LinkState::Connecting),
         stopped: stopped_rx,
         target_identity: watch::channel(None).0,
+        target_heartbeat: watch::channel(None).0,
     });
     let handle = ConnectionHandle {
         inner: inner.clone(),
@@ -598,6 +611,8 @@ pub(crate) async fn spawn_with_serial(
             serial,
         )
         .await;
+        inner.target_heartbeat.send_replace(None);
+        inner.target_identity.send_replace(None);
         *inner.state.lock().await = LinkState::Disconnected;
         stopped_tx.send_replace(true);
     });
@@ -670,6 +685,7 @@ async fn run_worker(
         }
         *inner.state.lock().await = LinkState::Connecting;
         inner.target_identity.send_replace(None);
+        inner.target_heartbeat.send_replace(None);
         if let Some(serial) = serial.as_ref() {
             let check = tokio::select! {
                 biased;
@@ -790,6 +806,9 @@ async fn run_worker(
             inner
                 .target_identity
                 .send_replace(super::serial::classify_autopilot_heartbeat(&message));
+            inner
+                .target_heartbeat
+                .send_replace(Some((generation, message.clone())));
             heartbeat.observe(
                 config.target_system_id,
                 config.target_component_id,
@@ -898,6 +917,7 @@ async fn run_worker(
                         let is_target_heartbeat = candidate_autopilot_node(&env) == Some(target);
                         if is_target_heartbeat {
                             inner.target_identity.send_replace(super::serial::classify_autopilot_heartbeat(&env));
+                            inner.target_heartbeat.send_replace(Some((generation, env.clone())));
                         }
                         let _ = events.send(ConnectionEvent::Message(Box::new(env)));
                         if is_target_heartbeat && !just_adopted {
@@ -1025,6 +1045,8 @@ async fn run_worker(
             }
         }
 
+        inner.target_heartbeat.send_replace(None);
+        inner.target_identity.send_replace(None);
         if serial
             .as_ref()
             .is_some_and(|serial| serial.single_transport)
@@ -1101,12 +1123,123 @@ pub(crate) fn stalled_test_connection() -> (ConnectionHandle, impl Send) {
         state: Mutex::new(LinkState::Connected),
         stopped: watch::channel(true).1,
         target_identity: watch::channel(None).0,
+        target_heartbeat: watch::channel(None).0,
     });
     (ConnectionHandle { inner, events, raw }, receiver)
 }
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn heartbeat_cache_survives_late_observers_but_not_reconnect_or_shutdown() {
+        use super::*;
+        let peer = tokio::net::UdpSocket::bind("127.0.0.1:0")
+            .await
+            .expect("peer");
+        let (handle, events, first) = spawn_connection(ConnectionConfig {
+            endpoint: Endpoint::UdpClient {
+                addr: peer.local_addr().expect("peer address"),
+            },
+            target_system_id: 42,
+            auto_discover_target: false,
+            reconnect_delay: Duration::from_millis(10),
+            ..Default::default()
+        })
+        .await
+        .expect("connection");
+        first.await.expect("startup result").expect("opened");
+        drop(events);
+        let mut bytes = [0; 512];
+        let (_, address) = tokio::time::timeout(Duration::from_secs(1), peer.recv_from(&mut bytes))
+            .await
+            .expect("GCS heartbeat deadline")
+            .expect("GCS heartbeat");
+        let message = MavMessage::HEARTBEAT(::mavlink::common::HEARTBEAT_DATA {
+            custom_mode: 0,
+            mavtype: ::mavlink::common::MavType::MAV_TYPE_QUADROTOR,
+            autopilot: ::mavlink::common::MavAutopilot::MAV_AUTOPILOT_PX4,
+            base_mode: ::mavlink::common::MavModeFlag::empty(),
+            system_status: ::mavlink::common::MavState::MAV_STATE_STANDBY,
+            mavlink_version: 3,
+        });
+        let mut wire = Vec::new();
+        ::mavlink::write_v2_msg(
+            &mut wire,
+            MavHeader {
+                system_id: 42,
+                component_id: 1,
+                sequence: 7,
+            },
+            &message,
+        )
+        .expect("heartbeat encoding");
+        peer.send_to(&wire, address)
+            .await
+            .expect("target heartbeat");
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while handle.target_heartbeat().is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("retained heartbeat");
+        let _late_observer = handle.subscribe();
+        let retained = handle
+            .target_heartbeat()
+            .expect("available before another heartbeat");
+        assert_eq!(
+            (retained.header.system_id, retained.header.sequence),
+            (42, 7)
+        );
+
+        let mut raw = handle.subscribe_raw();
+        wire.clear();
+        ::mavlink::write_v2_msg(
+            &mut wire,
+            MavHeader {
+                system_id: 99,
+                component_id: 1,
+                sequence: 8,
+            },
+            &message,
+        )
+        .expect("foreign heartbeat encoding");
+        peer.send_to(&wire, address)
+            .await
+            .expect("foreign heartbeat");
+        tokio::time::timeout(Duration::from_secs(1), raw.recv())
+            .await
+            .expect("foreign frame received")
+            .expect("raw frame");
+        assert_eq!(
+            handle
+                .target_heartbeat()
+                .expect("selected heartbeat")
+                .header
+                .system_id,
+            42
+        );
+
+        let old_generation = handle.generation();
+        handle.reconnect().await.expect("reconnect");
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while handle.generation() == old_generation {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("replacement generation");
+        assert!(
+            handle.target_heartbeat().is_none(),
+            "old generation cannot supply FC state"
+        );
+        handle
+            .shutdown_and_wait(Duration::from_secs(1))
+            .await
+            .expect("shutdown");
+        assert!(handle.target_heartbeat().is_none());
+    }
+
     #[tokio::test]
     async fn guarded_inflight_write_is_bounded_and_cancellable() {
         use super::*;

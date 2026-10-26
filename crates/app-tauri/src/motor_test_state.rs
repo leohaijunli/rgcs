@@ -572,12 +572,11 @@ impl MotorTestState {
     }
 }
 
-/// The one safety envelope for every motor-test start. The UI no longer
-/// lets the operator declare a lighter load: even a props-off bench must pass
-/// the full-prop cap, slew limit and long-press confirmation.
+/// Motor-test demands span the full normalized range of the FC-read output
+/// model. The slew limit shapes transitions without imposing a lower peak.
 pub fn motor_test_limits(target_system_id: u8) -> SafetyLimits {
     SafetyLimits {
-        max_value: 0.3,
+        max_value: 1.0,
         max_slew_per_s: 2.0,
         heartbeat_timeout: Duration::from_millis(1500),
         target_sys: target_system_id,
@@ -586,14 +585,88 @@ pub fn motor_test_limits(target_system_id: u8) -> SafetyLimits {
 }
 
 #[cfg(test)]
-mod load_tests {
+mod output_limits_tests {
     use super::*;
+    use maggcs_core::motor_test::source::{AnySource, ManualSource, PresetKind, WaveformPreset};
+    use maggcs_core::motor_test::MotorTestSession;
+    use std::time::Instant;
 
     #[test]
-    fn every_motor_test_uses_the_full_prop_envelope() {
-        let limits = motor_test_limits(42);
-        assert_eq!((limits.max_value, limits.max_slew_per_s), (0.3, 2.0));
-        assert_eq!(limits.target_sys, 42);
-        assert_eq!(limits.target_comp, TARGET_COMPONENT_ID);
+    fn manual_demands_reach_the_full_fc_output_range() {
+        for (demand, expected_us) in [(0.4, 1420.0), (0.5, 1500.0), (0.75, 1700.0), (1.0, 1900.0)] {
+            for (reversed, thrust_factor) in [(false, 0.0), (true, 0.5)] {
+                let model = PwmModel::new(1100, 1900, reversed, thrust_factor).expect("FC model");
+                let mut session =
+                    MotorTestSession::new(ManualSource::new(vec![demand]), motor_test_limits(42));
+                session.set_pwm_models(vec![model]);
+                let now = Instant::now();
+                session.interlock_mut().observe_heartbeat(false, now);
+                session.start(now);
+                for tick in 0..=10 {
+                    let frames = session.tick(now + Duration::from_millis(tick * 100));
+                    for frame in frames {
+                        let maggcs_core::mavlink::MavMessage::COMMAND_LONG(command) = frame else {
+                            panic!("ACTUATOR_TEST frame");
+                        };
+                        assert_eq!(command.target_system, 42);
+                        assert_eq!(command.target_component, TARGET_COMPONENT_ID);
+                        assert!((0.0..=1.0).contains(&command.param1));
+                    }
+                }
+                let output = session.pwm_output()[0].expect("active PWM output");
+                assert!(
+                    (output - expected_us).abs() < 1.0,
+                    "demand {demand}, reversed={reversed}: {output} != {expected_us} µs"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sine_presets_keep_their_requested_peak_and_shape_above_1340_us() {
+        for amplitude in [0.5, 1.0] {
+            let mut session = MotorTestSession::new(
+                AnySource::Manual(ManualSource::new(vec![0.0])),
+                motor_test_limits(42),
+            );
+            session.set_pwm_models(vec![
+                PwmModel::new(1100, 1900, false, 0.0).expect("FC model")
+            ]);
+            let now = Instant::now();
+            session.start_preset(
+                WaveformPreset {
+                    kind: PresetKind::Sine,
+                    amplitude,
+                    frequency_hz: 0.5,
+                    duration_s: 3.0,
+                },
+                now,
+            );
+            let mut peak_us = 0.0_f32;
+            for tick in 0..=20 {
+                let at = now + Duration::from_millis(tick * 100);
+                session.interlock_mut().observe_heartbeat(false, at);
+                session.tick(at);
+                let fraction = f64::from(amplitude)
+                    * 0.5
+                    * (1.0 - (std::f64::consts::PI * tick as f64 / 10.0).cos());
+                if fraction <= 0.0 {
+                    assert_eq!(
+                        session.pwm_output()[0],
+                        None,
+                        "zero demand releases the motor"
+                    );
+                    continue;
+                }
+                let output = session.pwm_output()[0].expect("active PWM output");
+                let expected_us = 1100.0 + 800.0 * fraction;
+                assert!(
+                    (f64::from(output) - expected_us).abs() < 1.0,
+                    "amplitude {amplitude}, tick {tick}: {output} != {expected_us} µs"
+                );
+                peak_us = peak_us.max(output);
+            }
+            assert!((peak_us - (1100.0 + 800.0 * amplitude)).abs() < 1.0);
+        }
     }
 }

@@ -79,8 +79,6 @@ export interface CesiumViewerHandle {
   /** DEM/mesh ground elevation (AMSL) under the live vehicle, or `null`
    * outside coverage — the ground the drop line and AGL readout stand on. */
   setVehicleGround(groundAmslM: number | null): void
-  /** Colour the recorded track by height above ground, or one solid colour. */
-  setTrailByAgl(byAgl: boolean): void
   /** Re-render the mission waypoint layer. */
   setLayers(showGrid: boolean): void
   setMission(
@@ -186,7 +184,6 @@ export function useCesiumViewer(
     )
     droneRef.current = layer
     const trail = createTrailLayer(viewer)
-    trail.setColorByAgl(useUiStore.getState().trailByAgl)
     trailRef.current = trail
     const ghost = createGhostPoint(viewer)
     ghostRef.current = ghost
@@ -511,20 +508,12 @@ export function useCesiumViewer(
         ? projectAhead(pos, PREDICT_HORIZON_S, PREDICT_STEP_S, renderAmsl)
         : []
 
-    // Record the track: AMSL for position, height above the same ground the
-    // drop line stands on (the DEM/mesh surface, else the HOME plane) for the
-    // colour.
+    // Record the track: AMSL for position. The trail bakes `offset` in at
+    // render time; in the flat-globe case it must share the marker's
+    // height-above-HOME frame (offset is 0 there).
     if (record) {
-      // The trail bakes `offset` in at render time; in the flat-globe case it
-      // must share the marker's height-above-HOME frame (offset is 0 there).
       const trailH = useRel ? pos.relative_alt_m : droneAmsl
-      // Colour against the DEM/mesh ground under the vehicle (DR6) — the
-      // same surface the plan was draped on; the HOME plane stays the
-      // fallback when no ground is known (flat-globe / no DEM).
-      const aglForColour = groundAmsl != null && Number.isFinite(groundAmsl)
-        ? droneAmsl - groundAmsl
-        : droneAmsl - homeAmsl
-      trailRef.current?.push(pos.longitude_deg, pos.latitude_deg, trailH, aglForColour)
+      trailRef.current?.push(pos.longitude_deg, pos.latitude_deg, trailH)
     }
   }, [])
 
@@ -538,10 +527,6 @@ export function useCesiumViewer(
     setSnapshot(lastSnapshotRef.current, false)
     setMeshOffsetState(next)
   }, [setSnapshot])
-
-  const setTrailByAgl = useCallback((byAgl: boolean) => {
-    trailRef.current?.setColorByAgl(byAgl)
-  }, [])
 
   // DEM/mesh ground under the live vehicle changed (MapView sampled it):
   // re-render the marker so the drop line lands on the terrain and the AGL
@@ -695,5 +680,5 @@ export function useCesiumViewer(
     applyLayerVisibility(viewer, showGrid)
   }, [])
 
-  return { initError, setSnapshot, setMeshOffset, setVehicleGround, setTrailByAgl, setMission, setTerrainOverlay, setTerrain3d, setSurveyCoverage, sampleMeshGround, setLayers, setImageryStyle, focusWaypoint, fitMission, goHome, lookNorth }
+  return { initError, setSnapshot, setMeshOffset, setVehicleGround, setMission, setTerrainOverlay, setTerrain3d, setSurveyCoverage, sampleMeshGround, setLayers, setImageryStyle, focusWaypoint, fitMission, goHome, lookNorth }
 }

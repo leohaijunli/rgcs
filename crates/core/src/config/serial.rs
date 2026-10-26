@@ -49,7 +49,7 @@ pub struct AutoConnectIntentRef {
 impl AutoConnectIntentRef {
     pub fn next(role: AutoConnectRole) -> Result<Self, SerialDiscoveryError> {
         let id = NEXT_INTENT
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .map_err(|_| SerialDiscoveryError::IdExhausted)?;
         Ok(Self {
             role,

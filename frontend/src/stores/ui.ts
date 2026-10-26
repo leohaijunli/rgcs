@@ -56,8 +56,6 @@ interface UiState {
   /** Draw a height stick and an AGL chip on every map waypoint (default on:
    * clearance is the number a survey plan is checked against). */
   showHeights: boolean
-  /** Colour the flown track by height above ground (legend on the map). */
-  trailByAgl: boolean
   /** Imagery style on top of the offline grid (always shown; no
    * grid-only mode — operator request 2026-10-10). */
   imageryStyle: ImageryStyle
@@ -105,7 +103,6 @@ interface UiState {
   setMapCenter: (c: { lat: number; lon: number }) => void
   setMapTool: (tool: MapTool) => void
   toggleHeights: () => void
-  toggleTrailByAgl: () => void
   setImageryStyle: (style: ImageryStyle) => void
   toggleGrid: () => void
   toggleCoverage: () => void
@@ -136,7 +133,6 @@ const OPACITY_MAX = 1
 
 interface LayerPrefs {
   showHeights: boolean
-  trailByAgl: boolean
   imageryStyle: ImageryStyle
   showGrid: boolean
   showCoverage: boolean
@@ -145,7 +141,6 @@ interface LayerPrefs {
 
 const DEFAULT_LAYERS: LayerPrefs = {
   showHeights: true,
-  trailByAgl: true,
   imageryStyle: 'google-satellite',
   showGrid: true,
   showCoverage: true,
@@ -187,7 +182,6 @@ function saveLayerPrefs(p: LayerPrefs): void {
 function layerSnapshot(s: UiState): LayerPrefs {
   return {
     showHeights: s.showHeights,
-    trailByAgl: s.trailByAgl,
     imageryStyle: s.imageryStyle,
     showGrid: s.showGrid,
     showCoverage: s.showCoverage,
@@ -257,12 +251,6 @@ export const useUiStore = create<UiState>((set, get) => ({
   toggleHeights: () =>
     set((s) => {
       const next = { showHeights: !s.showHeights }
-      saveLayerPrefs({ ...layerSnapshot(s), ...next })
-      return next
-    }),
-  toggleTrailByAgl: () =>
-    set((s) => {
-      const next = { trailByAgl: !s.trailByAgl }
       saveLayerPrefs({ ...layerSnapshot(s), ...next })
       return next
     }),
