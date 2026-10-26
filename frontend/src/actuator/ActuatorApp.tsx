@@ -139,6 +139,11 @@ interface SitlSourceFieldsProps {
   port: ServoPort
   onPort: (value: ServoPort) => void
   connected: boolean
+  /** 'main_link' when the feed borrows the primary link. */
+  origin: 'dedicated' | 'main_link' | null
+  /** Present while the main link can be borrowed for the feed. */
+  mainSource: ActuatorStatus['main_sitl_source']
+  onUseMain: () => void
   /** Routing is frozen while the motor test is sending. */
   locked: boolean
   error: string | null
@@ -212,6 +217,26 @@ function SitlSourceFields(props: SitlSourceFieldsProps) {
           <option value="aux">AUX</option>
         </select>
       </label>
+      {!props.connected && props.mainSource && (
+        <div className="card" data-testid="main-sitl-offer">
+          <div className="estop-note">
+            Main link · PX4 {props.mainSource.system_id}/{props.mainSource.component_id}
+          </div>
+          <div className="target-endpoint mono">{props.mainSource.endpoint}</div>
+          <button
+            className="mode-btn target-link-action"
+            type="button"
+            onClick={props.onUseMain}
+            disabled={props.locked}
+            title="Subscribe the forward feed to the main window's existing link. PX4 keeps one GCS partner, so a second UDP connection would receive no telemetry."
+          >
+            Use main link
+          </button>
+        </div>
+      )}
+      {props.connected && props.origin === 'main_link' && (
+        <div className="estop-note" data-testid="main-sitl-attached">Using main link</div>
+      )}
       {props.error && (
         <InlineError message={props.error} onDismiss={props.onDismissError} />
       )}
@@ -221,7 +246,13 @@ function SitlSourceFields(props: SitlSourceFieldsProps) {
           style={{ width: '100%', marginTop: 6 }}
           onClick={props.onDisconnect}
           disabled={props.locked}
-          title={props.locked ? 'Stop the motor test before changing the source' : undefined}
+          title={
+            props.locked
+              ? 'Stop the motor test before changing the source'
+              : props.origin === 'main_link'
+                ? 'Detach the feed. The main window connection stays open.'
+                : undefined
+          }
         >
           Disconnect SITL
         </button>
@@ -946,6 +977,17 @@ export function ActuatorApp() {
       setSitlConnectError(String(error))
     })
   }
+  const useMainSitl = () => {
+    if (!tauri || !status.main_sitl_source) return
+    resetConfirmation()
+    setSitlConnectError(null)
+    void invoke('actuator_use_main_sitl', {
+      expected: status.main_sitl_source,
+      port: sitlPort,
+    }).catch((error: unknown) => {
+      setSitlConnectError(String(error))
+    })
+  }
   const connectTarget = () => {
     if (!tauri) return
     resetConfirmation()
@@ -1105,7 +1147,9 @@ export function ActuatorApp() {
           <div className="row source-summary">
             <span className="estop-note">Input for Forward mode</span>
             <span className={`mono ${status.sitl_connected ? 'text-ok' : 'text-muted'}`}>
-              {status.sitl_connected ? 'connected' : 'offline'}
+              {status.sitl_connected
+                ? status.sitl_origin === 'main_link' ? 'connected · main link' : 'connected'
+                : 'offline'}
             </span>
           </div>
           <div id="motor-sitl-details" hidden={!sitlExpanded}>
@@ -1119,6 +1163,9 @@ export function ActuatorApp() {
             port={sitlPort}
             onPort={changeSitlPort}
             connected={status.sitl_connected}
+            origin={status.sitl_origin}
+            mainSource={status.main_sitl_source}
+            onUseMain={useMainSitl}
             locked={running || pendingStart}
             error={sitlConnectError}
             highlightConnect={guide.action === 'sitl'}

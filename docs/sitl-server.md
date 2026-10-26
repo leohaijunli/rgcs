@@ -77,6 +77,7 @@ INFO  [mavlink] and broadcast IP: <subnet>.255
 | No telemetry on the GCS machine | Wi-Fi **AP/client isolation** drops broadcast frames — use wired LAN or a router without client isolation. |
 | MagGCS sees heartbeat, commands ignored | A GCS reply path problem: the GCS must be able to send UDP to `<server-ip>:18570` (outbound; normally fine). |
 | `WARNING: ... is not v1.17*` in the script output | Broadcast override is v1.17-only (port layout differs per release). For other versions the link stays localhost-only. |
+| Motor Test SITL source stays "no data yet" while the main window is connected | PX4 unicasts to its single GCS partner (the main link). In Motor Test → Forward choose **Use main link** (ADR-029); a second `udpout` to 18570 receives no telemetry. Alternatively run a separate offboard instance and use its own endpoint. |
 | Deterministic alternative needed | Connect the GCS actively to the SITL listen port instead of relying on broadcast: `udp:<server-ip>:18570` (QGC-style). Requires a GCS connection string supporting active `udp:` — a config change, not a code change. |
 | WSL2 GCS machine | Same notes as the single-host setup apply — see `docs/sitl-wsl-windows.md`. |
 

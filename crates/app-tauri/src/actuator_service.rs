@@ -57,8 +57,9 @@ const MAPPING_PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 
 use crate::motor_test_state::motor_test_limits;
 use crate::motor_test_state::{
-    AuxiliaryLinkRuntime, FcPortOutputs, MotorTestTarget, MotorTestTargetRef, OutputConfigSnapshot,
-    SitlLinkRuntime, SitlSourceConfig, TargetLinkRuntime, TARGET_COMPONENT_ID,
+    AuxiliaryLinkRuntime, FcPortOutputs, MainSitlSource, MotorTestTarget, MotorTestTargetRef,
+    OutputConfigSnapshot, SitlLinkRuntime, SitlSourceConfig, SitlSourceOrigin, TargetLinkRuntime,
+    TARGET_COMPONENT_ID,
 };
 use crate::state::AppState;
 
@@ -93,8 +94,12 @@ pub struct ActuatorStatus {
     pub sitl_endpoint: Option<String>,
     /// Node and PWM bank selected for the SITL source.
     pub sitl_source: Option<SitlSourceConfig>,
+    /// Whether the feed owns its connection or borrows the primary link.
+    pub sitl_origin: Option<SitlSourceOrigin>,
     /// Seconds since the last SERVO_OUTPUT_RAW sample; null = none yet.
     pub sitl_feed_age_s: Option<f64>,
+    /// Offer to use the already-connected primary link as the SITL feed.
+    pub main_sitl_source: Option<MainSitlSource>,
     /// The motor test's own target link (real PX4, serial): connected + endpoint.
     pub target_connected: bool,
     pub target_endpoint: Option<String>,
@@ -608,13 +613,7 @@ pub(crate) async fn start_source<R: tauri::Runtime>(
         StartSource::Manual(values) => (MotorTestCommand::StartManual, Some(values)),
         StartSource::Preset(preset) => (MotorTestCommand::StartPreset { preset }, None),
         StartSource::Forward => {
-            let slot = state
-                .motor_test
-                .sitl
-                .lock()
-                .as_ref()
-                .map(|source| source.slot.clone())
-                .ok_or("connect the SITL source first")?;
+            let slot = forward_slot(state)?;
             (MotorTestCommand::StartForward { slot }, None)
         }
     };
@@ -888,9 +887,23 @@ pub async fn actuator_connect_sitl(
         handle.shutdown().await;
         return Err(error);
     }
-    let slot: ForwardSlot = std::sync::Arc::new(std::sync::Mutex::new(
-        maggcs_core::motor_test::source::ForwardState::new(usize::from(MOTOR_TEST_MOTOR_COUNT)),
-    ));
+    let runtime = sitl_feed_runtime(&state, handle, source, SitlSourceOrigin::Dedicated);
+    *state.motor_test.sitl.lock() = Some(runtime);
+    Ok(())
+}
+
+/// Build the forward slot + tap for a SITL source. A dedicated runtime owns
+/// its connection; a main-link runtime only owns the tap task, so detaching
+/// or reconnecting never shuts the primary transport down.
+fn sitl_feed_runtime(
+    state: &AppState,
+    handle: ConnectionHandle,
+    source: SitlSourceConfig,
+    origin: SitlSourceOrigin,
+) -> SitlLinkRuntime {
+    let slot: ForwardSlot = std::sync::Arc::new(std::sync::Mutex::new(ForwardState::new(
+        usize::from(MOTOR_TEST_MOTOR_COUNT),
+    )));
     let bus = state.motor_test.scope.clone();
     let tap = tauri::async_runtime::spawn(run_sitl_tap(
         handle.clone(),
@@ -898,12 +911,101 @@ pub async fn actuator_connect_sitl(
         slot.clone(),
         bus,
     ));
-    *state.motor_test.sitl.lock() = Some(SitlLinkRuntime {
+    let runtime = match origin {
+        SitlSourceOrigin::Dedicated => AuxiliaryLinkRuntime::new(handle, [tap]),
+        SitlSourceOrigin::MainLink => {
+            let mut runtime = AuxiliaryLinkRuntime::borrowed(&handle);
+            runtime.add_task(tap);
+            runtime
+        }
+    };
+    SitlLinkRuntime {
         slot,
         source,
-        runtime: AuxiliaryLinkRuntime::new(handle, [tap]),
-    });
+        origin,
+        runtime,
+    }
+}
+
+/// Offer the live primary connection as the SITL feed. The tap subscribes to
+/// the same frames the main window already receives, so PX4 keeps exactly one
+/// UDP partner (PX4 v1.17 pins one GCS per MAVLink instance).
+pub(crate) fn main_sitl_candidate(state: &AppState) -> Option<MainSitlSource> {
+    let handle = state.connection()?;
+    if handle.generation() == 0 {
+        return None;
+    }
+    let link = state.link_status()?;
+    if link.link_state != maggcs_core::mavlink::LinkState::Connected || !link.fc_alive {
+        return None;
+    }
+    let identity = handle.target_identity()?;
+    if identity.system_id == 0 || identity.component_id == 0 {
+        return None;
+    }
+    Some(MainSitlSource {
+        endpoint: handle.config().endpoint.to_address_string(),
+        system_id: identity.system_id,
+        component_id: identity.component_id,
+        transport_generation: handle.generation(),
+    })
+}
+
+/// Attach the forward feed to the already-connected primary link instead of
+/// opening a second UDP stream.
+#[tauri::command]
+pub async fn actuator_use_main_sitl(
+    state: State<'_, AppState>,
+    expected: MainSitlSource,
+    port: ServoPort,
+) -> Result<(), String> {
+    state.motor_test.tones.cancel();
+    let _ops = state.ops().lock().await;
+    let Some(handle) = state.connection() else {
+        return Err("the main link is not connected".into());
+    };
+    if handle.generation() != expected.transport_generation
+        || main_sitl_candidate(&state) != Some(expected.clone())
+    {
+        return Err("the main link changed; choose Use main link again".into());
+    }
+    let existing_sitl = state.motor_test.sitl.lock().is_some();
+    stop_before_auxiliary_close(
+        async {
+            if existing_sitl {
+                stop_active_session(&state).await?;
+            }
+            Ok(())
+        },
+        async {
+            let old = state.motor_test.sitl.lock().take();
+            if let Some(old) = old {
+                old.stop().await;
+            }
+            Ok::<(), String>(())
+        },
+    )
+    .await?;
+    let source = SitlSourceConfig {
+        endpoint: expected.endpoint,
+        system_id: expected.system_id,
+        component_id: expected.component_id,
+        port,
+    };
+    let runtime = sitl_feed_runtime(&state, handle, source, SitlSourceOrigin::MainLink);
+    *state.motor_test.sitl.lock() = Some(runtime);
     Ok(())
+}
+
+/// The live forward slot for a start, or the reason it cannot be used.
+fn forward_slot(state: &AppState) -> Result<ForwardSlot, String> {
+    let primary = state.connection();
+    let guard = state.motor_test.sitl.lock();
+    let link = guard.as_ref().ok_or("connect the SITL source first")?;
+    if !link.generation_is_current(primary.as_ref()) {
+        return Err("SITL source link changed; reconnect it".into());
+    }
+    Ok(link.slot.clone())
 }
 
 /// Drop the SITL source link.
@@ -2077,9 +2179,21 @@ impl AppState {
             Some(SessionState::Emergency) => "emergency",
             _ => "idle",
         };
-        let (sitl_connected, sitl_endpoint, sitl_source, sitl_feed_age_s) = {
+        let (
+            sitl_connected,
+            sitl_origin,
+            sitl_endpoint,
+            sitl_source,
+            sitl_feed_age_s,
+            input_values,
+            input_pwm,
+        ) = {
+            let primary = self.connection();
             let guard = self.motor_test.sitl.lock();
-            match guard.as_ref() {
+            match guard
+                .as_ref()
+                .filter(|link| link.generation_is_current(primary.as_ref()))
+            {
                 Some(link) => {
                     let age = link
                         .slot
@@ -2094,33 +2208,27 @@ impl AppState {
                             })
                         })
                         .filter(|a| *a >= 0.0);
+                    // The same sample's normalized and raw values, so the
+                    // window shows the exact source percentage.
+                    let (values, pwm) = link
+                        .slot
+                        .lock()
+                        .ok()
+                        .map(|st| (st.values.clone(), st.raw_pwm.clone()))
+                        .unwrap_or_default();
                     (
                         true,
+                        Some(link.origin),
                         Some(link.source.endpoint.clone()),
                         Some(link.source.clone()),
                         age,
+                        values,
+                        pwm,
                     )
                 }
-                None => (false, None, None, None),
+                None => (false, None, None, None, None, Vec::new(), Vec::new()),
             }
         };
-        // The forward INPUT: the SITL's normalized SERVO_OUTPUT_RAW 1–4.
-        let input_values = self
-            .motor_test
-            .sitl
-            .lock()
-            .as_ref()
-            .and_then(|link| link.slot.lock().ok().map(|st| st.values.clone()))
-            .unwrap_or_default();
-        // The same sample's raw microseconds, so the window shows the exact
-        // source value the percentage came from.
-        let input_pwm = self
-            .motor_test
-            .sitl
-            .lock()
-            .as_ref()
-            .and_then(|link| link.slot.lock().ok().map(|st| st.raw_pwm.clone()))
-            .unwrap_or_default();
         // The OUTPUT: the values the session sent to the FC as ACTUATOR_TEST.
         let (output_values, output_pwm) = self
             .motor_test
@@ -2278,7 +2386,9 @@ impl AppState {
             sitl_connected,
             sitl_endpoint,
             sitl_source,
+            sitl_origin,
             sitl_feed_age_s,
+            main_sitl_source: main_sitl_candidate(self),
             target_connected,
             target_endpoint,
             target_system_id,
@@ -4563,6 +4673,248 @@ mod sitl_mapping_tests {
 
         assert_eq!(outputs[0].expect("main sample").pwm[0], 1);
         assert_eq!(outputs[1].expect("aux sample").pwm[0], 11);
+    }
+}
+
+#[cfg(test)]
+mod main_sitl_feed_tests {
+    //! The SITL feed can borrow the primary link (operator report: a second
+    //! `udpout` to PX4's listening port receives nothing — PX4 v1.17 pins one
+    //! GCS partner per MAVLink instance).
+
+    use std::time::Duration;
+
+    use maggcs_core::commands::CommandService;
+    use maggcs_core::mavlink::connection::LinkStatus;
+    use maggcs_core::mavlink::{
+        ConnectionConfig, ConnectionHandle, Endpoint, LinkState, MavHeader, MavMessage,
+    };
+    use maggcs_core::mission::service::{MissionIds, MissionService};
+    use maggcs_core::motor_test::mapping::ServoPort;
+    use maggcs_core::telemetry::hub::{TelemetryHub, DEFAULT_PUSH_HZ};
+    use maggcs_core::telemetry::VehicleId;
+
+    use crate::motor_test_state::{SitlSourceConfig, SitlSourceOrigin};
+    use crate::state::{ActiveLink, AppState, LinkId};
+
+    use super::{forward_slot, main_sitl_candidate, sitl_feed_runtime};
+
+    async fn send_heartbeat(peer: &tokio::net::UdpSocket, port: u16) {
+        let message = MavMessage::HEARTBEAT(::mavlink::common::HEARTBEAT_DATA {
+            custom_mode: 0,
+            mavtype: ::mavlink::common::MavType::MAV_TYPE_QUADROTOR,
+            autopilot: ::mavlink::common::MavAutopilot::MAV_AUTOPILOT_PX4,
+            base_mode: ::mavlink::common::MavModeFlag::empty(),
+            system_status: ::mavlink::common::MavState::MAV_STATE_STANDBY,
+            mavlink_version: 3,
+        });
+        let mut bytes = Vec::new();
+        ::mavlink::write_v2_msg(
+            &mut bytes,
+            MavHeader {
+                system_id: 1,
+                component_id: 1,
+                sequence: 0,
+            },
+            &message,
+        )
+        .expect("wire heartbeat");
+        peer.send_to(&bytes, ("127.0.0.1", port))
+            .await
+            .expect("send heartbeat");
+    }
+
+    async fn send_servo(peer: &tokio::net::UdpSocket, port: u16, bank: u8, pwm: [u16; 4]) {
+        let message = MavMessage::SERVO_OUTPUT_RAW(::mavlink::common::SERVO_OUTPUT_RAW_DATA {
+            time_usec: 0,
+            servo1_raw: pwm[0],
+            servo2_raw: pwm[1],
+            servo3_raw: pwm[2],
+            servo4_raw: pwm[3],
+            port: bank,
+            ..Default::default()
+        });
+        let mut bytes = Vec::new();
+        ::mavlink::write_v2_msg(
+            &mut bytes,
+            MavHeader {
+                system_id: 1,
+                component_id: 1,
+                sequence: 1,
+            },
+            &message,
+        )
+        .expect("wire servo output");
+        peer.send_to(&bytes, ("127.0.0.1", port))
+            .await
+            .expect("send servo output");
+    }
+
+    async fn wait_for(timeout: Duration, mut check: impl FnMut() -> bool) {
+        let deadline = tokio::time::Instant::now() + timeout;
+        while !check() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "condition not reached within {timeout:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    /// A loopback primary connection plus a fake PX4 that teaches it its
+    /// identity. The returned socket is the fake FC.
+    async fn install_primary(state: &AppState) -> (ConnectionHandle, tokio::net::UdpSocket, u16) {
+        let probe = std::net::UdpSocket::bind("127.0.0.1:0").expect("reserve UDP port");
+        let port = probe.local_addr().expect("probe address").port();
+        drop(probe);
+        let endpoint = format!("udpin:127.0.0.1:{port}");
+        let config = ConnectionConfig {
+            endpoint: Endpoint::try_from(endpoint.as_str()).expect("endpoint"),
+            ..Default::default()
+        };
+        let (handle, events, first) = maggcs_core::mavlink::connection::spawn_connection(config)
+            .await
+            .expect("spawn primary link");
+        tokio::time::timeout(Duration::from_secs(2), first)
+            .await
+            .expect("listener startup timed out")
+            .expect("first result channel")
+            .expect("listener bound");
+        let hub = TelemetryHub::spawn(events, DEFAULT_PUSH_HZ, VehicleId::new(1, 1));
+        let (mission, _) = MissionService::spawn(
+            handle.clone(),
+            MissionIds {
+                self_system: 250,
+                self_component: 250,
+                target_system: 1,
+                target_component: 1,
+            },
+        );
+        let (command, _) = CommandService::spawn(handle.clone(), 1, 1);
+        state.set_primary_link(ActiveLink {
+            id: LinkId::next(),
+            connection: handle.clone(),
+            hub,
+            mission,
+            command,
+            logs: None,
+            params: None,
+            rtk: None,
+        });
+
+        let fc = tokio::net::UdpSocket::bind("127.0.0.1:0")
+            .await
+            .expect("fake FC socket");
+        send_heartbeat(&fc, port).await;
+        wait_for(Duration::from_secs(2), || {
+            handle.target_identity().is_some()
+        })
+        .await;
+        state.publish_link(LinkStatus::alive(endpoint));
+        (handle, fc, port)
+    }
+
+    fn attach_main_feed(state: &AppState, handle: &ConnectionHandle) {
+        let offer = main_sitl_candidate(state).expect("main-link offer");
+        let runtime = sitl_feed_runtime(
+            state,
+            handle.clone(),
+            SitlSourceConfig {
+                endpoint: offer.endpoint,
+                system_id: offer.system_id,
+                component_id: offer.component_id,
+                port: ServoPort::Main,
+            },
+            SitlSourceOrigin::MainLink,
+        );
+        *state.motor_test.sitl.lock() = Some(runtime);
+    }
+
+    #[test]
+    fn no_offer_without_a_primary_link() {
+        assert!(main_sitl_candidate(&AppState::default()).is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn main_link_feed_updates_the_forward_slot_and_keeps_the_primary_open() {
+        let state = AppState::default();
+        let (handle, fc, port) = install_primary(&state).await;
+
+        let offer = main_sitl_candidate(&state).expect("main-link offer");
+        assert_eq!(offer.system_id, 1);
+        assert_eq!(offer.component_id, 1);
+        assert_eq!(offer.transport_generation, handle.generation());
+
+        attach_main_feed(&state, &handle);
+        send_servo(&fc, port, 0, [1100, 1200, 1300, 1400]).await;
+        wait_for(Duration::from_secs(2), || {
+            state.motor_test.sitl.lock().as_ref().is_some_and(|link| {
+                link.slot
+                    .lock()
+                    .is_ok_and(|slot| slot.last_update_s.is_some())
+            })
+        })
+        .await;
+
+        let status = state.actuator_status();
+        assert!(status.sitl_connected);
+        assert_eq!(status.sitl_origin, Some(SitlSourceOrigin::MainLink));
+        assert_eq!(status.input_pwm, vec![1100, 1200, 1300, 1400]);
+        assert!(status.input_values.iter().all(|value| *value > 0.0));
+        assert!(status.sitl_feed_age_s.is_some());
+        assert!(status.main_sitl_source.is_some());
+        assert!(forward_slot(&state).is_ok());
+
+        // Detaching the borrowed feed only stops the tap: the main transport
+        // (and its main-window subscribers) stay connected.
+        let runtime = state.motor_test.sitl.lock().take().expect("feed");
+        runtime.stop().await;
+        assert_eq!(handle.state().await, LinkState::Connected);
+        assert!(!state.actuator_status().sitl_connected);
+
+        handle.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_primary_reconnect_expires_the_borrowed_feed() {
+        let state = AppState::default();
+        let (handle, fc, port) = install_primary(&state).await;
+        attach_main_feed(&state, &handle);
+        send_servo(&fc, port, 0, [1200, 1300, 1400, 1500]).await;
+        wait_for(Duration::from_secs(2), || {
+            state.actuator_status().sitl_feed_age_s.is_some()
+        })
+        .await;
+
+        let before = handle.generation();
+        handle.reconnect().await.expect("reconnect primary");
+        wait_for(Duration::from_secs(2), || handle.generation() > before).await;
+        assert!(
+            !state.actuator_status().sitl_connected,
+            "borrowed generation expired"
+        );
+        send_heartbeat(&fc, port).await;
+        wait_for(Duration::from_secs(2), || {
+            handle.target_identity().is_some()
+        })
+        .await;
+        state.publish_link(LinkStatus::alive(
+            handle.config().endpoint.to_address_string(),
+        ));
+
+        let status = state.actuator_status();
+        assert!(!status.sitl_connected, "borrowed generation expired");
+        assert!(status.input_values.is_empty());
+        assert_eq!(
+            forward_slot(&state).map(|_| ()),
+            Err("SITL source link changed; reconnect it".to_string())
+        );
+        let offer = main_sitl_candidate(&state).expect("new main-link offer");
+        assert_eq!(offer.transport_generation, handle.generation());
+
+        let stale = state.motor_test.sitl.lock().take().expect("stale feed");
+        stale.stop().await;
+        handle.shutdown().await;
     }
 }
 #[cfg(test)]

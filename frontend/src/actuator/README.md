@@ -101,6 +101,33 @@ matching telemetry, detach and verify the main telemetry/Parameters still work;
 reattach then reconnect the main link and verify control is OFF and target is
 detached. Repeat tool close in the packaged desktop runtime.
 
+### SITL feed over the main link
+
+PX4 pins one GCS partner per MAVLink instance, so a second `udpout` to the
+autopilot's listening port (for example `10.0.100.103:18570`) receives no
+telemetry while the main window owns that partner. When the main link is
+connected and the FC heartbeat is live, the SITL card offers **Use main link**.
+It subscribes the forward feed to the same connection and displays **Using main
+link** — no second socket and no stream-rate changes, and the main window keeps
+receiving telemetry.
+
+The offer carries the endpoint, PX4 system/component IDs and transport
+generation; an obsolete offer is refused. A main-link reconnect or close
+expires the feed: input values clear and Forward start refuses the stale feed
+until the operator attaches again. Detaching the feed never shuts down the main
+transport. The dedicated SITL fields remain for a separate source, such as a
+second PX4 instance on `udpin:0.0.0.0:14540` or one GCS at a time on
+`udpin:0.0.0.0:14550`. See
+[ADR-029](../../../docs/adr/029-sitl-feed-main-link.md).
+
+Focused checks: `cargo test -p maggcs-app --lib
+actuator_service::main_sitl_feed_tests` and the main-link block in
+`node scripts/check-motor-controls.mjs` (offer, borrowed attach, no second
+connect command, disconnect). Manual review: connect the main window to PX4,
+open Motor Test → Forward, select **Use main link**, verify **Using main link**
+and live input PWM; reconnect the main link and confirm the SITL card returns
+to offline and START refuses the stale feed.
+
 ### Selected FC and full-range verification — 2026-10-26
 
 Passed numerical acceptance: 100% manual demand reaches the FC-read maximum,

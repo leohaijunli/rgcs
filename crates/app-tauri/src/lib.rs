@@ -153,6 +153,7 @@ pub fn run() {
             actuator_service::actuator_start_manual,
             actuator_service::actuator_start_preset,
             actuator_service::actuator_connect_sitl,
+            actuator_service::actuator_use_main_sitl,
             actuator_service::actuator_disconnect_sitl,
             actuator_service::actuator_connect_target,
             main_link_service::actuator_use_main_target,

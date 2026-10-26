@@ -66,7 +66,8 @@ await page.addInitScript(() => {
     connected: true, fc_alive: true, target_fc_alive: true, armed: false,
     custom_mode: 0, autopilot_px4: true, mode_label: 'Manual', endpoint: 'isolated IPC test',
     tick_hz: 10, session: 'idle', sitl_connected: false, sitl_endpoint: null,
-    sitl_source: null, sitl_feed_age_s: null, target_connected: true,
+    sitl_source: null, sitl_feed_age_s: null, sitl_origin: null, main_sitl_source: null,
+    target_connected: true,
     target_endpoint: 'isolated IPC test', target_system_id: 250,
     target_origin: 'dedicated', main_serial_target: null,
     com_mot_test_en: 1, sdlog_mode: 0, sdlog_backend: 1,
@@ -227,6 +228,29 @@ await page.addInitScript(() => {
         status.endpoint = null
         status.target_origin = null
         status.motor_control.enabled = false
+        return
+      }
+      if (command === 'actuator_use_main_sitl') {
+        if (test.mainSitlError) throw new Error(test.mainSitlError)
+        if (JSON.stringify(args.expected) !== JSON.stringify(status.main_sitl_source)) throw new Error('main SITL source changed')
+        status.sitl_connected = true
+        status.sitl_origin = 'main_link'
+        status.sitl_endpoint = args.expected.endpoint
+        status.sitl_source = {
+          endpoint: args.expected.endpoint,
+          system_id: args.expected.system_id,
+          component_id: args.expected.component_id,
+          port: args.port,
+        }
+        status.sitl_feed_age_s = 0
+        return
+      }
+      if (command === 'actuator_disconnect_sitl') {
+        status.sitl_connected = false
+        status.sitl_origin = null
+        status.sitl_endpoint = null
+        status.sitl_source = null
+        status.sitl_feed_age_s = null
         return
       }
       if (command === 'actuator_set_motor_control') {
@@ -663,6 +687,29 @@ try {
   )
   await page.getByRole('button', { name: 'Forward', exact: true }).click()
   await page.waitForFunction(() => document.getElementById('motor-sitl-details')?.hidden === false)
+  // Main-link SITL feed: the offer mirrors the main serial-target pattern.
+  // Borrowing must reuse the main connection, never open a second UDP link.
+  const mainSitlOffer = {
+    endpoint: 'udpin:0.0.0.0:14550',
+    system_id: 1,
+    component_id: 1,
+    transport_generation: 3,
+  }
+  await page.evaluate((offer) => { window.__bench.status.main_sitl_source = offer }, mainSitlOffer)
+  const useMainSitl = page.getByRole('button', { name: 'Use main link', exact: true })
+  await useMainSitl.waitFor()
+  await useMainSitl.click()
+  await page.getByTestId('main-sitl-attached').waitFor()
+  await page.getByText('connected · main link', { exact: true }).waitFor()
+  assert.equal(await calls('actuator_connect_sitl'), 0, 'borrowing never opens a second SITL link')
+  assert.deepEqual(
+    await page.evaluate(() => window.__bench.calls.find((call) => call.command === 'actuator_use_main_sitl').args),
+    { expected: mainSitlOffer, port: 'main' },
+  )
+  await page.getByRole('button', { name: 'Disconnect SITL', exact: true }).click()
+  await useMainSitl.waitFor()
+  await page.evaluate(() => { window.__bench.status.main_sitl_source = null })
+  await page.waitForFunction(() => ![...document.querySelectorAll('button')].some((button) => button.textContent === 'Use main link'))
   await page.getByRole('button', { name: 'Manual', exact: true }).click()
   await page.waitForFunction(() => document.getElementById('motor-sitl-details')?.hidden === true)
   assert.equal(await calls('actuator_start_forward'), 0, 'changing the displayed source never starts a test')

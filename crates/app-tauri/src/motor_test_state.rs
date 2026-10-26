@@ -179,6 +179,11 @@ impl AuxiliaryLinkRuntime {
         self.tasks.extend(tasks);
     }
 
+    /// Primary transport generation this runtime borrowed, if any.
+    pub fn borrowed_generation(&self) -> Option<u64> {
+        self.borrowed_generation
+    }
+
     /// Take tasks for a window-only detach while keeping the link connected.
     pub fn take_tasks(&mut self) -> Vec<tauri::async_runtime::JoinHandle<()>> {
         std::mem::take(&mut self.tasks)
@@ -237,11 +242,47 @@ pub struct SitlSourceConfig {
     pub port: ServoPort,
 }
 
+/// How the forward feed is attached: its own connection or the primary link.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SitlSourceOrigin {
+    Dedicated,
+    MainLink,
+}
+
+/// Explicit offer to borrow the connected primary link for the SITL feed.
+/// The UI echoes it back; an obsolete transport generation is refused.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct MainSitlSource {
+    pub endpoint: String,
+    pub system_id: u8,
+    pub component_id: u8,
+    pub transport_generation: u64,
+}
+
 /// The SITL source link plus its SERVO_OUTPUT_RAW forwarder runtime.
 pub struct SitlLinkRuntime {
     pub slot: ForwardSlot,
     pub source: SitlSourceConfig,
+    pub origin: SitlSourceOrigin,
     pub runtime: AuxiliaryLinkRuntime,
+}
+
+impl SitlLinkRuntime {
+    /// A dedicated link is current while this runtime exists; a borrowed feed
+    /// expires as soon as the primary link reconnects (new generation).
+    pub fn generation_is_current(&self, primary: Option<&ConnectionHandle>) -> bool {
+        match self.origin {
+            SitlSourceOrigin::Dedicated => true,
+            SitlSourceOrigin::MainLink => {
+                self.runtime
+                    .borrowed_generation()
+                    .is_some_and(|generation| {
+                        primary.is_some_and(|handle| handle.generation() == generation)
+                    })
+            }
+        }
+    }
 }
 
 impl TargetLinkRuntime {

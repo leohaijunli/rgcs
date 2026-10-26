@@ -259,7 +259,16 @@ export interface ActuatorStatus {
   sitl_endpoint: string | null
   /** Node and PWM bank selected for the SITL source. */
   sitl_source: SitlSourceConfig | null
+  /** 'main_link' = the feed borrows the already-connected primary link. */
+  sitl_origin: 'dedicated' | 'main_link' | null
   sitl_feed_age_s: number | null
+  /** Offer to attach the feed to the connected primary link. */
+  main_sitl_source: {
+    endpoint: string
+    system_id: number
+    component_id: number
+    transport_generation: number
+  } | null
   /** The motor test's own target link (real PX4, serial). */
   target_connected: boolean
   /** Explicit target alias for fc_alive. */
@@ -452,7 +461,9 @@ export const IDLE: ActuatorStatus = {
   sitl_connected: false,
   sitl_endpoint: null,
   sitl_source: null,
+  sitl_origin: null,
   sitl_feed_age_s: null,
+  main_sitl_source: null,
   target_connected: false,
   target_fc_alive: false,
   target_endpoint: null,
