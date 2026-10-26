@@ -38,8 +38,10 @@ const MAX_SLEEP_MS: f64 = 50.0;
 /// Poll interval while paused, at the end of the log, or after a read error.
 const IDLE_POLL_MS: u64 = 30;
 /// After a seek, stream this much log time (capped) without pacing so the plot
-/// shows data at the new position immediately — even while paused.
-const SCRUB_MAX_MS: f64 = 30_000.0;
+/// shows data at the new position immediately — even while paused. Covers the
+/// largest UI window (60 s); a seek asks for the dragged window and the scrub
+/// must reach the playhead target, not stop short of it.
+const SCRUB_MAX_MS: f64 = 60_000.0;
 /// Upper bound on the records read in one scrub burst (a dense log's 30 s).
 const SCRUB_MAX_STEPS: usize = 120_000;
 /// Yield to the runtime every this many scrub records so a burst cannot starve

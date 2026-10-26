@@ -25,6 +25,7 @@ import {
   Radio,
   Ruler,
 } from 'lucide-react'
+import { replaySeekWindow } from './replaySeek'
 import type { AlgorithmInfo } from '../generated-types/AlgorithmInfo'
 import { isTauri, mockCatalog, mockSamples, msgName, signalKey } from './mock'
 import type { AlgoConfig } from '../generated-types/AlgoConfig'
@@ -507,6 +508,9 @@ export function InspectorApp() {
   const [replay, setReplay] = useState<ReplayStatus | null>(null)
   /** Seek slider position while dragging; committed to the backend on release. */
   const [seekPreview, setSeekPreview] = useState<number | null>(null)
+  /** Mirrors the drag position for the pointer-up handler (avoid reading it
+   * out of a state updater, which React may invoke more than once). */
+  const seekPreviewRef = useRef<number | null>(null)
 
   const noticeAt = useRef(0)
   const showNotice = useCallback((text: string, severity: NoticeSeverity = 'info') => {
@@ -528,6 +532,13 @@ export function InspectorApp() {
     }
   }, [showNotice])
 
+  /** New samples set this; a requestAnimationFrame loop redraws (S4: no React
+   * re-render per frame). */
+  const dirty = useRef(false)
+  const markDirty = useCallback(() => {
+    dirty.current = true
+  }, [])
+
   /** Open a `.ulg` and switch the source to replay (plan decision B). */
   const openUlog = useCallback(async () => {
     try {
@@ -537,6 +548,17 @@ export function InspectorApp() {
       })
       if (typeof path !== 'string') return
       const info = await invoke<UlogInfo>('inspector_open_ulog', { path })
+      // Fresh log: drop any live-link samples still in the view rings and
+      // force the view on so the streamed replay renders immediately (a
+      // previously drag-zoomed/paused view would otherwise freeze until the
+      // user seeks once).
+      buffers.current.clear()
+      spectra.current.clear()
+      setFollow(true)
+      setPaused(false)
+      setSeekPreview(null)
+      seekPreviewRef.current = null
+      markDirty()
       setReplay({
         active: true,
         name: info.name,
@@ -552,7 +574,7 @@ export function InspectorApp() {
     } catch (e) {
       showNotice(String(e), 'error')
     }
-  }, [showNotice])
+  }, [showNotice, markDirty])
 
   /** Update the replay control (play/pause, speed, seek). */
   const replayControl = useCallback(
@@ -563,7 +585,11 @@ export function InspectorApp() {
       if (patch.seek_ms !== undefined) args.seekMs = patch.seek_ms
       if (patch.span_ms !== undefined) args.spanMs = patch.span_ms
       try {
-        setReplay(await invoke<ReplayStatus>('inspector_replay', args))
+        const status = await invoke<ReplayStatus>('inspector_replay', args)
+        // A seek is applied optimistically (commitSeek) because the backend
+        // returns its pre-seek playhead — it processes the request on its next
+        // tick — so don't let that stale position snap the slider back.
+        setReplay((prev) => (patch.seek_ms !== undefined && prev ? { ...status, position_ms: prev.position_ms } : status))
       } catch (e) {
         showNotice(String(e), 'error')
       }
@@ -658,13 +684,6 @@ export function InspectorApp() {
   }, [])
   /** The x-range we last set per chart, to tell our auto-scale from a user zoom. */
   const expectedX = useRef<Map<uPlot, { min: number; max: number }>>(new Map())
-
-  /** New samples set this; a requestAnimationFrame loop redraws (S4: no React
-   * re-render per frame). */
-  const dirty = useRef(false)
-  const markDirty = useCallback(() => {
-    dirty.current = true
-  }, [])
 
   /** checked = the signals in the active plot (checking adds to it). */
   const checked = useMemo(
@@ -1314,18 +1333,27 @@ export function InspectorApp() {
    * Commit the seek slider: drop the buffered view so the plot jumps to the new
    * position (otherwise a backward seek leaves the old x-window on screen) and
    * force-follow, then ask the backend to stream that region.
+   *
+   * The ULog source reads forward-only, so the seek goes `window` *before* the
+   * dragged position and the backend's unpaced scrub fills exactly that window
+   * — ending the playhead at the position the user dragged to.
    */
   const commitSeek = useCallback(() => {
-    setSeekPreview((preview) => {
-      if (preview != null) {
-        buffers.current.clear()
-        spectra.current.clear()
-        setFollow(true)
-        markDirty()
-        void replayControl({ seek_ms: preview, span_ms: windowRef.current * 1000 })
-      }
-      return null
-    })
+    const target = seekPreviewRef.current
+    seekPreviewRef.current = null
+    setSeekPreview(null)
+    if (target == null) return
+    buffers.current.clear()
+    spectra.current.clear()
+    setFollow(true)
+    setPaused(false)
+    markDirty()
+    const windowMs = windowRef.current * 1000
+    // Optimistic playhead: show the dragged position now instead of the stale
+    // pre-seek value the backend still reports until it processes the request.
+    setReplay((r) => (r ? { ...r, position_ms: target } : r))
+    const { sourceSeekMs, scrubSpanMs } = replaySeekWindow(target, windowMs)
+    void replayControl({ seek_ms: sourceSeekMs, span_ms: scrubSpanMs })
   }, [replayControl, markDirty])
 
   // Sidebar tracks as CSS custom properties (the grid template reads them);
@@ -1527,7 +1555,11 @@ export function InspectorApp() {
             value={Math.round(seekPreview ?? replay.position_ms)}
             title="Seek"
             aria-label="Seek replay"
-            onChange={(e) => setSeekPreview(Number(e.target.value))}
+            onChange={(e) => {
+              const v = Number(e.target.value)
+              seekPreviewRef.current = v
+              setSeekPreview(v)
+            }}
             onMouseUp={commitSeek}
             onKeyUp={commitSeek}
           />

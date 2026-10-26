@@ -14,6 +14,7 @@
     "check:params": "node scripts/check-params.mjs",
     "check:params-connection": "node scripts/check-params-connection.mjs",
     "check:inspector-connection": "node scripts/check-inspector-connection.mjs",
+    "check:replay-seek": "node scripts/check-replay-seek.mjs",
     "build:model": "node scripts/build-uav-model.mjs",
     "check:colors": "bash scripts/check-colors.sh",
     "check:contrast": "node scripts/check-contrast.mjs",
