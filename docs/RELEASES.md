@@ -23,7 +23,21 @@ explicitly select `nsis,msi`; Ubuntu builds select `appimage,deb`.
 
 When preparing a release tag, keep the Cargo workspace version, Tauri config
 version, and frontend package/lockfile versions equal to the tag without its
-`v` prefix. The current patch release is `v1.0.3`, with installer version `1.0.3`.
+`v` prefix. The current release is `v1.1.0`, with installer version `1.1.0`.
+
+### v1.1.0 motor-test and SITL workflow
+
+- Motor Test reports FC state only from the selected serial PX4, including a
+  borrowed main-window serial link. The dedicated port is probed and adopts the
+  PX4 system/component IDs automatically; the manual routing-ID field is gone.
+- The 0–100% control maps to the full configured PWM range instead of stopping
+  at 30%. Legacy run manifests without protocol metadata still load.
+- A next-step guide highlights the single next control, from connecting and
+  disarming through unlock and START, so the safe order is visible on the bench.
+- The flown track is drawn in one solid colour. The height ramp, map toggle and
+  legend are removed.
+- `scripts/sitl/setup_px4_sitl.sh` provides a Docker-only PX4 SIH workflow for
+  setup, build, launch, shell, update and clean, using the MagGCS vehicle origin.
 
 ### v1.0.3 desktop fixes
 
