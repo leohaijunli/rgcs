@@ -1,7 +1,7 @@
 {
   "record_date": "2026-10-26",
-  "generated_at": "2026-10-27T00:37:20.308Z",
-  "source_base": "e0c1b45e8b435ebfb586375b7d1520762d8a762c",
+  "generated_at": "2026-10-27T01:18:45.510Z",
+  "source_base": "a07d8e3125292071a15a592abc7c1177a6585409",
   "source_includes_uncommitted_implementation": true,
   "scope": "AF-02b.4 owned Mission and related flight/shell browser regression",
   "reproduction": [
@@ -23,7 +23,7 @@
       "exit_code": 0,
       "passed": 37,
       "failed": 0,
-      "elapsed_ms": 8206,
+      "elapsed_ms": 7800,
       "log": "/tmp/opencode/af02b-mission-browser-mission.log",
       "log_sha256": "1dea4dcecd29242e9386ea0f836dc98dd58a0dca01deaf62319451a8cf1d584f"
     },
@@ -38,9 +38,9 @@
       "exit_code": 0,
       "passed": 66,
       "failed": 0,
-      "elapsed_ms": 26247,
+      "elapsed_ms": 25947,
       "log": "/tmp/opencode/af02b-mission-browser-ux.log",
-      "log_sha256": "cf7c84a3cdcba68ae5a76e7a6f93b5663ae0bed7f2afe80b704378979f8804dd"
+      "log_sha256": "d1bef6b4294af17c296d4c87b19e969882e41838e3cc49fc38bf15fb22270570"
     },
     {
       "name": "safety",
@@ -53,7 +53,7 @@
       "exit_code": 0,
       "passed": 26,
       "failed": 0,
-      "elapsed_ms": 18098,
+      "elapsed_ms": 17925,
       "log": "/tmp/opencode/af02b-mission-browser-safety.log",
       "log_sha256": "8f994e984f418245514d749ebcb67892aba4241d67b0f7ece143e4bbb9e0d9b5"
     },
@@ -68,7 +68,7 @@
       "exit_code": 0,
       "passed": 43,
       "failed": 0,
-      "elapsed_ms": 9983,
+      "elapsed_ms": 9933,
       "log": "/tmp/opencode/af02b-mission-browser-preflight.log",
       "log_sha256": "80ee7bd14af1631212595afb6452234dec79b5e47bb3d6d5472d38393345ec2e"
     },
@@ -83,7 +83,7 @@
       "exit_code": 0,
       "passed": 69,
       "failed": 0,
-      "elapsed_ms": 7845,
+      "elapsed_ms": 7563,
       "log": "/tmp/opencode/af02b-mission-browser-topbar.log",
       "log_sha256": "82cb6ec606b2ed4287baba062ecbdd0b94859bf957f85f4f1c19dcc01f92666c"
     },
@@ -98,7 +98,7 @@
       "exit_code": 0,
       "passed": 22,
       "failed": 0,
-      "elapsed_ms": 9616,
+      "elapsed_ms": 9552,
       "log": "/tmp/opencode/af02b-mission-browser-teardown.log",
       "log_sha256": "0c0741a8408e41a05e55a810b372b23e330d053f4b8c9f9a151de089e0a7100d"
     },
@@ -113,7 +113,7 @@
       "exit_code": 0,
       "passed": 14,
       "failed": 0,
-      "elapsed_ms": 16043,
+      "elapsed_ms": 15949,
       "log": "/tmp/opencode/af02b-mission-browser-startup.log",
       "log_sha256": "5091cc3879d1b7b2307348d0c869c82b7307f8b45ec04ba67aec75b5c3385ed7"
     },
@@ -128,21 +128,21 @@
       "exit_code": 0,
       "passed": 24,
       "failed": 0,
-      "elapsed_ms": 22523,
+      "elapsed_ms": 22359,
       "log": "/tmp/opencode/af02b-mission-browser-heartbeat.log",
-      "log_sha256": "11d3c520a6598212036ee2f8d0c1f455555e7b66738846d4f88816bddb485012"
+      "log_sha256": "52a02e99a3a6bca97aad8083f83d73dff51f450afe60843303288865cfd551f6"
     }
   ],
   "screenshots": [
     {
       "path": "frontend/screenshots/mission/ownership/heartbeat/heartbeat-lost.png",
-      "bytes": 52464,
-      "sha256": "cf5c344d3da5c2ed58abb745dd6a9bf7e881fdde81dee36f5ab7ab8171750c31"
+      "bytes": 52447,
+      "sha256": "a1167806a649993ecc30778218d288533585caacc465a0b3dfe824f90c34c007"
     },
     {
       "path": "frontend/screenshots/mission/ownership/heartbeat/heartbeat-restored.png",
-      "bytes": 43241,
-      "sha256": "a1f6c3c2da2142388ae65a064b4c7b02a23a4fb4f3e1ae0a2b72dc6aeb30fdae"
+      "bytes": 43695,
+      "sha256": "24be4b7b9d8010444b0b41debbaef76fba6aff46082ccb35b5f10a321fb1149f"
     },
     {
       "path": "frontend/screenshots/mission/ownership/mission/mission-cancelled-uncertain.png",
@@ -151,8 +151,8 @@
     },
     {
       "path": "frontend/screenshots/mission/ownership/mission/mission-cancelling.png",
-      "bytes": 77202,
-      "sha256": "cd1d84a9434e2435a47ca298b49679b73228854752405eeb5e24aa26bd6658cf"
+      "bytes": 77168,
+      "sha256": "1afea61f9cdf3a1d56cd10aaa19e8913f25d94d5d3bca1d3c54fdddbf6c8035c"
     },
     {
       "path": "frontend/screenshots/mission/ownership/mission/mission-clear-denied.png",
@@ -161,8 +161,8 @@
     },
     {
       "path": "frontend/screenshots/mission/ownership/mission/mission-download-not-applied.png",
-      "bytes": 79630,
-      "sha256": "dee8bfcc40f699190699185ac0953fbf0b57201238f9f16acdc9abbea7a2b8d5"
+      "bytes": 79629,
+      "sha256": "fa3d0fcdd3d3e943e5aca740822beb74a6f37bad59cf4b70403ed9cee63b42d6"
     },
     {
       "path": "frontend/screenshots/mission/ownership/mission/mission-editor-changed.png",
@@ -176,13 +176,13 @@
     },
     {
       "path": "frontend/screenshots/mission/ownership/mission/mission-silent-target-loss.png",
-      "bytes": 73901,
-      "sha256": "d4f39a07af031627bd320c5f87692f036e6cddb0e074189d44418684aab83da8"
+      "bytes": 73913,
+      "sha256": "bfe361328c5c912f0a2b67292a363fded0cbcc8156e7db4738045227122a2b21"
     },
     {
       "path": "frontend/screenshots/mission/ownership/mission/mission-stale-reply.png",
       "bytes": 80556,
-      "sha256": "b35aa522f7b5158285c8c902ab113c1e16a79da728fe4c57f5fe5ab95030df67"
+      "sha256": "a34e58345d1245d9ae1ef7068591d1829b9d6a1f0c915655b534cd44214b3f24"
     },
     {
       "path": "frontend/screenshots/mission/ownership/mission/mission-upload-progress.png",
@@ -196,8 +196,8 @@
     },
     {
       "path": "frontend/screenshots/mission/ownership/mission/mission-verifying.png",
-      "bytes": 76366,
-      "sha256": "83b72d42870af984e384d91841a739e1df6e8676a9044f877ee511af0603c702"
+      "bytes": 76388,
+      "sha256": "9a9037fdcbe54ecea3a1007a84eb8aea616166a8bc978721356be5d62388dbfa"
     },
     {
       "path": "frontend/screenshots/mission/ownership/preflight/preflight-force-accepted.png",
@@ -221,8 +221,8 @@
     },
     {
       "path": "frontend/screenshots/mission/ownership/preflight/preflight-panel.png",
-      "bytes": 92778,
-      "sha256": "2c1cdb7095b34ca59a00ce76752b0d0d8e12376a5cc1e760b4ef1fe09638e20d"
+      "bytes": 92773,
+      "sha256": "eb7d4a27390203a4c973f40731e0599ac69df51dbe4a16b9442b494a16e87d86"
     },
     {
       "path": "frontend/screenshots/mission/ownership/preflight/preflight-u5-repairs.png",
@@ -241,8 +241,8 @@
     },
     {
       "path": "frontend/screenshots/mission/ownership/safety/safety-holding.png",
-      "bytes": 85651,
-      "sha256": "485a8eac3b6b4295c5b9f517f10d763b773da19139d8253ae1137410c54f770b"
+      "bytes": 85643,
+      "sha256": "d40d0c3bfa894ef24df91cc4e2397f08d38dc89c08cb0c3f1c716edeae8be85a"
     },
     {
       "path": "frontend/screenshots/mission/ownership/safety/safety-in-flight.png",
@@ -251,8 +251,8 @@
     },
     {
       "path": "frontend/screenshots/mission/ownership/safety/safety-no-link.png",
-      "bytes": 51910,
-      "sha256": "55a2a4565720fd15d7b0a748798a7741e206904d99851640ec839234e2dda5b3"
+      "bytes": 52043,
+      "sha256": "332b2a03fe0030884a3d959c3a70c106d7890b9fdc90ab803972aab11ad107ac"
     },
     {
       "path": "frontend/screenshots/mission/ownership/safety/safety-old-request.png",
@@ -282,7 +282,7 @@
     {
       "path": "frontend/screenshots/mission/ownership/teardown/teardown-at-stake.png",
       "bytes": 88006,
-      "sha256": "77fc3ef03fed38a9aba0dff276095242c56cfd95fd5a77dd3388ab957c8c8410"
+      "sha256": "5aeef857b2b5454ce7db208d983b49e757038d5c3c812d757acc1e10d9bcfa12"
     },
     {
       "path": "frontend/screenshots/mission/ownership/teardown/teardown-keyword.png",
@@ -301,18 +301,18 @@
     },
     {
       "path": "frontend/screenshots/mission/ownership/topbar/about-dark.png",
-      "bytes": 124222,
-      "sha256": "31158b150353bfbd4a765cd8b069a2df0e108f0616d3466bec1738163933c9b5"
+      "bytes": 124160,
+      "sha256": "053e50631c6597781c27e94e7773b448f8d1c2f5f544ffed3eea3ba12f28f933"
     },
     {
       "path": "frontend/screenshots/mission/ownership/topbar/about-light.png",
-      "bytes": 127210,
-      "sha256": "92ba15ff17ea0d65dcca6af4e453db57a70ffcf5126d1dd97cc95aae5a1cc7ed"
+      "bytes": 127197,
+      "sha256": "02403f62876dfa41ea7d79d000bc32c4bc56edb88c46edfe5a8aff66bb3d4256"
     },
     {
       "path": "frontend/screenshots/mission/ownership/topbar/tools-1280.png",
-      "bytes": 45791,
-      "sha256": "75bd53462da1522b4b1ac69f37059cd79bd0132896cdd880e5147724fe01b95e"
+      "bytes": 45783,
+      "sha256": "4180bd8dc8331f3518b4337cffdca2508a7fddfe91d9ea3fc9a180f9e6fa70bd"
     },
     {
       "path": "frontend/screenshots/mission/ownership/topbar/tools-1920.png",
@@ -357,12 +357,12 @@
     {
       "path": "frontend/screenshots/mission/ownership/ux/command-holding.png",
       "bytes": 56602,
-      "sha256": "06824d51abb4d57d879d6067af2afe4a8713bfb341057fa8e16e9ad2638f4525"
+      "sha256": "db9bc275d950169614b8bc967bd86b2586fb69db73f27f3761c33cf98f73c448"
     },
     {
       "path": "frontend/screenshots/mission/ownership/ux/command-home-owner.png",
-      "bytes": 45762,
-      "sha256": "906f498b80f1a01413a369d63316f819fb2d6a82e80172081a2887dc818936c3"
+      "bytes": 45761,
+      "sha256": "2b3e1fba0784f9bba6482451500e4622906395748da8d2955a1c955d57420026"
     },
     {
       "path": "frontend/screenshots/mission/ownership/ux/command-long-error-1024.png",

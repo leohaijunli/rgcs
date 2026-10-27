@@ -1,7 +1,7 @@
 {
   "record_date": "2026-10-26",
-  "generated_at": "2026-10-27T00:41:22.800Z",
-  "source_base": "e0c1b45e8b435ebfb586375b7d1520762d8a762c",
+  "generated_at": "2026-10-27T01:24:07.531Z",
+  "source_base": "a07d8e3125292071a15a592abc7c1177a6585409",
   "source_includes_uncommitted_implementation": true,
   "scope": "AF-02b.4 Mission final workspace/protocol/static/production/release gates",
   "reproduction": [
@@ -12,8 +12,8 @@
     "check:mission-delivery"
   ],
   "source_before": {
-    "file_count": 735,
-    "sha256": "b6116c1e0de6aebfe8bf995ce36a8079997e57f6043c01966bdb34ade607e162"
+    "file_count": 738,
+    "sha256": "e9eec890c6a01010f06d1f3426ad47228b3c84ccf16eff85d9bc6e43bd57cd40"
   },
   "result": "pass",
   "checks": [
@@ -26,10 +26,10 @@
       ],
       "cwd": "frontend",
       "exit_code": 0,
-      "elapsed_ms": 27189,
+      "elapsed_ms": 26836,
       "log": "/tmp/opencode/af02b-mission-build-frontend-build.log",
-      "log_sha256": "9c560c5dd3dfe01775ed618afa4771b6592069973e33de2cfe62320e510ccbb4",
-      "modules_transformed": 3472
+      "log_sha256": "c7cf188e6c4f48c25ab271cc66336ec9fe2103a9a1b1d5d7a4f0a83d706f8f43",
+      "modules_transformed": 3474
     },
     {
       "name": "dem-helper",
@@ -43,9 +43,9 @@
       ],
       "cwd": ".",
       "exit_code": 0,
-      "elapsed_ms": 20376,
+      "elapsed_ms": 438,
       "log": "/tmp/opencode/af02b-mission-build-dem-helper.log",
-      "log_sha256": "dfcae967b5b7566c36362af849cbf83b658d6cd604aba6081a5a8fe4e34e814e"
+      "log_sha256": "a178c7902ac24dda0e2c0cd4cf0e47a2a6976ef30481cb4015f2f71620380d8b"
     },
     {
       "name": "rust-all-targets",
@@ -57,9 +57,9 @@
       ],
       "cwd": ".",
       "exit_code": 0,
-      "elapsed_ms": 135603,
+      "elapsed_ms": 63759,
       "log": "/tmp/opencode/af02b-mission-build-rust-all-targets.log",
-      "log_sha256": "645f52f8f84764b7f21b390198017eb94af64ffb2ba07257bf2fea74d0fc3328",
+      "log_sha256": "e9859815f02d84d078f62d387dfc6e0acbf0963c73ba65cbcc206830c8c7ffdc",
       "test_summaries": [
         {
           "result": "ok",
@@ -69,7 +69,7 @@
         },
         {
           "result": "ok",
-          "passed": 236,
+          "passed": 246,
           "failed": 0,
           "ignored": 8
         },
@@ -87,7 +87,7 @@
         },
         {
           "result": "ok",
-          "passed": 1039,
+          "passed": 1044,
           "failed": 0,
           "ignored": 1
         },
@@ -188,7 +188,7 @@
           "ignored": 0
         }
       ],
-      "total_passed": 1413,
+      "total_passed": 1428,
       "total_ignored": 12
     },
     {
@@ -201,9 +201,9 @@
       ],
       "cwd": ".",
       "exit_code": 0,
-      "elapsed_ms": 39526,
+      "elapsed_ms": 15793,
       "log": "/tmp/opencode/af02b-mission-build-rust-doc-tests.log",
-      "log_sha256": "560f40b3708f13ced2a68f033fbe2540ccbb2f17e1e262fccd8988b4366d3a36",
+      "log_sha256": "7a49493ae906e07ad89368b74905f5f577e6dc081027f9ab68050a87ca69ffc5",
       "test_summaries": [
         {
           "result": "ok",
@@ -234,9 +234,9 @@
       ],
       "cwd": ".",
       "exit_code": 0,
-      "elapsed_ms": 28086,
+      "elapsed_ms": 12235,
       "log": "/tmp/opencode/af02b-mission-build-clippy.log",
-      "log_sha256": "135650c6e198283f70a0dcf477460d2fdd72e2f34a7da062f88471239cbcb4e5"
+      "log_sha256": "c3b577528ce9b911263585ae52457d583410cab600edc6e5f4eeff2314b039c7"
     },
     {
       "name": "format",
@@ -249,7 +249,7 @@
       ],
       "cwd": ".",
       "exit_code": 0,
-      "elapsed_ms": 864,
+      "elapsed_ms": 803,
       "log": "/tmp/opencode/af02b-mission-build-format.log",
       "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
@@ -262,9 +262,9 @@
       ],
       "cwd": "frontend",
       "exit_code": 0,
-      "elapsed_ms": 278,
+      "elapsed_ms": 238,
       "log": "/tmp/opencode/af02b-mission-build-frontend-generated-types.log",
-      "log_sha256": "99790f906398988375fe2f5d1d730625cd395618f46707a70514fd5db8bfd428"
+      "log_sha256": "b21531eefd5a9b7e0da499663df032ad390247cea9bbc9c32556515f6a69d753"
     },
     {
       "name": "frontend-i18n",
@@ -275,9 +275,9 @@
       ],
       "cwd": "frontend",
       "exit_code": 0,
-      "elapsed_ms": 274,
+      "elapsed_ms": 250,
       "log": "/tmp/opencode/af02b-mission-build-frontend-i18n.log",
-      "log_sha256": "c12f34152d21d83918316c9e4e9b702254ca14817f4dede3ae8e3fdc499d29a5"
+      "log_sha256": "928d2c13b9a84f8fde4e81d79a302288812372445450307befbabec587476480"
     },
     {
       "name": "frontend-colors",
@@ -288,9 +288,9 @@
       ],
       "cwd": "frontend",
       "exit_code": 0,
-      "elapsed_ms": 116,
+      "elapsed_ms": 110,
       "log": "/tmp/opencode/af02b-mission-build-frontend-colors.log",
-      "log_sha256": "5aca22734a51b7b16ec3fe590de67aaf2f33697e62353ab7bb23baaf33e19001"
+      "log_sha256": "698c409823a617f2233e0b6a1eee39553d7bf7eb268b428fa1d73db95b233610"
     },
     {
       "name": "frontend-contrast",
@@ -301,9 +301,9 @@
       ],
       "cwd": "frontend",
       "exit_code": 0,
-      "elapsed_ms": 132,
+      "elapsed_ms": 126,
       "log": "/tmp/opencode/af02b-mission-build-frontend-contrast.log",
-      "log_sha256": "f3c2e1117fe03688b8da3fe0abafd818bf6a4492426ba18559f15b0f6c10d676"
+      "log_sha256": "65607687209d1f56ade58b4eab263ae014398b14a6a02352453a6c13b7aba435"
     },
     {
       "name": "frontend-planfile",
@@ -314,9 +314,9 @@
       ],
       "cwd": "frontend",
       "exit_code": 0,
-      "elapsed_ms": 191,
+      "elapsed_ms": 165,
       "log": "/tmp/opencode/af02b-mission-build-frontend-planfile.log",
-      "log_sha256": "7de5a6d3877c65844dbb90319905757fbbf3d0accf00ced9cbc5aa45a84e9c2b"
+      "log_sha256": "0f959793f4e64409b0cb066e57db31f087d82246c67c509d0171bd0b94cd46e9"
     },
     {
       "name": "frontend-mission-sync",
@@ -327,9 +327,9 @@
       ],
       "cwd": "frontend",
       "exit_code": 0,
-      "elapsed_ms": 316,
+      "elapsed_ms": 306,
       "log": "/tmp/opencode/af02b-mission-build-frontend-mission-sync.log",
-      "log_sha256": "2722c18cb7da1f8c704a719e4d88ef3af719ddb070697744db2658907a85d788"
+      "log_sha256": "a15f4f3ae5c3d3ff570382560f601bdf5edb66f6a207d4d1114195ab477b1cb9"
     },
     {
       "name": "frontend-undo",
@@ -340,9 +340,9 @@
       ],
       "cwd": "frontend",
       "exit_code": 0,
-      "elapsed_ms": 200,
+      "elapsed_ms": 179,
       "log": "/tmp/opencode/af02b-mission-build-frontend-undo.log",
-      "log_sha256": "d6738d8ff12a8855356a43699695a796447f3eb840f13c3dbf3f579b6a574941"
+      "log_sha256": "d3415e9dcac79a98b2149950a8e65b829903e1ea0434d18f42b8ce7828c9b145"
     },
     {
       "name": "frontend-survey-prep",
@@ -353,9 +353,9 @@
       ],
       "cwd": "frontend",
       "exit_code": 0,
-      "elapsed_ms": 156,
+      "elapsed_ms": 162,
       "log": "/tmp/opencode/af02b-mission-build-frontend-survey-prep.log",
-      "log_sha256": "5f47bef63ea43b7c278ba8e2c3c6453d58a939f58592ef76c8ce11a7f71960ac"
+      "log_sha256": "36e5eae9177849a4adb3e2cd81d9ef304b8e1da6c1293ceb731730c2c812b4da"
     },
     {
       "name": "frontend-surface",
@@ -366,9 +366,9 @@
       ],
       "cwd": "frontend",
       "exit_code": 0,
-      "elapsed_ms": 161,
+      "elapsed_ms": 157,
       "log": "/tmp/opencode/af02b-mission-build-frontend-surface.log",
-      "log_sha256": "a504670e075c69de3cfcda7f0e052499befa5f427b06b1cf36cef33c08ccc13e"
+      "log_sha256": "ae19e6933c65258d5c1db3d50172ddca864d9d9bef2f49091918d0af5961a432"
     },
     {
       "name": "frontend-plan-steps",
@@ -379,9 +379,9 @@
       ],
       "cwd": "frontend",
       "exit_code": 0,
-      "elapsed_ms": 162,
+      "elapsed_ms": 170,
       "log": "/tmp/opencode/af02b-mission-build-frontend-plan-steps.log",
-      "log_sha256": "80607cb055d9383a152a03a82319afa283827d6bcf3ee65d26ca6ccd3ccc270c"
+      "log_sha256": "fbdcf544cfe4fada125c4c1d526afa5d47e957e2405e60007f98dfccd3a4bbac"
     },
     {
       "name": "frontend-coords",
@@ -392,9 +392,9 @@
       ],
       "cwd": "frontend",
       "exit_code": 0,
-      "elapsed_ms": 170,
+      "elapsed_ms": 165,
       "log": "/tmp/opencode/af02b-mission-build-frontend-coords.log",
-      "log_sha256": "41839749aac8c709e86597d81e8a9799eacfbff015bcc39e8ca78bafea14cc08"
+      "log_sha256": "7c408c832678a72c7c78e80a211793be95228c7d9f574a3416e96073b6ca1e07"
     },
     {
       "name": "frontend-agl",
@@ -405,9 +405,9 @@
       ],
       "cwd": "frontend",
       "exit_code": 0,
-      "elapsed_ms": 167,
+      "elapsed_ms": 170,
       "log": "/tmp/opencode/af02b-mission-build-frontend-agl.log",
-      "log_sha256": "f85643b4a6a20a447a002e42da7820c061027707eb085dec2a3dfc461b3cc190"
+      "log_sha256": "be1020787978a17e8bd33bd9653e8932349dc11b40eb3443233dedda86144829"
     },
     {
       "name": "frontend-progress",
@@ -418,9 +418,9 @@
       ],
       "cwd": "frontend",
       "exit_code": 0,
-      "elapsed_ms": 171,
+      "elapsed_ms": 161,
       "log": "/tmp/opencode/af02b-mission-build-frontend-progress.log",
-      "log_sha256": "e10c268bbde9c65eacea4614b59b04c3e19efd77b14f7ef71d20d72e0ed26879"
+      "log_sha256": "646ab559236586d969d6284fd75e06e6ac5aafa7d8965b4998757678164d535b"
     },
     {
       "name": "frontend-polygon",
@@ -431,9 +431,9 @@
       ],
       "cwd": "frontend",
       "exit_code": 0,
-      "elapsed_ms": 154,
+      "elapsed_ms": 150,
       "log": "/tmp/opencode/af02b-mission-build-frontend-polygon.log",
-      "log_sha256": "4344be862e1e874a5b5daea2f25fb2a72f50e1a571dd364f7f15d2ffafedc1b1"
+      "log_sha256": "a8d4b38d88870c52f958951bbbe92c2ae077e060744d31379d4c408bb57a7948"
     },
     {
       "name": "frontend-drape-error",
@@ -444,9 +444,9 @@
       ],
       "cwd": "frontend",
       "exit_code": 0,
-      "elapsed_ms": 158,
+      "elapsed_ms": 146,
       "log": "/tmp/opencode/af02b-mission-build-frontend-drape-error.log",
-      "log_sha256": "d1201bff605f45d6dfbec7294d2ead5460288b9e0469d42792d4bb06ef0f9224"
+      "log_sha256": "df29ca5205a67d972703a47c0eae4efd4e33c33cb0ce7f8f96c63dca85f91440"
     },
     {
       "name": "frontend-plan-profile",
@@ -457,9 +457,9 @@
       ],
       "cwd": "frontend",
       "exit_code": 0,
-      "elapsed_ms": 158,
+      "elapsed_ms": 154,
       "log": "/tmp/opencode/af02b-mission-build-frontend-plan-profile.log",
-      "log_sha256": "fe7954175d60e52d0bbe03ff16d357156b2fd6da545ea2db4279c7b0f9c48431"
+      "log_sha256": "5bcf4c202e677246fa96bb91cea36d0c7f4da398fb65842bc138c2549e9c8633"
     },
     {
       "name": "frontend-motor-scope",
@@ -470,9 +470,9 @@
       ],
       "cwd": "frontend",
       "exit_code": 0,
-      "elapsed_ms": 478,
+      "elapsed_ms": 444,
       "log": "/tmp/opencode/af02b-mission-build-frontend-motor-scope.log",
-      "log_sha256": "078a43620e2ceea0e28fd74abaaef7cd25bdf12315eb7e00c4426ee7444a7753"
+      "log_sha256": "574468f4ed5f850501a631fe7cd024e48f4e51b01ee9b69fb9df8a3a25a648e4"
     },
     {
       "name": "stream-catalog",
@@ -483,7 +483,7 @@
       ],
       "cwd": ".",
       "exit_code": 0,
-      "elapsed_ms": 739,
+      "elapsed_ms": 642,
       "log": "/tmp/opencode/af02b-mission-build-stream-catalog.log",
       "log_sha256": "b69a2ffcebc4860466796226f86cad71425dc43cf2eeb0fe973d2a4ac8274519"
     },
@@ -496,7 +496,7 @@
       ],
       "cwd": ".",
       "exit_code": 0,
-      "elapsed_ms": 69,
+      "elapsed_ms": 92,
       "log": "/tmp/opencode/af02b-mission-build-whitespace.log",
       "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
@@ -510,39 +510,39 @@
       ],
       "cwd": ".",
       "exit_code": 0,
-      "elapsed_ms": 120996,
+      "elapsed_ms": 110759,
       "log": "/tmp/opencode/af02b-mission-build-release.log",
-      "log_sha256": "b104f833d5467bca382abe83dce80754db1173160b9491285af300f3463103b5"
+      "log_sha256": "dd3d5211afad6322698ebe3e3cb864eb6174e23efa515d6367b2c826f097177b"
     }
   ],
   "browser_evidence": {
     "path": "docs/verification/af-02b-mission-browser-20261026.json",
-    "sha256": "e4841ad06d813e77b543986293a29a14460a15999e5c63b8c9d8f1ff628b906e",
+    "sha256": "387699497469766826457879258b9c0ddac4bd654176221067a45336753bff84",
     "checks": 8,
     "passed": 301,
     "screenshots": 57
   },
   "source_after": {
-    "file_count": 735,
-    "sha256": "b6116c1e0de6aebfe8bf995ce36a8079997e57f6043c01966bdb34ade607e162"
+    "file_count": 738,
+    "sha256": "e9eec890c6a01010f06d1f3426ad47228b3c84ccf16eff85d9bc6e43bd57cd40"
   },
   "artifacts": {
     "frontend": {
       "path": "frontend/dist",
       "file_count": 241,
-      "bytes": 23803205,
-      "manifest_sha256": "a0bf75d44e534c9923737fb04b00eb157e0b90bbc9899618daa17d1cd9966b1b"
+      "bytes": 23805157,
+      "manifest_sha256": "c7ee394d23296d302a6c941fdd2087acfd2ba7fbfc6378b6a127fb6a2b65e38a"
     },
     "desktop": {
       "path": "target/release/maggcs-app",
-      "bytes": 46417184,
-      "sha256": "049dbcef48f694d6ec974cfef14cd3b8fa9e81ef245e2a9fa5f883d51fb09f26"
+      "bytes": 46538376,
+      "sha256": "67d0ce90d992c8837d5fe9eb0670d2952f0dd0baf72ed61050832640a2a16e2f"
     },
     "dem_helper": {
       "path": "target/release/dem-prep",
-      "bytes": 3111264,
-      "sha256": "a071c70d14f842cf73366ada8709992afdae186b67f74af3f4fc379b72c87ded"
+      "bytes": 3110672,
+      "sha256": "c0bac29807bf4d97e2d07123ab0c9e8998b099a5d6130d40895ab02ac6b812d1"
     }
   },
-  "completed_at": "2026-10-27T00:47:40.214Z"
+  "completed_at": "2026-10-27T01:28:02.597Z"
 }

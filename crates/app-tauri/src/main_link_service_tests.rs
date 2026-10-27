@@ -319,7 +319,7 @@ fn fake_px4_for_system(
     );
 }
 
-#[allow(deprecated)]
+#[allow(deprecated, clippy::too_many_arguments)]
 fn fake_px4_with_options(
     mut master: serialport::TTYPort,
     stop: Arc<AtomicBool>,

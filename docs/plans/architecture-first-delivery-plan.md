@@ -88,7 +88,7 @@ are implemented. The UI preserves newer edits/local clear, requires read-back
 before reporting sync, coalesces passive current validation, and never redirects
 old intent to a replacement target. [Acceptance evidence](../verification/af-02b-mission-20261026.md)
 records 9 owned UDP and 9 native PTY cases, 24 store scenarios, 301 browser
-assertions with 57 screenshots, 277 synchronized generated contracts, 1413
+assertions with 57 screenshots, 277 synchronized generated contracts, 1428
 passing workspace tests (12 ignored opt-ins), strict/static checks and rebuilt
 production/release artifacts.
 G1 remains open for Shell/Logs/Motor and the final cross-adapter matrix.
