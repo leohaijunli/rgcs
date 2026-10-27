@@ -1,19 +1,32 @@
-// Flight command state (issue #5): tracks a command's round-trip through the
-// desktop command service, which retransmits a COMMAND_LONG until the flight
-// controller acks it. The terminal outcome arrives on the `"command"` event.
+// Flight command state (issue #5): every request is bound to one exact Runtime
+// client/target session. The typed IPC reply, not the legacy global event,
+// supplies the terminal flight-controller verdict.
 
 import { useEffect, useState } from 'react'
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import type { Checklist } from '../generated-types/Checklist'
-import type { ChecklistItem } from '../generated-types/ChecklistItem'
+import type { ChecklistItemId } from '../generated-types/ChecklistItemId'
+import type { FlightCommandIntent } from '../generated-types/FlightCommandIntent'
+import type { FlightCommandKind } from '../generated-types/FlightCommandKind'
+import type { FlightCommandReply } from '../generated-types/FlightCommandReply'
+import type { FlightCommandRequest } from '../generated-types/FlightCommandRequest'
 import type { ForceArmRequest } from '../generated-types/ForceArmRequest'
+import type { Height } from '../generated-types/Height'
 import type { PreflightRefusal } from '../generated-types/PreflightRefusal'
-import type { RefusalKind } from '../generated-types/RefusalKind'
+import type { RuntimeClientSession } from '../generated-types/RuntimeClientSession'
+import {
+  flightCommandContext,
+  flightCommandError,
+  isCurrentFlightRuntimeSession,
+  operationMatchesSession,
+  resetFlightRuntimeSession,
+  sameRuntimeSession,
+} from '../desktop/flightRuntime'
 import { logEvent } from './eventlog'
 import { useTelemetryStore } from './telemetry'
 import { useTerrainStore } from './terrain'
-import { buildPlanState, fetchChecklist, gateStatus } from './preflight'
+import { buildPlanState, fetchChecklist, gateStatus, usePreflightUi } from './preflight'
 
 /** Ground (AMSL) under a point, for the commands that must name a terrain
  * target: the mesh/DEM sample when terrain is loaded, else the vehicle's own
@@ -37,9 +50,18 @@ async function groundAmslAt(
  * `MAV_CMD_NAV_LAND`; `pause`/`continue` (`MAV_CMD_DO_PAUSE_CONTINUE`) were
  * removed — PX4 v1.17 has no handler for them (SITL-confirmed NACK).
  */
-export type CommandName = 'takeoff' | 'land' | 'rtl' | 'set_mode' | 'arm_disarm'
+export type CommandName =
+  | 'takeoff'
+  | 'land'
+  | 'rtl'
+  | 'set_mode'
+  | 'arm_disarm'
+  | 'arm'
+  | 'disarm'
+  | 'goto'
+  | 'set_home'
 
-/** Payload of the backend `command` event. */
+/** Terminal vocabulary retained by the existing command-status components. */
 export interface CommandEventPayload {
   command: string
   kind: 'sent' | 'completed' | 'failed'
@@ -57,13 +79,17 @@ interface CommandState {
   sentAtMs: number | null
   /** Round trip of the last terminal ack, in ms (frozen at the ack). */
   lastElapsedMs: number | null
-  send: (name: CommandName) => Promise<void>
+  send: (name: 'takeoff' | 'land' | 'rtl') => Promise<void>
   /** Switch the PX4 flight mode (MS3, ADR-017). */
   sendSetMode: (mainMode: number, subMode: number) => Promise<void>
   /** Arm or disarm the vehicle (MS3, ADR-017). Arming passes an optional L5
    * force request (blocked checklist) or the acknowledged `Warn` item ids
    * (U5); the backend refuses a blocked arm without one. */
-  sendArmDisarm: (arm: boolean, force?: ForceArmRequest, ackedWarnings?: string[]) => Promise<void>
+  sendArmDisarm: (
+    arm: boolean,
+    force?: ForceArmRequest,
+    ackedWarnings?: ChecklistItemId[],
+  ) => Promise<boolean>
   /** The last preflight refusal (L5), rendered by the PreflightPanel. */
   preflight: PreflightRefusal | null
   dismissPreflight: () => void
@@ -85,8 +111,23 @@ interface CommandState {
   reset: () => void
 }
 
-/** Set-home request awaiting its ack; promoted to `homeMarker` on accept. */
-let pendingHome: [number, number, number] | null = null
+interface PendingHome {
+  token: symbol
+  marker: [number, number, number]
+}
+
+/** Map-command effects are request-local so an older reply cannot move a newer marker. */
+let pendingHome: PendingHome | null = null
+let pendingGoto: symbol | null = null
+let commandSession: RuntimeClientSession | null = null
+let commandEpoch = 0
+let latestFlightRequest: symbol | null = null
+
+interface FlightRequestScope {
+  token: symbol
+  epoch: number
+  context: FlightCommandRequest['context']
+}
 
 /** Terminal bookkeeping: stop the clock and freeze the round trip. */
 function settled(sentAtMs: number | null): {
@@ -111,6 +152,8 @@ export const useCommandStore = create<CommandState>((set) => ({
   dismissPreflight: () => set({ preflight: null }),
 
   send: async (name) => {
+    const scope = await beginFlightRequest(name)
+    if (!scope) return
     // One-click Takeoff is preflight-gated client-side while disarmed: the
     // backend enforces the gate on arm, so Takeoff refuses from the same
     // evaluated checklist instead of racing ahead of it. Once the vehicle is
@@ -123,18 +166,14 @@ export const useCommandStore = create<CommandState>((set) => ({
       if (!armed) {
         try {
           const checklist = await fetchChecklist()
+          if (!await validateFlightRequest(scope, name)) return
           const status = gateStatus(checklist)
           if (status !== 'allowed') {
-            set({
-              pending: null,
+            applyFailure(name, {
               preflight: refusalFromChecklist(status, checklist),
-              lastEvent: {
-                command: 'takeoff',
-                kind: 'failed',
-                result: null,
-                message: refusalMessage(status),
-              },
-            })
+              result: null,
+              message: refusalMessage(status),
+            }, {})
             return
           }
         } catch {
@@ -142,109 +181,81 @@ export const useCommandStore = create<CommandState>((set) => ({
         }
       }
     }
-    set({ pending: name, lastEvent: null, sentAtMs: null, lastElapsedMs: null })
-    // Landing: name the ground under the vehicle so the FC lands on the
-    // terrain instead of a HOME plane (operator report: the aircraft held
-    // altitude over lower ground at the end of a landing). Takeoff does the
-    // same with its AMSL climb target.
-    const fix = useTelemetryStore.getState().snapshot?.global_position
-    const ground =
-      name === 'land' && fix
-        ? await groundAmslAt(fix.latitude_deg, fix.longitude_deg, fix.altitude.meters)
-        : null
-    set({ sentAtMs: Date.now() })
-    try {
-      await invoke('send_command', { name, groundAmslM: ground })
-    } catch (err) {
-      set((s) => ({
-        pending: null,
-        ...settled(s.sentAtMs),
-        lastEvent: {
-          command: name,
-          kind: 'failed',
-          result: null,
-          message: String(err),
-        },
-      }))
+    if (name === 'takeoff') {
+      await executeFlightIntent(scope, 'takeoff', {
+        kind: 'takeoff',
+        plan_state: buildPlanState(),
+        acknowledged_warnings: [],
+      })
+      return
     }
+    if (name === 'rtl') {
+      await executeFlightIntent(scope, 'rtl', { kind: 'return_to_launch' })
+      return
+    }
+
+    // Name the terrain under the vehicle so PX4 lands on the surface rather
+    // than a HOME plane. Without a fix the backend reports the real refusal.
+    const fix = useTelemetryStore.getState().snapshot?.global_position
+    const ground = fix
+      ? await groundAmslAt(fix.latitude_deg, fix.longitude_deg, fix.altitude.meters)
+      : null
+    await executeFlightIntent(scope, 'land', {
+      kind: 'land',
+      ground_amsl: ground === null ? null : amslHeight(ground),
+    })
   },
 
   sendSetMode: async (mainMode, subMode) => {
-    set({ pending: 'set_mode', lastEvent: null, sentAtMs: Date.now(), lastElapsedMs: null })
-    try {
-      await invoke('send_set_mode', { mainMode, subMode })
-    } catch (err) {
-      set((s) => ({
-        pending: null,
-        ...settled(s.sentAtMs),
-        lastEvent: {
-          command: 'set_mode',
-          kind: 'failed',
-          result: null,
-          message: String(err),
-        },
-      }))
-    }
+    const scope = await beginFlightRequest('set_mode')
+    if (!scope) return
+    await executeFlightIntent(scope, 'set_mode', {
+      kind: 'set_mode',
+      main_mode: mainMode,
+      sub_mode: subMode,
+    })
   },
 
   sendArmDisarm: async (arm, force, ackedWarnings) => {
-    set({
-      pending: 'arm_disarm',
-      lastEvent: null,
-      sentAtMs: Date.now(),
-      lastElapsedMs: null,
-    })
-    try {
-      await invoke('send_arm_disarm', {
-        arm,
-        force: force ?? null,
-        planState: buildPlanState(),
-        ackedWarnings: ackedWarnings ?? [],
-      })
-      // Only a successful send clears a pending refusal: while the command is
-      // in flight the panel stays open on its "Working…" state instead of
-      // unmounting out from under the operator.
-      set({ preflight: null })
-    } catch (err) {
-      const refusal = parseRefusal(err)
-      set((s) => ({
-        pending: null,
-        ...settled(s.sentAtMs),
-        preflight: refusal ?? s.preflight,
-        lastEvent: {
-          command: 'arm_disarm',
-          kind: 'failed',
-          result: null,
-          message: refusal ? refusal.message : String(err),
-        },
-      }))
-    }
+    const command = arm ? 'arm' : 'disarm'
+    const scope = await beginFlightRequest(command)
+    if (!scope) return false
+    const intent: FlightCommandIntent = arm
+      ? {
+          kind: 'arm',
+          force: force ?? null,
+          plan_state: buildPlanState(),
+          acknowledged_warnings: ackedWarnings ?? [],
+        }
+      : { kind: 'disarm' }
+    return executeFlightIntent(scope, command, intent, { clearPreflightOnReply: arm })
   },
 
   /** Fly the vehicle to a map point (`MAV_CMD_DO_REPOSITION`). */
   sendGoto: async (latDeg, lonDeg) => {
+    const scope = await beginFlightRequest('goto')
+    if (!scope) return
+    const token = scope.token
+    pendingGoto = token
     set({ gotoTarget: [latDeg, lonDeg] })
-    try {
-      await invoke('send_goto', { latDeg, lonDeg })
-    } catch (err) {
-      // Invoke-level failures ("not connected", "no position fix yet") never
-      // reach the backend `command` event, so log them here or they vanish.
-      logEvent('command', 'err', `goto: ${String(err)}`)
-      set({
-        gotoTarget: null,
-        pending: null,
-        lastEvent: {
-          command: 'goto',
-          kind: 'failed',
-          result: null,
-          message: String(err),
+    await executeFlightIntent(
+      scope,
+      'goto',
+      { kind: 'goto', latitude_deg: latDeg, longitude_deg: lonDeg },
+      {
+        onTerminal: (event) => {
+          if (pendingGoto !== token) return
+          if (event.result !== 'accepted') set({ gotoTarget: null })
+          pendingGoto = null
         },
-      })
-    }
+      },
+    )
   },
 
   /** Set the vehicle's home to a map point (`MAV_CMD_DO_SET_HOME`). */
   sendSetHome: async (latDeg, lonDeg) => {
+    const scope = await beginFlightRequest('set_home')
+    if (!scope) return
     // The terrain height under the *clicked* point, not the vehicle's own
     // altitude: home is usually re-set while airborne over the next site, and
     // an airborne altitude bakes a home plane far above the ground (every
@@ -252,42 +263,36 @@ export const useCommandStore = create<CommandState>((set) => ({
     // high). Falls back to the current fix when no terrain is loaded.
     const fix = useTelemetryStore.getState().snapshot?.global_position
     const alt = await groundAmslAt(latDeg, lonDeg, fix?.altitude.meters ?? 0)
-    pendingHome = [latDeg, lonDeg, alt]
-    try {
-      await invoke('send_set_home', { latDeg, lonDeg, amslM: alt })
-    } catch (err) {
-      // Invoke-level failures ("not connected", "no position fix yet") never
-      // reach the backend `command` event, so log them here or they vanish.
-      logEvent('command', 'err', `set_home: ${String(err)}`)
-      pendingHome = null
-      set({
-        pending: null,
-        lastEvent: {
-          command: 'set_home',
-          kind: 'failed',
-          result: null,
-          message: String(err),
+    if (!isLatestFlightRequest(scope)) return
+    const token = scope.token
+    pendingHome = { token, marker: [latDeg, lonDeg, alt] }
+    await executeFlightIntent(
+      scope,
+      'set_home',
+      {
+        kind: 'set_home',
+        latitude_deg: latDeg,
+        longitude_deg: lonDeg,
+        altitude: amslHeight(alt),
+      },
+      {
+        onTerminal: (event) => {
+          const current = pendingHome
+          if (current?.token !== token) return
+          if (event.result === 'accepted') set({ homeMarker: current.marker })
+          pendingHome = null
         },
-      })
-    }
+      },
+    )
   },
 
-  // `sent` (including retransmissions) keeps the command pending; a
-  // `completed`/`failed` event always ends it.
+  // The executor emits a local `sent` phase and applies one scoped terminal
+  // reply. No unowned global command event reaches this store.
   handleEvent: (e) => {
     // Event log (operator request): the nav bar no longer shows the ack
     // inline; every terminal outcome lands in the log instead.
     if (e.kind !== 'sent') {
-      const level = e.result === 'accepted' ? 'ok' : e.result === undefined ? 'err' : 'warn'
-      logEvent('command', level, `${e.command}: ${e.result ?? e.message ?? 'failed'}`)
-    }
-    // Marker bookkeeping for the two map-click commands.
-    if (e.kind !== 'sent') {
-      if (e.command === 'goto' && e.result !== 'accepted') set({ gotoTarget: null })
-      if (e.command === 'set_home') {
-        if (e.result === 'accepted' && pendingHome) set({ homeMarker: pendingHome })
-        pendingHome = null
-      }
+      logCommandOutcome(e)
     }
     // Every terminal event freezes the round trip for the status strip.
     set((s) =>
@@ -302,7 +307,13 @@ export const useCommandStore = create<CommandState>((set) => ({
   },
 
   reset: () => {
+    commandEpoch += 1
+    resetFlightRuntimeSession()
+    commandSession = null
+    latestFlightRequest = null
     pendingHome = null
+    pendingGoto = null
+    usePreflightUi.getState().closePanel()
     set({
       pending: null,
       lastEvent: null,
@@ -315,23 +326,207 @@ export const useCommandStore = create<CommandState>((set) => ({
   },
 }))
 
-/** Tauri rejects with the serialized `PreflightRefusal` struct (an object) or
- * a plain string for other failures; accept either so the panel only opens on
- * a genuine gate refusal. */
-function parseRefusal(err: unknown): PreflightRefusal | null {
-  const raw =
-    err && typeof err === 'object'
-      ? (err as Record<string, unknown>)
-      : typeof err === 'string' && /^\{/.test(err.trim())
-        ? (JSON.parse(err) as Record<string, unknown>)
-        : null
-  if (!raw || typeof raw.kind !== 'string' || typeof raw.message !== 'string') return null
-  if (!Array.isArray(raw.items)) return null
-  return {
-    kind: raw.kind as RefusalKind,
-    items: raw.items as ChecklistItem[],
-    message: raw.message,
+interface ExecuteOptions {
+  clearPreflightOnReply?: boolean
+  onTerminal?: (event: CommandEventPayload) => void
+}
+
+/** Capture authority before checklist/terrain preparation. A later click retires
+ * this request's display authority without cancelling another native owner. */
+async function beginFlightRequest(
+  command: CommandName,
+): Promise<FlightRequestScope | null> {
+  const token = Symbol(command)
+  latestFlightRequest = token
+  const epoch = commandEpoch
+  const previousSession = commandSession
+  useCommandStore.setState({
+    pending: command,
+    lastEvent: null,
+    sentAtMs: Date.now(),
+    lastElapsedMs: null,
+  })
+
+  let context: FlightCommandRequest['context']
+  try {
+    context = await flightCommandContext()
+  } catch (error) {
+    if (epoch === commandEpoch && latestFlightRequest === token) {
+      applyFailure(command, flightCommandError(error), {})
+    }
+    return null
   }
+  if (epoch !== commandEpoch || latestFlightRequest !== token) return null
+
+  if (previousSession && !sameRuntimeSession(previousSession, context.session)) {
+    // A replacement discovered without a link/heartbeat event still retires
+    // old intent. Require a fresh click against the newly discovered target.
+    commandEpoch += 1
+    pendingHome = null
+    pendingGoto = null
+    usePreflightUi.getState().closePanel()
+    useCommandStore.setState({
+      pending: null,
+      lastEvent: null,
+      sentAtMs: null,
+      lastElapsedMs: null,
+      gotoTarget: null,
+      homeMarker: null,
+      preflight: null,
+    })
+    commandSession = context.session
+    applyFailure(command, {
+      message: 'The flight target changed; issue a new command for the current target',
+      preflight: null,
+      result: null,
+    }, {})
+    return null
+  }
+  commandSession = context.session
+  return { token, epoch, context }
+}
+
+function isCurrentFlightRequest(scope: FlightRequestScope): boolean {
+  return scope.epoch === commandEpoch
+    && sameRuntimeSession(commandSession, scope.context.session)
+    && isCurrentFlightRuntimeSession(scope.context.session)
+}
+
+function isLatestFlightRequest(scope: FlightRequestScope): boolean {
+  return latestFlightRequest === scope.token && isCurrentFlightRequest(scope)
+}
+
+/** Revalidate the captured native session after every asynchronous preparation,
+ * including a same-endpoint/generation replacement the UI has not observed. */
+async function validateFlightRequest(
+  scope: FlightRequestScope,
+  command: CommandName,
+  options: ExecuteOptions = {},
+): Promise<boolean> {
+  if (!isLatestFlightRequest(scope)) return false
+  try {
+    await invoke('runtime_client_validate', { session: scope.context.session })
+    return isLatestFlightRequest(scope)
+  } catch (error) {
+    if (isLatestFlightRequest(scope)) applyFailure(command, flightCommandError(error), options)
+    return false
+  }
+}
+
+/** An unchanged endpoint/heartbeat does not prove native generation continuity.
+ * Revalidate terminal authority as well as dispatch authority. */
+async function validateFlightReply(scope: FlightRequestScope): Promise<boolean> {
+  if (!isCurrentFlightRequest(scope)) return false
+  try {
+    await invoke('runtime_client_validate', { session: scope.context.session })
+    return isCurrentFlightRequest(scope)
+  } catch {
+    if (isCurrentFlightRequest(scope)) useCommandStore.getState().reset()
+    return false
+  }
+}
+
+/** Execute against the already captured session. Same-target displaced outcomes
+ * can reconcile their own marker/log, but cannot settle a newer pending command. */
+async function executeFlightIntent(
+  scope: FlightRequestScope,
+  command: CommandName,
+  intent: FlightCommandIntent,
+  options: ExecuteOptions = {},
+): Promise<boolean> {
+  if (!await validateFlightRequest(scope, command, options)) return false
+
+  const request: FlightCommandRequest = { context: scope.context, intent }
+  const replyPromise = invoke<FlightCommandReply>('flight_command_execute', { request })
+  if (isLatestFlightRequest(scope)) {
+    useCommandStore.setState({
+      lastEvent: { command, kind: 'sent', result: null, message: null },
+    })
+  }
+
+  try {
+    const reply = await replyPromise
+    if (
+      !isCurrentFlightRequest(scope)
+      || !operationMatchesSession(reply.operation, scope.context.session)
+      || commandFromKind(reply.command) !== command
+      || reply.command !== intent.kind
+    ) return false
+    if (!await validateFlightReply(scope)) return false
+
+    const verdict = reply.steps.find((step) => step.result !== 'accepted')
+      ?? reply.steps[reply.steps.length - 1]
+    const event: CommandEventPayload = verdict
+      ? { command, kind: 'completed', result: verdict.result, message: null }
+      : { command, kind: 'failed', result: null, message: 'Flight command returned no steps' }
+    options.onTerminal?.(event)
+    if (isLatestFlightRequest(scope)) {
+      if (options.clearPreflightOnReply && event.result === 'accepted') {
+        useCommandStore.setState({ preflight: null })
+      }
+      useCommandStore.getState().handleEvent(event)
+      return event.result === 'accepted'
+    }
+    logCommandOutcome(event)
+    return false
+  } catch (error) {
+    if (!await validateFlightReply(scope)) return false
+    const failure = flightCommandError(error)
+    if (isLatestFlightRequest(scope)) {
+      applyFailure(command, failure, options)
+    } else {
+      const event: CommandEventPayload = {
+        command,
+        kind: 'failed',
+        result: failure.result,
+        message: failure.message,
+      }
+      options.onTerminal?.(event)
+      logCommandOutcome(event)
+    }
+    return false
+  }
+}
+
+function logCommandOutcome(event: CommandEventPayload): void {
+  const level = event.result === 'accepted' ? 'ok' : event.result == null ? 'err' : 'warn'
+  logEvent('command', level, `${event.command}: ${event.result ?? event.message ?? 'failed'}`)
+}
+
+function applyFailure(
+  command: CommandName,
+  failure: ReturnType<typeof flightCommandError>,
+  options: ExecuteOptions,
+): void {
+  const event: CommandEventPayload = {
+    command,
+    kind: 'failed',
+    result: failure.result,
+    message: failure.message,
+  }
+  if (failure.preflight) {
+    useCommandStore.setState({ preflight: failure.preflight })
+  }
+  options.onTerminal?.(event)
+  useCommandStore.getState().handleEvent(event)
+}
+
+function commandFromKind(kind: FlightCommandKind): CommandName | null {
+  const names: Record<string, CommandName> = {
+    takeoff: 'takeoff',
+    land: 'land',
+    return_to_launch: 'rtl',
+    set_mode: 'set_mode',
+    arm: 'arm',
+    disarm: 'disarm',
+    goto: 'goto',
+    set_home: 'set_home',
+  }
+  return names[kind] ?? null
+}
+
+function amslHeight(meters: number): Height {
+  return { datum: 'AMSL_EGM96', meters }
 }
 
 /** Client-side refusal for the Takeoff gate (the backend gate covers arm). */

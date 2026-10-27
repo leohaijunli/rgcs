@@ -46,8 +46,9 @@ jobs:
       # ADR-002: committed ts-rs bindings must match regeneration.
       - name: Check ts-rs bindings are in sync
         run: |
-          if ! git diff --exit-code -- crates/core/bindings; then
-            echo "::error::Generated ts-rs bindings are stale. Run 'cargo test -p maggcs-core', then commit crates/core/bindings."
+          npm --prefix frontend run check:generated-types
+          if ! git diff --exit-code -- crates/core/bindings crates/app-tauri/bindings frontend/src/generated-types; then
+            echo "::error::Generated Rust/TypeScript contracts are stale. Regenerate core and native export_bindings and the frontend mirror."
             exit 1
           fi
 
@@ -82,6 +83,7 @@ jobs:
         # carry advisories that do not ship to users.
         run: npm audit --omit=dev --audit-level=high
       - run: npm run typecheck
+      - run: npm run check:generated-types
       - run: bash scripts/check-colors.sh
       - run: npm run check:contrast
       # 0.6: every t('...') key must exist, so the UI never shows raw keys.

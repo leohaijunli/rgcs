@@ -16,7 +16,7 @@ interface QgcItem {
   command: number
   doJumpId?: number
   frame: number
-  params?: number[]
+  params?: Array<number | null>
   coordinate?: [number, number, number]
   type?: string
   /** Present on newer QGC complex items: the generated simple waypoints. */
@@ -134,8 +134,9 @@ function isCoordinate(v: unknown): v is [number, number, number] {
   )
 }
 
-/** QGC writes unset params (e.g. yaw) as `null`; Rust `f32` rejects those. */
-function finiteOrZero(value: unknown): number {
+/** Preserve QGC/MAVLink's null/unspecified parameter sentinel. */
+function finiteOrZero(value: unknown): number | null {
+  if (value === null) return null
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
 }
 

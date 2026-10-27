@@ -30,7 +30,7 @@ export function itemsHash(items: MissionItem[]): string {
     items.map((i) => [
       i.frame,
       i.command,
-      i.params.map(Math.fround),
+      i.params.map((value) => value === null ? null : Math.fround(value)),
       i.frame === 'mission' ? Math.fround(i.x) : i.x,
       i.frame === 'mission' ? Math.fround(i.y) : i.y,
       Math.fround(i.z),

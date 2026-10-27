@@ -4,8 +4,7 @@
 
 import { create } from 'zustand'
 import type { ParamEntry } from '../generated-types/ParamEntry'
-import type { ParamType } from '../generated-types/ParamType'
-import type { ParamValue } from '../generated-types/ParamValue'
+import type { ParameterEventPayload } from '../generated-types/ParameterEventPayload'
 
 /** PX4 metadata entry (tools/param-meta schema). */
 export interface ParamMeta {
@@ -102,13 +101,7 @@ interface ParamsState {
 }
 
 /** `params_event` payloads (params_service.rs `ParamsEvent`). */
-export type ParamsIpcEvent =
-  | { kind: 'pull_started'; total: number }
-  | { kind: 'batch'; entries: ParamEntry[] }
-  | { kind: 'progress'; received: number; total: number }
-  | { kind: 'pull_done'; received: number; total: number }
-  | { kind: 'external_change'; name: string; value: ParamValue; ptype: ParamType }
-  | { kind: 'fc_version'; version: string }
+export type ParamsIpcEvent = ParameterEventPayload
 
 export const useParamsStore = create<ParamsState>((set, get) => ({
   values: new Map(),

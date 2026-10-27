@@ -14,7 +14,7 @@ use crate::motor_test_state::{
 };
 use crate::state::AppState;
 
-const HEARTBEAT_FRESH_MS: u64 = 3_000;
+const HEARTBEAT_FRESH_MS: u64 = maggcs_core::runtime::TARGET_HEARTBEAT_FRESH_MS;
 const LIFECYCLE_POLL: Duration = Duration::from_millis(100);
 type Attachment =
     std::sync::Arc<parking_lot::Mutex<Option<crate::motor_test_state::OutputConfigSnapshot>>>;
@@ -288,4 +288,4 @@ pub(crate) async fn before_primary_replace<R: Runtime>(
 
 #[cfg(all(test, unix))]
 #[path = "main_link_service_tests.rs"]
-mod tests;
+pub(crate) mod tests;

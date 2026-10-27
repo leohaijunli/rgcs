@@ -68,7 +68,7 @@ pub fn vehicle_state(state: &AppState) -> VehicleState {
 }
 
 /// Safety checklist telemetry age threshold (3 seconds).
-const SAFETY_TELEMETRY_STALE_AFTER_MS: u64 = 3_000;
+const SAFETY_TELEMETRY_STALE_AFTER_MS: u64 = maggcs_core::runtime::TARGET_HEARTBEAT_FRESH_MS;
 
 fn is_fresh(at_ms: Option<u64>, now_ms: u64) -> bool {
     at_ms.is_some_and(|at| now_ms.saturating_sub(at) <= SAFETY_TELEMETRY_STALE_AFTER_MS)
@@ -593,7 +593,7 @@ mod tests {
         );
         let (command, _command_events) = CommandService::spawn(handle.clone(), 1, 1);
         state.set_primary_link(ActiveLink {
-            id: LinkId::next(),
+            id: LinkId::next().expect("link ID"),
             connection: handle.clone(),
             hub,
             mission,

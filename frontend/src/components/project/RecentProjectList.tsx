@@ -6,6 +6,7 @@ import { FolderOpen, Trash2, X } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useProjectStore, type RecentProject } from '../../stores/project'
+import { confirmDeleteTwice } from '../../util/confirmDelete'
 
 export default function RecentProjectList() {
   const { t } = useTranslation()
@@ -87,6 +88,14 @@ export default function RecentProjectList() {
             <button
               disabled={busy || confirm !== deleting.name}
               onClick={() => {
+                if (
+                  !confirmDeleteTwice(
+                    t('project.deleteConfirmLast', { name: deleting.name }),
+                    t('project.deleteConfirmFinal', { name: deleting.name }),
+                  )
+                ) {
+                  return
+                }
                 void deleteFromDisk(deleting.path).then((ok) => {
                   if (ok) closeConfirm()
                 })

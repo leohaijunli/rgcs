@@ -327,6 +327,25 @@ impl ConnectionHandle {
         *self.inner.connected_since.lock().await
     }
 
+    /// Nonblocking observation for narrow synchronous Runtime snapshots. A
+    /// concurrently changing transport returns no authority instead of waiting
+    /// on a lifecycle lock. This does not identify a physical FC boot epoch.
+    pub fn connected_since_snapshot(&self) -> Option<Instant> {
+        if self.is_shutdown_requested() {
+            return None;
+        }
+        self.inner
+            .connected_since
+            .try_lock()
+            .ok()
+            .and_then(|at| *at)
+    }
+
+    /// Observe cancellation without exposing a transport shutdown capability.
+    pub fn is_shutdown_requested(&self) -> bool {
+        *self.inner.shutdown.borrow()
+    }
+
     /// Subscribe to the event stream.
     pub fn subscribe(&self) -> broadcast::Receiver<ConnectionEvent> {
         self.events.subscribe()

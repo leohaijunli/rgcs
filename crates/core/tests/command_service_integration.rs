@@ -7,7 +7,9 @@
 use std::net::UdpSocket;
 use std::time::Duration;
 
-use maggcs_core::commands::{CommandError, CommandEvent, CommandResult, CommandService};
+use maggcs_core::commands::{
+    CommandError, CommandEvent, CommandResult, CommandService, CommandTransaction,
+};
 use maggcs_core::mavlink::{
     connection::spawn_connection, message::MavMessage, ConnectionConfig, ConnectionEvent, Endpoint,
     MavHeader,
@@ -674,4 +676,304 @@ async fn a_statustext_flood_neither_stalls_commands_nor_breaks_preemption() {
         preempting.command, RTL,
         "the flood must not delay preemption"
     );
+}
+
+fn transaction(h: &Harness, budget: Duration) -> CommandTransaction {
+    CommandTransaction::new(
+        maggcs_core::runtime::OperationId::fresh().expect("operation ID"),
+        maggcs_core::runtime::TransportGeneration::new(h.handle.generation()).expect("generation"),
+        budget,
+    )
+    .expect("transaction")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn owned_cancel_retires_only_its_command_and_quarantines_ambiguous_ack() {
+    let mut h = harness().await;
+    let owned = transaction(&h, Duration::from_secs(5));
+    let (svc, tx) = (h.svc.clone(), owned.clone());
+    let task = tokio::spawn(async move { svc.send_owned(tx, GOTO, [0.0; 7]).await });
+    assert_eq!(peer_recv_command_long(&mut h.peer).await.command, GOTO);
+    let started = std::time::Instant::now();
+    assert!(h.svc.cancel_owned(&owned).await.expect("cancel receipt"));
+    assert!(started.elapsed() < maggcs_core::commands::OWNED_CANCEL_TIMEOUT);
+    assert_eq!(
+        task.await.expect("owned waiter"),
+        Err(CommandError::Cancelled)
+    );
+    assert!(owned.may_have_dispatched());
+    let repeat = transaction(&h, Duration::from_secs(5));
+    assert_eq!(
+        h.svc.send_owned(repeat.clone(), GOTO, [0.0; 7]).await,
+        Err(CommandError::AmbiguousAck)
+    );
+    assert!(!repeat.may_have_dispatched());
+
+    let svc = h.svc.clone();
+    let emergency =
+        tokio::spawn(async move { svc.send_await(RTL, [0.0; 7], Duration::from_secs(5)).await });
+    assert_eq!(peer_recv_command_long(&mut h.peer).await.command, RTL);
+    assert!(h
+        .svc
+        .cancel_owned(&owned)
+        .await
+        .expect("old repeated cancel"));
+    peer_send_ack(
+        &mut h.peer,
+        GOTO,
+        mavlink::common::MavResult::MAV_RESULT_DENIED,
+    )
+    .await;
+    peer_send_ack(
+        &mut h.peer,
+        RTL,
+        mavlink::common::MavResult::MAV_RESULT_ACCEPTED,
+    )
+    .await;
+    assert_eq!(
+        emergency.await.expect("emergency waiter"),
+        Ok(CommandResult::Accepted)
+    );
+    h.handle.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn awaiting_emergency_does_not_overwrite_the_displaced_waiter() {
+    let mut h = harness().await;
+    let svc = h.svc.clone();
+    let normal =
+        tokio::spawn(async move { svc.send_await(GOTO, [0.0; 7], Duration::from_secs(5)).await });
+    assert_eq!(peer_recv_command_long(&mut h.peer).await.command, GOTO);
+    let svc = h.svc.clone();
+    let emergency =
+        tokio::spawn(async move { svc.send_await(RTL, [0.0; 7], Duration::from_secs(5)).await });
+    assert_eq!(peer_recv_command_long(&mut h.peer).await.command, RTL);
+    assert_eq!(
+        normal.await.expect("old waiter"),
+        Err(CommandError::Superseded)
+    );
+    let quarantined = transaction(&h, Duration::from_secs(5));
+    assert_eq!(
+        h.svc.send_owned(quarantined.clone(), GOTO, [0.0; 7]).await,
+        Err(CommandError::AmbiguousAck),
+        "a legacy command's late ACK cannot complete new owned work"
+    );
+    assert!(!quarantined.may_have_dispatched());
+    peer_send_ack(
+        &mut h.peer,
+        GOTO,
+        mavlink::common::MavResult::MAV_RESULT_DENIED,
+    )
+    .await;
+    peer_send_ack(
+        &mut h.peer,
+        RTL,
+        mavlink::common::MavResult::MAV_RESULT_ACCEPTED,
+    )
+    .await;
+    assert_eq!(
+        emergency.await.expect("new waiter"),
+        Ok(CommandResult::Accepted)
+    );
+
+    assert_eq!(
+        h.svc
+            .send_owned(transaction(&h, Duration::from_secs(5)), GOTO, [0.0; 7])
+            .await,
+        Err(CommandError::AmbiguousAck),
+        "late legacy ACKs cannot clear quarantine in the same generation"
+    );
+    h.handle.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ack_quarantine_never_blocks_emergency_send_but_never_reports_stale_success() {
+    let mut h = harness().await;
+    let old = transaction(&h, Duration::from_secs(5));
+    let (svc, transaction) = (h.svc.clone(), old.clone());
+    let old_task = tokio::spawn(async move { svc.send_owned(transaction, RTL, [0.0; 7]).await });
+    assert_eq!(peer_recv_command_long(&mut h.peer).await.command, RTL);
+    h.svc.cancel_owned(&old).await.expect("retire old RTL");
+    assert_eq!(
+        old_task.await.expect("old RTL waiter"),
+        Err(CommandError::Cancelled)
+    );
+
+    let svc = h.svc.clone();
+    let emergency = tokio::spawn(async move {
+        svc.send_await(RTL, [0.0; 7], Duration::from_millis(500))
+            .await
+    });
+    let first = peer_recv_command_long(&mut h.peer).await;
+    assert_eq!(first.command, RTL, "the emergency is sent despite ACK debt");
+    peer_send_ack(
+        &mut h.peer,
+        RTL,
+        mavlink::common::MavResult::MAV_RESULT_ACCEPTED,
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        !emergency.is_finished(),
+        "the ambiguous first ACK is not trusted"
+    );
+    peer_send_ack(
+        &mut h.peer,
+        RTL,
+        mavlink::common::MavResult::MAV_RESULT_ACCEPTED,
+    )
+    .await;
+    assert_eq!(
+        emergency.await.expect("emergency waiter"),
+        Err(CommandError::TimedOut)
+    );
+    h.handle.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dropped_owned_waiter_stops_retransmission_without_touching_transport() {
+    let mut h = harness().await;
+    let owned = transaction(&h, Duration::from_secs(5));
+    let (svc, tx) = (h.svc.clone(), owned.clone());
+    let task = tokio::spawn(async move { svc.send_owned(tx, GOTO, [0.0; 7]).await });
+    assert_eq!(peer_recv_command_long(&mut h.peer).await.command, GOTO);
+    task.abort();
+    assert!(task.await.expect_err("aborted waiter").is_cancelled());
+    assert!(h.svc.cancel_owned(&owned).await.expect("worker retirement"));
+    assert!(
+        timeout(
+            maggcs_core::commands::COMMAND_RETRY_TIMEOUT + Duration::from_millis(200),
+            peer_recv_command_long(&mut h.peer)
+        )
+        .await
+        .is_err(),
+        "no retry after caller loss"
+    );
+    assert_eq!(
+        h.handle.state().await,
+        maggcs_core::mavlink::LinkState::Connected
+    );
+    h.handle.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn owned_deadline_and_emergency_survive_a_saturated_event_consumer() {
+    let mut h = harness().await;
+    h.svc.send(GOTO, [0.0; 7]).await.expect("initial command");
+    assert_eq!(peer_recv_command_long(&mut h.peer).await.command, GOTO);
+    // Keep the real event receiver alive but unread. Busy notifications exceed
+    // the actual queue's capacity; command/reply/cancel must remain responsive.
+    for _ in 0..48 {
+        h.svc
+            .send(GOTO, [0.0; 7])
+            .await
+            .expect("concurrent request");
+    }
+    let owned = transaction(&h, Duration::from_millis(500));
+    let (svc, tx) = (h.svc.clone(), owned.clone());
+    let started = std::time::Instant::now();
+    let task = tokio::spawn(async move { svc.send_owned(tx, RTL, [0.0; 7]).await });
+    assert_eq!(peer_recv_command_long(&mut h.peer).await.command, RTL);
+    peer_send_ack(
+        &mut h.peer,
+        RTL,
+        mavlink::common::MavResult::MAV_RESULT_IN_PROGRESS,
+    )
+    .await;
+    assert_eq!(
+        task.await.expect("bounded waiter"),
+        Err(CommandError::TimedOut)
+    );
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert!(h
+        .svc
+        .cancel_owned(&owned)
+        .await
+        .expect("bounded cancellation"));
+    assert!(h.svc.dropped_events() > 0, "event loss is counted");
+    assert!(timeout(
+        maggcs_core::commands::COMMAND_RETRY_TIMEOUT + Duration::from_millis(200),
+        peer_recv_command_long(&mut h.peer)
+    )
+    .await
+    .is_err());
+    h.handle.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stale_or_precancelled_owned_requests_never_write() {
+    let mut h = harness().await;
+    let cancelled = transaction(&h, Duration::from_secs(5));
+    assert!(!h
+        .svc
+        .cancel_owned(&cancelled)
+        .await
+        .expect("unsubmitted cancel"));
+    assert_eq!(
+        h.svc.send_owned(cancelled.clone(), GOTO, [0.0; 7]).await,
+        Err(CommandError::Cancelled)
+    );
+    assert!(!cancelled.may_have_dispatched());
+    assert_eq!(
+        h.svc.send_owned(cancelled, GOTO, [0.0; 7]).await,
+        Err(CommandError::AlreadySubmitted)
+    );
+
+    let stale = transaction(&h, Duration::from_secs(5));
+    h.handle.reconnect().await.expect("reopen");
+    timeout(Duration::from_secs(2), async {
+        while h.handle.generation() == stale.generation().get() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("new generation");
+    assert_eq!(
+        h.svc.send_owned(stale.clone(), GOTO, [0.0; 7]).await,
+        Err(CommandError::TargetChanged)
+    );
+    assert!(!stale.may_have_dispatched());
+    assert!(timeout(
+        Duration::from_millis(250),
+        peer_recv_command_long(&mut h.peer)
+    )
+    .await
+    .is_err());
+    h.handle.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn owned_ack_must_match_source_and_gcs_destination() {
+    let mut h = harness().await;
+    let owned = transaction(&h, Duration::from_secs(5));
+    let svc = h.svc.clone();
+    let task = tokio::spawn(async move { svc.send_owned(owned, GOTO, [0.0; 7]).await });
+    assert_eq!(peer_recv_command_long(&mut h.peer).await.command, GOTO);
+    for (source, destination) in [(2, 250), (1, 249)] {
+        h.peer
+            .send(
+                &MavHeader {
+                    system_id: source,
+                    component_id: 1,
+                    sequence: 0,
+                },
+                &MavMessage::COMMAND_ACK(mavlink::common::COMMAND_ACK_DATA {
+                    command: GOTO,
+                    result: mavlink::common::MavResult::MAV_RESULT_ACCEPTED,
+                    target_system: destination,
+                    target_component: 250,
+                    ..Default::default()
+                }),
+            )
+            .await
+            .expect("foreign ACK");
+    }
+    peer_send_ack(
+        &mut h.peer,
+        GOTO,
+        mavlink::common::MavResult::MAV_RESULT_DENIED,
+    )
+    .await;
+    assert_eq!(task.await.expect("owned waiter"), Ok(CommandResult::Denied));
+    h.handle.shutdown().await;
 }

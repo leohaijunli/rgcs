@@ -13,9 +13,12 @@
 //! command, which is reported as [`CommandError::Superseded`] instead of
 //! being dropped silently. An emergency command is never preempted.
 
+pub mod operation_types;
 pub mod service;
+mod transaction;
 
 pub use service::{CommandCommand, CommandService, RETRANSMIT_TICK};
+pub use transaction::{CommandTransaction, OWNED_CANCEL_TIMEOUT};
 
 use std::time::{Duration, Instant};
 
@@ -30,7 +33,9 @@ pub const COMMAND_MAX_RETRIES: u32 = 3;
 /// Final outcome of a command as reported by the flight controller.
 ///
 /// Maps 1:1 onto [`MavResult`]; surfaced to the UI through the app layer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
 pub enum CommandResult {
     Accepted,
     TemporarilyRejected,
@@ -41,6 +46,7 @@ pub enum CommandResult {
     Cancelled,
     CommandLongOnly,
     CommandIntOnly,
+    #[serde(rename = "unsupported_mav_frame")]
     CommandUnsupportedMavFrame,
 }
 
@@ -135,7 +141,11 @@ pub enum CommandEvent {
 }
 
 /// Errors that can end a command session.
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+#[derive(
+    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, thiserror::Error, ts_rs::TS,
+)]
+#[ts(export, rename = "CommandProtocolError")]
+#[serde(tag = "code", rename_all = "snake_case")]
 pub enum CommandError {
     /// A session is already in flight.
     #[error("a command is already in progress")]
@@ -157,6 +167,14 @@ pub enum CommandError {
     /// session reached a terminal outcome.
     #[error("no terminal COMMAND_ACK within the await timeout")]
     TimedOut,
+    #[error("the owned command was cancelled")]
+    Cancelled,
+    #[error("the command belongs to an earlier transport generation")]
+    TargetChanged,
+    #[error("this command transaction was already submitted")]
+    AlreadySubmitted,
+    #[error("an unresolved command in this transport generation makes ACK correlation ambiguous")]
+    AmbiguousAck,
 }
 
 #[derive(Debug)]
@@ -218,6 +236,14 @@ impl CommandSession {
     /// True when no command is in flight.
     pub fn is_idle(&self) -> bool {
         matches!(self.state, State::Idle)
+    }
+
+    pub(crate) fn target_system(&self) -> u8 {
+        self.target_sys
+    }
+
+    pub(crate) fn target_component(&self) -> u8 {
+        self.target_comp
     }
 
     /// Urgency of the command in flight, `None` when the slot is free. Lets

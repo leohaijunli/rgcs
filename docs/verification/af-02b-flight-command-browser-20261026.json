@@ -1,0 +1,352 @@
+{
+  "record_date": "2026-10-26",
+  "generated_at": "2026-10-26T07:50:39.304Z",
+  "source_base": "e0c1b45e8b435ebfb586375b7d1520762d8a762c",
+  "source_includes_uncommitted_implementation": true,
+  "scope": "AF-02b.4b browser flight-command ownership and related shell regression",
+  "reproduction": [
+    "node",
+    "scripts/check-flight-acceptance.mjs",
+    "ux,safety,preflight,topbar,teardown,startup,heartbeat"
+  ],
+  "result": "pass",
+  "checks": [
+    {
+      "name": "ux",
+      "command": [
+        "node",
+        "scripts/check-command-ux.mjs",
+        "http://127.0.0.1:4179/",
+        "screenshots/commands/ownership/ux"
+      ],
+      "exit_code": 0,
+      "passed": 66,
+      "failed": 0,
+      "elapsed_ms": 25561,
+      "log": "/tmp/opencode/af02b4b-browser-ux.log",
+      "log_sha256": "95b70df3bdd19e42e7d19f5a60b727caddb97d32cb3f3529843ad002e060a739"
+    },
+    {
+      "name": "safety",
+      "command": [
+        "node",
+        "scripts/check-safety.mjs",
+        "http://127.0.0.1:4179/",
+        "screenshots/commands/ownership/safety"
+      ],
+      "exit_code": 0,
+      "passed": 26,
+      "failed": 0,
+      "elapsed_ms": 17496,
+      "log": "/tmp/opencode/af02b4b-browser-safety.log",
+      "log_sha256": "8f994e984f418245514d749ebcb67892aba4241d67b0f7ece143e4bbb9e0d9b5"
+    },
+    {
+      "name": "preflight",
+      "command": [
+        "node",
+        "scripts/check-preflight.mjs",
+        "http://127.0.0.1:4179/",
+        "screenshots/commands/ownership/preflight"
+      ],
+      "exit_code": 0,
+      "passed": 43,
+      "failed": 0,
+      "elapsed_ms": 13139,
+      "log": "/tmp/opencode/af02b4b-browser-preflight.log",
+      "log_sha256": "80ee7bd14af1631212595afb6452234dec79b5e47bb3d6d5472d38393345ec2e"
+    },
+    {
+      "name": "topbar",
+      "command": [
+        "node",
+        "scripts/check-topbar.mjs",
+        "http://127.0.0.1:4179/",
+        "screenshots/commands/ownership/topbar"
+      ],
+      "exit_code": 0,
+      "passed": 69,
+      "failed": 0,
+      "elapsed_ms": 7731,
+      "log": "/tmp/opencode/af02b4b-browser-topbar.log",
+      "log_sha256": "82cb6ec606b2ed4287baba062ecbdd0b94859bf957f85f4f1c19dcc01f92666c"
+    },
+    {
+      "name": "teardown",
+      "command": [
+        "node",
+        "scripts/check-teardown.mjs",
+        "http://127.0.0.1:4179/",
+        "screenshots/commands/ownership/teardown"
+      ],
+      "exit_code": 0,
+      "passed": 22,
+      "failed": 0,
+      "elapsed_ms": 9544,
+      "log": "/tmp/opencode/af02b4b-browser-teardown.log",
+      "log_sha256": "0c0741a8408e41a05e55a810b372b23e330d053f4b8c9f9a151de089e0a7100d"
+    },
+    {
+      "name": "startup",
+      "command": [
+        "node",
+        "scripts/check-startup.mjs",
+        "http://127.0.0.1:4179/",
+        "screenshots/commands/ownership/startup"
+      ],
+      "exit_code": 0,
+      "passed": 14,
+      "failed": 0,
+      "elapsed_ms": 16170,
+      "log": "/tmp/opencode/af02b4b-browser-startup.log",
+      "log_sha256": "5091cc3879d1b7b2307348d0c869c82b7307f8b45ec04ba67aec75b5c3385ed7"
+    },
+    {
+      "name": "heartbeat",
+      "command": [
+        "node",
+        "scripts/check-heartbeat.mjs",
+        "http://127.0.0.1:4179/",
+        "screenshots/commands/ownership/heartbeat"
+      ],
+      "exit_code": 0,
+      "passed": 24,
+      "failed": 0,
+      "elapsed_ms": 22148,
+      "log": "/tmp/opencode/af02b4b-browser-heartbeat.log",
+      "log_sha256": "cdbafa6ff64aee5d2590b8669e0f7b2f8f07c8b8b4992d965f76c606f80194b4"
+    }
+  ],
+  "screenshots": [
+    {
+      "path": "frontend/screenshots/commands/ownership/heartbeat/heartbeat-lost.png",
+      "bytes": 52400,
+      "sha256": "0f56837d7d31156d42bd39a79b8a34a59fa9a7823aea202faa08f12e478ae7c0"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/heartbeat/heartbeat-restored.png",
+      "bytes": 43695,
+      "sha256": "24be4b7b9d8010444b0b41debbaef76fba6aff46082ccb35b5f10a321fb1149f"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/preflight/preflight-force-accepted.png",
+      "bytes": 42984,
+      "sha256": "fde6fc580ff90f1d19252082b36d6bd7f77bd67a131f17afd6b8bad7a5391602"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/preflight/preflight-force-denied.png",
+      "bytes": 86574,
+      "sha256": "b1da028bdce6089520900ea6a73f8782122c21bec85405384430f72e83a7272e"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/preflight/preflight-force-ready.png",
+      "bytes": 93353,
+      "sha256": "6efe657d906baba6a5808004866d85fd0f79f0222e8c8eef1f9285133e6af150"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/preflight/preflight-force-uncertain.png",
+      "bytes": 87821,
+      "sha256": "4be777bd0904cba91ff2b9d5327e1ab25268d33c55f9bf44c558672a469d2525"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/preflight/preflight-panel.png",
+      "bytes": 92773,
+      "sha256": "eb7d4a27390203a4c973f40731e0599ac69df51dbe4a16b9442b494a16e87d86"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/preflight/preflight-u5-repairs.png",
+      "bytes": 85924,
+      "sha256": "241b0d9370aadd3530c2435306fbffad532fb76bf93a2f6080389bc4dd7da156"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/preflight/preflight-warnings-accepted.png",
+      "bytes": 42962,
+      "sha256": "67471cc5ee3d043da9ac3fff7ae612e9a986091bc16b0775b90ed385a7403084"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/safety/safety-denied-acknowledged.png",
+      "bytes": 42766,
+      "sha256": "6a2db64e6a4ca617fb87240da3a59ae1fc873a38fec3ea49cd76ba93ab7a9bd1"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/safety/safety-holding.png",
+      "bytes": 85650,
+      "sha256": "660309a5dd1c18ea7c41dfa32fe5e02d37f9219a802ceac68fde362692022e2d"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/safety/safety-in-flight.png",
+      "bytes": 42983,
+      "sha256": "94972468e573ce68f7ca4cd183dcdc26f9b7b322aaf24a6bccdda3e359030f5c"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/safety/safety-no-link.png",
+      "bytes": 52043,
+      "sha256": "332b2a03fe0030884a3d959c3a70c106d7890b9fdc90ab803972aab11ad107ac"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/safety/safety-old-request.png",
+      "bytes": 43017,
+      "sha256": "925f53d7f2a71ccee7d73f3bce2cc55f6cb54c666b9a7f9691681fd3c9f19687"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/safety/safety-plan.png",
+      "bytes": 81520,
+      "sha256": "1471e832dc3a96bafe9d7ab4ae503eb266131da299eb7ec6e7e9fe120128c21e"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/startup/startup-autoconnect.png",
+      "bytes": 33072,
+      "sha256": "6e10b916a1bb63e4175e66b552568de0c15030b4e1158dbca5441bfd41aa2216"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/startup/startup-prepare-rows.png",
+      "bytes": 64424,
+      "sha256": "5216953148b35313d88b6db381006f2e9b9111d5b6eea8c7a4e85ef14f760ff6"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/startup/startup-target-change.png",
+      "bytes": 51437,
+      "sha256": "21da0cbbdc05cf0adf12a21a717ab73044c5b0f444d961ac43e0364642774b13"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/teardown/teardown-at-stake.png",
+      "bytes": 87574,
+      "sha256": "d4ccda3864e8be52f724be87c8f3236c65c78e1afa138ce4f5af16fdd3e80628"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/teardown/teardown-keyword.png",
+      "bytes": 74212,
+      "sha256": "35066031ec29efeee58ce024d5f08dc092241f66e4d343172a7124d57dd3bb5f"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/teardown/teardown-quit.png",
+      "bytes": 68197,
+      "sha256": "4fa4185205c2ab512af409eacde3664158c12469cf164f9153772a5167f17b72"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/teardown/teardown-refused.png",
+      "bytes": 48238,
+      "sha256": "409d715af87ab977a10c3d299ed9354002544576bb14dbc89e5f917278942206"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/topbar/about-dark.png",
+      "bytes": 124154,
+      "sha256": "be062773c402231635e3d91fe786a99537fb38b2a273a7c423f1c30d8ccc49a3"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/topbar/about-light.png",
+      "bytes": 127362,
+      "sha256": "e37cd14bb82de08eb99c335d755b2b161aae69c0ff0fb6063edeed85aebe625c"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/topbar/tools-1280.png",
+      "bytes": 45791,
+      "sha256": "75bd53462da1522b4b1ac69f37059cd79bd0132896cdd880e5147724fe01b95e"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/topbar/tools-1920.png",
+      "bytes": 98808,
+      "sha256": "a2c350a80e2dfe6acaceaad0c53dd7aefc2de38e2747cb7ae09a8787e6500d54"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/topbar/topbar-1024.png",
+      "bytes": 31208,
+      "sha256": "a69cce8400f278013ee804e1cb5a0f92d29560b4b9e7f324e0e00a5c61ebe677"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/topbar/topbar-1280.png",
+      "bytes": 33345,
+      "sha256": "df4e865d2138efbb1d21b61f3b5f6fc7b29303616fb67a62a65eea6a4d21d570"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/topbar/topbar-1920.png",
+      "bytes": 47658,
+      "sha256": "d71c02718dcfd8c56856c09b1ee3f6e97eb5b623e8eedc90c9b1b9205ce50bfc"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/topbar/topbar-light-1920.png",
+      "bytes": 89532,
+      "sha256": "6afc4ceded373e1953adbce1e1d1425291eaf26e203438e75ffc59f8e538f743"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/topbar/topbar-night-red-1920.png",
+      "bytes": 87247,
+      "sha256": "5637fbc8138f78c038693e95a012aa7ec74fd56007c364f34f54c2726a7427da"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/topbar/workflow-1920.png",
+      "bytes": 72813,
+      "sha256": "990b703ec946a0adc680fa4ba7ef55f185e4833369c14682a48604539786f820"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/ux/command-disarm-accepted.png",
+      "bytes": 55621,
+      "sha256": "c4043812c2029c7add06f51728f1e601b6b824773c4bc09ca6fcb02bba9a466e"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/ux/command-holding.png",
+      "bytes": 56602,
+      "sha256": "9af07bac633c02a6c624fd973a61f073d87a472e06c90fcad739ba2376ba2c4c"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/ux/command-home-owner.png",
+      "bytes": 45762,
+      "sha256": "906f498b80f1a01413a369d63316f819fb2d6a82e80172081a2887dc818936c3"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/ux/command-long-error-1024.png",
+      "bytes": 37951,
+      "sha256": "9f838ddf88a36985ecbc9195aa698ce61d4f91799d15583fa00f621a976c671e"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/ux/command-long-error-1280.png",
+      "bytes": 40819,
+      "sha256": "0a63444ea60aea3996425e0490f67f0e9419bac816b1ab58b56c9f974aa6c84f"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/ux/command-long-error-1440.png",
+      "bytes": 44645,
+      "sha256": "15a50d63cda5786ed6c1aedd9d4fe50b98bbf08aa2774fa6275086e0014d7f86"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/ux/command-long-error-1920.png",
+      "bytes": 50292,
+      "sha256": "f7b34df8e65071df2e41163fe8237e16defa7ac24a31e29632bb420b2a537922"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/ux/command-menu.png",
+      "bytes": 55086,
+      "sha256": "012a2ad5569186244de631cd44a05522e58300efbc452a18abf0ce8632c95358"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/ux/command-native-target-loss.png",
+      "bytes": 44888,
+      "sha256": "328013b26561219342695e53c3113584fbfdb64c442e8e71261ef066b57cff34"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/ux/command-replaced-target.png",
+      "bytes": 44645,
+      "sha256": "15a50d63cda5786ed6c1aedd9d4fe50b98bbf08aa2774fa6275086e0014d7f86"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/ux/command-request-isolation.png",
+      "bytes": 45539,
+      "sha256": "d838119829bace49f8596cf90b12ce90c87be46c3f42a873e55fba2423bc7769"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/ux/command-result.png",
+      "bytes": 56011,
+      "sha256": "00abdd8494d008df0350cc1bc857d13fc97a09d3f2dbb5b0c866a83dbcf501ff"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/ux/command-stale-checklist.png",
+      "bytes": 51697,
+      "sha256": "222534def89ba4957328a1327daacfc2ab5ef112ce5172610c17b6ea9a22ad42"
+    },
+    {
+      "path": "frontend/screenshots/commands/ownership/ux/command-stale-terrain.png",
+      "bytes": 51951,
+      "sha256": "8e56ccb147d64dc76d85ef2db856a47fcc0900527935dbea45be106cebeda7f5"
+    }
+  ]
+}

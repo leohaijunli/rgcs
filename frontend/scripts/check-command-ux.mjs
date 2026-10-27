@@ -4,11 +4,9 @@
 //   node check-command-ux.mjs <viteUrl> <shotsDir>
 //
 // The fake FC lives in the page: it streams telemetry, answers
-// `flight_mode_table`, and records every command the UI hands to the backend
-// (`__mockCommands`). Command acks are driven from Node through the `command`
-// event, exactly the payload Rust publishes (app-tauri `command_service`), so
-// what is checked is the UI's confirmation model — how much deliberate effort
-// a command costs and what the status strip says about it.
+// `flight_mode_table`, Runtime client ownership, and every typed command the UI
+// hands to `flight_command_execute`. Deferred operation-bound replies let the
+// check observe the awaiting-ack phase and stale-target rejection.
 //
 // High risk (force-arm L5, quit/disconnect L4) is the keyword tier and lives in
 // `check-teardown.mjs`; this file covers the click and hold tiers.
@@ -82,7 +80,7 @@ await page.addInitScript(() => {
   const snapshot = (atMs) => ({
     last_heartbeat_at_ms: atMs % 100000,
     heartbeat: {
-      system_id: 1,
+      system_id: targetRevision,
       component_id: 1,
       vehicle_type: 'quadrotor',
       autopilot: 'px4',
@@ -105,7 +103,7 @@ await page.addInitScript(() => {
       time_boot_ms: 1,
       latitude_deg: 49.2831,
       longitude_deg: -123.1207,
-      altitude: { datum: 'AMSL', meters: 48.5 },
+      altitude: { datum: 'AMSL_EGM96', meters: 48.5 },
       relative_alt_m: 40,
       velocity: { x_m_s: 0, y_m_s: 0, z_m_s: 0 },
       heading_deg: 12,
@@ -131,6 +129,51 @@ await page.addInitScript(() => {
 
   window.__mockCommands = []
   window.__mockUnhandled = []
+  let targetRevision = 1
+  const runtimeSessions = new Map()
+  let operation = 0
+  const pendingFlights = []
+  const pendingChecklists = []
+  window.__mockDeferChecklist = false
+  window.__mockResolveChecklist = () => {
+    const resolve = pendingChecklists.shift()
+    if (!resolve) throw new Error('no pending checklist')
+    resolve({ items: [
+      { id: 'link_fresh', group: 'link', status: 'pass', detail: 'Current link', fix_hint: null },
+      { id: 'gps_fix', group: 'navigation', status: 'fail', detail: 'Obsolete target GPS refusal', fix_hint: null },
+    ] })
+  }
+  window.__mockPendingChecklistCount = () => pendingChecklists.length
+  const runtimeTarget = () => ({
+    vehicle_id: `vehicle-${targetRevision}`,
+    session_id: `target-session-${targetRevision}`,
+    link_id: `link-${targetRevision}`,
+    generation: `${targetRevision}`,
+    mavlink_target: { system_id: targetRevision, component_id: 1 },
+  })
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
+  const flightReply = (entry, result, target = entry.request.context.session.target) => ({
+    operation: {
+      id: `operation-${++operation}`,
+      owner: structuredClone(entry.request.context.session.owner),
+      target: structuredClone(target),
+    },
+    command: entry.request.intent.kind,
+    steps: [{ step: entry.request.intent.kind, result }],
+  })
+  window.__mockFlightReply = (kind, result = 'accepted', target = null) => {
+    const index = pendingFlights.findIndex((entry) => entry.request.intent.kind === kind)
+    if (index < 0) throw new Error(`no pending ${kind} flight command`)
+    const [entry] = pendingFlights.splice(index, 1)
+    entry.resolve(flightReply(entry, result, target ?? entry.request.context.session.target))
+  }
+  window.__mockFlightError = (kind, error) => {
+    const index = pendingFlights.findIndex((entry) => entry.request.intent.kind === kind)
+    if (index < 0) throw new Error(`no pending ${kind} flight command`)
+    const [entry] = pendingFlights.splice(index, 1)
+    entry.reject(error)
+  }
+  window.__mockSetRuntimeTarget = (revision) => { targetRevision = revision }
   window.__mockFeedStart = (intervalMs = 250) => {
     clearInterval(feedTimer)
     window.__mockTelemetry(Date.now())
@@ -149,8 +192,6 @@ await page.addInitScript(() => {
     armed = next
     window.__mockTelemetry(Date.now())
   }
-  window.__mockCommandEvent = (payload) => deliver('command', payload)
-
   const modeEntry = (id, label, main, sub, confirm) => ({
     option: { id, label, main_mode: main, sub_mode: sub, confirm, advanced: false },
     enabled: true,
@@ -175,6 +216,45 @@ await page.addInitScript(() => {
       if (cmd === 'alert_snapshot') return []
       if (cmd === 'enumerate_devices') return []
       if (cmd === 'link_status' || cmd === 'connect' || cmd === 'link_error') return null
+      if (cmd === 'runtime_targets') {
+        const target = runtimeTarget()
+        return [{
+          link_id: target.link_id,
+          target,
+          availability: 'available',
+          heartbeat_age_ms: 0,
+          parameter_service_available: true,
+          roles: ['primary'],
+          transport_owner: 'primary',
+          endpoint: 'mock-primary',
+        }]
+      }
+      if (cmd === 'runtime_client_attach') {
+        const runtimeSession = {
+          owner: { client_id: 'command-ux-client', instance_id: `${args.moduleId}-${targetRevision}` },
+          target: structuredClone(args.target),
+          module_id: args.moduleId,
+        }
+        runtimeSessions.set(args.moduleId, runtimeSession)
+        return structuredClone(runtimeSession)
+      }
+      if (cmd === 'runtime_client_validate') {
+        if (!same(runtimeSessions.get(args.session.module_id), args.session)) throw { code: 'not_owner' }
+        if (!same(args.session.target, runtimeTarget())) throw { code: 'runtime', error: { code: 'target_changed' } }
+        return null
+      }
+      if (cmd === 'runtime_client_detach') {
+        if (same(runtimeSessions.get(args.session.module_id), args.session)) runtimeSessions.delete(args.session.module_id)
+        return null
+      }
+      if (cmd === 'flight_command_execute') {
+        window.__mockCommands.push({ cmd, ...(args ?? {}) })
+        return new Promise((resolve, reject) => pendingFlights.push({ request: structuredClone(args.request), resolve, reject }))
+      }
+      if (cmd === 'preflight_checklist') {
+        if (window.__mockDeferChecklist) return new Promise((resolve) => pendingChecklists.push(resolve))
+        return { items: [{ id: 'link_fresh', group: 'link', status: 'pass', detail: 'Current link', fix_hint: null }] }
+      }
       if (cmd === 'flight_mode_table') {
         return [
           modeEntry('hold', 'Hold', 4, 3, false),
@@ -215,9 +295,7 @@ await waitUntil(async () => (await page.locator('[data-testid="flight-menu"]').c
 /** Every command the UI handed to the backend (boot-time invokes excluded). */
 const commands = () =>
   page.evaluate(() =>
-    window.__mockCommands.filter((c) =>
-      ['send_command', 'send_set_mode', 'send_arm_disarm'].includes(c.cmd),
-    ),
+    window.__mockCommands.filter((c) => c.cmd === 'flight_command_execute'),
   )
 const status = page.locator('[data-testid="command-status"]')
 
@@ -293,13 +371,17 @@ check(
 )
 const afterHold = await commands()
 check(
-  afterHold.some((c) => c.cmd === 'send_command' && c.name === 'land'),
+  afterHold.some((c) => c.request.intent.kind === 'land'),
   'the completed hold sends the land command',
+)
+const landRequest = afterHold.find((c) => c.request.intent.kind === 'land')
+check(
+  landRequest?.request.intent.ground_amsl?.datum === 'AMSL_EGM96',
+  'the landing terrain height is datum-tagged',
 )
 check(afterHold.length === 1, `exactly one command goes out (got ${afterHold.length})`)
 
 // --- 5. the status strip: sent -> awaiting ack -> result + elapsed ----------
-await page.evaluate(() => window.__mockCommandEvent({ command: 'land', kind: 'sent' }))
 check(await waitUntil(async () => (await status.count()) === 1, 5000), 'the status strip appears')
 const sentText = await status.innerText()
 check(sentText.includes('Land'), `the strip names the command (got "${sentText}")`)
@@ -309,9 +391,7 @@ check(
 )
 const sentAt = Date.now()
 await page.waitForTimeout(900)
-await page.evaluate(() =>
-  window.__mockCommandEvent({ command: 'land', kind: 'completed', result: 'accepted' }),
-)
+await page.evaluate(() => window.__mockFlightReply('land'))
 check(
   await waitUntil(async () => (await status.innerText()).includes('Accepted'), 5000),
   'the strip shows the terminal ack',
@@ -338,19 +418,17 @@ await hold(page.locator('[data-testid="flight-cmd-rtl"]'), HOLD_AT_MS)
 interactions += 1
 const rtl = await commands()
 check(
-  rtl.some((c) => c.cmd === 'send_command' && c.name === 'rtl'),
+  rtl.some((c) => c.request.intent.kind === 'return_to_launch'),
   'RTL goes out from the flight stage',
 )
 check(interactions <= 2, `RTL costs at most two interactions (got ${interactions})`)
-await page.evaluate(() =>
-  window.__mockCommandEvent({ command: 'rtl', kind: 'completed', result: 'accepted' }),
-)
+await page.evaluate(() => window.__mockFlightReply('return_to_launch'))
 await page.keyboard.press('Escape')
 await page.waitForTimeout(250)
 
 // --- 7. the keyboard is a first-class hold path -----------------------------
 const armCount = async () =>
-  (await commands()).filter((c) => c.cmd === 'send_arm_disarm').length
+  (await commands()).filter((c) => c.request.intent.kind === 'arm' || c.request.intent.kind === 'disarm').length
 const armButton = page.locator('[data-testid="flight-cmd-arm_disarm"]')
 await page.locator('[data-testid="flight-menu"]').click()
 await armButton.focus()
@@ -358,28 +436,34 @@ await page.keyboard.down('Enter')
 await page.waitForTimeout(HOLD_AT_MS)
 await page.keyboard.up('Enter')
 check((await armCount()) === 1, 'holding Enter sends arm/disarm')
-await page.evaluate(() =>
-  window.__mockCommandEvent({ command: 'arm_disarm', kind: 'completed', result: 'accepted' }),
-)
+await page.evaluate(() => {
+  window.__mockArm(false)
+  window.__mockFlightReply('disarm')
+})
+check(await waitUntil(async () => (await status.getAttribute('data-command')) === 'Disarm' && (await status.innerText()).includes('Accepted'), 5000),
+  'Disarm acceptance keeps the requested action after telemetry becomes disarmed')
+await page.screenshot({ path: join(shotsDir, 'command-disarm-accepted.png') })
+await page.evaluate(() => window.__mockArm(true))
 await page.keyboard.press('Escape')
 await page.waitForTimeout(250)
 check((await armCount()) === 1, 'a single Enter press after the hold does not send again')
 
 // --- 8. mode switching follows the same grading -----------------------------
 await page.locator('[data-testid="mode-menu"]').click()
-const setModeCount = async () => (await commands()).filter((c) => c.cmd === 'send_set_mode').length
+const setModeCount = async () =>
+  (await commands()).filter((c) => c.request.intent.kind === 'set_mode').length
 check((await page.locator('[data-testid="confirm-bar"]').count()) === 1, 'the mode popover carries the confirm bar')
 
 // Low risk (Hold): one click.
 await page.locator('[data-testid="mode-hold"]').click()
 check(await waitUntil(async () => (await setModeCount()) === 1, 5000), 'Hold switches on a single click')
-const firstMode = (await commands()).find((c) => c.cmd === 'send_set_mode')
+const firstMode = (await commands()).find((c) => c.request.intent.kind === 'set_mode')
 check(
-  firstMode?.mainMode === 4 && firstMode?.subMode === 3,
-  `the switch carries the PX4 mode pair (got ${firstMode?.mainMode}/${firstMode?.subMode})`,
+  firstMode?.request.intent.main_mode === 4 && firstMode?.request.intent.sub_mode === 3,
+  `the switch carries the PX4 mode pair (got ${firstMode?.request.intent.main_mode}/${firstMode?.request.intent.sub_mode})`,
 )
 await page.evaluate(() => {
-  window.__mockCommandEvent({ command: 'set_mode', kind: 'completed', result: 'accepted' })
+  window.__mockFlightReply('set_mode')
   window.__mockMode(4, 3, 'Hold')
 })
 await waitUntil(async () => (await page.locator('[data-testid="mode-switching"]').count()) === 0, 8000)
@@ -390,15 +474,195 @@ await page.waitForTimeout(300)
 check((await setModeCount()) === 1, 'a single click cannot switch into Return')
 await hold(page.locator('[data-testid="mode-return"]'), HOLD_AT_MS)
 check(await waitUntil(async () => (await setModeCount()) === 2, 5000), 'holding Return switches the mode')
-const returnMode = (await commands()).filter((c) => c.cmd === 'send_set_mode')[1]
+const returnMode = (await commands()).filter((c) => c.request.intent.kind === 'set_mode')[1]
 check(
-  returnMode?.mainMode === 4 && returnMode?.subMode === 5,
-  `Return sends the RTL mode pair (got ${returnMode?.mainMode}/${returnMode?.subMode})`,
+  returnMode?.request.intent.main_mode === 4 && returnMode?.request.intent.sub_mode === 5,
+  `Return sends the RTL mode pair (got ${returnMode?.request.intent.main_mode}/${returnMode?.request.intent.sub_mode})`,
 )
 await page.evaluate(() => {
-  window.__mockCommandEvent({ command: 'set_mode', kind: 'completed', result: 'accepted' })
+  window.__mockFlightReply('set_mode')
   window.__mockMode(4, 5, 'RTL')
 })
+
+// --- 9. Runtime identity scopes every request and retires stale replies -----
+const beforeStale = (await commands()).length
+await hold(page.locator('[data-testid="rtl-always"]'), HOLD_AT_MS)
+check(
+  await waitUntil(async () => (await commands()).length === beforeStale + 1, 5000),
+  'a command is pending before the target replacement',
+)
+await page.evaluate(() => {
+  window.__mockSetRuntimeTarget(2)
+  window.__mockLink({ link_state: 'connected', endpoint: 'udpin:0.0.0.0:14550', fc_alive: false })
+})
+check(await waitUntil(async () => (await status.count()) === 0, 5000), 'target loss clears the old command scope')
+await page.evaluate(() => window.__mockFlightReply('return_to_launch'))
+await page.waitForTimeout(300)
+check((await status.count()) === 0, 'an old-target operation reply is ignored')
+
+const scoped = await commands()
+const requestIds = scoped.map((entry) => entry.request?.context?.request_id)
+check(
+  scoped.every((entry) =>
+    entry.request?.context?.session?.module_id === 'flight-controls'
+    && typeof entry.request.context.request_id === 'string'
+    && entry.request.context.request_id.length > 0),
+  'every execute carries a flight-controls session and request identity',
+)
+check(new Set(requestIds).size === requestIds.length, 'every execute uses a fresh request identity')
+const sessionKeys = scoped.map((entry) => JSON.stringify(entry.request.context.session))
+check(new Set(sessionKeys).size === 1, 'commands on one target reuse the exact Runtime session')
+
+// --- 10. same-target old outcomes cannot settle a newer emergency -----------
+await page.keyboard.press('Escape')
+await page.evaluate(async () => {
+  const { useCommandStore } = await import('/src/stores/command.ts')
+  const { useTerrainStore } = await import('/src/stores/terrain.ts')
+  window.__flightStore = useCommandStore
+  window.__terrainStore = useTerrainStore
+  window.__originalTerrainSample = useTerrainStore.getState().samplePointAmsl
+})
+async function readyTarget(revision) {
+  await page.evaluate((revision) => {
+    window.__mockSetRuntimeTarget(revision)
+    window.__mockLink({ link_state: 'connected', endpoint: 'udpin:0.0.0.0:14550', fc_alive: true })
+    window.__mockTelemetry(Date.now())
+    window.__mockFeedStart()
+  }, revision)
+  await page.waitForTimeout(250)
+  if (await targetConfirm.isVisible()) await targetConfirm.click()
+}
+await readyTarget(2)
+const beforeRace = (await commands()).length
+await page.evaluate(() => { void window.__flightStore.getState().sendGoto(49.2832, -123.1208) })
+check(await waitUntil(async () => (await commands()).length === beforeRace + 1, 5000), 'a normal map command is pending')
+await hold(page.locator('[data-testid="rtl-always"]'), HOLD_AT_MS)
+check(await waitUntil(async () => (await commands()).length === beforeRace + 2, 5000), 'RTL is sent while the normal map command is pending')
+await page.evaluate(() => window.__mockFlightReply('goto'))
+check(await waitUntil(async () => (await status.innerText()).includes('RTL') && (await status.innerText()).includes('Sent — awaiting ack'), 5000),
+  'an old same-target accepted reply cannot clear the newer RTL wait')
+await page.screenshot({ path: join(shotsDir, 'command-request-isolation.png') })
+await page.evaluate(() => window.__mockFlightReply('return_to_launch', 'denied'))
+check(await waitUntil(async () => (await status.innerText()).includes('Denied'), 5000), 'the newer RTL retains its own denied verdict')
+
+// --- 11. map markers belong to their individual request --------------------
+const beforeHomes = (await commands()).length
+await page.evaluate(() => { void window.__flightStore.getState().sendSetHome(49.2832, -123.1208) })
+await waitUntil(async () => (await commands()).length === beforeHomes + 1, 5000)
+await page.evaluate(() => { void window.__flightStore.getState().sendSetHome(49.2833, -123.1209) })
+await waitUntil(async () => (await commands()).length === beforeHomes + 2, 5000)
+await page.evaluate(() => window.__mockFlightReply('set_home'))
+check(await page.evaluate(() => window.__flightStore.getState().homeMarker === null), 'an older same-target Set home reply cannot move the newer marker')
+check(await page.evaluate(() => window.__flightStore.getState().pending === 'set_home'), 'an older Set home reply cannot clear the newer Set home wait')
+await page.evaluate(() => window.__mockFlightReply('set_home'))
+check(await waitUntil(async () => page.evaluate(() => window.__flightStore.getState().homeMarker?.[0] === 49.2833), 5000),
+  'the current Set home acceptance installs only its clicked marker')
+await page.screenshot({ path: join(shotsDir, 'command-home-owner.png') })
+
+const beforeGotos = (await commands()).length
+await page.evaluate(() => { void window.__flightStore.getState().sendGoto(49.2832, -123.1208) })
+await waitUntil(async () => (await commands()).length === beforeGotos + 1, 5000)
+await page.evaluate(() => { void window.__flightStore.getState().sendGoto(49.2833, -123.1209) })
+await waitUntil(async () => (await commands()).length === beforeGotos + 2, 5000)
+await page.evaluate(() => window.__mockFlightReply('goto', 'denied'))
+check(await page.evaluate(() => window.__flightStore.getState().gotoTarget?.[0] === 49.2833), 'an older Go to denial cannot clear a newer Go to marker')
+check(await page.evaluate(() => window.__flightStore.getState().pending === 'goto'), 'an older Go to denial cannot settle a newer Go to request')
+await page.evaluate(() => window.__mockFlightReply('goto'))
+
+// --- 12. slow terrain preparation cannot migrate to a replacement target ---
+const beforeTerrain = (await commands()).length
+await page.evaluate(() => {
+  window.__terrainStore.setState({ samplePointAmsl: () => new Promise((resolve) => { window.__resolveTerrain = resolve }) })
+  void window.__flightStore.getState().send('land')
+})
+check(await waitUntil(async () => page.evaluate(() => typeof window.__resolveTerrain === 'function'), 5000),
+  'landing captures its Runtime context before awaiting terrain')
+await page.evaluate(() => {
+  window.__mockSetRuntimeTarget(3)
+  window.__mockLink({ link_state: 'connected', endpoint: 'udpin:0.0.0.0:14550', fc_alive: false })
+  window.__resolveTerrain(42)
+  window.__terrainStore.setState({ samplePointAmsl: window.__originalTerrainSample })
+})
+await page.waitForTimeout(300)
+check((await commands()).length === beforeTerrain, 'obsolete terrain preparation sends zero flight commands')
+check(await page.evaluate(() => window.__flightStore.getState().pending === null && window.__flightStore.getState().homeMarker === null),
+  'target replacement clears old pending and home-marker authority')
+await page.screenshot({ path: join(shotsDir, 'command-stale-terrain.png') })
+
+// --- 13. a delayed old-target checklist cannot revive a refusal ------------
+await readyTarget(3)
+const beforeChecklist = (await commands()).length
+await page.evaluate(() => {
+  window.__mockArm(false)
+  window.__mockDeferChecklist = true
+  void window.__flightStore.getState().send('takeoff')
+})
+check(await waitUntil(async () => page.evaluate(() => window.__mockPendingChecklistCount() === 1), 5000), 'takeoff is waiting on its captured target checklist')
+await page.evaluate(() => {
+  window.__mockSetRuntimeTarget(4)
+  window.__mockLink({ link_state: 'connected', endpoint: 'udpin:0.0.0.0:14550', fc_alive: false })
+  window.__mockResolveChecklist()
+  window.__mockDeferChecklist = false
+})
+await page.waitForTimeout(300)
+check((await commands()).length === beforeChecklist, 'obsolete checklist preparation sends zero takeoff commands')
+check(await page.evaluate(() => window.__flightStore.getState().preflight === null), 'a delayed old-target checklist cannot reopen preflight')
+await page.screenshot({ path: join(shotsDir, 'command-stale-checklist.png') })
+
+// --- 14. native generation loss is authoritative without UI link events ----
+await readyTarget(4)
+const beforeHidden = (await commands()).length
+await page.evaluate(() => { void window.__flightStore.getState().sendSetMode(4, 3) })
+await waitUntil(async () => (await commands()).length === beforeHidden + 1, 5000)
+await page.evaluate(() => {
+  window.__mockFeedStop()
+  window.__mockSetRuntimeTarget(5)
+  window.__mockFlightReply('set_mode')
+})
+check(await waitUntil(async () => (await status.count()) === 0, 5000), 'a reply from a silently replaced native target cannot establish acceptance')
+check(await page.evaluate(() => window.__flightStore.getState().homeMarker === null), 'native reply revalidation also retires old map authority')
+await page.screenshot({ path: join(shotsDir, 'command-native-target-loss.png') })
+
+// Discovering a later replacement while preparing a click must not replay it.
+await readyTarget(5)
+const beforeDiscovery = (await commands()).length
+await page.evaluate(() => { void window.__flightStore.getState().send('rtl') })
+await waitUntil(async () => (await commands()).length === beforeDiscovery + 1, 5000)
+await page.evaluate(() => window.__mockFlightReply('return_to_launch'))
+await waitUntil(async () => page.evaluate(() => window.__flightStore.getState().pending === null), 5000)
+await page.evaluate(() => {
+  window.__mockFeedStop()
+  window.__mockSetRuntimeTarget(6)
+  void window.__flightStore.getState().sendSetMode(4, 3)
+})
+check(await waitUntil(async () => (await status.innerText()).includes('flight target changed'), 5000), 'discovering a replaced target requires a fresh operator command')
+check((await commands()).length === beforeDiscovery + 1, 'the click that discovers a replacement produces zero writes')
+check((await status.getAttribute('title')).includes('issue a new command for the current target'),
+  'a truncated native error retains its complete reason in the status tooltip')
+for (const width of [1024, 1280, 1440, 1920]) {
+  await page.setViewportSize({ width, height: 900 })
+  await page.waitForTimeout(200)
+  const geometry = await page.evaluate(() => {
+    const ids = ['topbar-status', 'rtl-always', 'hold-always', 'project-pill']
+    return ids.map((id) => {
+      const rect = document.querySelector(`[data-testid="${id}"]`).getBoundingClientRect()
+      return { id, left: rect.left, right: rect.right, height: rect.height, inside: rect.left >= 0 && rect.right <= innerWidth }
+    })
+  })
+  check(geometry.every((entry) => entry.inside), `a long command error keeps status, emergency controls and app context inside ${width}px (${JSON.stringify(geometry)})`)
+  await page.screenshot({ path: join(shotsDir, `command-long-error-${width}.png`) })
+}
+await page.setViewportSize({ width: 1440, height: 900 })
+await page.screenshot({ path: join(shotsDir, 'command-replaced-target.png') })
+await page.evaluate(() => { void window.__flightStore.getState().sendSetMode(4, 3) })
+check(await waitUntil(async () => (await commands()).length === beforeDiscovery + 2, 5000), 'a fresh command binds the new target without replaying old intent')
+await page.evaluate(() => window.__mockFlightReply('set_mode'))
+check(await waitUntil(async () => (await status.innerText()).includes('Accepted'), 5000), 'the new target command accepts only its own operation reply')
+
+const allScoped = await commands()
+check(new Set(allScoped.map((entry) => entry.request.context.request_id)).size === allScoped.length,
+  'all stale/racing/new-target executes retain distinct request identities')
+check(allScoped.at(-1).request.context.session.target.generation === '6', 'the final fresh request names the replacement generation explicitly')
 
 const unhandled = await page.evaluate(() => window.__mockUnhandled)
 if (unhandled.length > 0) {

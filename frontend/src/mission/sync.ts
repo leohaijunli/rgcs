@@ -41,7 +41,7 @@ export function planSyncStatus(f: PlanSyncFacts): PlanSyncStatus {
   if (f.fcMatches === false) return 'mismatch'
   const synced = f.lastSyncedHash !== null
   if (f.dirty) return synced ? 'dirty' : 'unsynced'
-  return synced ? 'synced' : 'unsynced'
+  return synced && f.fcMatches === true ? 'synced' : 'unsynced'
 }
 
 /** Lifecycle phase shown in the sync line (U17d): the stored relationship
@@ -76,7 +76,7 @@ export interface PlanSyncPhaseFacts extends PlanSyncFacts {
  */
 export function planSyncPhase(f: PlanSyncPhaseFacts): SyncPhase {
   if (f.itemCount === 0) return 'empty'
-  if (f.busy && f.syncState !== 'idle') return f.syncState
   if (f.verifying) return 'verifying'
+  if (f.busy && f.syncState !== 'idle') return f.syncState
   return planSyncStatus(f)
 }

@@ -23,8 +23,8 @@ command: number,
  * live in `x`/`y`/`z`; duplicating them here would lose precision when the
  * `i32` lat/lon is narrowed to `f32` (issues.md #10).
  */
-params: Array<number>, x: number, y: number, z: number, autocontinue: boolean, 
+x: number, y: number, z: number, autocontinue: boolean, 
 /**
  * Whether this item is the active one (1 for the first item on upload).
  */
-current: boolean, };
+current: boolean, params: Array<number | null>, };

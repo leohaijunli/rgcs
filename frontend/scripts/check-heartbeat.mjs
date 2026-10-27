@@ -57,6 +57,10 @@ await page.addInitScript((heartbeatTimeoutMs) => {
   const handlers = {}
   let fired = 0
   let lossTimer = undefined
+  let runtimeGeneration = 1
+  let runtimeSession = null
+  const runtimeTarget = () => ({ vehicle_id: 'heartbeat-vehicle', session_id: `session-${runtimeGeneration}`,
+    link_id: '1', generation: String(runtimeGeneration), mavlink_target: { system_id: 1, component_id: 1 } })
 
   const deliver = (event, payload) => {
     const handler = handlers[event]
@@ -95,7 +99,7 @@ await page.addInitScript((heartbeatTimeoutMs) => {
       time_boot_ms: 1,
       latitude_deg: 49.2831,
       longitude_deg: -123.1207,
-      altitude: { datum: 'AMSL', meters: 34 },
+      altitude: { datum: 'AMSL_EGM96', meters: 34 },
       relative_alt_m: 30,
       velocity: { x_m_s: 0, y_m_s: 0, z_m_s: 0 },
       heading_deg: 12,
@@ -140,6 +144,7 @@ await page.addInitScript((heartbeatTimeoutMs) => {
     return stopAt
   }
   window.__mockHeartbeatResume = () => {
+    runtimeGeneration += 1
     clearTimeout(lossTimer)
     const at = Date.now()
     window.__mockTelemetry(at)
@@ -173,9 +178,24 @@ await page.addInitScript((heartbeatTimeoutMs) => {
       if (cmd === 'alert_snapshot') return []
       if (cmd === 'enumerate_devices') return []
       if (cmd === 'link_status' || cmd === 'connect' || cmd === 'link_error') return null
+      if (cmd === 'runtime_targets') return [{ target: runtimeTarget(), link_id: '1', availability: 'available',
+        roles: ['primary'], transport_owner: 'primary', endpoint: 'heartbeat-fixture', parameter_service_available: true, heartbeat_age_ms: 0 }]
+      if (cmd === 'runtime_client_attach') {
+        runtimeSession = { owner: { client_id: 'heartbeat-client', instance_id: `${args.moduleId}-${runtimeGeneration}` }, module_id: args.moduleId, target: args.target }
+        return structuredClone(runtimeSession)
+      }
+      if (cmd === 'runtime_client_validate') {
+        if (JSON.stringify(runtimeSession) !== JSON.stringify(args.session)
+          || JSON.stringify(args.session.target) !== JSON.stringify(runtimeTarget())) throw { code: 'target_changed' }
+        return null
+      }
+      if (cmd === 'runtime_client_detach') {
+        if (JSON.stringify(runtimeSession) === JSON.stringify(args.session)) runtimeSession = null
+        return null
+      }
       // Recorded rather than ignored: the reconnect path is what we assert on.
       window.__mockCalls.push(cmd)
-      if (cmd === 'mission_download') return null
+      if (cmd === 'mission_download') return { operation: { id: 'heartbeat-download', owner: structuredClone(args.request.session.owner), target: structuredClone(args.request.session.target) }, result: { kind: 'downloaded', items: [] } }
       window.__mockUnhandled.push(cmd)
       return null
     },
@@ -315,8 +335,8 @@ check(
   (await restored.innerText()).includes('Link restored'),
   'a "restored" notice confirms the reconnect',
 )
-const calls = await page.evaluate(() => window.__mockCalls)
-check(calls.includes('mission_download'), 'the mission state is re-read after the reconnect')
+check(await waitUntil(async () => page.evaluate(() => window.__mockCalls.includes('mission_download')), 5000),
+  'the mission state is re-read with a fresh owned request after reconnect')
 const liveAgain = await waitUntil(
   async () =>
     (await page.locator('[data-testid="link-stale"]').getAttribute('data-stale')) === 'false',

@@ -15,8 +15,15 @@ import { isTauri } from '../inspector/mock'
 import type { ParamEntry } from '../generated-types/ParamEntry'
 import type { ParamValue } from '../generated-types/ParamValue'
 import type { LinkStatus } from '../generated-types/LinkStatus'
+import type { RuntimeClientSession } from '../generated-types/RuntimeClientSession'
+import type { OperationRef } from '../generated-types/OperationRef'
+import type { OperationStatus } from '../generated-types/OperationStatus'
+import type { ParameterEventEnvelope } from '../generated-types/ParameterEventEnvelope'
+import type { ParameterSetEcho } from '../generated-types/ParameterSetEcho'
+import type { CommandReply } from '../generated-types/CommandReply'
 import AppLogo from '../components/AppLogo'
-import { useParamsStore, type ParamMeta, type ParamsIpcEvent } from './store'
+import { useParamsStore, type ParamMeta } from './store'
+import { attachParameters, detachParameters, parameterContext, parameterError, primaryTarget, sameSession, sameTarget } from './runtime'
 import { confirmDeleteTwice } from '../util/confirmDelete'
 
 /** Refresh link state and retry an unanswered version request without reloading. */
@@ -221,8 +228,15 @@ export function ParamsApp() {
   const [connectionEpoch, setConnectionEpoch] = useState(0)
   const connectionEpochRef = useRef(0)
   const onlineRef = useRef(false)
+  const [runtimeSession, setRuntimeSession] = useState<RuntimeClientSession | null>(null)
+  const runtimeSessionRef = useRef<RuntimeClientSession | null>(null)
+  const lifetimeRef = useRef(0)
+  const [activePull, setActivePull] = useState<OperationRef | null>(null)
+  const activePullRef = useRef<OperationRef | null>(null)
+  const [cancellingPull, setCancellingPull] = useState(false)
   const readQueueRef = useRef<Promise<void>>(Promise.resolve())
-  const connected = tauri && isConnected(link)
+  const nativeConnected = tauri && isConnected(link)
+  const connected = nativeConnected && runtimeSession !== null
   const [metadataManifest, setMetadataManifest] = useState<MetadataManifest | null>(null)
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
@@ -246,6 +260,7 @@ export function ParamsApp() {
   /** Successfully applied names whose metadata says a reboot is required. */
   const [rebootNeeded, setRebootNeeded] = useState<string[]>([])
   const [rebooting, setRebooting] = useState(false)
+  const rebootRequestRef = useRef<string | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const detailRef = useRef<HTMLElement | null>(null)
   const [scrollTop, setScrollTop] = useState(0)
@@ -362,6 +377,7 @@ export function ParamsApp() {
   // link exists, or stay open through repeated reconnects on the same port.
   useEffect(() => {
     if (!tauri) return
+    const lifetime = ++lifetimeRef.current
     store.getState().resetConnection()
     readStateRef.current = new Map()
     setReadState(readStateRef.current)
@@ -369,21 +385,82 @@ export function ParamsApp() {
     let disposed = false
     let unLink: (() => void) | undefined
     let unParams: (() => void) | undefined
+    let unOperations: (() => void) | undefined
     let timer: ReturnType<typeof setInterval> | undefined
     let currentLink: LinkStatus | null = null
     let eventSequence = 0
     let polling = false
     let versionEpoch: number | null = null
+    let scopeLoadingEpoch: number | null = null
+
+    const clearScope = () => {
+      const previous = runtimeSessionRef.current
+      runtimeSessionRef.current = null
+      setRuntimeSession(null)
+      activePullRef.current = null
+      setActivePull(null)
+      setCancellingPull(false)
+      rebootRequestRef.current = null
+      setRebooting(false)
+      setRebootNeeded([])
+      if (previous) void detachParameters(previous).catch(() => {})
+    }
+
+    const resetValues = () => {
+      connectionEpochRef.current += 1
+      store.getState().resetConnection()
+      readStateRef.current = new Map()
+      setReadState(readStateRef.current)
+      readQueueRef.current = Promise.resolve()
+      setConnectionEpoch(connectionEpochRef.current)
+    }
+
+    const refreshScope = async () => {
+      if (disposed || !isConnected(currentLink)) return
+      const epoch = connectionEpochRef.current
+      if (scopeLoadingEpoch === epoch) return
+      scopeLoadingEpoch = epoch
+      try {
+        const target = await primaryTarget()
+        if (disposed || epoch !== connectionEpochRef.current) return
+        if (!target) {
+          if (runtimeSessionRef.current) { clearScope(); resetValues() }
+          return
+        }
+        const previous = runtimeSessionRef.current
+        if (previous && sameTarget(previous.target, target)) {
+          try {
+            await invoke('runtime_client_validate', { session: previous })
+            if (!disposed && sameSession(runtimeSessionRef.current, previous)) return
+          } catch { /* A refresh may have detached the previous module instance. */ }
+        }
+        if (runtimeSessionRef.current) clearScope()
+        const session = await attachParameters(target)
+        if (disposed || epoch !== connectionEpochRef.current) {
+          if (lifetimeRef.current === lifetime && !sameSession(runtimeSessionRef.current, session)) {
+            void detachParameters(session).catch(() => {})
+          }
+          return
+        }
+        runtimeSessionRef.current = session
+        setRuntimeSession(session)
+        resetValues()
+        setNotice(null)
+      } finally {
+        if (scopeLoadingEpoch === epoch) scopeLoadingEpoch = null
+      }
+    }
 
     const fetchVersion = async () => {
       const epoch = connectionEpochRef.current
-      if (disposed || !isConnected(currentLink) || store.getState().fcVersion != null || versionEpoch === epoch)
+      const session = runtimeSessionRef.current
+      if (disposed || !session || !isConnected(currentLink) || store.getState().fcVersion != null || versionEpoch === epoch)
         return
       versionEpoch = epoch
       try {
         // Rust returns Option<String>, not an object containing fcVersion.
-        const version = await invoke<string | null>('params_fc_version')
-        if (!disposed && epoch === connectionEpochRef.current && isConnected(currentLink)) {
+        const version = await invoke<string | null>('params_fc_version', { session })
+        if (!disposed && epoch === connectionEpochRef.current && sameSession(runtimeSessionRef.current, session) && isConnected(currentLink)) {
           store.setState({ fcVersion: version })
         }
       } catch {
@@ -402,17 +479,17 @@ export function ParamsApp() {
       if (!changed) return
       currentLink = next
       onlineRef.current = isConnected(next)
-      connectionEpochRef.current += 1
-      store.getState().resetConnection()
-      readStateRef.current = new Map()
-      setReadState(readStateRef.current)
-      readQueueRef.current = Promise.resolve()
+      clearScope()
+      resetValues()
       setLink(next)
-      setConnectionEpoch(connectionEpochRef.current)
       if (onlineRef.current) {
         setHadFc(true)
         setNotice(null)
-        void fetchVersion()
+        // An old version/read RPC may still be pending. New link epochs must
+        // bind and request their version independently of that poll promise.
+        void refreshScope().then(fetchVersion).catch((error) => {
+          if (!disposed) setNotice(parameterError(error))
+        })
       }
     }
 
@@ -424,8 +501,10 @@ export function ParamsApp() {
         const next = await invoke<LinkStatus | null>('link_status')
         // A slower snapshot must not undo a newer live link event.
         if (sequence === eventSequence) updateLink(next)
+        await refreshScope()
         await fetchVersion()
-      } catch {
+      } catch (error) {
+        if (!disposed && isConnected(currentLink)) setNotice(parameterError(error))
         // Retry on the next tick; explicit link events still update the page.
       } finally {
         polling = false
@@ -439,11 +518,17 @@ export function ParamsApp() {
           updateLink(e.payload)
         })
         if (disposed) { unLink(); return }
-        unParams = await listen<ParamsIpcEvent>('params_event', (e) => {
+        unParams = await listen<ParameterEventEnvelope>('params_event', (e) => {
           if (disposed || !onlineRef.current) return
+          const session = runtimeSessionRef.current
+          if (!session || !sameTarget(session.target, e.payload.target)) return
           store.getState().onEvent(e.payload)
         })
         if (disposed) { unParams(); return }
+        unOperations = await listen<OperationStatus>('params_operation', (e) => {
+          if (!disposed) handlePullStatus(e.payload)
+        })
+        if (disposed) { unOperations(); return }
         await poll()
         if (!disposed) timer = setInterval(() => void poll(), CONNECTION_POLL_MS)
       } catch {
@@ -454,9 +539,17 @@ export function ParamsApp() {
       disposed = true
       onlineRef.current = false
       connectionEpochRef.current += 1
+      const previous = runtimeSessionRef.current
+      runtimeSessionRef.current = null
+      // StrictMode reuses the component while cleanup/setup run back-to-back.
+      // Defer native detach until there is no replacement view lifetime.
+      queueMicrotask(() => {
+        if (previous && lifetimeRef.current === lifetime) void detachParameters(previous).catch(() => {})
+      })
       if (timer) clearInterval(timer)
       unLink?.()
       unParams?.()
+      unOperations?.()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tauri])
@@ -475,16 +568,17 @@ export function ParamsApp() {
   // Serialize row reads: the protocol permits one parameter transaction at a
   // time. A reconnect invalidates both queued work and delayed old replies.
   const readParameter = useCallback((name: string) => {
-    if (!tauri || !onlineRef.current) return
+    const session = runtimeSessionRef.current
+    if (!tauri || !onlineRef.current || !session) return
     if (store.getState().values.has(name) || readStateRef.current.get(name) === 'loading') return
     const epoch = connectionEpochRef.current
     readStateRef.current = new Map(readStateRef.current).set(name, 'loading')
     setReadState(readStateRef.current)
     const request = async () => {
-      if (epoch !== connectionEpochRef.current || !onlineRef.current) return
+      if (epoch !== connectionEpochRef.current || !onlineRef.current || !sameSession(runtimeSessionRef.current, session)) return
       try {
-        const entry = await invoke<ParamEntry | null>('params_read', { name })
-        if (epoch !== connectionEpochRef.current || !onlineRef.current) return
+        const entry = await invoke<ParamEntry | null>('params_read', { request: { context: parameterContext(session), name } })
+        if (epoch !== connectionEpochRef.current || !onlineRef.current || !sameSession(runtimeSessionRef.current, session)) return
         readStateRef.current = new Map(readStateRef.current).set(name, entry ? 'done' : 'missing')
         setReadState(readStateRef.current)
         if (entry) store.setState((s) => ({ values: new Map(s.values).set(name, entry) }))
@@ -492,7 +586,7 @@ export function ParamsApp() {
         if (epoch !== connectionEpochRef.current || !onlineRef.current) return
         readStateRef.current = new Map(readStateRef.current).set(name, 'missing')
         setReadState(readStateRef.current)
-        setNotice(String(e))
+        setNotice(parameterError(e))
       }
     }
     readQueueRef.current = readQueueRef.current.then(request, request)
@@ -505,7 +599,7 @@ export function ParamsApp() {
 
   useEffect(() => {
     if (selectedRef.current) readParameter(selectedRef.current)
-  }, [connectionEpoch, readParameter])
+  }, [connectionEpoch, runtimeSession, readParameter])
 
   /** Validate the draft against the metadata; returns the numeric value or
    * an error string. */
@@ -543,14 +637,15 @@ export function ParamsApp() {
   }
 
   const applyStaged = async () => {
-    if (!connected || staged.size === 0) return
+    const session = runtimeSessionRef.current
+    if (!connected || !session || staged.size === 0) return
     const epoch = connectionEpochRef.current
     setApplying(true)
     setNotice(null)
     const errors: string[] = []
     const done: string[] = []
     for (const [name, v] of staged) {
-      if (!onlineRef.current || epoch !== connectionEpochRef.current) {
+      if (!onlineRef.current || epoch !== connectionEpochRef.current || !sameSession(runtimeSessionRef.current, session)) {
         errors.push('Connection changed — remaining staged values were not applied')
         break
       }
@@ -562,15 +657,23 @@ export function ParamsApp() {
         const ptype = values.get(name)?.ptype ?? (m?.type === 'Float32' ? 'real32' : 'i32')
         const num = Number(v)
         const value = ptype === 'real32' ? { real: num } : { int: num }
-        const echo = await invoke<{ status: string }>('params_set', { name, value, ptype })
+        const echo = await invoke<ParameterSetEcho>('params_set', { request: { context: parameterContext(session), name, value, ptype } })
+        if (epoch !== connectionEpochRef.current || !sameSession(runtimeSessionRef.current, session)) {
+          errors.push(`${name}: target changed; old operation results were not applied to this draft`)
+          break
+        }
         if (echo.status === 'clamped') errors.push(`${name}: clamped`)
-        else if (echo.status === 'timeout') errors.push(`${name}: timeout`)
         else done.push(name)
       } catch (e) {
-        errors.push(`${name}: ${String(e)}`)
+        errors.push(`${name}: ${parameterError(e)}`)
+        if (epoch !== connectionEpochRef.current || !sameSession(runtimeSessionRef.current, session)) break
       }
     }
     // Remove the successfully applied names from the tray.
+    if (epoch !== connectionEpochRef.current || !sameSession(runtimeSessionRef.current, session)) {
+      setApplying(false)
+      return
+    }
     store.setState((s) => {
       const staged = new Map(s.staged)
       for (const n of done) staged.delete(n)
@@ -587,39 +690,89 @@ export function ParamsApp() {
   }
 
   const rebootFc = async () => {
-    if (!connected) return
+    const session = runtimeSessionRef.current
+    if (!connected || !session || rebootRequestRef.current) return
+    const epoch = connectionEpochRef.current
+    const request = parameterContext(session)
+    rebootRequestRef.current = request.request_id
+    const current = () => epoch === connectionEpochRef.current
+      && sameSession(runtimeSessionRef.current, session)
+      && rebootRequestRef.current === request.request_id
     setRebooting(true)
     try {
-      const result = await invoke<string>('params_reboot')
-      if (result === 'accepted')
+      const reply = await invoke<CommandReply>('params_reboot', { request })
+      if (!current()) return
+      if (!sameTarget(reply.operation.target, session.target)
+        || reply.operation.owner.client_id !== session.owner.client_id
+        || reply.operation.owner.instance_id !== session.owner.instance_id) {
+        setNotice('Reboot result belongs to a different target or client')
+        return
+      }
+      const result = reply.result
+      if (result === 'accepted') {
+        setRebootNeeded([])
         setNotice('Reboot accepted — the link will drop; re-pull after reconnect.')
-      else if (result === 'denied')
+      } else if (result === 'denied')
         // SITL denies PREFLIGHT_REBOOT_SHUTDOWN (a NuttX-only code path).
         setNotice('FC rejected the reboot (denied) — SITL does not support reboot')
       else setNotice(`Reboot result: ${result}`)
     } catch (e) {
-      setNotice(String(e))
+      if (current()) setNotice(parameterError(e))
     } finally {
-      setRebooting(false)
+      if (current()) {
+        rebootRequestRef.current = null
+        setRebooting(false)
+      }
     }
   }
 
   const pullAll = async () => {
-    if (!connected) return
+    const session = runtimeSessionRef.current
+    if (!connected || !session || activePullRef.current) return
+    const epoch = connectionEpochRef.current
     setNotice(null)
     try {
-      await invoke('params_pull')
+      const operation = await invoke<OperationRef>('params_pull', { request: parameterContext(session) })
+      if (epoch !== connectionEpochRef.current || !sameSession(runtimeSessionRef.current, session)) return
+      activePullRef.current = operation
+      setActivePull(operation)
+      store.setState({ pulling: true, progress: { received: 0, total: 0 } })
+      // A small inventory may finish before the RPC reply reaches this view.
+      const status = await invoke<OperationStatus>('params_operation_status', { session, operation })
+      handlePullStatus(status)
     } catch (e) {
-      setNotice(String(e))
+      setNotice(parameterError(e))
     }
   }
+
+  const handlePullStatus = (status: OperationStatus) => {
+    const session = runtimeSessionRef.current
+    const operation = activePullRef.current
+    if (!session || !operation || status.operation.id !== operation.id
+      || status.operation.owner.client_id !== session.owner.client_id
+      || status.operation.owner.instance_id !== session.owner.instance_id
+      || !sameTarget(status.operation.target, session.target)) return
+    if (status.phase === 'finished') {
+      activePullRef.current = null
+      setActivePull(null)
+      setCancellingPull(false)
+      store.setState({ pulling: false })
+      if (status.outcome?.kind === 'failed') setNotice(status.outcome.message)
+      else if (status.outcome?.kind === 'uncertain') setNotice(status.outcome.reason)
+      else if (status.outcome?.kind === 'cancelled') setNotice('Parameter pull cancelled')
+    } else if (status.phase === 'cancel_requested') setCancellingPull(true)
+  }
   const cancelPull = async () => {
-    if (!tauri) return
+    const session = runtimeSessionRef.current
+    const operation = activePullRef.current
+    if (!tauri || !session || !operation) return
     try {
-      await invoke('params_cancel')
-      store.setState({ pulling: false, progress: null })
+      setCancellingPull(true)
+      const status = await invoke<OperationStatus>('params_cancel', { session, operation })
+      handlePullStatus(status)
     } catch (e) {
-      setNotice(String(e))
+      setCancellingPull(false)
+      setNotice(parameterError(e))
     }
   }
 
@@ -888,13 +1041,13 @@ export function ParamsApp() {
         label: 'Mock',
         title: 'Browser mock — no flight controller',
       }
-    : !connected
+    : !nativeConnected
       ? {
           tone: 'warn' as const,
           label: hadFc ? 'FC disconnected' : 'No FC',
           title: hadFc ? 'FC heartbeat lost; the page will recover when the link returns' : 'No live flight controller heartbeat yet',
         }
-      : fcVersion == null
+      : runtimeSession == null || fcVersion == null
         ? { tone: 'warn' as const, label: 'FC connected', title: 'Waiting for AUTOPILOT_VERSION' }
         : fcVersion === metadataManifest?.firmwareVersion
           ? {
@@ -931,9 +1084,10 @@ export function ParamsApp() {
             ? `Pulling ${progress ? `${progress.received}/${progress.total}` : '…'}`
             : 'Pull all'}
         </button>
-        {pulling && (
-          <button className="p-btn" onClick={() => void cancelPull()}>
-            Cancel
+        {(pulling || activePull !== null) && (
+          <button className="p-btn" onClick={() => void cancelPull()} disabled={activePull === null || cancellingPull}
+            title={activePull ? 'Cancel this window’s parameter pull' : 'This window does not own the active pull'}>
+            {cancellingPull ? 'Cancelling…' : 'Cancel'}
           </button>
         )}
         <input
@@ -962,7 +1116,7 @@ export function ParamsApp() {
             </button>
           ))}
         </div>
-        <span className="p-status">
+        <span className="p-status" title={notice ?? undefined}>
           {notice ?? `${values.size} values${staged.size ? ` · ${staged.size} staged` : ''}`}
         </span>
       </header>

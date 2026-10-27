@@ -78,6 +78,11 @@ export default function SyncStep({
   const download = useMissionStore((s) => s.download)
   const clear = useMissionStore((s) => s.clear)
   const clearPlan = useMissionStore((s) => s.clearPlan)
+  const cancel = useMissionStore((s) => s.cancel)
+  const cancelling = useMissionStore((s) => s.cancelRequested)
+  const verifying = useMissionStore((s) => s.verifying)
+  const operation = useMissionStore((s) => s.operation)
+  const reconciliation = useMissionStore((s) => s.requiresReconciliation)
   const applyImport = useMissionStore((s) => s.applyImport)
 
   const homeAmsl = home?.[2] ?? 0
@@ -164,6 +169,7 @@ export default function SyncStep({
       )}
       <div className="flex items-stretch gap-1.5">
         <button
+          data-testid="mission-upload"
           disabled={!connected || busy || !hasItems}
           title={!connected ? t('plan.needLink') : undefined}
           onClick={() => void upload()}
@@ -172,6 +178,7 @@ export default function SyncStep({
           {t('plan.upload')}
         </button>
         <button
+          data-testid="mission-download"
           disabled={!connected || busy}
           onClick={() => void download()}
           className="rounded-md border border-line bg-panel px-2 py-1.5 text-sm hover:bg-canvas disabled:opacity-40"
@@ -180,6 +187,7 @@ export default function SyncStep({
         </button>
         <div className="relative" ref={menuRef}>
           <button
+            data-testid="mission-more"
             onClick={() => setMenuOpen((o) => !o)}
             title={t('plan.more')}
             aria-label={t('plan.more')}
@@ -195,6 +203,7 @@ export default function SyncStep({
               </MenuItem>
               <div className="my-1 border-t border-line" />
               <button
+                data-testid="mission-clear-local"
                 onClick={armPlan}
                 className={`w-full rounded px-2 py-1.5 text-left text-xs transition-colors ${
                   confirmClearPlan ? 'bg-warn text-canvas' : 'text-ink hover:bg-canvas'
@@ -203,6 +212,7 @@ export default function SyncStep({
                 {confirmClearPlan ? t('plan.confirmClearPlan') : t('plan.clearPlan')}
               </button>
               <button
+                data-testid="mission-clear-fc"
                 onClick={armFc}
                 disabled={!connected || busy}
                 title={!connected ? t('plan.needLink') : undefined}
@@ -219,25 +229,31 @@ export default function SyncStep({
 
       {/* Progress and errors render directly under the primary button. */}
       {busy ? (
-        // U13: the mission ops share one TaskProgress readout — bar, counts,
-        // elapsed. Cancelling mid-MAVLink-upload is not protocol-safe (a half
-        // mission left on the FC), so there is no cancel button by design;
-        // disconnect is the abort, and the Sync gate flags the mismatch.
+        // Cancellation retires the exact owned local exchange; the retained
+        // result separately reports whether FC state still needs read-back.
         <TaskProgress
-          label={t(`plan.status.${syncState}`)}
+          label={cancelling ? t('plan.cancellingMission') : verifying ? t('plan.sync.verifying')
+            : lastEvent?.op === 'set_current' ? t('plan.settingCurrent') : t(`plan.status.${syncState}`)}
           sent={lastEvent?.kind === 'progress' ? lastEvent.sent ?? undefined : undefined}
           total={lastEvent?.kind === 'progress' ? lastEvent.total ?? undefined : undefined}
           indeterminate={lastEvent?.kind !== 'progress'}
           startedAtMs={taskStartedAtMs}
+          onCancel={cancelling ? undefined : () => void cancel()}
         />
       ) : lastEvent && lastEvent.kind === 'failed' ? (
-        <div className="rounded border border-error px-2 py-1 text-[11px] text-error">
+        <div data-testid="mission-error" className={`rounded border px-2 py-1 text-[11px] ${reconciliation ? 'border-warn text-warn' : 'border-error text-error'}`}>
           {t('plan.failed')}: {lastEvent.message ?? '—'}
         </div>
       ) : (
         lastEvent && (
           <div className="text-[11px] text-ok">{t(`plan.done.${lastEvent.op}`)}</div>
         )
+      )}
+      {operation && (
+        <div data-testid="mission-operation-id" title={`${operation.id} · generation ${operation.target.generation}`}
+          className="mono truncate text-[10px] text-muted">
+          {t('plan.missionOperation', { operation: operation.id, generation: operation.target.generation })}
+        </div>
       )}
     </div>
   )

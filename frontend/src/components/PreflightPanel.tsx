@@ -9,7 +9,7 @@
 //              + optional note), which bypasses **only** the GCS checklist —
 //              PX4 prearm still applies (no 21196).
 //
-// The gate is enforced in core (`send_arm_disarm`); this dialog is the
+// The gate is enforced in core (`flight_command_execute`); this dialog is the
 // operator's way to see the reasons and to pass the gate with intent.
 
 import { useEffect, useState, type ReactNode } from 'react'
@@ -168,6 +168,16 @@ export default function PreflightPanel() {
   const [refresh, setRefresh] = useState(0)
 
   const open = refusal !== null || uiOpen
+  useEffect(() => {
+    if (open) return
+    setChecklist(null)
+    setTyped('')
+    setNote('')
+    setAckd(new Set())
+    setBusy(false)
+    setError(null)
+  }, [open])
+
   const close = () => {
     dismiss()
     closePanel()
@@ -218,15 +228,22 @@ export default function PreflightPanel() {
     setBusy(true)
     setError(null)
     try {
+      let accepted: boolean
       if (isBlocked) {
-        await sendArmDisarm(true, { reason, note: note.trim() === '' ? null : note.trim() })
+        accepted = await sendArmDisarm(true, { reason, note: note.trim() === '' ? null : note.trim() })
       } else {
         // The operator confirmed every `Warn` item in the panel: pass the
         // acknowledged ids so the backend's gate treats them as Pass (U5) —
         // otherwise it would re-refuse the same warnings it just asked for.
-        await sendArmDisarm(true, undefined, warnItems.map((i) => i.id))
+        accepted = await sendArmDisarm(true, undefined, warnItems.map((i) => i.id))
       }
-      close()
+      if (accepted) {
+        close()
+      } else {
+        const event = useCommandStore.getState().lastEvent
+        setError(event?.message ?? event?.result ?? t('preflight.armRefused'))
+        setBusy(false)
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
       setBusy(false)

@@ -39,6 +39,11 @@ async function openPage(initiallyConnected) {
     let listenerId = 0
     const bench = {
       calls: [],
+      generation: 1,
+      target() {
+        return { vehicle_id: 'vehicle-a', session_id: `session-${this.generation}`, link_id: '1',
+          generation: String(this.generation), mavlink_target: { system_id: 42, component_id: 1 } }
+      },
       link: { link_state: 'connected', endpoint: 'serial:/dev/ttyACM0:115200', fc_alive: alive },
       version: '1.17.0',
       nullVersions: 0,
@@ -56,11 +61,13 @@ async function openPage(initiallyConnected) {
         RTL_TYPE: { name: 'RTL_TYPE', index: 5, ptype: 'i32', value: { int: 1 } },
       },
       emit(event, payload) {
+        if (event === 'params_event') payload = { target: this.target(), operation_id: null, ...payload }
         for (const [id, listener] of listeners) {
           if (listener.event === event) callbacks.get(listener.handler)?.({ id, event, payload })
         }
       },
       setLink(connected) {
+        if (connected) this.generation += 1
         this.link = { ...this.link, fc_alive: connected }
         this.emit('link', structuredClone(this.link))
       },
@@ -82,6 +89,14 @@ async function openPage(initiallyConnected) {
         if (command === 'config_load') return null
         if (command === 'alert_snapshot') return []
         if (command === 'link_status') return structuredClone(bench.link)
+        if (command === 'runtime_targets') return bench.link.fc_alive ? [{ link_id: '1', target: bench.target(), availability: 'available',
+          heartbeat_age_ms: 0, parameter_service_available: true, roles: ['primary'], transport_owner: 'primary', endpoint: bench.link.endpoint }] : []
+        if (command === 'runtime_client_attach') return { owner: { client_id: 'client-params', instance_id: `instance-${bench.generation}` }, target: structuredClone(args.target), module_id: args.moduleId }
+        if (command === 'runtime_client_validate') {
+          if (args.session.target.generation !== String(bench.generation)) throw { code: 'target_changed' }
+          return null
+        }
+        if (command === 'runtime_client_detach') return null
         if (command === 'params_fc_version') {
           if (bench.deferVersion) {
             bench.deferVersion = false
@@ -91,14 +106,16 @@ async function openPage(initiallyConnected) {
           return bench.version // Rust Option<String> is a scalar, not {fcVersion}.
         }
         if (command === 'params_read') {
-          const entry = structuredClone(bench.entries[args.name] ?? null)
-          if (bench.deferRead === args.name) {
+          const { name, context } = args.request
+          assertContext(context)
+          const entry = structuredClone(bench.entries[name] ?? null)
+          if (bench.deferRead === name) {
             bench.deferRead = null
             return new Promise((resolve) => bench.pendingReads.push(() => resolve(entry)))
           }
           if (bench.readDelayMs > 0) {
             const delayMs = bench.readDelayMs
-            bench.delayedReads.push({ name: args.name, delayMs })
+            bench.delayedReads.push({ name, delayMs })
             await new Promise((resolve) => setTimeout(resolve, delayMs))
           }
           return entry
@@ -106,6 +123,11 @@ async function openPage(initiallyConnected) {
         if (command === 'params_cancel') return null
         return null
       },
+    }
+    function assertContext(context) {
+      if (!context?.request_id || context.session?.target?.generation !== String(bench.generation)) {
+        throw { code: 'target_changed' }
+      }
     }
   }, initiallyConnected)
   // Readiness is the rendered table. A live dev server can retain background

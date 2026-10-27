@@ -1,0 +1,5 @@
+# ts-rs emits stable spaces before some documented field line breaks. Generated
+# content is compared byte-for-byte; do not make git whitespace checks fight it.
+crates/core/bindings/*.ts -whitespace
+crates/app-tauri/bindings/*.ts -whitespace
+frontend/src/generated-types/*.ts -whitespace

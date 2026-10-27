@@ -30,6 +30,7 @@ const RETIRE_TIMEOUT: Duration = Duration::from_secs(2);
 /// The current recording, if any.
 struct Running {
     recorder: Arc<Recorder>,
+    connection_id: usize,
     /// Flipped to `true` to end the tap/alert pump tasks.
     stop: watch::Sender<bool>,
 }
@@ -107,6 +108,7 @@ impl RecorderState {
     /// Returns an error if no session is recording or durable audit fails.
     pub async fn record_force_arm(
         &self,
+        connection: &ConnectionHandle,
         items: Vec<ChecklistItemId>,
         reason: ForceArmReason,
         note: Option<String>,
@@ -115,8 +117,12 @@ impl RecorderState {
             .inner
             .lock()
             .as_ref()
+            .filter(|running| running.connection_id == connection.handle_id())
             .map(|r| r.recorder.clone())
-            .ok_or_else(|| "flight recorder is not running; forced arm was not sent".to_string())?;
+            .ok_or_else(|| {
+                "flight recorder is not running for this target; forced arm was not sent"
+                    .to_string()
+            })?;
         let audit_items = items.clone();
         let audit_note = note.clone();
         let time_utc_us = tauri::async_runtime::spawn_blocking(move || {
@@ -186,6 +192,7 @@ impl RecorderState {
         tauri::async_runtime::spawn(alert_feed(recorder.clone(), alerts, stop_rx));
         *self.inner.lock() = Some(Running {
             recorder,
+            connection_id: handle.handle_id(),
             stop: stop_tx,
         });
         Ok(())
@@ -322,8 +329,20 @@ mod tests {
     #[tokio::test]
     async fn force_arm_audit_without_a_session_is_refused() {
         let state = RecorderState::default();
+        let (connection, _events, opened) = maggcs_core::mavlink::connection::spawn_connection(
+            maggcs_core::mavlink::ConnectionConfig {
+                endpoint: maggcs_core::mavlink::Endpoint::UdpListener {
+                    addr: "127.0.0.1:0".parse().expect("loopback endpoint"),
+                },
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("isolated connection");
+        opened.await.expect("open receipt").expect("UDP opened");
         let error = state
             .record_force_arm(
+                &connection,
                 vec![ChecklistItemId::Battery],
                 ForceArmReason::SafetyOverride,
                 None,
@@ -331,6 +350,7 @@ mod tests {
             .await
             .expect_err("must not claim a forced arm was archived");
         assert!(error.contains("not running"), "{error}");
+        connection.shutdown().await;
     }
 
     #[test]

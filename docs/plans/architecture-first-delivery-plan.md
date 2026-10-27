@@ -1,8 +1,14 @@
 # Architecture-First Delivery Plan
 
 - **Language:** English | [简体中文](architecture-first-delivery-plan.zh-CN.md)
-- **Date:** 2026-10-25
-- **Status:** Proposed sequence. **Implementation is paused for owner review.**
+- **Date:** 2026-10-26
+- **Status:** Execution authorized on 2026-10-25; AF-00/01 and AF-02 through the
+  AF-02b.4b owned-flight-command slice are recorded.
+  Continued small-slice implementation is authorized without repeated approval
+  questions; engineering gates remain evidence-based.
+  The owner reaffirmed autonomous decisions and continuous small-slice execution
+  on 2026-10-26. Publish decisions/signatures and measurable acceptance before
+  implementation, then proceed under that standing authorization.
 - **Priority decision:** Architecture, demand loading, existing tools, execution and
   monitoring come first. **Flight Plan and Drape are the final feature phases.**
 - **Near-term scope:** One operational flight aircraft, retaining the existing
@@ -16,6 +22,90 @@
 
 **Review guide:** §4 phase order; §5 architecture tickets; §6 final Flight Plan/
 Drape phases; §8 acceptance; §11 resources; §14 future multi-aircraft support.
+
+**Execution record — 2026-10-25:** AF-00 ownership/lifecycle inventory,
+minimum contracts and AF-01 fixtures are in
+[the current-system inventory](../architecture/af-00-current-system.md) and
+[Runtime contracts](../architecture/runtime-contracts.md). Native/browser
+measurements and current regression results are in
+[the baseline evidence](../verification/af-00-baseline-20261025.md).
+The owner authorized continued execution and waived repeated approval questions.
+Linux/WebKitGTK is the first reference desktop; PX4 multirotor remains the
+aircraft scope. Implementation proceeds one small AF-owned slice at a time.
+
+**AF-01 checkpoint:** Explicit target/context types and the same-process read
+facade are implemented and verified. [Evidence](../verification/af-01-facade-20261025.md)
+records core 972/app 193 passing tests, strict/clippy/format checks, generated TS
+bindings and rebuilt-native RPC/close smoke. AF-02 adds operation ownership and
+cancellation; G1/G-ARCH remain their declared engineering gates.
+
+**AF-02a checkpoint:** The bounded core operation coordinator implements
+owner/target cancellation, resource conflicts, deadline/drop uncertainty and
+retained cleanup evidence. [Evidence](../verification/af-02a-operations-20261025.md)
+records core 996/app 193 passing tests and strict/clippy checks. AF-02b native
+effect/client integration remains the active work package; G1 is not closed.
+
+**AF-02b client foundation:** Native caller/client/module registration and captured
+expiry are implemented with bounded metadata and owner-only cancellation signals.
+[Evidence](../verification/af-02b-client-foundation-20261025.md) records core 998/app
+198 passing tests and strict checks. Device effect/cancel adapter wiring and G1
+qualification remain in progress.
+
+**AF-02b.2 / AF-02b.3 Parameters checkpoint:** Owner/target-bound parameter
+pull/read/set, exact cancellation and interrupted-write read-back are implemented
+and verified. [Acceptance evidence](../verification/af-02b-parameters-20261025.md)
+records core 1007/app 203 library tests, ten parameter protocol integration tests,
+three browser regressions with 16 screenshots, strict checks and a rebuilt-native
+cross-client close test (155 ms; B's write and post-close cached read both return 77).
+
+**AF-02b.4a Command/reboot checkpoint:** The existing command worker now supports
+owner/target/generation-bound transactions, cancellation retirement, bounded
+observer behavior and generation-wide ambiguous-ACK quarantine. Parameters reboot
+requires fresh disarmed/OnGround telemetry and retires the accepted target
+generation. [Acceptance evidence](../verification/af-02b-command-reboot-20261025.md)
+records core 1013/app 211 library tests, 20 UDP command and 7 native PTY ownership
+fixtures, three browser regressions with 20 retained screenshots, strict checks
+and rebuilt release artifacts. G1 remains open for the other adapters.
+
+**AF-02b.4b Flight-command checkpoint — 2026-10-26:** All eight general flight
+intents use typed owner/target/generation-bound command operations. Emergency
+admission has reserved/nonblocking capacity and native normal-command supersession.
+Takeoff/preflight/audit rechecks, partial-step uncertainty, local retry retirement,
+old UI request/reply isolation and exact Arm/Disarm labels are verified.
+[Acceptance evidence](../verification/af-02b-flight-commands-20261026.md) records
+16 native flight PTY fixtures, 268 synchronized Rust/TypeScript contracts,
+7 browser regressions with 264 passing assertions and 46 screenshots,
+1378 passing workspace tests (12 opt-in/environment-dependent cases ignored),
+all-target clippy, formatting, 17 frontend static gates, production frontend and
+workspace release builds. G1 remains open for Mission/Shell/Logs/Motor and the
+complete cross-adapter matrix.
+
+**AF-02b.4 Mission checkpoint — 2026-10-26:** Existing upload, download, clear
+and set-current now return typed terminal replies from the captured single Mission
+worker. Exact cancellation/status, generation-bound writes, ambiguous-reply
+quarantine, bounded observation, target/current events and sent-snapshot read-back
+are implemented. The UI preserves newer edits/local clear, requires read-back
+before reporting sync, coalesces passive current validation, and never redirects
+old intent to a replacement target. [Acceptance evidence](../verification/af-02b-mission-20261026.md)
+records 9 owned UDP and 9 native PTY cases, 24 store scenarios, 301 browser
+assertions with 57 screenshots, 277 synchronized generated contracts, 1413
+passing workspace tests (12 ignored opt-ins), strict/static checks and rebuilt
+production/release artifacts.
+G1 remains open for Shell/Logs/Motor and the final cross-adapter matrix.
+
+| Active AF-02b slices | Status |
+| --- | --- |
+| AF-02b.2 — Parameters owned transfer/write implementation | Complete |
+| AF-02b.3 — Cross-client/native-close regression, screenshots and documentation | Complete |
+| AF-02b.4a — Command primitive and Parameters reboot | Complete |
+| AF-02b.4b — General flight Command migration and acceptance | Complete within software scope |
+| AF-02b.4 — Mission adapter and acceptance | Complete within software scope |
+| AF-02b.4 — Shell/Logs / Motor adapters and cross-adapter matrix | Pending; G1 open |
+
+AF-06 retains the full Parameters Module Host/SDK and batch-reconciliation
+acceptance. The Command checkpoints do not imply the remaining legacy effect
+callers are migrated. The [Mission contract](../architecture/af-02b4-mission-ownership-proposal.md)
+is implemented; Shell/Logs is the next interface/risk slice.
 
 ## 1. Outcome and ordering decision
 

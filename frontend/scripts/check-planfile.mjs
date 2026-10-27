@@ -126,7 +126,7 @@ check('doJumpId survives an unedited round trip', () => {
   eq(out.mission.items[1].doJumpId, surveyRaw.doJumpId, 'survey doJumpId')
 })
 
-check('null params are coerced to finite numbers (finding 4)', () => {
+check('null parameters retain the MAVLink unspecified sentinel across import/export', () => {
   const plan = {
     fileType: 'Plan',
     version: 1,
@@ -145,7 +145,14 @@ check('null params are coerced to finite numbers (finding 4)', () => {
   }
   const imp = parsePlan(JSON.stringify(plan))
   eq(imp.items.length, 1, 'item parsed')
-  imp.items[0].params.forEach((p, i) => assert(Number.isFinite(p), `param ${i} is ${p}`))
+  eq(imp.items[0].params[0], null, 'unspecified parameter stays null')
+  eq(imp.items[0].params[1], 2, 'finite parameter preserved')
+  const waypoint = waypointFromItem(imp.items[0], 0)
+  assert(Number.isNaN(waypoint.params[3]), 'planned yaw remains unspecified')
+  const compiled = compileWaypoints([waypoint], 'relative', 0)
+  eq(itemsHash(compiled), itemsHash(imp.items), 'null/NaN hashes retain the same wire meaning')
+  const exported = JSON.parse(buildPlan(compiled, 'relative'))
+  eq(exported.mission.items[0].params[3], null, 'export preserves unspecified yaw')
 })
 
 check('itemsHash ignores seq and current (finding 5)', () => {

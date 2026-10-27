@@ -1,5 +1,6 @@
 .main-topbar {
   --topbar-control-h: 32px;
+  --topbar-command-status-max-w: 240px;
   display: flex;
   flex: none;
   align-items: center;
@@ -12,6 +13,12 @@
 
 .main-topbar button {
   white-space: nowrap;
+}
+
+/* Native errors are bounded on the control bar; the complete reason remains
+   available in the status tooltip and preflight panel. */
+.main-topbar [data-testid='command-status'] {
+  max-width: var(--topbar-command-status-max-w);
 }
 
 .topbar-app-group,
@@ -339,6 +346,7 @@
 
 @media (max-width: 1100px) {
   .main-topbar {
+    --topbar-command-status-max-w: 144px;
     gap: 6px;
     padding: 0 8px;
   }

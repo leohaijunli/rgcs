@@ -1,8 +1,33 @@
 # 架构优先实施计划
 
 - **语言：** [English](architecture-first-delivery-plan.md) | 简体中文
-- **日期：** 2026-10-25
-- **状态：** 实施顺序提案。**当前暂停实施，等待所有者 review。**
+- **日期：** 2026-10-26
+- **状态：** Execution authorized on 2026-10-25; AF-00 baseline recorded.
+  Small-slice implementation continues under owner authorization and the existing
+  engineering gates. See the [execution inventory](../architecture/af-00-current-system.md),
+  [Runtime contracts](../architecture/runtime-contracts.md) and
+  [measured baseline](../verification/af-00-baseline-20261025.md).
+  AF-01 target/read-facade checkpoint is implemented and verified:
+  [delivery evidence](../verification/af-01-facade-20261025.md).
+  AF-02a core coordination is verified; AF-02b native integration is active:
+  [operation checkpoint](../verification/af-02a-operations-20261025.md).
+  AF-02b.2 Parameters ownership and AF-02b.3 cross-client/native-close regression,
+  screenshots and documentation are complete:
+  [acceptance evidence](../verification/af-02b-parameters-20261025.md).
+  AF-02b.4a Command 所属操作和 Parameters 重启接入已实现并通过验收：
+  [验收证据](../verification/af-02b-command-reboot-20261025.md)。
+  AF-02b.4b general flight Command migration is complete within software scope:
+  [acceptance evidence](../verification/af-02b-flight-commands-20261026.md).
+  Verified: 16 native flight fixtures, 268 synchronized generated contracts,
+  264 browser assertions / 46 screenshots, 1378 workspace tests, strict checks
+  and production/release builds. Mission/Shell/Logs/Motor and the complete adapter
+  matrix remain pending; G1 stays open. The
+  [Mission interface proposal](../architecture/af-02b4-mission-ownership-proposal.md)
+  is implemented and accepted in software scope:
+  [evidence](../verification/af-02b-mission-20261026.md). Upload/download/clear/
+  set-current, exact cancellation, sent-snapshot read-back and stale-target/editor
+  isolation are verified. Shell/Logs/Motor and the cross-adapter matrix remain;
+  G1 stays open.
 - **优先级决定：** 先做架构、按需加载、现有工具、执行与监控；**Flight Plan 和 Drape 放到最后的功能阶段。**
 - **近期范围：** 单个作业飞行器，保留既有专用台架、SITL 来源和独立基站角色。未来多机兼容仅作为接口设计考虑，不列入近期功能开发包。
 - **顺序依据：** 本文替代此前 Survey／工具方案中的实施排序；原功能设计和 BL／SW／TM 编号继续作为参考。

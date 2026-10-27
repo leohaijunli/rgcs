@@ -9,6 +9,17 @@ import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import type { GeoPoint } from '../generated-types/GeoPoint'
 import type { MissionItem } from '../generated-types/MissionItem'
+import type { MissionReply } from '../generated-types/MissionReply'
+import type { MissionRequestContext } from '../generated-types/MissionRequestContext'
+import type { MissionProgressEnvelope } from '../generated-types/MissionProgressEnvelope'
+import type { MissionCurrentSnapshot } from '../generated-types/MissionCurrentSnapshot'
+import type { MissionUploadRequest } from '../generated-types/MissionUploadRequest'
+import type { MissionSetCurrentRequest } from '../generated-types/MissionSetCurrentRequest'
+import type { OperationRef } from '../generated-types/OperationRef'
+import type { OperationStatus } from '../generated-types/OperationStatus'
+import type { RuntimeClientSession } from '../generated-types/RuntimeClientSession'
+import { isCurrentMissionSession, missionContext, missionFailure, resetMissionRuntime } from '../desktop/missionRuntime'
+import { operationMatchesSession, sameRuntimeSession, sameRuntimeTarget } from '../desktop/flightRuntime'
 import type { PatternLine } from '../generated-types/PatternLine'
 import type { PatternStats } from '../generated-types/PatternStats'
 import type { PatternPlan } from '../generated-types/PatternPlan'
@@ -95,7 +106,7 @@ export interface PlanSnapshot {
   selectedSeq: number | null
 }
 
-/** Payload of the backend `mission` event. */
+/** Local presentation event derived from one scoped invocation/observation. */
 export interface MissionEventPayload {
   op: 'upload' | 'download' | 'clear' | 'set_current' | 'mission'
   kind: 'progress' | 'completed' | 'current_changed' | 'failed'
@@ -111,6 +122,10 @@ interface MissionState {
   selectedSeq: number | null
   altitudeMode: AltitudeMode
   busy: boolean
+  operation: OperationRef | null
+  cancelRequested: boolean
+  requiresReconciliation: boolean
+  currentReceivedAtMs: number | null
   lastEvent: MissionEventPayload | null
   syncState: 'idle' | 'uploading' | 'downloading' | 'clearing'
   /** True when the plan was edited since it was last known to match the FC. */
@@ -203,8 +218,10 @@ interface MissionState {
   /** The heartbeat came back: re-read the mission state the FC holds (L3). */
   linkRestored: () => void
   setCurrent: (seq: number) => Promise<void>
-  handleEvent: (e: MissionEventPayload) => void
-  handlePlan: (items: MissionItem[]) => void
+  cancel: () => Promise<void>
+  handleOperation: (status: OperationStatus) => void
+  handleProgress: (progress: MissionProgressEnvelope) => void
+  handleCurrent: (current: MissionCurrentSnapshot) => void
   /** Editable waypoints compiled to the current wire frame. */
   compiled: () => MissionItem[]
   /** Compiled waypoints plus complex-item children, in flyable order. */
@@ -300,6 +317,10 @@ export const useMissionStore = create<MissionState>((set, get) => ({
   drapePreview: null,
   infeasibleAcceptedFor: null,
   busy: false,
+  operation: null,
+  cancelRequested: false,
+  requiresReconciliation: false,
+  currentReceivedAtMs: null,
   lastEvent: null,
   syncState: 'idle',
   dirty: false,
@@ -552,11 +573,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       planCleared: true,
     })),
 
-  // The mission service task exits with its connection (core::mission::service),
-  // so a dead link never emits the terminal event. Without this the panel would
-  // sit on "Uploading…" with every button disabled.
-  linkLost: () =>
-    set({ busy: false, verifying: false, syncState: 'idle' }),
+  linkLost: () => retireMissionScope(),
 
   // Reconnect (L3, plan §4): mode and armed state ride on the heartbeat and
   // resume by themselves, but the *mission* state is only known from an
@@ -567,182 +584,33 @@ export const useMissionStore = create<MissionState>((set, get) => ({
   linkRestored: () => {
     const s = get()
     if (s.busy || s.verifying) return
-    if (s.lastSyncedHash) void get().verifyFc()
-    else if (s.waypoints.length === 0 && s.blocks.length === 0 && !s.planCleared) {
+    if (s.waypoints.length > 0 || s.blocks.length > 0) {
+      void runMission('download', { purpose: 'verify', expectedHash: itemsHash(s.flyable()) })
+    } else if (!s.planCleared) {
       void get().download()
     }
   },
 
   upload: async () => {
-    const items = get().flyable()
-    // Nothing to fly: the panel disables the button, but a clear-then-upload
-    // race would otherwise leave `busy` set forever.
-    if (items.length === 0) return
-    set({ busy: true, syncState: 'uploading', fcMatches: null })
-    try {
-      await invoke('mission_upload', { items })
-    } catch (err) {
-      set({
-        busy: false,
-        syncState: 'idle',
-        lastEvent: {
-          op: 'mission',
-          kind: 'failed',
-          sent: 0,
-          total: 0,
-          seq: 0,
-          message: String(err),
-        },
-      })
-    }
+    await runMission('upload')
   },
 
   download: async () => {
-    set({ busy: true, syncState: 'downloading', verifying: false })
-    try {
-      await invoke('mission_download')
-    } catch (err) {
-      set({
-        busy: false,
-        syncState: 'idle',
-        lastEvent: {
-          op: 'mission',
-          kind: 'failed',
-          sent: 0,
-          total: 0,
-          seq: 0,
-          message: String(err),
-        },
-      })
-    }
+    await runMission('download')
   },
 
   clear: async () => {
-    set({ busy: true, syncState: 'clearing' })
-    try {
-      await invoke('mission_clear')
-    } catch (err) {
-      set({
-        busy: false,
-        syncState: 'idle',
-        lastEvent: {
-          op: 'mission',
-          kind: 'failed',
-          sent: 0,
-          total: 0,
-          seq: 0,
-          message: String(err),
-        },
-      })
-    }
+    await runMission('clear')
   },
 
   setCurrent: async (seq) => {
-    try {
-      await invoke('mission_set_current', { seq })
-    } catch {
-      /* best-effort */
-    }
+    await runMission('set_current', { seq })
   },
 
-  handleEvent: (e) => {
-    set((s) => {
-      const done = e.kind === 'completed' || e.kind === 'failed'
-      const busy = done ? false : s.busy
-      const syncState: MissionState['syncState'] = done
-        ? 'idle'
-        : e.op === 'upload' && e.kind === 'progress'
-          ? 'uploading'
-          : e.op === 'download' && e.kind === 'progress'
-            ? 'downloading'
-            : s.syncState
-      const patch: Partial<MissionState> = { lastEvent: e, busy, syncState }
-      if (e.kind === 'current_changed') patch.currentSeq = e.seq
-      if (e.kind === 'failed') {
-        // A failed operation ends any read-back too: without this a lost
-        // `mission_plan` left `verifying` set and swallowed the next download.
-        patch.verifying = false
-      }
-      if (e.kind === 'completed' && e.op === 'upload') {
-        // We believe the FC now holds exactly our plan; confirm with a
-        // read-back download (issues.md #15).
-        patch.dirty = false
-        patch.lastSyncedHash = itemsHash(
-          orderedMissionItems(
-            compileWaypoints(s.waypoints, s.altitudeMode, homeAmsl(s.home), anchorCompensationM()),
-            s.blocks,
-            s.planBase ?? undefined,
-          ),
-        )
-        patch.fcMatches = true
-      }
-      if (e.kind === 'completed' && e.op === 'clear') {
-        // The FC dropped its mission: there is no baseline any more. The
-        // local plan (if any) is simply unsynced again — reporting "synced"
-        // here is exactly the stale-state false positive issues.md #33/#38
-        // describe (the panel claimed sync while the FC held nothing).
-        patch.lastSyncedHash = null
-        patch.fcMatches = null
-      }
-      return patch
-    })
-    if (e.kind === 'completed' && e.op === 'upload') {
-      void get().verifyFc()
-    }
-    // The FC is flying a mission this plan does not know about (typical:
-    // the mission came from QGC or a previous session — the local plan is
-    // memory-only and a restart empties it). Fetch it once so the Fly view
-    // can show progress. Safe by construction: it only fires while the
-    // local plan is empty, so nothing the operator built can be clobbered.
-    if (
-      e.kind === 'current_changed' &&
-      get().waypoints.length === 0 &&
-      get().blocks.length === 0 &&
-      !get().busy &&
-      !get().verifying &&
-      // After an explicit "Clear local plan" the panel must stay empty: the
-      // FC's still-loaded mission is not fetched back over an intentional
-      // clear (operator report).
-      !get().planCleared
-    ) {
-      void get().download()
-    }
-  },
-
-  handlePlan: (items) => {
-    set((s) => {
-      if (s.verifying) {
-        return {
-          verifying: false,
-          fcMatches: itemsHash(items) === s.lastSyncedHash,
-          busy: false,
-          syncState: 'idle' as const,
-        }
-      }
-      const anchor = homeAmsl(s.home)
-      const mode = items.length > 0 ? modeFromFrame(items[0].frame) : null
-      const current = items.findIndex((it) => it.current)
-      return {
-        currentSeq: current >= 0 ? current : null,
-        waypoints: items.map((it) => waypointFromItem(it, anchor)),
-        blocks: [],
-        planBase: null,
-        lastPattern: null,
-        ...(mode ? { altitudeMode: mode } : {}),
-        dirty: false,
-        lastSyncedHash: itemsHash(items),
-        fcMatches: true,
-        busy: false,
-        syncState: 'idle' as const,
-        selectedSeq: null,
-        planCleared: false,
-        // A plan fetched from the FC is a new baseline, not an edit: it resets
-        // history so undo cannot resurrect a pre-download plan (U8).
-        undoStack: [],
-        redoStack: [],
-      }
-    })
-  },
+  cancel: () => cancelMission(),
+  handleOperation: (status) => applyMissionStatus(status),
+  handleProgress: (progress) => applyMissionProgress(progress),
+  handleCurrent: (current) => enqueueMissionCurrent(current),
 
   compiled: () => {
     const s = get()
@@ -805,16 +673,12 @@ export const useMissionStore = create<MissionState>((set, get) => ({
     }),
 
   verifyFc: async () => {
-    if (!get().lastSyncedHash) return
-    set({ verifying: true })
-    try {
-      await invoke('mission_download')
-    } catch {
-      set({ verifying: false, fcMatches: false })
-    }
+    const expectedHash = get().lastSyncedHash
+    if (expectedHash) await runMission('download', { purpose: 'verify', expectedHash, expectedSession: missionSession ?? undefined })
   },
 
-  reset: () =>
+  reset: () => {
+    retireMissionScope()
     set({
       waypoints: [],
       selectedSeq: null,
@@ -838,8 +702,251 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       redoStack: [],
       // A true fresh boot: the FC's running mission may be auto-fetched.
       planCleared: false,
-    }),
+    })
+  },
 }))
+
+type MissionKind = 'upload' | 'download' | 'clear' | 'set_current'
+const MAX_MISSION_SEQUENCE = 65535
+interface MissionOptions { seq?: number; purpose?: 'explicit' | 'verify' | 'observe'; expectedHash?: string; expectedSession?: RuntimeClientSession }
+interface PendingMission {
+  kind: MissionKind; epoch: number; inputKey: string; options: MissionOptions;
+  context: MissionRequestContext | null; operation: OperationRef | null;
+  items: MissionItem[]; sentHash: string | null; currentAtStart: number | null;
+  initialMatch: boolean | null; initialHash: string | null;
+  dispatched: boolean; cancelRequested: boolean; cancelSent: boolean;
+}
+let pendingMission: PendingMission | null = null
+let missionSession: RuntimeClientSession | null = null
+let missionEpoch = 0
+let queuedCurrent: MissionCurrentSnapshot | null = null
+let observingCurrent = false
+
+function editorKey(state: MissionState): string {
+  return JSON.stringify([state.waypoints, state.blocks, state.home, state.planBase, state.altitudeMode,
+    state.planCleared, state.patternCenter, state.lastPattern])
+}
+function activeMission(request: PendingMission): boolean {
+  return pendingMission === request && request.epoch === missionEpoch
+}
+function localEvent(op: MissionKind, kind: MissionEventPayload['kind'], message: string | null = null): MissionEventPayload {
+  return { op, kind, sent: 0, total: 0, seq: 0, message }
+}
+function retireMissionScope(resetRuntime = true): void {
+  missionEpoch += 1
+  pendingMission = null
+  missionSession = null
+  queuedCurrent = null
+  if (resetRuntime) resetMissionRuntime()
+  useMissionStore.setState((state) => ({ busy: false, verifying: false, syncState: 'idle', operation: null,
+    cancelRequested: false, requiresReconciliation: false, currentSeq: null, currentReceivedAtMs: null,
+    lastSyncedHash: null, fcMatches: null, lastEvent: null,
+    dirty: state.waypoints.length > 0 || state.blocks.length > 0 }))
+}
+
+function applyMissionStatus(status: OperationStatus): void {
+  const request = pendingMission
+  if (!request || !activeMission(request) || !request.context
+    || status.request_id !== request.context.request_id
+    || !isCurrentMissionSession(request.context.session)
+    || !operationMatchesSession(status.operation, request.context.session)) return
+  if (request.operation && request.operation.id !== status.operation.id) return
+  request.operation = status.operation
+  useMissionStore.setState({ operation: status.operation })
+  if (status.stop_reason === 'target_changed') { retireMissionScope(); return }
+  if (request.cancelRequested) void cancelExactMission(request)
+}
+
+function applyMissionProgress(progress: MissionProgressEnvelope): void {
+  const request = pendingMission
+  if (!request || !activeMission(request) || !request.context
+    || progress.request_id !== request.context.request_id
+    || !isCurrentMissionSession(request.context.session)
+    || !operationMatchesSession(progress.operation, request.context.session)
+    || (request.operation !== null && request.operation.id !== progress.operation.id)) return
+  request.operation = progress.operation
+  useMissionStore.setState({ operation: progress.operation,
+    lastEvent: { ...localEvent(request.kind, 'progress'), sent: progress.sent, total: progress.total } })
+  if (request.cancelRequested) void cancelExactMission(request)
+}
+
+async function cancelExactMission(request: PendingMission): Promise<void> {
+  if (!activeMission(request) || !request.context || !request.operation || request.cancelSent) return
+  request.cancelSent = true
+  try {
+    await invoke<OperationStatus>('mission_cancel', { session: request.context.session, operation: request.operation })
+  } catch (error) {
+    if (activeMission(request)) {
+      request.cancelSent = false
+      request.cancelRequested = false
+      useMissionStore.setState({ cancelRequested: false, lastEvent: localEvent(request.kind, 'failed', missionFailure(error).message) })
+    }
+  }
+}
+
+async function cancelMission(): Promise<void> {
+  const request = pendingMission
+  if (!request || !activeMission(request) || request.cancelRequested) return
+  request.cancelRequested = true
+  useMissionStore.setState({ cancelRequested: true })
+  if (!request.dispatched) {
+    pendingMission = null
+    useMissionStore.setState({ busy: false, verifying: false, syncState: 'idle', cancelRequested: false, operation: null,
+      lastEvent: localEvent(request.kind, 'failed', 'Mission cancelled before dispatch') })
+    return
+  }
+  await cancelExactMission(request)
+}
+
+function finishMissionFailure(request: PendingMission, error: unknown): void {
+  if (!activeMission(request)) return
+  const failure = missionFailure(error)
+  pendingMission = null
+  const definitelyUnsent = ['resource_busy', 'busy', 'invalid_request', 'duplicate_request', 'already_submitted', 'capacity_exceeded'].includes(failure.code ?? '')
+  useMissionStore.setState((state) => ({ busy: false, verifying: false, syncState: 'idle', cancelRequested: false,
+    requiresReconciliation: failure.reconciliation, lastEvent: localEvent(request.kind, 'failed', failure.message),
+    fcMatches: definitelyUnsent && editorKey(state) === request.inputKey ? request.initialMatch : null,
+    lastSyncedHash: failure.reconciliation ? null : request.initialHash }))
+}
+
+async function validateMissionReply(request: PendingMission): Promise<boolean> {
+  if (!activeMission(request) || !request.context) return false
+  if (!isCurrentMissionSession(request.context.session)) { retireMissionScope(); return false }
+  try {
+    await invoke('runtime_client_validate', { session: request.context.session })
+    return activeMission(request) && isCurrentMissionSession(request.context.session)
+  } catch {
+    if (activeMission(request)) retireMissionScope()
+    return false
+  }
+}
+
+async function runMission(kind: MissionKind, options: MissionOptions = {}): Promise<void> {
+  const state = useMissionStore.getState()
+  if (pendingMission || state.busy || state.verifying) return
+  const wireItems = kind === 'upload' ? structuredClone(state.flyable()).map((item, seq) => ({ ...item,
+    seq, current: seq === 0, params: item.params.map((value) => typeof value === 'number' && Number.isNaN(value) ? null : value) })) : []
+  if (kind === 'upload' && wireItems.length === 0) return
+  const request: PendingMission = { kind, options, epoch: missionEpoch, inputKey: editorKey(state), context: null, operation: null,
+    items: wireItems, sentHash: kind === 'upload' ? itemsHash(wireItems) : null, currentAtStart: state.currentReceivedAtMs,
+    initialMatch: state.fcMatches, initialHash: state.lastSyncedHash, dispatched: false, cancelRequested: false, cancelSent: false }
+  pendingMission = request
+  useMissionStore.setState({ busy: true, verifying: options.purpose === 'verify', operation: null,
+    cancelRequested: false, requiresReconciliation: false, lastEvent: localEvent(kind, 'progress'),
+    syncState: kind === 'upload' ? 'uploading' : kind === 'download' ? 'downloading' : kind === 'clear' ? 'clearing' : 'idle' })
+  try {
+    if (kind === 'upload' && state.drapeError === VERTICAL_DATUM_UNVERIFIED_ERROR) throw new Error(VERTICAL_DATUM_UNVERIFIED_ERROR)
+    if (kind === 'upload' && wireItems.some((item) => !Number.isFinite(item.z)
+      || item.params.some((value) => value !== null && !Number.isFinite(value)))) throw new Error('Mission contains non-finite wire values')
+    if (kind === 'set_current' && (!Number.isInteger(options.seq) || options.seq! < 0 || options.seq! > MAX_MISSION_SEQUENCE)) throw new Error('Mission sequence is outside the u16 wire range')
+    const context = await missionContext()
+    if (!activeMission(request)) return
+    if ((missionSession && !sameRuntimeSession(missionSession, context.session))
+      || (options.expectedSession && !sameRuntimeSession(options.expectedSession, context.session))) {
+      retireMissionScope(false)
+      missionSession = context.session
+      useMissionStore.setState({ lastEvent: localEvent(kind, 'failed', 'The mission target changed; issue a fresh request for the current target') })
+      return
+    }
+    missionSession = context.session
+    request.context = context
+    await invoke('runtime_client_validate', { session: context.session })
+    if (!activeMission(request)) return
+    request.dispatched = true
+    const input: MissionRequestContext | MissionUploadRequest | MissionSetCurrentRequest = kind === 'upload'
+      ? { context, items: wireItems } : kind === 'set_current' ? { context, seq: options.seq! } : context
+    const reply = await invoke<MissionReply>(`mission_${kind}`, { request: input })
+    if (!await validateMissionReply(request)) return
+    const expectedKind = kind === 'upload' ? 'uploaded' : kind === 'download' ? 'downloaded' : kind === 'clear' ? 'cleared' : 'current'
+    if (!operationMatchesSession(reply.operation, context.session) || reply.result.kind !== expectedKind
+      || (reply.result.kind === 'uploaded' && reply.result.count !== wireItems.length)
+      || (request.operation !== null && request.operation.id !== reply.operation.id)) {
+      finishMissionFailure(request, new Error('Mission reply does not match the original operation/target'))
+      return
+    }
+    pendingMission = null
+    useMissionStore.setState({ busy: false, verifying: false, syncState: 'idle', cancelRequested: false,
+      operation: reply.operation, lastEvent: localEvent(kind, 'completed') })
+    switch (reply.result.kind) {
+      case 'uploaded': {
+        const expectedHash = request.sentHash!
+        useMissionStore.setState((state) => ({ lastSyncedHash: expectedHash, fcMatches: null,
+          dirty: state.planCleared || editorKey(state) !== request.inputKey }))
+        if (!useMissionStore.getState().planCleared) void runMission('download', { purpose: 'verify', expectedHash, expectedSession: context.session })
+        break
+      }
+      case 'downloaded': {
+        const downloaded = reply.result.items
+        const current = useMissionStore.getState()
+        if (options.purpose === 'verify') {
+          const matches = itemsHash(downloaded) === options.expectedHash
+          const localMatches = itemsHash(current.flyable()) === options.expectedHash && !current.planCleared
+          useMissionStore.setState({ fcMatches: !matches ? false : localMatches ? true : null,
+            lastSyncedHash: matches ? options.expectedHash ?? null : null,
+            dirty: !localMatches || editorKey(current) !== request.inputKey })
+        } else if (editorKey(current) !== request.inputKey) {
+          useMissionStore.setState({ fcMatches: null, lastEvent: localEvent('download', 'failed', 'Local plan changed during download; received items were not applied') })
+        } else {
+          const mode = downloaded.length > 0 ? modeFromFrame(downloaded[0].frame) : null
+          const selected = downloaded.findIndex((item) => item.current)
+          useMissionStore.setState({ waypoints: downloaded.map((item) => waypointFromItem(item, homeAmsl(current.home))),
+            blocks: [], planBase: null, lastPattern: null, ...(mode ? { altitudeMode: mode } : {}), dirty: false,
+            lastSyncedHash: itemsHash(downloaded), fcMatches: true, selectedSeq: null, planCleared: false,
+            currentSeq: current.currentReceivedAtMs === request.currentAtStart ? selected >= 0 ? selected : null : current.currentSeq,
+            undoStack: [], redoStack: [] })
+        }
+        break
+      }
+      case 'cleared': useMissionStore.setState({ lastSyncedHash: null, fcMatches: null }); break
+      case 'current':
+        if (reply.result.seq !== options.seq) {
+          useMissionStore.setState({ lastEvent: localEvent(kind, 'failed', 'The FC did not confirm the requested current sequence') })
+        } else if (useMissionStore.getState().currentReceivedAtMs === request.currentAtStart) {
+          useMissionStore.setState({ currentSeq: reply.result.seq })
+        }
+        break
+    }
+  } catch (error) {
+    if (request.context && request.dispatched && !await validateMissionReply(request)) return
+    finishMissionFailure(request, error)
+  }
+}
+
+async function observeMissionCurrent(current: MissionCurrentSnapshot): Promise<void> {
+  const epoch = missionEpoch
+  try {
+    const context = await missionContext()
+    if (epoch !== missionEpoch || !sameRuntimeTarget(current.target, context.session.target)) return
+    await invoke('runtime_client_validate', { session: context.session })
+    if (epoch !== missionEpoch || !isCurrentMissionSession(context.session)) return
+    if (missionSession && !sameRuntimeSession(missionSession, context.session)) retireMissionScope(false)
+    missionSession = context.session
+    const state = useMissionStore.getState()
+    if (state.currentReceivedAtMs !== null && current.received_at_ms <= state.currentReceivedAtMs) return
+    useMissionStore.setState({ currentSeq: current.seq, currentReceivedAtMs: current.received_at_ms })
+    if (state.waypoints.length === 0 && state.blocks.length === 0 && !state.planCleared && !pendingMission && !state.busy && !state.verifying) {
+      void runMission('download', { purpose: 'observe', expectedSession: context.session })
+    }
+  } catch { /* A retired source observation has no publication authority. */ }
+}
+
+function enqueueMissionCurrent(current: MissionCurrentSnapshot): void {
+  if (queuedCurrent === null || current.received_at_ms > queuedCurrent.received_at_ms) queuedCurrent = current
+  if (observingCurrent) return
+  observingCurrent = true
+  void (async () => {
+    try {
+      while (queuedCurrent !== null) {
+        const next = queuedCurrent
+        queuedCurrent = null
+        await observeMissionCurrent(next)
+      }
+    } finally {
+      observingCurrent = false
+      if (queuedCurrent !== null) enqueueMissionCurrent(queuedCurrent)
+    }
+  })()
+}
 
 /** The EKF-origin bias measured by the landed self-calibration (δ): the
  * upload subtracts it from every coordinate item so the vehicle's TRUE

@@ -190,6 +190,7 @@ export default {
     cancel: 'Cancel',
     working: 'Working…',
     failed: 'Failed — {{message}}',
+    armRefused: 'The arm command was not accepted.',
     group: {
       link: 'Link',
       navigation: 'Navigation',
@@ -598,6 +599,9 @@ export default {
     },
     importUnsupported: 'Unsupported items skipped: {{items}}',
     goTo: 'Set current',
+    cancellingMission: 'Cancelling local mission retries…',
+    settingCurrent: 'Confirming the active waypoint…',
+    missionOperation: 'Operation {{operation}} · generation {{generation}}',
     failed: 'Mission failed',
     mode: {
       relative: 'HOME-rel',

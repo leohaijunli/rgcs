@@ -3530,7 +3530,7 @@ mod start_refusal_tests {
         );
         let (command, _command_events) = CommandService::spawn(handle.clone(), 1, 1);
         state.set_primary_link(ActiveLink {
-            id: LinkId::next(),
+            id: LinkId::next().expect("link ID"),
             connection: handle,
             hub,
             mission,
@@ -4792,7 +4792,7 @@ mod main_sitl_feed_tests {
         );
         let (command, _) = CommandService::spawn(handle.clone(), 1, 1);
         state.set_primary_link(ActiveLink {
-            id: LinkId::next(),
+            id: LinkId::next().expect("link ID"),
             connection: handle.clone(),
             hub,
             mission,

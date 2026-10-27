@@ -7,49 +7,9 @@
 // runtime in Node) and drives plan edits through the undo/redo stacks. The
 // regression guard is the round-trip: edit → undo restores the *prior* plan →
 // redo restores the edit; a fresh edit after an undo drops the redo branch.
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { build } from 'esbuild'
-
-const here = dirname(fileURLToPath(import.meta.url))
-const srcDir = join(here, '..', 'src')
-
-const tauriStub = {
-  name: 'stub-tauri',
-  setup(build) {
-    build.onResolve({ filter: /^@tauri-apps\// }, (args) => ({
-      path: args.path,
-      namespace: 'tauri-stub',
-    }))
-    build.onLoad({ filter: /.*/, namespace: 'tauri-stub' }, () => ({
-      contents:
-        'export const readTextFile=async()=>"";export const writeTextFile=async()=>{};' +
-        'export const open=async()=>null;export const save=async()=>null;export const invoke=async()=>{};' +
-        'export const listen=async()=>()=>{};',
-      loader: 'js',
-    }))
-  },
-}
-
-async function bundle(entry) {
-  const out = join(await mkdtemp(join(tmpdir(), 'maggcs-undo-')), 'mod.mjs')
-  await build({
-    entryPoints: [join(srcDir, entry)],
-    outfile: out,
-    bundle: true,
-    format: 'esm',
-    platform: 'neutral',
-    plugins: [tauriStub],
-    logLevel: 'silent',
-  })
-  const mod = await import(`file://${out}`)
-  await rm(dirname(out), { recursive: true, force: true })
-  return mod
-}
-
-const { useMissionStore } = await bundle('stores/mission.ts')
+import { missionFixture, waitUntil } from './mission-store-fixture.mjs'
+const fixture = await missionFixture()
+const useMissionStore = fixture.store
 
 const failures = []
 let passed = 0
@@ -167,14 +127,16 @@ await check('undo of an inserted pattern removes the whole block', () => {
   eq(store().lastPattern, null, 'pattern memory restored to empty')
 })
 
-await check('a plan fetched from the FC resets history', () => {
+await check('a plan fetched from the FC resets history', async () => {
   reset()
   store().addWaypointAt(48.6493, -123.3982)
   assert(store().undoStack.length > 0, 'history present before download')
-  store().handlePlan([
+  const promise = store().download()
+  await waitUntil(() => fixture.pending.some((entry) => entry.command === 'mission_download'))
+  fixture.resolve('mission_download', { kind: 'downloaded', items: [
     {
       command: 16,
-      frame: 6,
+      frame: 'global_int',
       current: false,
       autocontinue: true,
       params: [0, 0, 0, 0],
@@ -183,7 +145,8 @@ await check('a plan fetched from the FC resets history', () => {
       z: 80,
       seq: 0,
     },
-  ])
+  ] })
+  await promise
   eq(store().undoStack.length, 0, 'undo stack cleared')
   eq(store().redoStack.length, 0, 'redo stack cleared')
   store().undo()

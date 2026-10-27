@@ -11,9 +11,12 @@ documentation in [FEATURES.md](FEATURES.md); open work in
 - **Frontend**: React + TypeScript strict, Zustand, Tailwind + Radix,
   uPlot for high-frequency curves. Colors/spacing/typography are design
   tokens (CSS variables) — no hardcoded colors (lint-enforced).
-- **Types across the boundary**: ts-rs generates `frontend/src/generated-types/`
-  from core structs; a CI check fails when the committed bindings drift
-  (`cargo test -p maggcs-core` regenerates).
+- **Types across the boundary**: ts-rs generates canonical `crates/core/bindings/`
+  from core structs; the frontend consumes the mirror in `frontend/src/generated-types/`.
+  A CI check fails when committed core bindings drift. Set `TS_RS_EXPORT_DIR` to
+  the frontend directory when regenerating its mirror (ADR-002).
+  `npm --prefix frontend run check:generated-types` compares the complete core
+  and native export set/content to that mirror; it also runs in CI.
 - **Cesium** for the 3D/2D map (only the main window loads it).
 
 ## 2. Crates and processes
@@ -30,7 +33,9 @@ crates/core          maggcs_core — all domain logic (ADR-001):
   alerts/              alert center (A3): dedup window, Critical latching,
                        hysteresis for level alerts, acknowledge, history cap
   lifecycle/           teardown supervisor (A1): ordered, deadline-bounded
-                       stop of every service; armed/airborne refusal policy
+                        stop of every service; armed/airborne refusal policy
+  runtime/             AF-01 logical vehicle/session/link/generation contracts;
+                        lossless identity types + AF-02 bounded owned operations
   signals/             inspector tap: field extraction, mag_total synthesis,
                        ESC aggregation (ESC_STATUS index×4 → esc{k})
   dsp/                 biquad / moving average / detrend / FFT + registry
@@ -68,16 +73,38 @@ Principle: **logic in core, adapters in app-tauri** — every service is a
 tokio task driven by a command channel + routed inbound frames + a ticker,
 so headless mode reuses them unchanged.
 
+AF-01's `app-tauri/src/runtime_facade.rs` adds target-bound read handles over the
+existing primary/dedicated services. Borrowed primary serial/cache ownership is
+retained. See [ADR-029](adr/029-runtime-target-context.md),
+[the ownership inventory](architecture/af-00-current-system.md) and
+[Runtime contracts](architecture/runtime-contracts.md). AF-02 adds core operation
+coordination, native client registration and the owner/target-bound Parameters
+adapter. Its [cross-client/native-close acceptance](verification/af-02b-parameters-20261025.md)
+records retained read-back uncertainty and primary-I/O continuity. AF-02b.4a adds
+owned command transactions and the target-bound Parameters reboot adapter; its
+[acceptance record](verification/af-02b-command-reboot-20261025.md) covers command
+deadline/cancellation, ambiguous ACK quarantine and reboot-generation retirement.
+AF-02b.4b moves the eight general flight intents to one typed, owner/target-bound
+native command entry. Its [acceptance record](verification/af-02b-flight-commands-20261026.md)
+covers emergency capacity/preemption, preflight rechecks, late UI request/reply
+isolation and reproducible browser/workspace/release evidence.
+AF-02b.4 Mission moves upload/download/clear/set-current and cancellation to the
+same owner/target/generation model. Its [acceptance record](verification/af-02b-mission-20261026.md)
+covers terminal replies, sent-snapshot read-back, cancellation uncertainty,
+current observation, editor isolation and core/native/browser fault matrices.
+The remaining effect adapters, bounded subscriptions and independent Runtime
+process retain their subsequent AF owners.
+
 ## 3. Windows and data flow
 
 | Window | Content | Data path |
 | --- | --- | --- |
 | main | map + plan task panel + nav-bar flight controls (Flight ▾,
   MODE ▾, event log / RTK drawers) | Tauri events (`telemetry`, `link`,
-  `mission`, `command`, `rtk_stats`) + invokes |
+  `mission_progress`, `mission_current`, `rtk_stats`) + typed owned flight-command/Mission invokes |
 | inspector | Signal Inspector (ADR-015/016) | one Tauri Channel, columnar frames (~30 Hz), DSP in Rust |
 | actuator | motor / mag-interference test | invokes (commands) + `actuator_event`/`actuator_telemetry`/`actuator_alarm` events |
-| params | FC parameters (PM3): three panes, lazy value fetch, staging tray, reboot banner | `params_event` + invokes (`params_pull/set/read/...`) |
+| params | FC parameters (PM3): three panes, lazy value fetch, staging tray, reboot banner | Target-bound events, owned parameter operations and an owned command operation for reboot |
 
 Tool-window creation runs in asynchronous Tauri commands. On Windows,
 creating a WebView2 window inside a synchronous command can deadlock the UI
@@ -146,3 +173,4 @@ traffic bypasses the single-slot command service).
 | 015 | DSP in core |
 | 016 | Inspector window + channel |
 | 017 | Flight mode switching and arming |
+| 029 | Explicit Runtime target context over existing I/O owners |

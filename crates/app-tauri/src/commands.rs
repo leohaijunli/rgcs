@@ -16,11 +16,9 @@ use maggcs_core::mavlink::connection::{
 use maggcs_core::mavlink::message::MavMessage;
 use maggcs_core::mavlink::{ConnectionConfig, Endpoint};
 use maggcs_core::mission::service::MissionIds;
-use maggcs_core::mission::types::MissionItem;
 use maggcs_core::rtk::base::BASE_STOP_TIMEOUT as SERIAL_CLOSE_BUDGET;
 use maggcs_core::safety::{
-    arm_gate_with_ack, evaluate, evaluate_force_arm, ArmGate, Checklist, ChecklistItemId,
-    ForceArmOutcome, ForceArmRequest, PlanState, PreflightRefusal, RefusalKind, SafetyConfig,
+    evaluate, Checklist, PlanState, PreflightRefusal, RefusalKind, SafetyConfig,
 };
 use maggcs_core::survey::{CloverleafPattern, PatternPlan, SurveyPattern};
 use maggcs_core::telemetry::hub::{TelemetryHub, DEFAULT_PUSH_HZ};
@@ -247,6 +245,9 @@ async fn install_connection(
         intent,
         port,
     } = installation;
+    // Allocate identity before creating protocol/pump tasks. An exhausted ID
+    // space must not leave a partially initialized, unpublished Runtime.
+    let link_id = LinkId::next().map_err(|error| error.to_string())?;
 
     // The hub consumes the initial event stream, so the `Connected` emitted by
     // the worker cannot be missed (issue #2).
@@ -261,6 +262,7 @@ async fn install_connection(
             target_system: target_system_id,
             target_component: target_component_id,
         },
+        link_id,
     );
     let command = command_service::spawn(
         app.clone(),
@@ -275,7 +277,7 @@ async fn install_connection(
     // link).
     let log_connection = handle.clone();
     let new_link = ActiveLink {
-        id: LinkId::next(),
+        id: link_id,
         connection: handle,
         hub,
         mission,
@@ -794,37 +796,6 @@ pub async fn set_sitl_home(app: AppHandle, lat: f64, lon: f64) -> Result<(), Str
     write_sitl_home_file(&dir, lat, lon).map_err(|e| e.to_string())
 }
 
-/// Start uploading a mission to the FC.
-#[tauri::command]
-pub async fn mission_upload(
-    state: State<'_, AppState>,
-    items: Vec<MissionItem>,
-) -> Result<(), String> {
-    let mission = state.mission().ok_or_else(|| "not connected".to_string())?;
-    mission.upload(items).await.map_err(|e| e.to_string())
-}
-
-/// Download the FC mission.
-#[tauri::command]
-pub async fn mission_download(state: State<'_, AppState>) -> Result<(), String> {
-    let mission = state.mission().ok_or_else(|| "not connected".to_string())?;
-    mission.download().await.map_err(|e| e.to_string())
-}
-
-/// Clear the FC mission.
-#[tauri::command]
-pub async fn mission_clear(state: State<'_, AppState>) -> Result<(), String> {
-    let mission = state.mission().ok_or_else(|| "not connected".to_string())?;
-    mission.clear().await.map_err(|e| e.to_string())
-}
-
-/// Set the active waypoint.
-#[tauri::command]
-pub async fn mission_set_current(state: State<'_, AppState>, seq: u16) -> Result<(), String> {
-    let mission = state.mission().ok_or_else(|| "not connected".to_string())?;
-    mission.set_current(seq).await.map_err(|e| e.to_string())
-}
-
 /// Generate a parameterised survey sweep (optionally with tie lines).
 ///
 /// Pure geometry: no link is required. The result is appended to the plan as
@@ -851,89 +822,6 @@ pub fn survey_compile_pattern(
     maggcs_core::survey::compile::compile_pattern(&plan, &options).map_err(|e| e.to_string())
 }
 
-/// Named vehicle command.
-///
-/// `name` is one of `"takeoff"`, `"land"`, `"rtl"`. The command is enqueued
-/// to the command service, which sends a `COMMAND_LONG` and retransmits until
-/// the FC acks; the outcome arrives asynchronously on the `"command"` event
-/// (issue #5).
-///
-/// `MAV_CMD_DO_PAUSE_CONTINUE` was removed: PX4 v1.17 has no handler for it
-/// (SITL-confirmed NACK, operator report 2026-10-10); takeoff/land are the
-/// flight-phase commands PX4 v1.17 actually supports.
-#[tauri::command]
-pub async fn send_command(
-    name: String,
-    ground_amsl_m: Option<f64>,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    let service = state.command().ok_or_else(|| "not connected".to_string())?;
-    let (command, params) = named_command(&name)?;
-
-    // Takeoff (MS3, ADR-017): PX4's own `commander takeoff` flow is
-    // NAV_TAKEOFF -> await ACK -> ARM (Commander.cpp:336-345). The mode
-    // intent is accepted while disarmed; nobody would arm afterwards, so we
-    // replicate the sequence here: param7 = current AMSL + the relative
-    // 10 m climb, then arm once the FC accepted the mode.
-    if name == "takeoff" {
-        let fix = state
-            .hub()
-            .and_then(|h| h.snapshot().global_position)
-            .ok_or_else(|| "no position fix yet — cannot compute the takeoff target".to_string())?;
-        maggcs_core::CommandService::send_await(
-            &service,
-            MavCmd::MAV_CMD_NAV_TAKEOFF,
-            takeoff_params(fix.latitude_deg, fix.longitude_deg, fix.altitude.meters()),
-            TAKEOFF_ACK_TIMEOUT,
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-        let armed = state
-            .hub()
-            .and_then(|h| h.snapshot().heartbeat)
-            .is_some_and(|hb| hb.base_mode.safety_armed);
-        if !armed {
-            service
-                .send(
-                    MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
-                    arm_disarm_params(true),
-                )
-                .await
-                .map_err(|e| e.to_string())?;
-        }
-        return Ok(());
-    }
-
-    // Landing (operator report, SITL): PX4 reads `NAV_LAND`'s `param7` as an
-    // **AMSL** altitude exactly like takeoff, so a bare `[0.0; 7]` asked the
-    // vehicle to land at AMSL 0 — a descending-to-nowhere target that ended
-    // with the aircraft holding altitude over lower ground. Send the ground
-    // under the vehicle instead (the frontend samples the terrain, mesh
-    // first); without a terrain sample the current fix stands in, since a
-    // vehicle on the ground knows its own height.
-    if name == "land" {
-        let fix = state
-            .hub()
-            .and_then(|h| h.snapshot().global_position)
-            .ok_or_else(|| "no position fix yet — cannot compute the landing target".to_string())?;
-        let ground = ground_amsl_m
-            .filter(|m| m.is_finite())
-            .unwrap_or_else(|| fix.altitude.meters());
-        return service
-            .send(
-                MavCmd::MAV_CMD_NAV_LAND,
-                land_params(fix.latitude_deg, fix.longitude_deg, ground),
-            )
-            .await
-            .map_err(|e| e.to_string());
-    }
-
-    service
-        .send(command, params)
-        .await
-        .map_err(|e| e.to_string())
-}
-
 /// Resolve the switchable mode table against the given vehicle state
 /// (ADR-017): which entries are enabled and why. Pure core logic — the Fly
 /// view only renders the result.
@@ -946,16 +834,12 @@ pub fn flight_mode_table(
 
 /// Relative takeoff altitude (operator setting, 2026-10-11).
 const TAKEOFF_ALTITUDE_M: f32 = 10.0;
-/// How long takeoff waits for the NAV_TAKEOFF ack before giving up on the
-/// sequence (the session's own retry budget is ~4 s).
-const TAKEOFF_ACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-
 /// `MAV_CMD_NAV_TAKEOFF` parameters. PX4 reads `param7` as an **AMSL**
 /// altitude (`navigator_main.cpp`: `rep->current.alt = cmd.param7`), so the
 /// GCS must add the relative 10 m to the vehicle's current AMSL (telemetry).
 /// `param5/6` must be the **current lat/lon**: `PX4_ISFINITE(0.0)` is true,
 /// so zeros would aim the takeoff loiter at 0°N/0°E — the equator.
-fn takeoff_params(lat_deg: f64, lon_deg: f64, current_amsl_m: f64) -> [f32; 7] {
+pub(crate) fn takeoff_params(lat_deg: f64, lon_deg: f64, current_amsl_m: f64) -> [f32; 7] {
     let mut params = [0.0; 7];
     params[4] = lat_deg as f32;
     params[5] = lon_deg as f32;
@@ -969,7 +853,7 @@ fn takeoff_params(lat_deg: f64, lon_deg: f64, current_amsl_m: f64) -> [f32; 7] {
 /// altitude, so the GCS sends the ground under the vehicle. `param5/6` carry
 /// the current lat/lon because `PX4_ISFINITE(0.0)` is true — zeros would aim
 /// the landing at 0°N/0°E (the equator).
-fn land_params(lat_deg: f64, lon_deg: f64, ground_amsl_m: f64) -> [f32; 7] {
+pub(crate) fn land_params(lat_deg: f64, lon_deg: f64, ground_amsl_m: f64) -> [f32; 7] {
     let mut params = [0.0; 7];
     params[4] = lat_deg as f32;
     params[5] = lon_deg as f32;
@@ -979,13 +863,13 @@ fn land_params(lat_deg: f64, lon_deg: f64, ground_amsl_m: f64) -> [f32; 7] {
 
 /// `MAV_CMD_DO_SET_MODE` parameters (ADR-017): `param1` must set
 /// `MAV_MODE_FLAG_CUSTOM_MODE_ENABLED`, then PX4 main/sub mode.
-fn set_mode_params(main_mode: u8, sub_mode: u8) -> [f32; 7] {
+pub(crate) fn set_mode_params(main_mode: u8, sub_mode: u8) -> [f32; 7] {
     [1.0, main_mode as f32, sub_mode as f32, 0.0, 0.0, 0.0, 0.0]
 }
 
 /// `MAV_CMD_COMPONENT_ARM_DISARM` parameters (ADR-017): `param1` 1 = arm /
 /// 0 = disarm; we never send the 21196 kill code from the UI.
-fn arm_disarm_params(arm: bool) -> [f32; 7] {
+pub(crate) fn arm_disarm_params(arm: bool) -> [f32; 7] {
     [if arm { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 }
 
@@ -999,7 +883,7 @@ const MAV_DO_REPOSITION_FLAG_CHANGE_MODE: f32 = 1.0;
 /// the default ground speed, `param2` carries the change-mode flag (PX4
 /// requires it), `param4` = NaN keeps the current heading, `param7` is the
 /// altitude expressed as AMSL (no `MAV_DO_REPOSITION_FLAGS` AGL bit).
-fn reposition_params(lat_deg: f64, lon_deg: f64, amsl_m: f64) -> [f32; 7] {
+pub(crate) fn reposition_params(lat_deg: f64, lon_deg: f64, amsl_m: f64) -> [f32; 7] {
     let mut params = [0.0f32; 7];
     params[0] = -1.0; // default ground speed
     params[1] = MAV_DO_REPOSITION_FLAG_CHANGE_MODE;
@@ -1014,120 +898,13 @@ fn reposition_params(lat_deg: f64, lon_deg: f64, amsl_m: f64) -> [f32; 7] {
 /// location (`param5/6/7`); 1 would mean "use the vehicle's current position",
 /// which PX4's commander reads as `cmd.param1 > 0.5f` and would ignore the
 /// clicked coordinates entirely.
-fn set_home_params(lat_deg: f64, lon_deg: f64, amsl_m: f64) -> [f32; 7] {
+pub(crate) fn set_home_params(lat_deg: f64, lon_deg: f64, amsl_m: f64) -> [f32; 7] {
     let mut params = [0.0f32; 7];
     params[0] = 0.0; // use the specified location, not the current position
     params[4] = lat_deg as f32;
     params[5] = lon_deg as f32;
     params[6] = amsl_m as f32;
     params
-}
-
-/// Switch the PX4 flight mode (`MAV_CMD_DO_SET_MODE`, ADR-017). Fire and
-/// forget through the command service like the other flight commands: the
-/// ack verdict arrives on the `"command"` event (`set_mode`), the UI
-/// additionally confirms via the heartbeat readback (MS3).
-#[tauri::command]
-pub async fn send_set_mode(
-    main_mode: u8,
-    sub_mode: u8,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    let service = state.command().ok_or_else(|| "not connected".to_string())?;
-    service
-        .send(
-            MavCmd::MAV_CMD_DO_SET_MODE,
-            set_mode_params(main_mode, sub_mode),
-        )
-        .await
-        .map_err(|e| e.to_string())
-}
-
-/// Arm or disarm the vehicle (`MAV_CMD_COMPONENT_ARM_DISARM`, ADR-017).
-///
-/// Arming runs the L5 preflight gate: every checklist item must pass, `Warn`
-/// items need per-item confirmation (`force: None`), and `Fail`/`Unknown`
-/// items are refused unless the operator supplies a [`ForceArmRequest`] — the
-/// forced path, which only bypasses the **GCS** checklist. PX4's own prearm
-/// checks always apply (the GCS never sends the 21196 forced-arming code) and
-/// its verdict arrives on the `"command"` event (`arm_disarm`). Disarming is
-/// never gated. A forced arm is recorded into the flight log.
-#[tauri::command]
-pub async fn send_arm_disarm(
-    arm: bool,
-    force: Option<ForceArmRequest>,
-    plan_state: Option<PlanState>,
-    acked_warnings: Option<Vec<ChecklistItemId>>,
-    state: State<'_, AppState>,
-) -> Result<(), PreflightRefusal> {
-    if !arm {
-        return send_arm_command(false, &state).await;
-    }
-    let Some(snapshot) = state.hub().map(|h| h.snapshot()) else {
-        return Err(refusal(RefusalKind::NoLink, "no link — cannot arm"));
-    };
-    let checklist = evaluate(
-        &snapshot,
-        &app_plan_state(&state, plan_state),
-        &safety_config(&state),
-        epoch_ms(),
-    );
-    let Some(request) = force else {
-        // The operator may have acknowledged specific `Warn` items in the
-        // panel (U5); those count as Pass here. `Fail`/`Unknown` items and a
-        // stale link still refuse — an acknowledgement never talks past those.
-        return match arm_gate_with_ack(&checklist, &acked_warnings.unwrap_or_default()) {
-            ArmGate::Allowed => send_arm_command(true, &state).await,
-            ArmGate::RequiresAck { items } => Err(PreflightRefusal::new(
-                RefusalKind::RequiresAck,
-                &checklist,
-                &items,
-                "confirm the listed warnings before arming",
-            )),
-            ArmGate::Blocked { items } => Err(PreflightRefusal::new(
-                RefusalKind::Blocked,
-                &checklist,
-                &items,
-                "preflight blocks arming",
-            )),
-            ArmGate::NoLink => Err(refusal(RefusalKind::NoLink, "no link — cannot arm")),
-        };
-    };
-    match evaluate_force_arm(&snapshot, &checklist) {
-        ForceArmOutcome::Allowed => {
-            let items = checklist
-                .items
-                .iter()
-                .filter(|item| item.status != maggcs_core::safety::ChecklistStatus::Pass)
-                .map(|item| item.id)
-                .collect();
-            // Audit persistence is a prerequisite to sending a forced arm.
-            // Never fall through to an unrecorded override.
-            state
-                .recorder()
-                .record_force_arm(items, request.reason, request.note)
-                .await
-                .map_err(|message| {
-                    refusal(
-                        RefusalKind::Blocked,
-                        format!("forced arm not sent: {message}"),
-                    )
-                })?;
-            send_arm_command(true, &state).await
-        }
-        ForceArmOutcome::NoLink => Err(refusal(
-            RefusalKind::NoLink,
-            "no link — a forced arm is not possible",
-        )),
-        ForceArmOutcome::AlreadyArmed => Err(refusal(
-            RefusalKind::AlreadyArmed,
-            "the vehicle is already armed",
-        )),
-        ForceArmOutcome::NotNeeded => Err(refusal(
-            RefusalKind::NotNeeded,
-            "the checklist is already clear — no force needed",
-        )),
-    }
 }
 
 /// The current evaluated preflight checklist (L5/U5), so the UI can render the
@@ -1149,20 +926,9 @@ pub async fn preflight_checklist(
     ))
 }
 
-/// Send the arm/disarm command itself, past the gate.
-async fn send_arm_command(arm: bool, state: &AppState) -> Result<(), PreflightRefusal> {
-    let service = state
-        .command()
-        .ok_or_else(|| refusal(RefusalKind::NoLink, "not connected"))?;
-    service
-        .send(MavCmd::MAV_CMD_COMPONENT_ARM_DISARM, arm_disarm_params(arm))
-        .await
-        .map_err(|e| refusal(RefusalKind::Blocked, e.to_string()))
-}
-
 /// App-side plan facts: the frontend supplies the mission-sync state, the
 /// backend overrides the motor-test bit (it is authoritative there).
-fn app_plan_state(state: &AppState, from_ui: Option<PlanState>) -> PlanState {
+pub(crate) fn app_plan_state(state: &AppState, from_ui: Option<PlanState>) -> PlanState {
     let mut plan = from_ui.unwrap_or_default();
     plan.motor_test_active = state.motor_test.running.lock().is_some();
     plan
@@ -1170,12 +936,12 @@ fn app_plan_state(state: &AppState, from_ui: Option<PlanState>) -> PlanState {
 
 /// The thresholds the gate reads. A5 defaults for now; A6 persists them and
 /// L7/M2 feed alert and mag thresholds from the same source later.
-fn safety_config(state: &AppState) -> SafetyConfig {
+pub(crate) fn safety_config(state: &AppState) -> SafetyConfig {
     state.config().safety
 }
 
 /// A refusal with no item details.
-fn refusal(kind: RefusalKind, message: impl Into<String>) -> PreflightRefusal {
+pub(crate) fn refusal(kind: RefusalKind, message: impl Into<String>) -> PreflightRefusal {
     PreflightRefusal {
         kind,
         items: Vec::new(),
@@ -1194,72 +960,10 @@ fn epoch_ms() -> u64 {
 /// L9: a click-to-fly target farther than this is refused — the map is not a
 /// long-range navigator and a fat-fingered click must not launch a
 /// cross-country flight. Configured via `SafetyConfig` (`goto_max_distance_m`).
-const DEFAULT_GOTO_MAX_DISTANCE_M: f64 = 1_000.0;
-
-/// Fly the vehicle to a spot clicked on the map (`MAV_CMD_DO_REPOSITION`).
-/// The altitude is the vehicle's current AMSL, so the drone holds its height
-/// and flies horizontally to `(lat, lon)` — the click-to-fly behaviour QGC's
-/// "Fly to here" exposes. `param2` carries `MAV_DO_REPOSITION_FLAG_CHANGE_MODE`
-/// so PX4 moves itself into loiter and accepts the target regardless of the
-/// current mode.
-///
-/// **L9 guards**: the horizontal distance to the target must stay within
-/// `safety.goto_max_distance_m` (default 1 km), and a target whose terrain
-/// AMSL (when the DEM knows it) puts the vehicle's held altitude closer than
-/// `safety.goto_min_clearance_m` above the surface is refused — the click
-/// cannot command the drone into a hillside at its current height. Both
-/// refusals carry the numbers so the operator sees why.
-///
-/// The ack verdict arrives on the `"command"` event (`goto`).
-#[tauri::command]
-pub async fn send_goto(
-    lat_deg: f64,
-    lon_deg: f64,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    let service = state.command().ok_or_else(|| "not connected".to_string())?;
-    let fix = state
-        .hub()
-        .and_then(|h| h.snapshot().global_position)
-        .ok_or_else(|| "no position fix yet — cannot command a move".to_string())?;
-
-    // L9 guards: distance cap + terrain clearance under the held altitude
-    // (the terrain verdict needs a DEM; without one it is skipped, the same
-    // fail-open rule as the preflight `Unknown`).
-    let safety = state.config().safety;
-    let max_distance = safety
-        .goto_max_distance_m
-        .unwrap_or(DEFAULT_GOTO_MAX_DISTANCE_M);
-    let terrain_m = if let (Some(_), Some(dem)) = (safety.goto_min_clearance_m, loaded_dem(&state))
-    {
-        use maggcs_core::terrain::ElevationSource;
-        dem.as_ref()
-            .sample_pair(maggcs_core::plan::GeoPoint::new(lat_deg, lon_deg))
-            .ok()
-            .map(|(dtm, _)| dtm.meters())
-    } else {
-        None
-    };
-    goto_guard(
-        (fix.latitude_deg, fix.longitude_deg),
-        (lat_deg, lon_deg),
-        max_distance,
-        terrain_m,
-        fix.altitude.meters(),
-        safety.goto_min_clearance_m,
-    )?;
-
-    service
-        .send(
-            MavCmd::MAV_CMD_DO_REPOSITION,
-            reposition_params(lat_deg, lon_deg, fix.altitude.meters()),
-        )
-        .await
-        .map_err(|e| e.to_string())
-}
+pub(crate) const DEFAULT_GOTO_MAX_DISTANCE_M: f64 = 1_000.0;
 
 /// L9 guard decision (pure, for tests): `Err(reason)` refuses the click.
-fn goto_guard(
+pub(crate) fn goto_guard(
     from: (f64, f64),
     to: (f64, f64),
     max_distance_m: f64,
@@ -1291,50 +995,6 @@ fn haversine_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     let a = (dlat / 2.0).sin().powi(2)
         + lat1.to_radians().cos() * lat2.to_radians().cos() * (dlon / 2.0).sin().powi(2);
     2.0 * r * a.sqrt().asin()
-}
-
-/// The DEM the terrain store has open, when one is loaded.
-fn loaded_dem(
-    state: &State<'_, AppState>,
-) -> Option<std::sync::Arc<maggcs_core::terrain::cog::CogDem>> {
-    let guard = state.dem.lock();
-    guard.as_ref().map(|(_, dem)| dem.clone())
-}
-
-/// Set the vehicle's home to a spot clicked on the map (`MAV_CMD_DO_SET_HOME`).
-/// `param1` = 0 carries the clicked coordinates (`param5/6/7`), so PX4 sets
-/// home there rather than at the vehicle's current position.
-///
-/// `amsl_m` is the **terrain height under the clicked point**, sampled by the
-/// frontend (mesh first, then the DEM tile). It must not default to the
-/// vehicle's own altitude: home is usually re-set while *airborne* over the
-/// next site, and an airborne altitude bakes a home plane far above the
-/// ground — every HOME-referenced height (relative legs, the landing target)
-/// then sits too high. Without a terrain sample the current fix stands in,
-/// which is correct for the landed case. The verdict arrives on the
-/// `"command"` event (`set_home`).
-#[tauri::command]
-pub async fn send_set_home(
-    lat_deg: f64,
-    lon_deg: f64,
-    amsl_m: Option<f64>,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    let service = state.command().ok_or_else(|| "not connected".to_string())?;
-    let fix = state
-        .hub()
-        .and_then(|h| h.snapshot().global_position)
-        .ok_or_else(|| "no position fix yet — cannot set home".to_string())?;
-    let alt = amsl_m
-        .filter(|m| m.is_finite())
-        .unwrap_or_else(|| fix.altitude.meters());
-    service
-        .send(
-            MavCmd::MAV_CMD_DO_SET_HOME,
-            set_home_params(lat_deg, lon_deg, alt),
-        )
-        .await
-        .map_err(|e| e.to_string())
 }
 
 /// Map a stream-rate request to `MAV_CMD_SET_MESSAGE_INTERVAL` parameters.
@@ -1454,8 +1114,9 @@ pub async fn install_udev_rules(vid_pids: Vec<(String, String)>) -> Result<Strin
 /// Map a UI command name to its MAVLink command and parameters.
 ///
 /// The returned parameters are the *default* payload; `takeoff` and `land`
-/// are overridden in [`send_command`] with the position/altitude targets
+/// are overridden by the owned flight adapter with the position/altitude targets
 /// computed from telemetry (see [`takeoff_params`] / [`land_params`]).
+#[cfg(test)]
 fn named_command(name: &str) -> Result<(MavCmd, [f32; 7]), String> {
     let command = match name {
         "takeoff" => MavCmd::MAV_CMD_NAV_TAKEOFF,

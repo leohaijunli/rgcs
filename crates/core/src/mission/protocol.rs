@@ -17,9 +17,9 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use ::mavlink::common::{
-    MavMessage, MavMissionResult, MISSION_ACK_DATA, MISSION_CLEAR_ALL_DATA, MISSION_COUNT_DATA,
-    MISSION_CURRENT_DATA, MISSION_ITEM_INT_DATA, MISSION_REQUEST_DATA, MISSION_REQUEST_INT_DATA,
-    MISSION_REQUEST_LIST_DATA, MISSION_SET_CURRENT_DATA,
+    MavMessage, MavMissionResult, MavMissionType, MISSION_ACK_DATA, MISSION_CLEAR_ALL_DATA,
+    MISSION_COUNT_DATA, MISSION_CURRENT_DATA, MISSION_ITEM_INT_DATA, MISSION_REQUEST_DATA,
+    MISSION_REQUEST_INT_DATA, MISSION_REQUEST_LIST_DATA, MISSION_SET_CURRENT_DATA,
 };
 use ::mavlink::{MavHeader, MessageData};
 
@@ -153,11 +153,11 @@ impl MissionProtocol {
         &mut self,
         items: Vec<MissionItem>,
     ) -> Result<Vec<MavMessage>, MissionError> {
-        if items.is_empty() {
-            return Err(MissionError::NoItems);
-        }
+        super::types::validate_upload(&items)?;
+        let count = u16::try_from(items.len()).map_err(|_| MissionError::InvalidRequest {
+            message: "mission item count exceeds the wire limit".into(),
+        })?;
         self.start_operation();
-        let count = items.len() as u16;
         self.state = State::Upload { items, next_seq: 0 };
         let msg = MavMessage::MISSION_COUNT(MISSION_COUNT_DATA {
             target_system: self.target_sys,
@@ -214,6 +214,32 @@ impl MissionProtocol {
         self.queue(msg, "MISSION_SET_CURRENT")
     }
 
+    /// Source/destination/type checks also apply to COUNT, REQUEST and ACK.
+    pub(super) fn accepts(&self, header: &MavHeader, message: &MavMessage) -> bool {
+        if header.system_id != self.target_sys || header.component_id != self.target_comp {
+            return false;
+        }
+        if let Some((system, component)) = target_of(message) {
+            if (system, component) != (self.self_sys, self.self_comp)
+                && (system, component) != (0, 0)
+            {
+                return false;
+            }
+        }
+        let mission_type = match message {
+            MavMessage::MISSION_COUNT(message) => Some(message.mission_type),
+            MavMessage::MISSION_REQUEST(message) => Some(message.mission_type),
+            MavMessage::MISSION_REQUEST_INT(message) => Some(message.mission_type),
+            MavMessage::MISSION_REQUEST_LIST(message) => Some(message.mission_type),
+            MavMessage::MISSION_ACK(message) => Some(message.mission_type),
+            MavMessage::MISSION_ITEM_INT(message) => Some(message.mission_type),
+            MavMessage::MISSION_CLEAR_ALL(message) => Some(message.mission_type),
+            MavMessage::MISSION_CURRENT(_) | MavMessage::MISSION_SET_CURRENT(_) => None,
+            _ => return false,
+        };
+        mission_type.is_none_or(|kind| kind == MavMissionType::MAV_MISSION_TYPE_MISSION)
+    }
+
     /// Handle an incoming frame. Returns events and frames to send.
     #[allow(deprecated)]
     pub fn handle(
@@ -221,21 +247,7 @@ impl MissionProtocol {
         header: &MavHeader,
         msg: &MavMessage,
     ) -> (Vec<MissionEvent>, Vec<MavMessage>) {
-        if let Some((sys, comp)) = target_of(msg) {
-            let to_us = (sys == self.self_sys && comp == self.self_comp) || (sys == 0 && comp == 0);
-            if !to_us {
-                return (Vec::new(), Vec::new());
-            }
-        }
-        // `MISSION_ITEM_INT`/`MISSION_CURRENT` carry no reliable target that
-        // would let us tell two GCSs apart, so only trust them when they come
-        // from our FC (issues.md #9). A QGC running beside us downloads its
-        // own items; without this check they would leak into our plan.
-        if matches!(
-            msg,
-            MavMessage::MISSION_ITEM_INT(_) | MavMessage::MISSION_CURRENT(_)
-        ) && (header.system_id != self.target_sys || header.component_id != self.target_comp)
-        {
+        if !self.accepts(header, msg) {
             return (Vec::new(), Vec::new());
         }
         match msg {
@@ -357,7 +369,10 @@ impl MissionProtocol {
                 }
                 if next_seq >= total {
                     return (
-                        vec![MissionEvent::Completed(MissionOperation::Upload)],
+                        vec![MissionEvent::Failed(MissionError::SeqMismatch {
+                            expected: total.saturating_sub(1),
+                            got: req_seq,
+                        })],
                         Vec::new(),
                     );
                 }
@@ -388,8 +403,29 @@ impl MissionProtocol {
     fn on_download_count(&mut self, count: u16) -> (Vec<MissionEvent>, Vec<MavMessage>) {
         let state = std::mem::replace(&mut self.state, State::Idle);
         match state {
-            State::Download { mut items, .. } => {
-                items.clear();
+            State::Download {
+                items,
+                next_seq,
+                total,
+            } => {
+                if total != 0 {
+                    self.state = State::Download {
+                        items,
+                        next_seq,
+                        total,
+                    };
+                    return if count == total {
+                        (Vec::new(), Vec::new())
+                    } else {
+                        (
+                            vec![MissionEvent::Failed(MissionError::CountMismatch {
+                                expected: total,
+                                got: count,
+                            })],
+                            Vec::new(),
+                        )
+                    };
+                }
                 if count == 0 {
                     return (
                         vec![MissionEvent::Completed(MissionOperation::Download)],
@@ -425,6 +461,19 @@ impl MissionProtocol {
                 mut next_seq,
                 total,
             } => {
+                if total == 0 {
+                    self.state = State::Download {
+                        items,
+                        next_seq,
+                        total,
+                    };
+                    return (
+                        vec![MissionEvent::Failed(MissionError::Unexpected(
+                            "MISSION_ITEM_INT before MISSION_COUNT",
+                        ))],
+                        Vec::new(),
+                    );
+                }
                 // A duplicate of the item we just accepted (our request
                 // retransmit raced the FC's answer) is ignored.
                 if next_seq > 0 && m.seq == next_seq - 1 {
@@ -502,8 +551,16 @@ impl MissionProtocol {
         let state = std::mem::replace(&mut self.state, State::Idle);
         let accepted = ack_type == MavMissionResult::MAV_MISSION_ACCEPTED as u8;
         match state {
-            State::Upload { .. } => {
-                if accepted {
+            State::Upload { items, next_seq } => {
+                if accepted && usize::from(next_seq) != items.len() {
+                    (
+                        vec![MissionEvent::Failed(MissionError::CountMismatch {
+                            expected: items.len() as u16,
+                            got: next_seq,
+                        })],
+                        Vec::new(),
+                    )
+                } else if accepted {
                     (
                         vec![MissionEvent::Completed(MissionOperation::Upload)],
                         Vec::new(),
@@ -538,13 +595,17 @@ impl MissionProtocol {
     fn on_set_current(&mut self, seq: u16) -> (Vec<MissionEvent>, Vec<MavMessage>) {
         let state = std::mem::replace(&mut self.state, State::Idle);
         match state {
-            State::SetCurrent { seq: requested } => (
+            State::SetCurrent { seq: requested } if seq == requested => (
                 vec![
                     MissionEvent::CurrentChanged { seq },
                     MissionEvent::Completed(MissionOperation::SetCurrent(requested)),
                 ],
                 Vec::new(),
             ),
+            State::SetCurrent { seq: requested } => {
+                self.state = State::SetCurrent { seq: requested };
+                (vec![MissionEvent::CurrentChanged { seq }], Vec::new())
+            }
             other => {
                 self.state = other;
                 // An unsolicited MISSION_CURRENT is the FC's flight-time
@@ -600,6 +661,15 @@ pub fn mission_item_to_mav(
 
 /// Map a MISSION_ITEM_INT payload to a [`MissionItem`].
 pub fn mission_item_from_mav(m: &MISSION_ITEM_INT_DATA) -> Result<MissionItem, MissionError> {
+    if !m.z.is_finite()
+        || [m.param1, m.param2, m.param3, m.param4]
+            .iter()
+            .any(|value| value.is_infinite())
+    {
+        return Err(MissionError::InvalidRequest {
+            message: "non-finite mission altitude/parameter on read-back".into(),
+        });
+    }
     Ok(MissionItem {
         seq: m.seq,
         frame: MissionFrame::from_mav(m.frame)?,
@@ -618,6 +688,7 @@ fn target_of(msg: &MavMessage) -> Option<(u8, u8)> {
     use MavMessage as M;
     match msg {
         M::MISSION_COUNT(m) => Some((m.target_system, m.target_component)),
+        M::MISSION_ITEM_INT(m) => Some((m.target_system, m.target_component)),
         M::MISSION_REQUEST(m) => Some((m.target_system, m.target_component)),
         M::MISSION_REQUEST_INT(m) => Some((m.target_system, m.target_component)),
         M::MISSION_REQUEST_LIST(m) => Some((m.target_system, m.target_component)),
@@ -664,8 +735,8 @@ mod tests {
 
     fn item_msg(seq: u16) -> M {
         M::MISSION_ITEM_INT(mission_item_to_mav(
-            FC_SYS,
-            FC_COMP,
+            SELF_SYS,
+            SELF_COMP,
             &mk_item(seq, 48.0, -123.0, 50.0),
         ))
     }
@@ -700,7 +771,7 @@ mod tests {
         assert_eq!(c.count, 2);
 
         for seq in 0..2u16 {
-            let (events, frames) = p.handle(&MavHeader::default(), &req_int(seq));
+            let (events, frames) = p.handle(&fc_header(), &req_int(seq));
             assert_eq!(frames.len(), 1);
             assert!(
                 matches!(&frames[0], M::MISSION_ITEM_INT(m) if m.seq == seq && m.x == ((48.0 + seq as f64 * 0.1) * 1e7) as i32)
@@ -708,7 +779,7 @@ mod tests {
             assert!(events.iter().any(|e| matches!(e, MissionEvent::Progress { operation: MissionOperation::Upload, sent, total } if *sent == seq + 1 && *total == 2)));
         }
 
-        let (events, frames) = p.handle(&MavHeader::default(), &ack_msg(true));
+        let (events, frames) = p.handle(&fc_header(), &ack_msg(true));
         assert!(frames.is_empty());
         assert!(events.contains(&MissionEvent::Completed(MissionOperation::Upload)));
         assert!(p.is_idle());
@@ -719,7 +790,7 @@ mod tests {
         let mut p = MissionProtocol::new(SELF_SYS, SELF_COMP, FC_SYS, FC_COMP);
         p.begin_upload(vec![mk_item(0, 48.0, -123.0, 50.0)])
             .unwrap();
-        let (events, _) = p.handle(&MavHeader::default(), &req_int(1));
+        let (events, _) = p.handle(&fc_header(), &req_int(1));
         assert!(matches!(
             &events[0],
             MissionEvent::Failed(MissionError::SeqMismatch {
@@ -850,7 +921,7 @@ mod tests {
         let mut p = MissionProtocol::new(SELF_SYS, SELF_COMP, FC_SYS, FC_COMP);
         let frames = p.begin_clear();
         assert!(matches!(&frames[0], M::MISSION_CLEAR_ALL(_)));
-        let (events, frames) = p.handle(&MavHeader::default(), &ack_msg(true));
+        let (events, frames) = p.handle(&fc_header(), &ack_msg(true));
         assert!(frames.is_empty());
         assert!(events.contains(&MissionEvent::Completed(MissionOperation::ClearAll)));
         assert!(p.is_idle());
@@ -860,7 +931,7 @@ mod tests {
     fn clear_all_denied() {
         let mut p = MissionProtocol::new(SELF_SYS, SELF_COMP, FC_SYS, FC_COMP);
         p.begin_clear();
-        let (events, _) = p.handle(&MavHeader::default(), &ack_msg(false));
+        let (events, _) = p.handle(&fc_header(), &ack_msg(false));
         assert!(matches!(
             &events[0],
             MissionEvent::Failed(MissionError::AckDenied(_))
@@ -907,7 +978,7 @@ mod tests {
         p.begin_upload(vec![mk_item(0, 48.0, -123.0, 50.0)])
             .unwrap();
         let (events, frames) = p.handle(
-            &MavHeader::default(),
+            &fc_header(),
             &M::MISSION_REQUEST_INT(MISSION_REQUEST_INT_DATA {
                 target_system: 99,
                 target_component: 99,
@@ -923,7 +994,7 @@ mod tests {
         let mut p = MissionProtocol::new(SELF_SYS, SELF_COMP, FC_SYS, FC_COMP);
         p.begin_upload(vec![mk_item(0, 48.0, -123.0, 50.0)])
             .unwrap();
-        p.handle(&MavHeader::default(), &req_int(0));
+        p.handle(&fc_header(), &req_int(0));
 
         let mut now = Instant::now() + Duration::from_millis(600);
         for i in 1..=MAX_RETRIES {
@@ -1127,7 +1198,7 @@ mod tests {
                 ..Default::default()
             }),
         );
-        let mut raw = mission_item_to_mav(FC_SYS, FC_COMP, &mk_item(0, 48.0, -123.0, 50.0));
+        let mut raw = mission_item_to_mav(SELF_SYS, SELF_COMP, &mk_item(0, 48.0, -123.0, 50.0));
         raw.frame = ::mavlink::common::MavFrame::MAV_FRAME_BODY_FRD;
         let (events, _frames) = p.handle(&fc_header(), &M::MISSION_ITEM_INT(raw));
         assert!(matches!(
@@ -1135,5 +1206,134 @@ mod tests {
             MissionEvent::Failed(MissionError::UnsupportedFrame(_))
         ));
         assert!(p.is_idle());
+    }
+
+    #[test]
+    fn a_different_current_sequence_is_observation_not_completion() {
+        let mut protocol = MissionProtocol::new(SELF_SYS, SELF_COMP, FC_SYS, FC_COMP);
+        protocol.begin_set_current(3);
+        let (events, _) = protocol.handle(
+            &fc_header(),
+            &M::MISSION_CURRENT(MISSION_CURRENT_DATA {
+                seq: 2,
+                ..Default::default()
+            }),
+        );
+        assert_eq!(events, [MissionEvent::CurrentChanged { seq: 2 }]);
+        assert!(!protocol.is_idle());
+        assert_eq!(
+            protocol
+                .retransmit_due(Instant::now() + RETRY_TIMEOUT)
+                .len(),
+            1
+        );
+        let (events, _) = protocol.handle(
+            &fc_header(),
+            &M::MISSION_CURRENT(MISSION_CURRENT_DATA {
+                seq: 3,
+                ..Default::default()
+            }),
+        );
+        assert!(events.contains(&MissionEvent::Completed(MissionOperation::SetCurrent(3))));
+    }
+
+    #[test]
+    fn an_early_ack_or_out_of_range_request_cannot_complete_upload() {
+        let mut protocol = MissionProtocol::new(SELF_SYS, SELF_COMP, FC_SYS, FC_COMP);
+        protocol
+            .begin_upload(vec![mk_item(0, 49.0, -123.0, 50.0)])
+            .expect("upload");
+        let (events, _) = protocol.handle(&fc_header(), &ack_msg(true));
+        assert_eq!(
+            events,
+            [MissionEvent::Failed(MissionError::CountMismatch {
+                expected: 1,
+                got: 0
+            })]
+        );
+        protocol
+            .begin_upload(vec![mk_item(0, 49.0, -123.0, 50.0)])
+            .expect("upload");
+        protocol.handle(&fc_header(), &req_int(0));
+        let (events, _) = protocol.handle(&fc_header(), &req_int(1));
+        assert!(events
+            .iter()
+            .all(|event| !matches!(event, MissionEvent::Completed(_))));
+        assert!(matches!(events[0], MissionEvent::Failed(_)));
+    }
+
+    #[test]
+    fn foreign_request_ack_count_and_wrong_mission_type_are_ignored() {
+        let mut protocol = MissionProtocol::new(SELF_SYS, SELF_COMP, FC_SYS, FC_COMP);
+        protocol
+            .begin_upload(vec![mk_item(0, 49.0, -123.0, 50.0)])
+            .expect("upload");
+        let foreign = MavHeader {
+            system_id: FC_SYS + 1,
+            ..fc_header()
+        };
+        for message in [req_int(0), ack_msg(true)] {
+            assert_eq!(
+                protocol.handle(&foreign, &message),
+                (Vec::new(), Vec::new())
+            );
+        }
+        let mut wrong_type = req_int(0);
+        if let M::MISSION_REQUEST_INT(request) = &mut wrong_type {
+            request.mission_type = MavMissionType::MAV_MISSION_TYPE_FENCE;
+        }
+        assert_eq!(
+            protocol.handle(&fc_header(), &wrong_type),
+            (Vec::new(), Vec::new())
+        );
+        protocol.abort();
+        protocol.begin_download();
+        let count = M::MISSION_COUNT(MISSION_COUNT_DATA {
+            target_system: SELF_SYS,
+            target_component: SELF_COMP,
+            count: 1,
+            ..Default::default()
+        });
+        assert_eq!(protocol.handle(&foreign, &count), (Vec::new(), Vec::new()));
+    }
+
+    #[test]
+    fn duplicate_count_preserves_items_and_item_before_count_fails() {
+        let mut protocol = MissionProtocol::new(SELF_SYS, SELF_COMP, FC_SYS, FC_COMP);
+        protocol.begin_download();
+        let (events, _) = protocol.handle(&fc_header(), &item_msg(0));
+        assert!(matches!(
+            events[0],
+            MissionEvent::Failed(MissionError::Unexpected(_))
+        ));
+        protocol.abort();
+        protocol.begin_download();
+        let count = M::MISSION_COUNT(MISSION_COUNT_DATA {
+            target_system: SELF_SYS,
+            target_component: SELF_COMP,
+            count: 2,
+            ..Default::default()
+        });
+        protocol.handle(&fc_header(), &count);
+        protocol.handle(&fc_header(), &item_msg(0));
+        assert_eq!(
+            protocol.handle(&fc_header(), &count),
+            (Vec::new(), Vec::new())
+        );
+        protocol.handle(&fc_header(), &item_msg(1));
+        assert_eq!(protocol.take_downloaded().len(), 2);
+    }
+
+    #[test]
+    fn non_finite_readback_altitude_cannot_become_a_json_zero_height() {
+        let mut raw = mission_item_to_mav(SELF_SYS, SELF_COMP, &mk_item(0, 49.0, -123.0, 50.0));
+        raw.z = f32::NAN;
+        assert!(matches!(
+            mission_item_from_mav(&raw),
+            Err(MissionError::InvalidRequest { .. })
+        ));
+        raw.z = 50.0;
+        raw.param4 = f32::NAN;
+        assert!(mission_item_from_mav(&raw).expect("unspecified yaw").params[3].is_nan());
     }
 }

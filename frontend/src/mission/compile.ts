@@ -171,9 +171,9 @@ function wire(v: number): number {
 }
 
 /** Normalise a wire params array to the 4-tuple the model uses. */
-function params4(params: readonly number[]): [number, number, number, number] {
+function params4(params: readonly (number | null)[]): [number, number, number, number] {
   const out: [number, number, number, number] = [0, 0, 0, 0]
-  for (let i = 0; i < 4; i += 1) out[i] = params[i] ?? 0
+  for (let i = 0; i < 4; i += 1) out[i] = params[i] === null ? Number.NaN : params[i] ?? 0
   return out
 }
 

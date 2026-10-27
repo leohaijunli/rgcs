@@ -39,13 +39,7 @@ export function startMockFeed(): number {
       const { waypoints, currentSeq } = useMissionStore.getState()
       if (waypoints.length === 0) return
       const next = currentSeq == null ? 0 : (currentSeq + 1) % waypoints.length
-      useMissionStore.getState().handleEvent({
-        op: 'mission',
-        kind: 'current_changed',
-        seq: next,
-        sent: 0,
-        total: 0,
-      })
+      useMissionStore.setState({ currentSeq: next })
     }
     const origin = usePrefsStore.getState().initialPosition
     const { lat, lon, alt } = pathAt(t, origin)

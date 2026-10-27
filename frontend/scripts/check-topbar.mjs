@@ -17,6 +17,8 @@ if (!url || !shotsDir) {
 
 /** §7.4: normal (non-field) mode interactive targets are ≥ 32 px. */
 const MIN_TARGET_PX = 32
+/** Radix restores focus asynchronously when the portal unmounts. */
+const FOCUS_RESTORE_BUDGET_MS = 2000
 
 let failed = 0
 const check = (ok, label) => {
@@ -223,7 +225,7 @@ function within(b, width, height) {
   await p.keyboard.press('Enter')
   await p.getByTestId('workflow-panel').waitFor({ state: 'detached' })
   check(await workflow.getAttribute('data-stage') === 'review', 'workflow Enter selects Review')
-  check(await workflow.evaluate((el) => el === document.activeElement), 'workflow selection restores trigger focus')
+  check(await waitUntilOn(p, () => workflow.evaluate((el) => el === document.activeElement), FOCUS_RESTORE_BUDGET_MS), 'workflow selection restores trigger focus within the receipt budget')
   await workflow.click()
   check(await p.getByTestId('workflow-next').isDisabled(), 'the last workflow stage disables Next')
   await p.getByTestId('workflow-previous').click()
@@ -251,7 +253,7 @@ function within(b, width, height) {
   check(await p.getByTestId('tool-params').evaluate((el) => el === document.activeElement), 'Tools arrows wrap to the first item')
   await p.keyboard.press('Escape')
   await p.getByTestId('tools-menu').waitFor({ state: 'detached' })
-  check(await tools.evaluate((el) => el === document.activeElement), 'Tools Escape restores trigger focus')
+  check(await waitUntilOn(p, () => tools.evaluate((el) => el === document.activeElement), FOCUS_RESTORE_BUDGET_MS), 'Tools Escape restores trigger focus within the receipt budget')
 
   await p.getByTestId('settings-open').click()
   await p.getByRole('tab', { name: 'About', exact: true }).click()

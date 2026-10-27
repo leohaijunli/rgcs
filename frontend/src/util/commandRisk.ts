@@ -26,7 +26,11 @@ export const COMMAND_RISK: Record<CommandName, CommandRisk> = {
   land: 'medium',
   rtl: 'medium',
   arm_disarm: 'medium',
+  arm: 'medium',
+  disarm: 'medium',
   set_mode: 'low',
+  goto: 'medium',
+  set_home: 'medium',
 }
 
 /** Risk of a specific mode switch: the core table marks the disruptive modes

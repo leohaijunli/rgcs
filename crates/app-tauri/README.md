@@ -7,6 +7,67 @@ The desktop product and main-window title are **Q-Mag**, configured in
 provides continuity for installed settings. The Rust package/binary is
 `maggcs-app`.
 
+## Owned flight commands and native client cleanup
+
+`flight_command_operations::flight_command_execute` accepts the Rust-derived
+`FlightCommandRequest` for Takeoff, Land, RTL, Set mode, Arm/Disarm, Go to and
+Set home. It authorizes the actual native window/session and captures the existing
+primary command worker/transport. Supplied heights are datum-tagged AMSL.
+
+Takeoff and its optional arm share one owner-bound operation. Preflight is
+rechecked after the takeoff ACK; forced-arm audit persistence is target-bound and
+precedes dispatch. The original deadline also bounds asynchronous preparation.
+`command_cancel` and `command_operation_status` require the exact original native
+caller/session/operation for normal and emergency commands.
+
+The coordinator reserves emergency capacity and native admission supersedes
+normal commands, including their inter-step gaps. Confirmed local retry retirement
+releases flight protocol claims while retaining any uncertain FC outcome and ACK
+quarantine. The Parameters reboot adapter retains its whole-target reconciliation
+policy. Native window destruction expires its captured client ID and retires only
+that client's work; primary I/O and other clients' caches/operations remain alive.
+
+```bash
+cargo test -p maggcs-app --lib flight_command_operations
+```
+
+Sixteen Unix PTY fixtures exercise actual production command/transport services,
+zero-write admission failures, preflight rechecks, partial takeoff, emergency
+supersession, owner-only cancellation, native-close/reopen isolation and uncertain
+ACK outcomes. See the [reviewed contract](../../docs/architecture/af-02b4b-flight-command-ownership.md)
+and [delivery evidence](../../docs/verification/af-02b-flight-commands-20261026.md).
+
+## Owned Mission exchanges
+
+`mission_operations` replaces the main-window enqueue/global-event adapter with
+typed upload, download, clear and set-current replies. Every request authorizes
+the actual native window, captures the existing primary `MissionService` and
+transport generation, claims `MissionTransfer`, and retains its operation result.
+`mission_cancel`/`mission_operation_status` require the exact original
+session/operation.
+
+Progress envelopes identify operation/request/target; passive `MISSION_CURRENT`
+snapshots identify target and receive time. Terminal/downloaded data is returned
+through the owned invocation, not an unscoped event. Native forwarding revalidates
+target generation and drops obsolete/finished operation events.
+
+Cancelled dispatched Mission work stops local retries only. It retains uncertain
+FC state and directs the UI to read back instead of rolling back upload/clear/current.
+Confirmed local retirement releases the operation claim while core reply quarantine
+prevents ambiguous same-generation reuse. A new verified transport generation is
+required after an unresolved wire exchange.
+
+```bash
+cargo test -p maggcs-app --lib mission_operations
+cargo test -p maggcs-core --test mission_owned_integration
+```
+
+Nine PTY/native and nine UDP/core owned cases cover all four verdicts, zero-write
+admission failures, owner-only cancellation, native close/reopen, borrowed Motor
+exclusion, reboot conflict, target event scoping, source/type validation, bounded
+observers and ambiguous failures. See the [contract](../../docs/architecture/af-02b4-mission-ownership-proposal.md)
+and [acceptance evidence](../../docs/verification/af-02b-mission-20261026.md).
+
 ## RTK base and vehicle forwarding
 
 `RtkState::base` is application-owned. `rtk_start_serial` takes an enumerated

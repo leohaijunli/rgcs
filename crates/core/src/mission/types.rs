@@ -10,6 +10,64 @@ use ts_rs::TS;
 
 use super::error::MissionError;
 
+pub const MAX_MISSION_ITEMS: usize = u16::MAX as usize;
+const MISSION_PARAMETER_COUNT: usize = 4;
+const MAX_LATITUDE_INT: i32 = 900_000_000;
+const MAX_LONGITUDE_INT: i32 = 1_800_000_000;
+
+/// Validate the exact wire snapshot before the protocol can narrow or encode it.
+pub fn validate_upload(items: &[MissionItem]) -> Result<(), MissionError> {
+    if items.is_empty() {
+        return Err(MissionError::NoItems);
+    }
+    if items.len() > MAX_MISSION_ITEMS {
+        return Err(MissionError::InvalidRequest {
+            message: "mission item count exceeds the u16 wire limit".into(),
+        });
+    }
+    for (index, item) in items.iter().enumerate() {
+        if usize::from(item.seq) != index {
+            return Err(MissionError::InvalidRequest {
+                message: "mission sequences must be contiguous and zero-based".into(),
+            });
+        }
+        if item.params.len() > MISSION_PARAMETER_COUNT
+            || item.params.iter().any(|value| value.is_infinite())
+            || !item.z.is_finite()
+        {
+            return Err(MissionError::InvalidRequest {
+                message: "mission parameters/altitude are not encodable".into(),
+            });
+        }
+        if <::mavlink::common::MavCmd as ::num_traits::FromPrimitive>::from_u16(item.command)
+            .is_none()
+        {
+            return Err(MissionError::InvalidRequest {
+                message: format!("unknown MAV_CMD {}", item.command),
+            });
+        }
+        let coordinate = command_uses_coordinate(item.command);
+        if coordinate == (item.frame == MissionFrame::Mission) {
+            return Err(MissionError::InvalidRequest {
+                message: "mission command and coordinate frame do not agree".into(),
+            });
+        }
+        if matches!(
+            item.frame,
+            MissionFrame::GlobalInt
+                | MissionFrame::GlobalRelativeAltInt
+                | MissionFrame::GlobalTerrainAltInt
+        ) && (!(-MAX_LATITUDE_INT..=MAX_LATITUDE_INT).contains(&item.x)
+            || !(-MAX_LONGITUDE_INT..=MAX_LONGITUDE_INT).contains(&item.y))
+        {
+            return Err(MissionError::InvalidRequest {
+                message: "mission position is outside WGS84 coordinate bounds".into(),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Coordinate frame of a mission item.
 ///
 /// Only the integer (`*_INT`) global frames are modelled: a mission item is
@@ -130,13 +188,36 @@ pub struct MissionItem {
     /// For an integer mission item P5/P6/P7 are the coordinate fields, which
     /// live in `x`/`y`/`z`; duplicating them here would lose precision when the
     /// `i32` lat/lon is narrowed to `f32` (issues.md #10).
-    pub params: Vec<f32>,
     pub x: i32,
     pub y: i32,
     pub z: f32,
     pub autocontinue: bool,
     /// Whether this item is the active one (1 for the first item on upload).
     pub current: bool,
+    #[serde(with = "nullable_parameters")]
+    #[ts(type = "Array<number | null>")]
+    pub params: Vec<f32>,
+}
+
+// MAVLink uses NaN for unspecified parameters (notably waypoint heading).
+// JSON uses null for that sentinel; preserve it on download -> upload.
+mod nullable_parameters {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(values: &[f32], serializer: S) -> Result<S::Ok, S::Error> {
+        values
+            .iter()
+            .map(|value| if value.is_nan() { None } else { Some(*value) })
+            .collect::<Vec<_>>()
+            .serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<f32>, D::Error> {
+        Ok(Vec::<Option<f32>>::deserialize(deserializer)?
+            .into_iter()
+            .map(|value| value.unwrap_or(f32::NAN))
+            .collect())
+    }
 }
 
 impl MissionItem {
@@ -185,5 +266,48 @@ mod tests {
         assert!(!command_uses_coordinate(178)); // DO_CHANGE_SPEED
         assert!(!command_uses_coordinate(93)); // NAV_DELAY
         assert!(!command_uses_coordinate(20)); // NAV_RETURN_TO_LAUNCH
+    }
+
+    #[test]
+    fn nullable_heading_round_trips_without_becoming_zero() {
+        let mut item = MissionItem::waypoint(49.0, -123.0, 50.0, MissionFrame::GlobalInt);
+        item.params[3] = f32::NAN;
+        let json = serde_json::to_value(&item).expect("JSON mission");
+        assert!(json["params"][3].is_null());
+        let restored: MissionItem = serde_json::from_value(json).expect("null is the NaN sentinel");
+        assert!(restored.params[3].is_nan());
+        assert_eq!(restored.x, item.x);
+        assert!(validate_upload(&[restored]).is_ok());
+    }
+
+    #[test]
+    fn invalid_uploads_fail_before_narrowing_or_encoding() {
+        let good = MissionItem::waypoint(49.0, -123.0, 50.0, MissionFrame::GlobalInt);
+        let mut invalid = Vec::new();
+        let mut item = good.clone();
+        item.seq = 1;
+        invalid.push(item);
+        let mut item = good.clone();
+        item.command = u16::MAX;
+        invalid.push(item);
+        let mut item = good.clone();
+        item.frame = MissionFrame::Mission;
+        invalid.push(item);
+        let mut item = good.clone();
+        item.z = f32::NAN;
+        invalid.push(item);
+        let mut item = good.clone();
+        item.x = MAX_LATITUDE_INT + 1;
+        invalid.push(item);
+        let mut item = good.clone();
+        item.params.push(0.0);
+        invalid.push(item);
+        let mut item = good.clone();
+        item.params[0] = f32::INFINITY;
+        invalid.push(item);
+        for item in invalid {
+            assert!(validate_upload(&[item]).is_err());
+        }
+        assert!(validate_upload(&vec![good; MAX_MISSION_ITEMS + 1]).is_err());
     }
 }

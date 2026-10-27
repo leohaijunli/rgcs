@@ -30,6 +30,7 @@ pub mod plan;
 pub mod project;
 pub mod recorder;
 pub mod rtk;
+pub mod runtime;
 pub mod safety;
 pub mod shared_state;
 pub mod signals;

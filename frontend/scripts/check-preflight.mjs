@@ -1,7 +1,8 @@
 // End-to-end check for the U5 preflight checklist surface.
 //   node check-preflight.mjs <viteUrl> <shotsDir>
 //
-// The fake shell intercepts `preflight_checklist` and `send_arm_disarm`:
+// The fake shell intercepts `preflight_checklist`, the Runtime client API and
+// `flight_command_execute`:
 //   - the checklist is `window.__mockChecklist` (a blocked one by default)
 //   - an ungated arm rejects with the structured `PreflightRefusal` the real
 //     backend returns when the gate blocks; a forced arm (force payload)
@@ -11,7 +12,7 @@
 //   1. the FlightMenu Preflight entry opens the full checklist (groups + badge)
 //   2. a blocked arm auto-opens the panel with the reason + force section
 //   3. the wrong keyword cannot confirm; `FORCE ARM` enables it
-//   4. the forced arm sends exactly one `send_arm_disarm` with the force
+//   4. the forced arm sends exactly one typed Arm intent with the force
 //      payload, then the panel closes
 //   5. a warn-only checklist requires per-item confirmation before arming
 import { chromium } from 'playwright'
@@ -96,7 +97,7 @@ await page.addInitScript(() => {
       time_boot_ms: 1,
       latitude_deg: 49.2831,
       longitude_deg: -123.1207,
-      altitude: { datum: 'AMSL', meters: 48.5 },
+      altitude: { datum: 'AMSL_EGM96', meters: 48.5 },
       relative_alt_m: 40,
       velocity: { x_m_s: 0, y_m_s: 0, z_m_s: 0 },
       heading_deg: 12,
@@ -125,7 +126,7 @@ await page.addInitScript(() => {
       radio_at_ms: null,
     },
     extended_sys_state: { landed_state: 'in_air', vtol_state: 'undefined' },
-    home: { latitude_deg: 49.2831, longitude_deg: -123.1207, altitude: { datum: 'AMSL', meters: 8.5 } },
+    home: { latitude_deg: 49.2831, longitude_deg: -123.1207, altitude: { datum: 'AMSL_EGM96', meters: 8.5 } },
     estimator: null,
     vibration: null,
     rc_channels: null,
@@ -169,7 +170,31 @@ await page.addInitScript(() => {
 
   window.__mockCommands = []
   window.__mockUnhandled = []
+  const target = {
+    vehicle_id: 'preflight-vehicle',
+    session_id: 'preflight-target-session',
+    link_id: 'preflight-link',
+    generation: '1',
+    mavlink_target: { system_id: 1, component_id: 1 },
+  }
+  const runtimeSession = {
+    owner: { client_id: 'preflight-client', instance_id: 'preflight-flight-controls' },
+    target,
+    module_id: 'flight-controls',
+  }
+  let operation = 0
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
+  const flightReply = (request, result = 'accepted') => ({
+    operation: {
+      id: `preflight-operation-${++operation}`,
+      owner: structuredClone(request.context.session.owner),
+      target: structuredClone(request.context.session.target),
+    },
+    command: request.intent.kind,
+    steps: [{ step: request.intent.kind, result }],
+  })
   window.__mockChecklist = 'blocked' // 'blocked' | 'warn' | 'clean'
+  window.__mockArmOutcome = 'accepted' // 'accepted' | 'denied' | 'uncertain'
   window.__mockFeedStart = (intervalMs = 250) => {
     clearInterval(feedTimer)
     window.__mockTelemetry(Date.now())
@@ -186,8 +211,6 @@ await page.addInitScript(() => {
     armed = next
     window.__mockTelemetry(Date.now())
   }
-  window.__mockCommandEvent = (payload) => deliver('command', payload)
-
   window.__TAURI_INTERNALS__ = {
     transformCallback: (cb, once = false) => {
       const id = Math.floor(Math.random() * 1e9)
@@ -207,26 +230,64 @@ await page.addInitScript(() => {
       if (cmd === 'enumerate_devices') return []
       if (cmd === 'link_status' || cmd === 'connect' || cmd === 'link_error') return null
       if (cmd === 'flight_mode_table') return []
+      if (cmd === 'runtime_targets') {
+        return [{
+          link_id: target.link_id,
+          target,
+          availability: 'available',
+          heartbeat_age_ms: 0,
+          parameter_service_available: true,
+          roles: ['primary'],
+          transport_owner: 'primary',
+          endpoint: 'mock-primary',
+        }]
+      }
+      if (cmd === 'runtime_client_attach') return structuredClone(runtimeSession)
+      if (cmd === 'runtime_client_validate') {
+        if (!same(args.session, runtimeSession)) throw { code: 'not_owner' }
+        return null
+      }
+      if (cmd === 'runtime_client_detach') return null
       if (cmd === 'preflight_checklist') {
         window.__mockCommands.push({ cmd, ...(args ?? {}) })
         return window.__mockChecklist === 'warn' ? warnOnly : window.__mockChecklist === 'clean' ? { items: [] } : blocked
       }
-      if (cmd === 'send_arm_disarm') {
+      if (cmd === 'flight_command_execute') {
         const entry = { cmd, ...(args ?? {}) }
         window.__mockCommands.push(entry)
-        if (args.arm === true && !args.force && window.__mockChecklist === 'blocked') {
-          // The real backend refuses a blocked arm with the structured refusal.
+        const intent = args.request.intent
+        if (intent.kind === 'arm' && !intent.force && window.__mockChecklist === 'blocked') {
           throw {
-            kind: 'blocked',
-            items: blocked.items.filter((i) => i.status === 'fail' || i.status === 'unknown'),
-            message: 'preflight blocks arming',
+            code: 'preflight',
+            refusal: {
+              kind: 'blocked',
+              items: blocked.items.filter((i) => i.status === 'fail' || i.status === 'unknown'),
+              message: 'preflight blocks arming',
+            },
           }
         }
-        if (args.arm === true) {
+        if (intent.kind === 'arm' && window.__mockArmOutcome === 'denied') {
+          return flightReply(args.request, 'denied')
+        }
+        if (intent.kind === 'arm' && window.__mockArmOutcome === 'uncertain') {
+          throw {
+            code: 'command',
+            error: {
+              code: 'reconciliation_required',
+              operation: flightReply(args.request).operation,
+              reason: 'Local retries retired; FC arm outcome is unconfirmed',
+            },
+          }
+        }
+        if (intent.kind === 'arm') {
           armed = true // a successful arm (normal, acked-warn or forced) arms the vehicle
           window.__mockTelemetry(Date.now())
         }
-        return null
+        if (intent.kind === 'disarm') {
+          armed = false
+          window.__mockTelemetry(Date.now())
+        }
+        return flightReply(args.request)
       }
       if (cmd === 'actuator_stop') {
         window.__mockCommands.push({ cmd })
@@ -262,7 +323,8 @@ await mkdir(shotsDir, { recursive: true })
 await waitUntil(async () => (await page.locator('[data-testid="flight-menu"]').count()) === 1, 20000)
 
 const armCalls = () =>
-  page.evaluate(() => window.__mockCommands.filter((c) => c.cmd === 'send_arm_disarm'))
+  page.evaluate(() => window.__mockCommands.filter((c) =>
+    c.cmd === 'flight_command_execute' && c.request.intent.kind === 'arm'))
 const dialog = page.locator('[data-testid="preflight-dialog"]')
 
 // --- 1. the FlightMenu Preflight entry opens the full checklist ------------
@@ -308,25 +370,47 @@ check(await waitUntil(async () => !(await confirm.isDisabled()), 3000), 'the ver
 await page.screenshot({ path: join(shotsDir, 'preflight-force-ready.png') })
 
 // --- 4. the forced arm sends exactly one command with the force payload -----
+await page.evaluate(() => { window.__mockArmOutcome = 'denied' })
+const beforeDenied = (await armCalls()).length
+await confirm.click()
+check(await waitUntil(async () => (await armCalls()).length === beforeDenied + 1, 5000),
+  'one confirmation sends exactly one forced arm attempt')
+check(await waitUntil(async () => (await dialog.innerText()).includes('denied'), 5000),
+  'a denied forced arm keeps the panel and its verdict visible')
+check(await confirm.isEnabled(), 'a denied arm restores confirmation instead of remaining busy')
+await confirm.scrollIntoViewIfNeeded()
+await page.screenshot({ path: join(shotsDir, 'preflight-force-denied.png') })
+await page.evaluate(() => { window.__mockArmOutcome = 'uncertain' })
+await confirm.click()
+check(await waitUntil(async () => (await dialog.innerText()).includes('FC arm outcome is unconfirmed'), 5000),
+  'an uncertain forced arm keeps the reconciliation reason visible')
+check(await confirm.isEnabled(), 'an uncertain arm restores confirmation')
+await confirm.scrollIntoViewIfNeeded()
+await page.screenshot({ path: join(shotsDir, 'preflight-force-uncertain.png') })
+await page.evaluate(() => { window.__mockArmOutcome = 'accepted' })
+const beforeAccepted = (await armCalls()).length
 await confirm.click()
 check(
-  await waitUntil(async () => (await armCalls()).some((c) => c.force?.reason === 'safety_override'), 5000),
+  await waitUntil(async () => (await armCalls()).some((c) => c.request.intent.force?.reason === 'safety_override'), 5000),
   'the forced arm carries the chosen reason',
 )
 const sent = await armCalls()
-const forced = sent.filter((c) => c.force)
-check(forced.length === 1, `exactly one forced arm command goes out (got ${forced.length})`)
-check(forced[0].force?.note === null || typeof forced[0].force?.note === 'string', 'the note is optional')
+const forced = sent.filter((c) => c.request.intent.force)
+check(sent.length === beforeAccepted + 1, 'successful confirmation sends exactly one additional forced arm')
+check(forced.length === 3, `denied, uncertain and accepted attempts have separate requests (got ${forced.length})`)
+check(
+  forced[0].request.intent.force?.note === null || typeof forced[0].request.intent.force?.note === 'string',
+  'the note is optional',
+)
 check(await waitUntil(async () => (await dialog.count()) === 0, 5000), 'the panel closes after a successful forced arm')
+check(await page.locator('[data-testid="command-status"]').getAttribute('data-command') === 'Arm',
+  'Arm acceptance keeps the requested action after telemetry becomes armed')
+await page.screenshot({ path: join(shotsDir, 'preflight-force-accepted.png') })
 
 // --- 4b. the armed vehicle may Take off past the gate -----------------------
 // The forced arm armed the vehicle; Takeoff must not re-block with the same
 // checklist (the arm decision stands, PX4 takeoff handling applies).
 await page.evaluate(() => window.__mockSetChecklist('blocked'))
-// The mock arms the vehicle; the real backend also acks, which clears the
-// command store's pending slot (without it the FlightMenu buttons stay
-// disabled in the mock). Emit the same ack the real PX4 sends.
-await page.evaluate(() => window.__mockCommandEvent({ command: 'arm_disarm', kind: 'completed', result: 'accepted' }))
 await page.waitForTimeout(300)
 await page.locator('[data-testid="flight-menu"]').click()
 const tk = page.locator('[data-testid="flight-cmd-takeoff"]')
@@ -336,19 +420,27 @@ await page.waitForTimeout(HOLD_AT_MS)
 await page.mouse.up()
 const takeoffState = await page.evaluate(() => ({
   dialog: document.querySelectorAll('[data-testid="preflight-dialog"]').length,
-  cmds: window.__mockCommands.slice(-4).map((c) => ({ cmd: c.cmd, name: c.name, arm: c.arm })),
-  armed: (window.__mockCommands.some((c) => c.cmd === 'send_arm_disarm' && c.arm === true)),
+  cmds: window.__mockCommands.slice(-4).map((c) => ({ cmd: c.cmd, kind: c.request?.intent?.kind })),
+  armed: window.__mockCommands.some((c) => c.cmd === 'flight_command_execute' && c.request.intent.kind === 'arm'),
 }))
 console.log('takeoff state:', JSON.stringify(takeoffState))
 check(
   await waitUntil(
     async () =>
       (await page.evaluate(() =>
-        window.__mockCommands.some((c) => c.cmd === 'send_command' && c.name === 'takeoff'),
+        window.__mockCommands.some((c) => c.cmd === 'flight_command_execute' && c.request.intent.kind === 'takeoff'),
       )) === true,
     5000,
   ),
   'takeoff proceeds after the forced arm (gate does not re-block)',
+)
+const takeoffRequest = await page.evaluate(() =>
+  window.__mockCommands.find((c) => c.cmd === 'flight_command_execute' && c.request.intent.kind === 'takeoff'))
+check(takeoffRequest?.request.intent.plan_state != null, 'takeoff carries the current plan state')
+check(
+  Array.isArray(takeoffRequest?.request.intent.acknowledged_warnings)
+    && takeoffRequest.request.intent.acknowledged_warnings.length === 0,
+  'the current takeoff menu carries an empty warning acknowledgement list',
 )
 
 // --- 5. a warn-only checklist needs per-item confirmation -------------------
@@ -374,11 +466,23 @@ check(
   await waitUntil(async () => (await ackArm.isDisabled()) === false, 3000),
   'confirming every warning enables the arm',
 )
+const beforeWarn = (await armCalls()).length
 await ackArm.click()
 check(
-  await waitUntil(async () => (await armCalls()).length === 3, 5000),
+  await waitUntil(async () => (await armCalls()).length === beforeWarn + 1, 5000),
   'the confirmed warn arm is sent (no force payload)',
 )
+const warnedArm = (await armCalls()).at(-1)
+check(
+  warnedArm.request.intent.force === null
+    && warnedArm.request.intent.acknowledged_warnings.includes('gps_fix')
+    && warnedArm.request.intent.plan_state != null,
+  'Arm carries force, plan state and acknowledged warnings in one typed intent',
+)
+check(await waitUntil(async () => (await dialog.count()) === 0, 5000), 'the accepted warning arm closes only its own panel')
+check(await page.locator('[data-testid="command-status"]').getAttribute('data-command') === 'Arm',
+  'warning-arm acceptance also retains its exact requested action')
+await page.screenshot({ path: join(shotsDir, 'preflight-warnings-accepted.png') })
 
 // --- 6. U5 repair entries + the out-of-band acceptance ---------------------
 // A verified plan + a solver preview with infeasible spans: the acceptance
@@ -456,9 +560,22 @@ check(
 )
 await page.screenshot({ path: join(shotsDir, 'preflight-u5-repairs.png') })
 
+const scoped = await page.evaluate(() =>
+  window.__mockCommands.filter((c) => c.cmd === 'flight_command_execute'))
+const requestIds = scoped.map((entry) => entry.request?.context?.request_id)
+check(
+  scoped.every((entry) =>
+    entry.request?.context?.session?.module_id === 'flight-controls'
+    && typeof entry.request.context.request_id === 'string'
+    && entry.request.context.request_id.length > 0),
+  'every preflight execute carries its exact session and request identity',
+)
+check(new Set(requestIds).size === requestIds.length, 'preflight executes use fresh request identities')
+
 await browser.close()
 if (pageErrors.length > 0) {
-  console.log(`  page errors: ${pageErrors.join(' | ')}`)
+  console.error(`  page errors: ${pageErrors.join(' | ')}`)
+  process.exit(2)
 }
 if (failed > 0) {
   console.log(`${failed} FAILED`)

@@ -8,27 +8,33 @@ mod actuator_service;
 mod alert_service;
 mod calibration_service;
 mod capture_service;
+mod command_operations;
 mod command_service;
 mod commands;
 mod config_service;
 mod console_service;
 mod diagnostics_service;
+mod flight_command_operations;
 mod inspector_service;
 mod instruments_service;
 mod lifecycle_service;
 mod logs_service;
 mod main_link_service;
 mod map_service;
+mod mission_operations;
 mod mission_service;
 mod motor_control_service;
 mod motor_test_state;
 mod motor_tone_service;
+mod params_operations;
 mod params_service;
 mod project_service;
 mod px4_shell;
 mod recorder_service;
 mod rtk_service;
 mod run_service;
+mod runtime_clients;
+mod runtime_facade;
 mod serial_service;
 mod shared_state_service;
 mod state;
@@ -62,6 +68,15 @@ pub fn run() {
             alert_service::alert_ack_all,
             alert_service::alert_clear_acknowledged,
             commands::get_snapshot,
+            runtime_facade::runtime_targets,
+            runtime_facade::runtime_target_snapshot,
+            runtime_facade::runtime_telemetry_snapshot,
+            runtime_facade::runtime_parameter_observation,
+            runtime_clients::runtime_client_attach,
+            runtime_clients::runtime_client_detach,
+            runtime_clients::runtime_client_validate,
+            command_operations::command_cancel,
+            command_operations::command_operation_status,
             commands::enumerate_devices,
             serial_service::serial_inventory,
             serial_service::serial_resolve_endpoint,
@@ -86,10 +101,12 @@ pub fn run() {
             project_service::project_export,
             project_service::project_import,
             commands::install_udev_rules,
-            commands::mission_upload,
-            commands::mission_download,
-            commands::mission_clear,
-            commands::mission_set_current,
+            mission_operations::mission_upload,
+            mission_operations::mission_download,
+            mission_operations::mission_clear,
+            mission_operations::mission_set_current,
+            mission_operations::mission_cancel,
+            mission_operations::mission_operation_status,
             commands::survey_generate_sweep,
             commands::survey_generate_cloverleaf,
             commands::survey_compile_pattern,
@@ -134,12 +151,8 @@ pub fn run() {
             rtk_service::rtk_serial_ports,
             rtk_service::rtk_base_status,
             rtk_service::rtk_link_status,
-            commands::send_command,
-            commands::send_goto,
-            commands::send_set_home,
+            flight_command_operations::flight_command_execute,
             commands::flight_mode_table,
-            commands::send_set_mode,
-            commands::send_arm_disarm,
             commands::preflight_checklist,
             commands::set_message_interval,
             actuator_service::actuator_open,
@@ -185,6 +198,7 @@ pub fn run() {
             params_service::params_open,
             params_service::params_pull,
             params_service::params_cancel,
+            params_service::params_operation_status,
             params_service::params_set,
             params_service::params_fc_version,
             params_service::params_reboot,

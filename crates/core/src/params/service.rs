@@ -18,6 +18,7 @@ use super::session::{IncomingParam, ParamSession, SetOutcome};
 use crate::mavlink::connection::{ConnectionEvent, ConnectionHandle};
 use crate::mavlink::router::MessageRoute;
 use crate::mavlink::MavMessage;
+use crate::runtime::{OperationId, TransportGeneration};
 use ::mavlink::MessageData;
 
 /// Routed message ids the parameter service consumes.
@@ -37,12 +38,83 @@ const SET_TIMEOUT: Duration = Duration::from_secs(1);
 pub const TRANSACTION_TIMEOUT: Duration = Duration::from_secs(5);
 /// Poll period while waiting for `AUTOPILOT_VERSION` to land.
 const FC_VERSION_POLL: Duration = Duration::from_millis(50);
+const COMMAND_CAPACITY: usize = 8;
+const EVENT_CAPACITY: usize = 256;
+const SERVICE_TICK: Duration = Duration::from_millis(50);
+const OWNED_CANCEL_TIMEOUT: Duration = Duration::from_secs(1);
+const PARAM_ENCODE_BYTEWISE_CAPABILITY: u64 = 16;
+const PARAM_ENCODE_CAST_CAPABILITY: u64 = 131_072;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 #[ts(export)]
 pub struct ParamObservation {
     pub entry: ParamEntry,
     pub age_ms: u64,
+}
+
+/// Identity and admission boundary of one existing parameter-worker transaction.
+/// Native composition issues its OperationId and verifies the target. This does
+/// not create a second protocol/cache or grant device authority by itself.
+#[derive(Clone)]
+pub struct ParamTransaction {
+    id: OperationId,
+    generation: TransportGeneration,
+    deadline: tokio::time::Instant,
+    cancellation: crate::devices::SerialCancellation,
+}
+
+impl ParamTransaction {
+    pub fn new(
+        id: OperationId,
+        generation: TransportGeneration,
+        timeout: Duration,
+    ) -> Result<Self, ParamError> {
+        if timeout.is_zero() {
+            return Err(ParamError::Timeout);
+        }
+        let deadline = tokio::time::Instant::now()
+            .checked_add(timeout)
+            .ok_or(ParamError::Timeout)?;
+        Ok(Self {
+            id,
+            generation,
+            deadline,
+            cancellation: crate::devices::SerialCancellation::new(),
+        })
+    }
+
+    pub fn id(&self) -> &OperationId {
+        &self.id
+    }
+
+    pub fn generation(&self) -> TransportGeneration {
+        self.generation
+    }
+
+    fn check(&self, handle: &ConnectionHandle) -> Result<(), ParamError> {
+        if self.cancellation.is_cancelled() {
+            return Err(ParamError::Cancelled);
+        }
+        if tokio::time::Instant::now() >= self.deadline {
+            return Err(ParamError::Timeout);
+        }
+        if handle.generation() != self.generation.get() {
+            return Err(ParamError::TargetChanged);
+        }
+        if handle.is_shutdown_requested() {
+            return Err(ParamError::NotConnected);
+        }
+        Ok(())
+    }
+}
+
+/// The shared protocol stream retains identity for scoped native publication.
+/// Legacy consumers can still subscribe to ParamEvent on the same worker.
+#[derive(Debug, Clone)]
+pub struct ScopedParamEvent {
+    pub transaction_id: Option<OperationId>,
+    pub generation: u64,
+    pub event: ParamEvent,
 }
 
 /// Terminal set outcome surfaced to the caller.
@@ -78,7 +150,11 @@ pub enum ParamEvent {
 }
 
 /// Errors surfaced through the command channel.
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+#[derive(
+    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, thiserror::Error, ts_rs::TS,
+)]
+#[ts(export, rename = "ParamProtocolError")]
+#[serde(tag = "code", rename_all = "snake_case")]
 pub enum ParamError {
     #[error("another parameter transaction is running")]
     Busy,
@@ -88,6 +164,8 @@ pub enum ParamError {
     Timeout,
     #[error("parameter transaction cancelled")]
     Cancelled,
+    #[error("parameter transaction belongs to an earlier target generation")]
+    TargetChanged,
     #[error("parameter name must contain 1–16 non-NUL ASCII characters")]
     InvalidName,
     #[error("parameter value does not match {expected:?}")]
@@ -135,11 +213,21 @@ struct SetRequest {
     value: ParamValue,
     ptype: ParamType,
     reply: oneshot::Sender<Result<SetResult, ParamError>>,
+    transaction: Option<ParamTransaction>,
 }
 
 enum Command {
     Pull(oneshot::Sender<Result<(), ParamError>>),
+    PullOwned {
+        transaction: ParamTransaction,
+        reply: oneshot::Sender<Result<super::session::PullReport, ParamError>>,
+    },
     Cancel,
+    CancelOwned {
+        id: OperationId,
+        generation: TransportGeneration,
+        reply: oneshot::Sender<bool>,
+    },
     Shutdown,
     Set(Box<SetRequest>),
     Read(Box<ReadRequest>),
@@ -149,6 +237,7 @@ enum Command {
 struct ReadRequest {
     name: String,
     reply: oneshot::Sender<Result<ParamEntry, ParamError>>,
+    transaction: Option<ParamTransaction>,
 }
 
 /// Handle to the running service.
@@ -158,6 +247,7 @@ pub struct ParamService {
     cache: ParamCache,
     fc_version: FcVersion,
     events: broadcast::Sender<ParamEvent>,
+    scoped_events: broadcast::Sender<ScopedParamEvent>,
 }
 
 /// The FC's reported AUTOPILOT_VERSION, invalidated when the link is lost.
@@ -205,26 +295,30 @@ impl ParamService {
         broadcast::Receiver<ParamEvent>,
         tokio::task::JoinHandle<()>,
     ) {
-        let (tx, cmd_rx) = mpsc::channel(8);
-        let (evt_tx, evt_rx) = broadcast::channel(256);
+        let (tx, cmd_rx) = mpsc::channel(COMMAND_CAPACITY);
+        let (evt_tx, evt_rx) = broadcast::channel(EVENT_CAPACITY);
+        let (scoped_events, _) = broadcast::channel(EVENT_CAPACITY);
         let cache = ParamCache::default();
         let fc_version = FcVersion::default();
         let service_events = evt_tx.clone();
-        let task = tokio::spawn(run(
+        let worker = ParamWorker::new(
             handle,
-            cmd_rx,
-            evt_tx,
+            EventChannels {
+                legacy: evt_tx,
+                scoped: scoped_events.clone(),
+            },
             cache.clone(),
             fc_version.clone(),
-            target_sys,
-            target_comp,
-        ));
+            (target_sys, target_comp),
+        );
+        let task = tokio::spawn(worker.run(cmd_rx));
         (
             Self {
                 cmd_tx: tx,
                 cache,
                 fc_version,
                 events: service_events,
+                scoped_events,
             },
             evt_rx,
             task,
@@ -244,6 +338,106 @@ impl ParamService {
     /// Subscribe to this service's protocol events (pull completion etc.).
     pub fn subscribe(&self) -> broadcast::Receiver<ParamEvent> {
         self.events.subscribe()
+    }
+
+    pub fn subscribe_scoped(&self) -> broadcast::Receiver<ScopedParamEvent> {
+        self.scoped_events.subscribe()
+    }
+
+    pub async fn pull_owned(
+        &self,
+        transaction: ParamTransaction,
+    ) -> Result<super::session::PullReport, ParamError> {
+        let (reply, response) = oneshot::channel();
+        self.await_owned(
+            transaction.clone(),
+            Command::PullOwned { transaction, reply },
+            response,
+        )
+        .await
+    }
+
+    pub async fn read_owned(
+        &self,
+        transaction: ParamTransaction,
+        name: &str,
+    ) -> Result<ParamEntry, ParamError> {
+        validate_name(name)?;
+        let (reply, response) = oneshot::channel();
+        let request = ReadRequest {
+            name: name.into(),
+            reply,
+            transaction: Some(transaction.clone()),
+        };
+        self.await_owned(transaction, Command::Read(Box::new(request)), response)
+            .await
+    }
+
+    pub async fn set_owned(
+        &self,
+        transaction: ParamTransaction,
+        name: &str,
+        value: ParamValue,
+        ptype: ParamType,
+    ) -> Result<SetResult, ParamError> {
+        validate_name(name)?;
+        validate_value(value, ptype)?;
+        let (reply, response) = oneshot::channel();
+        let request = SetRequest {
+            name: name.into(),
+            value,
+            ptype,
+            reply,
+            transaction: Some(transaction.clone()),
+        };
+        self.await_owned(transaction, Command::Set(Box::new(request)), response)
+            .await
+    }
+
+    /// Revoke queued/inflight intent synchronously, then wait for this worker
+    /// to confirm only the matching transaction stopped. An idle/obsolete cancel
+    /// never cancels a different owned or legacy transaction.
+    pub async fn cancel_owned(&self, transaction: &ParamTransaction) -> Result<bool, ParamError> {
+        transaction.cancellation.cancel();
+        let (reply, response) = oneshot::channel();
+        tokio::time::timeout(OWNED_CANCEL_TIMEOUT, async {
+            self.cmd_tx
+                .send(Command::CancelOwned {
+                    id: transaction.id.clone(),
+                    generation: transaction.generation,
+                    reply,
+                })
+                .await
+                .map_err(|_| ParamError::NotConnected)?;
+            response.await.map_err(|_| ParamError::NotConnected)
+        })
+        .await
+        .map_err(|_| ParamError::Timeout)?
+    }
+
+    async fn await_owned<T>(
+        &self,
+        transaction: ParamTransaction,
+        command: Command,
+        response: oneshot::Receiver<Result<T, ParamError>>,
+    ) -> Result<T, ParamError> {
+        let mut guard = OwnedWait {
+            transaction: transaction.clone(),
+            finished: false,
+        };
+        let result = tokio::select! {
+            biased;
+            _ = transaction.cancellation.cancelled() => Err(ParamError::Cancelled),
+            result = tokio::time::timeout_at(transaction.deadline, async {
+                self.cmd_tx.send(command).await.map_err(|_| ParamError::NotConnected)?;
+                response.await.map_err(|_| ParamError::NotConnected)?
+            }) => result.map_err(|_| ParamError::Timeout)?,
+        };
+        guard.finished = true;
+        if result.is_err() {
+            transaction.cancellation.cancel();
+        }
+        result
     }
 
     /// Run a full parameter pull and wait for its completion report.
@@ -346,6 +540,7 @@ impl ParamService {
         let req = ReadRequest {
             name: name.to_string(),
             reply: tx,
+            transaction: None,
         };
         tokio::time::timeout(timeout, async {
             if self
@@ -377,6 +572,7 @@ impl ParamService {
             value,
             ptype,
             reply: tx,
+            transaction: None,
         };
         tokio::time::timeout(TRANSACTION_TIMEOUT, async {
             if self.cmd_tx.send(Command::Set(Box::new(req))).await.is_err() {
@@ -423,6 +619,19 @@ impl ParamService {
         })
         .await
         .map_err(|_| ParamError::Timeout)?
+    }
+}
+
+struct OwnedWait {
+    transaction: ParamTransaction,
+    finished: bool,
+}
+
+impl Drop for OwnedWait {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.transaction.cancellation.cancel();
+        }
     }
 }
 
@@ -489,6 +698,21 @@ impl ParamCache {
             })
     }
 
+    /// A target-bound reader must not relabel a value retained from before a
+    /// transport reopen as an observation of the new generation. The original
+    /// cache remains shared and unchanged; callers may request fresh read-back.
+    pub fn observation_since(&self, name: &str, not_before: Instant) -> Option<ParamObservation> {
+        self.entries
+            .lock()
+            .ok()?
+            .get(name)
+            .filter(|(_, at)| *at >= not_before)
+            .map(|(entry, at)| ParamObservation {
+                entry: entry.clone(),
+                age_ms: at.elapsed().as_millis().min(u64::MAX as u128) as u64,
+            })
+    }
+
     pub fn clear(&self) {
         if let Ok(mut entries) = self.entries.lock() {
             entries.clear();
@@ -511,313 +735,471 @@ impl ParamCache {
             .unwrap_or_default()
     }
 
-    fn update(&self, entry: ParamEntry) {
+    fn update(&self, entry: ParamEntry, received_at: Instant) {
         if let Ok(mut guard) = self.entries.lock() {
-            guard.insert(entry.name.clone(), (entry, Instant::now()));
+            guard.insert(entry.name.clone(), (entry, received_at));
         }
     }
 }
 
-/// The service shell: command channel + routed frames + a ticker feeding
-/// the pure session.
-async fn run(
+struct EventChannels {
+    legacy: broadcast::Sender<ParamEvent>,
+    scoped: broadcast::Sender<ScopedParamEvent>,
+}
+
+type ReadReply = (String, oneshot::Sender<Result<ParamEntry, ParamError>>);
+type PullReply = oneshot::Sender<Result<super::session::PullReport, ParamError>>;
+
+/// One service shell around the unchanged pure ParamSession. Ownership identity
+/// belongs to its accepted transaction, never the current UI/global selection.
+struct ParamWorker {
     handle: ConnectionHandle,
-    mut cmd_rx: mpsc::Receiver<Command>,
-    evt_tx: broadcast::Sender<ParamEvent>,
+    events: crate::mavlink::router::RoutedEvents,
+    output: EventChannels,
     cache: ParamCache,
     fc_version: FcVersion,
-    target_sys: u8,
-    target_comp: u8,
-) {
-    use super::session::PullUpdate;
+    target: (u8, u8),
+    generation: u64,
+    session: ParamSession,
+    owned: Option<ParamTransaction>,
+    started_at: Option<Instant>,
+    pull_reply: Option<PullReply>,
+    read_reply: Option<ReadReply>,
+    set_reply: PendingReply,
+    batch: Vec<ParamEntry>,
+    batch_names: std::collections::HashSet<String>,
+    progress: Option<(u16, u16)>,
+    quiet_deadline: Option<tokio::time::Instant>,
+    read_deadline: Option<tokio::time::Instant>,
+    set_deadline: Option<tokio::time::Instant>,
+}
 
-    let mut events = handle
-        .subscribe_route(MessageRoute::messages(PARAM_MESSAGE_IDS).from(target_sys, target_comp));
-    let mut session = ParamSession::default();
-    let mut batch: Vec<ParamEntry> = Vec::new();
-    let mut batch_names: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut last_progress: Option<(u16, u16)> = None;
-    let mut quiet_deadline: Option<tokio::time::Instant> = None;
-    let mut set_deadline: Option<tokio::time::Instant> = None;
-    let mut pending_set_reply = PendingReply::new();
-    let mut pending_read_reply: Option<(String, oneshot::Sender<Result<ParamEntry, ParamError>>)> =
-        None;
-    let mut read_deadline: Option<tokio::time::Instant> = None;
-    let mut fill_tick = tokio::time::interval(Duration::from_millis(50));
-    fill_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+impl ParamWorker {
+    fn new(
+        handle: ConnectionHandle,
+        output: EventChannels,
+        cache: ParamCache,
+        fc_version: FcVersion,
+        target: (u8, u8),
+    ) -> Self {
+        let events = handle
+            .subscribe_route(MessageRoute::messages(PARAM_MESSAGE_IDS).from(target.0, target.1));
+        let generation = handle.generation();
+        Self {
+            handle,
+            events,
+            output,
+            cache,
+            fc_version,
+            target,
+            generation,
+            session: ParamSession::default(),
+            owned: None,
+            started_at: None,
+            pull_reply: None,
+            read_reply: None,
+            set_reply: PendingReply::new(),
+            batch: Vec::new(),
+            batch_names: Default::default(),
+            progress: None,
+            quiet_deadline: None,
+            read_deadline: None,
+            set_deadline: None,
+        }
+    }
 
-    loop {
-        // Drain one fill request per tick (rate-limit friendly).
-        if session.pull_active() {
-            if let Some(request) = session.next_fill_request() {
-                if let Some(frame) = outbound_frame(&request, target_sys, target_comp) {
-                    if handle.send(frame).await.is_err() {
-                        return;
-                    }
-                }
+    fn emit(&self, event: ParamEvent) {
+        if self.output.legacy.receiver_count() > 0 {
+            let _ = self.output.legacy.send(event.clone());
+        }
+        let _ = self.output.scoped.send(ScopedParamEvent {
+            transaction_id: self
+                .owned
+                .as_ref()
+                .map(|transaction| transaction.id.clone()),
+            generation: self
+                .owned
+                .as_ref()
+                .map_or(self.generation, |transaction| transaction.generation.get()),
+            event,
+        });
+    }
+
+    fn flush(&mut self) {
+        if !self.batch.is_empty() {
+            let batch = std::mem::take(&mut self.batch);
+            self.emit(ParamEvent::Batch(batch));
+        }
+        self.batch_names.clear();
+    }
+
+    fn abort(&mut self, error: ParamError) {
+        self.session.cancel();
+        self.flush();
+        self.progress = None;
+        self.quiet_deadline = None;
+        self.read_deadline = None;
+        self.set_deadline = None;
+        if let Some(reply) = self.pull_reply.take() {
+            let _ = reply.send(Err(error.clone()));
+        }
+        if let Some((_, reply)) = self.read_reply.take() {
+            let _ = reply.send(Err(error.clone()));
+        }
+        self.set_reply.reject(error);
+        self.owned = None;
+        self.started_at = None;
+    }
+
+    fn reset_transport(&mut self, error: ParamError) {
+        let error = if self.owned.is_none() && error == ParamError::TargetChanged {
+            ParamError::NotConnected
+        } else {
+            error
+        };
+        self.batch.clear();
+        self.batch_names.clear();
+        self.abort(error);
+        self.session = ParamSession::default();
+        self.cache.clear();
+        self.fc_version.clear();
+        self.generation = self.handle.generation();
+    }
+
+    async fn send(&self, frame: MavMessage) -> Result<(), ParamError> {
+        let Some(transaction) = self.owned.as_ref() else {
+            return self
+                .handle
+                .send(frame)
+                .await
+                .map_err(|_| ParamError::NotConnected);
+        };
+        transaction.check(&self.handle)?;
+        let result = tokio::select! {
+            biased;
+            _ = transaction.cancellation.cancelled() => return Err(ParamError::Cancelled),
+            result = self.handle.send_in_generation(frame, transaction.generation.get(), transaction.deadline) => result,
+        };
+        if result.is_err() {
+            transaction.check(&self.handle)?;
+            return Err(ParamError::NotConnected);
+        }
+        transaction.check(&self.handle)
+    }
+
+    async fn send_requests(
+        &self,
+        requests: Vec<super::session::Outbound>,
+    ) -> Result<(), ParamError> {
+        for request in requests {
+            if let Some(frame) = outbound_frame(&request, self.target.0, self.target.1) {
+                self.send(frame).await?;
             }
         }
+        Ok(())
+    }
 
-        tokio::select! {
-            cmd = cmd_rx.recv() => {
-                let Some(cmd) = cmd else { return };
-                match cmd {
-                    Command::Pull(reply) => match session.start_pull() {
-                        Ok(out) => {
-                            quiet_deadline = Some(tokio::time::Instant::now() + PULL_QUIET);
-                            let _ = reply.send(Ok(()));
-                            for req in out {
-                                if let Some(frame) = outbound_frame(&req, target_sys, target_comp) {
-                                    if handle.send(frame).await.is_err() {
-                                        return;
-                                    }
-                                }
-                            }
-                        }
-                        Err(_) => {
-                            let _ = reply.send(Err(ParamError::Busy));
-                        }
-                    },
-                    Command::Cancel => {
-                        session.cancel();
-                        flush_batch(&mut batch, &mut batch_names, &evt_tx);
-                        last_progress = None;
-                        quiet_deadline = None;
-                        set_deadline = None;
-                        read_deadline = None;
-                        if let Some((_, reply)) = pending_read_reply.take() {
-                            let _ = reply.send(Err(ParamError::Cancelled));
-                        }
-                        pending_set_reply.reject(ParamError::Cancelled);
+    fn accept_owned(&self, transaction: Option<&ParamTransaction>) -> Result<(), ParamError> {
+        if let Some(transaction) = transaction {
+            transaction.check(&self.handle)?;
+        }
+        Ok(())
+    }
+
+    fn begin(&mut self, transaction: Option<ParamTransaction>) {
+        self.flush();
+        self.owned = transaction;
+        self.started_at = Some(Instant::now());
+    }
+
+    async fn command(&mut self, command: Command) -> Result<bool, ParamError> {
+        match command {
+            Command::Cancel => self.abort(ParamError::Cancelled),
+            Command::CancelOwned {
+                id,
+                generation,
+                reply,
+            } => {
+                let matches = self.owned.as_ref().is_some_and(|transaction| {
+                    transaction.id == id && transaction.generation == generation
+                });
+                if matches {
+                    self.abort(ParamError::Cancelled);
+                }
+                let _ = reply.send(matches);
+            }
+            Command::Shutdown => {
+                self.abort(ParamError::NotConnected);
+                return Ok(false);
+            }
+            Command::Pull(reply) => match self.session.start_pull() {
+                Ok(requests) => {
+                    self.begin(None);
+                    self.quiet_deadline = Some(tokio::time::Instant::now() + PULL_QUIET);
+                    self.emit(ParamEvent::PullStarted { total: 0 });
+                    let result = self.send_requests(requests).await;
+                    let _ = reply.send(result.clone());
+                    result?;
+                }
+                Err(_) => {
+                    let _ = reply.send(Err(ParamError::Busy));
+                }
+            },
+            Command::PullOwned { transaction, reply } => {
+                if let Err(error) = self.accept_owned(Some(&transaction)) {
+                    let _ = reply.send(Err(error));
+                    return Ok(true);
+                }
+                match self.session.start_pull() {
+                    Ok(requests) => {
+                        self.begin(Some(transaction));
+                        self.pull_reply = Some(reply);
+                        self.quiet_deadline = Some(tokio::time::Instant::now() + PULL_QUIET);
+                        self.emit(ParamEvent::PullStarted { total: 0 });
+                        self.send_requests(requests).await?;
                     }
-                    Command::Shutdown => {
-                        session.cancel();
-                        pending_set_reply.resolve(SetOutcome::Timeout);
-                        if let Some((_, reply)) = pending_read_reply.take() {
-                            let _ = reply.send(Err(ParamError::Timeout));
-                        }
+                    Err(_) => {
+                        let _ = reply.send(Err(ParamError::Busy));
+                    }
+                }
+            }
+            Command::Read(request) => {
+                if let Err(error) = self.accept_owned(request.transaction.as_ref()) {
+                    let _ = request.reply.send(Err(error));
+                    return Ok(true);
+                }
+                match self.session.start_read(&request.name) {
+                    Ok(requests) => {
+                        self.begin(request.transaction);
+                        self.read_reply = Some((request.name, request.reply));
+                        self.read_deadline = Some(tokio::time::Instant::now() + SET_TIMEOUT);
+                        self.send_requests(requests).await?;
+                    }
+                    Err(_) => {
+                        let _ = request.reply.send(Err(ParamError::Busy));
+                    }
+                }
+            }
+            Command::Set(request) => {
+                if let Err(error) = self.accept_owned(request.transaction.as_ref()) {
+                    let _ = request.reply.send(Err(error));
+                    return Ok(true);
+                }
+                match self
+                    .session
+                    .start_set(&request.name, request.value, request.ptype)
+                {
+                    Ok(requests) => {
+                        self.begin(request.transaction);
+                        self.set_reply.0 = Some(request.reply);
+                        self.set_deadline = Some(tokio::time::Instant::now() + SET_TIMEOUT);
+                        self.send_requests(requests).await?;
+                    }
+                    Err(_) => {
+                        let _ = request.reply.send(Err(ParamError::Busy));
+                    }
+                }
+            }
+            Command::RequestFcVersion => {
+                self.send(MavMessage::COMMAND_LONG(
+                    ::mavlink::common::COMMAND_LONG_DATA {
+                        param1: ::mavlink::common::AUTOPILOT_VERSION_DATA::ID as f32,
+                        command: ::mavlink::common::MavCmd::MAV_CMD_REQUEST_MESSAGE,
+                        target_system: self.target.0,
+                        target_component: self.target.1,
+                        ..Default::default()
+                    },
+                ))
+                .await?;
+            }
+        }
+        Ok(true)
+    }
+
+    fn done_pull(&mut self, received: u16, total: u16) {
+        self.flush();
+        self.emit(ParamEvent::PullDone { received, total });
+        if let Some(reply) = self.pull_reply.take() {
+            let _ = reply.send(Ok(super::session::PullReport { received, total }));
+        }
+        self.progress = None;
+        self.quiet_deadline = None;
+        self.owned = None;
+        self.started_at = None;
+    }
+
+    fn message(&mut self, envelope: &crate::mavlink::MessageEnvelope) {
+        use super::session::PullUpdate;
+        if self
+            .handle
+            .connected_since_snapshot()
+            .is_none_or(|opened| envelope.received_at < opened)
+            || (self.session.is_busy()
+                && self
+                    .started_at
+                    .is_some_and(|started| envelope.received_at < started))
+        {
+            return;
+        }
+        if let MavMessage::AUTOPILOT_VERSION(version) = &envelope.message {
+            let encoding = if version.capabilities.bits() & PARAM_ENCODE_BYTEWISE_CAPABILITY != 0 {
+                super::codec::IntEncoding::ByteConcat
+            } else if version.capabilities.bits() & PARAM_ENCODE_CAST_CAPABILITY != 0 {
+                super::codec::IntEncoding::Cast
+            } else {
+                super::codec::IntEncoding::ByteConcat
+            };
+            self.session.set_encoding(encoding);
+            let value = version.flight_sw_version;
+            let version = format!(
+                "{}.{}.{}",
+                (value >> 24) & 0xff,
+                (value >> 16) & 0xff,
+                (value >> 8) & 0xff
+            );
+            self.fc_version.set(version.clone());
+            self.emit(ParamEvent::FcVersion(version));
+        }
+        let MavMessage::PARAM_VALUE(value) = &envelope.message else {
+            return;
+        };
+        let name = decode_param_id(&value.param_id);
+        if name == "_HASH_CHECK" {
+            return;
+        }
+        let Some(ptype) = ParamType::from_mav(value.param_type) else {
+            return;
+        };
+        let was_pull = self.session.pull_active();
+        let (entry, update, _) = self.session.on_param_value(IncomingParam {
+            index: value.param_index,
+            count: value.param_count,
+            name,
+            raw_value: value.param_value,
+            ptype,
+        });
+        let set_outcome = self.session.take_set_outcome();
+        if let Some(entry) = entry {
+            self.cache.update(entry.clone(), envelope.received_at);
+            if !was_pull {
+                self.emit(ParamEvent::ExternalChange(entry.clone()));
+            }
+            if let Some((name, reply)) = self.read_reply.take() {
+                if entry.name == name {
+                    let _ = reply.send(Ok(entry.clone()));
+                    self.read_deadline = None;
+                } else {
+                    self.read_reply = Some((name, reply));
+                }
+            }
+            if self.batch_names.insert(entry.name.clone()) {
+                self.batch.push(entry);
+            }
+            if self.batch.len() >= BATCH_LEN {
+                self.flush();
+            }
+        }
+        if let Some((_, outcome)) = set_outcome {
+            self.set_reply.resolve(outcome);
+            self.set_deadline = None;
+        }
+        match update {
+            Some(PullUpdate::Done { received, total }) => self.done_pull(received, total),
+            Some(PullUpdate::Progress { received, total }) => {
+                self.progress = Some((received, total));
+                self.quiet_deadline = Some(tokio::time::Instant::now() + PULL_QUIET);
+            }
+            _ => {}
+        }
+        if !self.session.is_busy() {
+            self.flush();
+            self.owned = None;
+            self.started_at = None;
+        }
+    }
+
+    async fn tick(&mut self) -> Result<(), ParamError> {
+        use super::session::{Outbound, PullUpdate};
+        if let Some((received, total)) = self.progress.take() {
+            self.emit(ParamEvent::Progress { received, total });
+        }
+        self.flush();
+        let now = tokio::time::Instant::now();
+        if self.session.pull_active() {
+            if self.quiet_deadline.is_some_and(|deadline| now >= deadline) {
+                let (update, resend) = self.session.on_pull_timeout();
+                if let Some(PullUpdate::Done { received, total }) = update {
+                    self.done_pull(received, total);
+                } else {
+                    if let Some(request) = resend {
+                        self.send_requests(vec![request]).await?;
+                    }
+                    self.quiet_deadline = Some(now + PULL_QUIET);
+                }
+            }
+            if let Some(request) = self.session.next_fill_request() {
+                self.send_requests(vec![request]).await?;
+            }
+        }
+        if self.read_deadline.is_some_and(|deadline| now >= deadline) {
+            if self.session.on_read_timeout() {
+                if let Some(name) = self.session.reading_name() {
+                    self.send_requests(vec![Outbound::RequestReadByName { name }])
+                        .await?;
+                }
+                self.read_deadline = Some(now + SET_TIMEOUT);
+            } else {
+                self.abort(ParamError::Timeout);
+            }
+        }
+        if self.set_deadline.is_some_and(|deadline| now >= deadline) {
+            if let Some(request) = self.session.on_set_timeout() {
+                self.send_requests(vec![request]).await?;
+                self.set_deadline = Some(now + SET_TIMEOUT);
+            } else {
+                self.abort(ParamError::Timeout);
+            }
+        }
+        Ok(())
+    }
+
+    async fn run(mut self, mut commands: mpsc::Receiver<Command>) {
+        let mut tick = tokio::time::interval(SERVICE_TICK);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            if self.generation != self.handle.generation() {
+                self.reset_transport(ParamError::TargetChanged);
+            }
+            if let Some(error) = self
+                .owned
+                .as_ref()
+                .and_then(|transaction| transaction.check(&self.handle).err())
+            {
+                self.abort(error);
+            }
+            let result = tokio::select! {
+                biased;
+                command = commands.recv() => match command { Some(command) => self.command(command).await, None => { self.abort(ParamError::NotConnected); return; } },
+                event = self.events.recv() => {
+                    match event {
+                        Ok(ConnectionEvent::Message(envelope)) => self.message(&envelope),
+                        Ok(ConnectionEvent::Connected { generation, .. }) if generation == self.handle.generation() && generation != self.generation => self.reset_transport(ParamError::TargetChanged),
+                        Ok(ConnectionEvent::LinkError(_)) | Ok(ConnectionEvent::Failed(_)) | Ok(ConnectionEvent::HeartbeatLost { .. }) => self.reset_transport(ParamError::NotConnected),
+                        Err(broadcast::error::RecvError::Closed) => { self.abort(ParamError::NotConnected); return; },
+                        _ => {},
+                    }
+                    Ok(true)
+                },
+                _ = tick.tick() => self.tick().await.map(|_| true),
+            };
+            match result {
+                Ok(true) => {}
+                Ok(false) => return,
+                Err(error) => {
+                    let owned = self.owned.is_some();
+                    self.abort(error);
+                    if !owned {
                         return;
-                    }
-                    Command::RequestFcVersion => {
-                        // MAV_CMD_REQUEST_MESSAGE param1 = 148 (AUTOPILOT_VERSION).
-                        let frame = MavMessage::COMMAND_LONG(
-                            ::mavlink::common::COMMAND_LONG_DATA {
-                                param1: 148.0,
-                                param2: 0.0,
-                                param3: 0.0,
-                                param4: 0.0,
-                                param5: 0.0,
-                                param6: 0.0,
-                                param7: 0.0,
-                                command: ::mavlink::common::MavCmd::MAV_CMD_REQUEST_MESSAGE,
-                                target_system: target_sys,
-                                target_component: target_comp,
-                                confirmation: 0,
-                            },
-                        );
-                        if handle.send(frame).await.is_err() {
-                            return;
-                        }
-                    }
-                    Command::Read(req) => match session.start_read(&req.name) {
-                        Ok(out) => {
-                            read_deadline = Some(tokio::time::Instant::now() + SET_TIMEOUT);
-                            for r in out {
-                                if let Some(frame) = outbound_frame(&r, target_sys, target_comp) {
-                                    if handle.send(frame).await.is_err() {
-                                        return;
-                                    }
-                                }
-                            }
-                            pending_read_reply = Some((req.name, req.reply));
-                        }
-                        Err(_) => {
-                            let _ = req.reply.send(Err(ParamError::Busy));
-                        }
-                    },
-                    Command::Set(req) => match session.start_set(&req.name, req.value, req.ptype)
-                    {
-                        Ok(out) => {
-                            set_deadline = Some(tokio::time::Instant::now() + SET_TIMEOUT);
-                            for r in out {
-                                if let Some(frame) = outbound_frame(&r, target_sys, target_comp) {
-                                    if handle.send(frame).await.is_err() {
-                                        return;
-                                    }
-                                }
-                            }
-                            pending_set_reply.0 = Some(req.reply);
-                        }
-                        Err(_) => {
-                            let _ = req.reply.send(Err(ParamError::Busy));
-                        }
-                    },
-                }
-            }
-            ev = events.recv() => {
-                match ev {
-                    Ok(ConnectionEvent::Message(env)) => {
-                        if let MavMessage::AUTOPILOT_VERSION(v) = &env.message {
-                            let capabilities = v.capabilities.bits();
-                            let encoding = if capabilities & 16 != 0 {
-                                super::codec::IntEncoding::ByteConcat
-                            } else if capabilities & 131_072 != 0 {
-                                super::codec::IntEncoding::Cast
-                            } else { super::codec::IntEncoding::ByteConcat };
-                            session.set_encoding(encoding);
-                            // 4 bytes MSB→LSB: major.minor.patch.type.
-                            let f = v.flight_sw_version;
-                            let ver = format!(
-                                "{}.{}.{}",
-                                (f >> 24) & 0xFF,
-                                (f >> 16) & 0xFF,
-                                (f >> 8) & 0xFF
-                            );
-                            fc_version.set(ver.clone());
-                            let _ = evt_tx.send(ParamEvent::FcVersion(ver));
-                        }
-                        if let MavMessage::PARAM_VALUE(v) = &env.message {
-                            if decode_param_id(&v.param_id) == "_HASH_CHECK" { continue; }
-                            let Some(ptype) = ParamType::from_mav(v.param_type) else {
-                                continue;
-                            };
-                            let incoming = IncomingParam {
-                                index: v.param_index,
-                                count: v.param_count,
-                                name: decode_param_id(&v.param_id),
-                                raw_value: v.param_value,
-                                ptype,
-                            };
-                            // Incremental: the session hands back the single new
-                            // entry (never a full snapshot — a 1794-param pull
-                            // made the old O(n) flush per frame starve the task).
-                            let (entry, update, _) = session.on_param_value(incoming);
-                            if let Some((_, outcome)) = session.take_set_outcome() {
-                                pending_set_reply.resolve(outcome);
-                                set_deadline = None;
-                            }
-                            // A lazy read resolves on its first matching entry.
-                            if let (Some(entry), Some((name, reply))) = (&entry, pending_read_reply.take()) {
-                                if entry.name == name {
-                                    cache.update(entry.clone());
-                                    let _ = reply.send(Ok(entry.clone()));
-                                    read_deadline = None;
-                                    let _ = evt_tx.send(ParamEvent::ExternalChange(entry.clone()));
-                                } else {
-                                    // Not our read (name mismatch): restore.
-                                    pending_read_reply = Some((name, reply));
-                                }
-                            }
-                            if let Some(entry) = entry {
-                                cache.update(entry.clone());
-                                if !batch_names.contains(&entry.name) {
-                                    batch_names.insert(entry.name.clone());
-                                    batch.push(entry);
-                                }
-                                if batch.len() >= BATCH_LEN {
-                                    let _ = evt_tx.send(ParamEvent::Batch(std::mem::take(&mut batch)));
-                                    batch_names.clear();
-                                }
-                            }
-                            match update {
-                                Some(PullUpdate::Done { received, total }) => {
-                                    flush_batch(&mut batch, &mut batch_names, &evt_tx);
-                                    let _ = evt_tx.send(ParamEvent::PullDone { received, total });
-                                    quiet_deadline = None;
-                                }
-                                Some(PullUpdate::Progress { received, total }) => {
-                                    // Throttle: the tick emits progress; the
-                                    // per-frame 1794-progress storm drowned the
-                                    // event channel in practice.
-                                    quiet_deadline = Some(tokio::time::Instant::now() + PULL_QUIET);
-                                    last_progress = Some((received, total));
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    Ok(ConnectionEvent::LinkError(_))
-                    | Ok(ConnectionEvent::Connected { .. })
-                    | Ok(ConnectionEvent::HeartbeatLost { .. })
-                    | Ok(ConnectionEvent::Failed(_)) => {
-                        // The worker reuses this event bus across serial
-                        // reconnects. Discard every old-session observation,
-                        // including a partial batch/progress and firmware
-                        // identity, while keeping this protocol task alive.
-                        session = ParamSession::default();
-                        cache.clear();
-                        fc_version.clear();
-                        batch.clear();
-                        batch_names.clear();
-                        last_progress = None;
-                        pending_set_reply.reject(ParamError::NotConnected);
-                        if let Some((_, reply)) = pending_read_reply.take() { let _ = reply.send(Err(ParamError::NotConnected)); }
-                        set_deadline = None; read_deadline = None; quiet_deadline = None;
-                    }
-                    Ok(_) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
-                }
-            }
-            _ = fill_tick.tick() => {
-                if let Some((received, total)) = last_progress.take() {
-                    let _ = evt_tx.send(ParamEvent::Progress { received, total });
-                }
-                if session.pull_active() {
-                    if let Some(deadline) = quiet_deadline {
-                        if tokio::time::Instant::now() >= deadline {
-                            let (update, resend) = session.on_pull_timeout();
-                            if let Some(super::session::PullUpdate::Done { received, total }) = update {
-                                flush_batch(&mut batch, &mut batch_names, &evt_tx);
-                                let _ = evt_tx.send(ParamEvent::PullDone { received, total });
-                                quiet_deadline = None;
-                            } else {
-                                // A fill round started, or the lost list
-                                // request is being re-issued: re-arm the
-                                // quiet window either way.
-                                if let Some(req) = resend {
-                                    if let Some(frame) = outbound_frame(&req, target_sys, target_comp) {
-                                        if handle.send(frame).await.is_err() {
-                                            return;
-                                        }
-                                    }
-                                }
-                                quiet_deadline = Some(tokio::time::Instant::now() + PULL_QUIET);
-                            }
-                        }
-                    }
-                }
-                if let Some(deadline) = read_deadline {
-                    if tokio::time::Instant::now() >= deadline {
-                        if session.on_read_timeout() {
-                            if let Some(name) = session.reading_name() {
-                                let req = super::session::Outbound::RequestReadByName { name };
-                                if let Some(frame) = outbound_frame(&req, target_sys, target_comp) {
-                                    if handle.send(frame).await.is_err() {
-                                        return;
-                                    }
-                                }
-                            }
-                            read_deadline = Some(tokio::time::Instant::now() + SET_TIMEOUT);
-                        } else if let Some((_, reply)) = pending_read_reply.take() {
-                            let _ = reply.send(Err(ParamError::Timeout));
-                            read_deadline = None;
-                        }
-                    }
-                }
-                if let Some(deadline) = set_deadline {
-                    if tokio::time::Instant::now() >= deadline {
-                        if let Some(retry) = session.on_set_timeout() {
-                            if let Some(frame) = outbound_frame(&retry, target_sys, target_comp) {
-                                if handle.send(frame).await.is_err() {
-                                    return;
-                                }
-                            }
-                            set_deadline = Some(tokio::time::Instant::now() + SET_TIMEOUT);
-                        } else {
-                            pending_set_reply.resolve(SetOutcome::Timeout);
-                            set_deadline = None;
-                        }
                     }
                 }
             }
@@ -868,14 +1250,39 @@ fn outbound_frame(
     })
 }
 
-/// Flush the pending batch (if any) as one event.
-fn flush_batch(
-    batch: &mut Vec<ParamEntry>,
-    names: &mut std::collections::HashSet<String>,
-    evt_tx: &broadcast::Sender<ParamEvent>,
-) {
-    if !batch.is_empty() {
-        let _ = evt_tx.send(ParamEvent::Batch(std::mem::take(batch)));
+#[cfg(test)]
+mod scoped_cache_tests {
+    use super::*;
+
+    fn entry(value: i64) -> ParamEntry {
+        ParamEntry {
+            name: "SCOPED".into(),
+            index: 0,
+            ptype: ParamType::I32,
+            value: ParamValue::Int(value),
+        }
     }
-    names.clear();
+
+    #[test]
+    fn queued_old_observation_is_not_relabelled_as_a_reopened_transport() {
+        let cache = ParamCache::default();
+        let reopened = Instant::now();
+        let received_before_reopen = reopened - Duration::from_secs(1);
+        cache.update(entry(17), received_before_reopen);
+        assert!(cache.observation_since("SCOPED", reopened).is_none());
+        assert_eq!(
+            cache.get("SCOPED").expect("retained cache").value,
+            ParamValue::Int(17)
+        );
+        assert!(cache.observation("SCOPED").expect("age").age_ms >= 1_000);
+        cache.update(entry(18), Instant::now());
+        assert_eq!(
+            cache
+                .observation_since("SCOPED", reopened)
+                .expect("fresh generation")
+                .entry
+                .value,
+            ParamValue::Int(18)
+        );
+    }
 }

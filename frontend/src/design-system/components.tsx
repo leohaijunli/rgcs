@@ -558,12 +558,13 @@ export function CommandStatusStrip({
     <div
       data-testid="command-status"
       data-command={command}
-      className={`flex items-center gap-1.5 rounded border border-line bg-canvas px-2 py-0.5 text-xs ${className}`}
+      title={`${command}: ${phase}`}
+      className={`flex min-w-0 items-center gap-1.5 rounded border border-line bg-canvas px-2 py-0.5 text-xs ${className}`}
     >
-      <span className="text-muted">{command}</span>
-      <span className={TONE_TEXT[tone]}>{phase}</span>
+      <span className="shrink-0 text-muted">{command}</span>
+      <span data-testid="command-status-phase" title={phase} className={`min-w-0 truncate ${TONE_TEXT[tone]}`}>{phase}</span>
       {elapsed !== null && (
-        <span data-testid="command-status-elapsed" className="mono text-muted">
+        <span data-testid="command-status-elapsed" className="mono shrink-0 text-muted">
           {elapsed}
         </span>
       )}
@@ -573,7 +574,7 @@ export function CommandStatusStrip({
           onClick={onDismiss}
           title={dismissLabel}
           aria-label={dismissLabel}
-          className="flex h-4 w-4 items-center justify-center rounded text-muted hover:text-ink"
+          className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted hover:text-ink"
         >
           <X size={11} />
         </button>

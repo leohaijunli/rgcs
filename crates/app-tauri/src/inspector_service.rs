@@ -686,7 +686,7 @@ mod connection_status_tests {
         let (command, _) = CommandService::spawn(handle.clone(), 1, 1);
         let state = AppState::default();
         state.set_primary_link(ActiveLink {
-            id: LinkId::next(),
+            id: LinkId::next().expect("link ID"),
             connection: handle.clone(),
             hub: hub.clone(),
             mission,

@@ -6,7 +6,7 @@
 //! two concurrent commands cannot race the swap.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use maggcs_core::calib::mag::MagCalibration;
@@ -30,6 +30,8 @@ use crate::recorder_service::RecorderState;
 use crate::rtk_service::{RtkRuntime, RtkState};
 use crate::terrain_server::TerrainServer;
 
+pub use maggcs_core::runtime::LinkId;
+
 /// Process-wide magnetometer calibration: one loaded JSON drives the Signal
 /// Inspector's mag traces (A·(m−b)) AND the motor-test alarm's total field.
 /// Survives link swaps; the motor-test tap re-reads it on every attach.
@@ -47,19 +49,6 @@ impl CalibrationStore {
         *self.0.lock() = cal;
     }
 }
-
-/// Stable identifier for one connection/vehicle session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct LinkId(u64);
-
-impl LinkId {
-    /// Allocate the next unused link id (monotonic, process-wide).
-    pub fn next() -> Self {
-        Self(NEXT_LINK_ID.fetch_add(1, Ordering::Relaxed))
-    }
-}
-
-static NEXT_LINK_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Everything bound to a single connection.
 pub struct ActiveLink {
@@ -92,6 +81,12 @@ struct AppInner {
 #[derive(Default)]
 pub struct AppState {
     pub serial: tokio::sync::OnceCell<Arc<crate::serial_service::SerialService>>,
+    /// Lightweight target identities for the narrow Runtime facade. No I/O,
+    /// protocol worker or optional tool is created by its default state.
+    pub runtime: crate::runtime_facade::RuntimeState,
+    /// Native-issued module/client scopes and the inert operation ledger.
+    pub runtime_clients: crate::runtime_clients::RuntimeClients,
+    pub(crate) missions: crate::mission_operations::MissionState,
     inner: Mutex<AppInner>,
     /// Signal Inspector tap/catalog/batcher (survives link swaps, ADR-016).
     pub inspector: InspectorState,
@@ -291,11 +286,6 @@ impl AppState {
         self.with_primary(|l| l.hub.clone())
     }
 
-    /// Cloned mission service of the primary link, if any.
-    pub fn mission(&self) -> Option<MissionService> {
-        self.with_primary(|l| l.mission.clone())
-    }
-
     /// Cloned command service of the primary link, if any.
     pub fn command(&self) -> Option<CommandService> {
         self.with_primary(|l| l.command.clone())
@@ -304,6 +294,19 @@ impl AppState {
     /// The connection handle of the primary link, if any.
     pub fn connection(&self) -> Option<ConnectionHandle> {
         self.with_primary(|l| l.connection.clone())
+    }
+
+    pub(crate) fn primary_runtime_source(&self) -> Option<crate::runtime_facade::TargetSource> {
+        self.with_primary(|link| {
+            crate::runtime_facade::TargetSource::primary(
+                link.id,
+                link.connection.clone(),
+                link.hub.clone(),
+                self.params.service(link),
+                link.command.clone(),
+                link.mission.clone(),
+            )
+        })
     }
 
     /// The process-wide alert center.
@@ -328,8 +331,8 @@ mod tests {
 
     #[test]
     fn link_ids_are_unique_and_monotonic() {
-        let a = LinkId::next();
-        let b = LinkId::next();
+        let a = LinkId::next().expect("link ID");
+        let b = LinkId::next().expect("link ID");
         assert_ne!(a, b);
         assert!(a < b);
     }

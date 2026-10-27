@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "work_package": "AF-00",
+  "source_commit": "e0c1b45",
+  "date": "2026-10-25",
+  "native": {
+    "measured_at": "2026-10-25T21:29:22.537Z",
+    "profile": "testdata/architecture/af00-idle",
+    "build": "release",
+    "os_cache": "warm; true OS-cold not measured",
+    "instrumentation": "WebKitGTK loopback inspector, 100 ms polling, ps and top",
+    "rss_kind": "sum of process RSS, KiB; not PSS",
+    "cpu_kind": "sum percent of one CPU core over 5 s",
+    "native_task_count": null,
+    "native_job_count": null,
+    "resource_timing_script_bytes": null,
+    "runs": [
+      { "run": 0, "ready_ms": 1890, "idle_processes": 3, "idle_rss_kib": 570104, "idle_threads": 105, "idle_cpu_pct": 7.6, "close_exit_ms": 71, "exit_code": 0 },
+      { "run": 1, "ready_ms": 754, "idle_processes": 3, "idle_rss_kib": 635172, "idle_threads": 102, "idle_cpu_pct": 7.8, "close_exit_ms": 51, "exit_code": 0 },
+      { "run": 2, "ready_ms": 782, "idle_processes": 3, "idle_rss_kib": 634388, "idle_threads": 103, "idle_cpu_pct": 10.0, "close_exit_ms": 30, "exit_code": 0 }
+    ],
+    "tool_cycles": [
+      { "cycle": 0, "inspector_ready_ms": 732, "inspector_cleanup_ms": 19, "params_ready_ms": 612, "params_cleanup_ms": 519, "actuator_ready_ms": 2661, "actuator_cleanup_ms": 13, "after_processes": 3, "after_rss_kib": 495940, "after_threads": 93 },
+      { "cycle": 1, "inspector_ready_ms": 743, "inspector_cleanup_ms": 11, "params_ready_ms": 735, "params_cleanup_ms": 2509, "actuator_ready_ms": 980, "actuator_cleanup_ms": 13, "after_processes": 3, "after_rss_kib": 466120, "after_threads": 93 },
+      { "cycle": 2, "inspector_ready_ms": 726, "inspector_cleanup_ms": 8, "params_ready_ms": 581, "params_cleanup_ms": 518, "actuator_ready_ms": 521, "actuator_cleanup_ms": 8, "after_processes": 3, "after_rss_kib": 470084, "after_threads": 93 }
+    ],
+    "passive_state_verified_each_cycle": true,
+    "dem_prep_processes": 0,
+    "remaining_app_webkit_processes_after_close": 0
+  },
+  "browser": {
+    "measured_at": "2026-10-25T21:32:33.213Z",
+    "engine": "Chromium 153.0.8010.12",
+    "build": "Vite production",
+    "url_path": "/?start&nomap",
+    "viewport": [1366, 768],
+    "cold_definition": "fresh context and HTTP cache; shared running browser and warm OS caches",
+    "warm_definition": "same-context reload",
+    "cold_js_decoded_bytes": 4961198,
+    "cold_js_transfer_bytes": 1378468,
+    "script_count": 16,
+    "heavy_chunk_decoded_bytes": 4337159,
+    "warm_resource_timing_body_bytes": null,
+    "runs": [
+      { "context": 0, "cold_ready_ms": 784, "cold_fcp_ms": 808, "cold_heap_bytes": 10019716, "warm_ready_ms": 161, "warm_fcp_ms": 168, "warm_heap_bytes": 15250348 },
+      { "context": 1, "cold_ready_ms": 293, "cold_fcp_ms": 300, "cold_heap_bytes": 9961236, "warm_ready_ms": 192, "warm_fcp_ms": 200, "warm_heap_bytes": 15173788 },
+      { "context": 2, "cold_ready_ms": 323, "cold_fcp_ms": 328, "cold_heap_bytes": 9968696, "warm_ready_ms": 122, "warm_fcp_ms": 132, "warm_heap_bytes": 15165028 }
+    ],
+    "workers_each_load": 0,
+    "page_errors": 0,
+    "forced_gc": false
+  },
+  "checks": {
+    "core": { "passed": 944, "failed": 0, "ignored": 1 },
+    "app": { "passed": 183, "failed": 0, "ignored": 8 },
+    "frontend_typecheck_build": "passed",
+    "native_release_build": "passed",
+    "inspector_connection_ipc": "passed",
+    "params_connection_ipc": "passed",
+    "motor_controls_ipc": "passed after increasing harness timeout to 240 s",
+    "motor_scope_numerical_groups": 11
+  }
+}

@@ -276,12 +276,12 @@ export default function WaypointsStep({ importNotice }: { importNotice: string[]
                 </span>
                 {commandUsesCoordinate(wp.command) ? (
                   <>
-                    <span className="mono min-w-0 flex-1 truncate">
+                    <span className="mono min-w-0 flex-1 truncate" title={`${wp.position.latitude_deg.toFixed(6)}, ${wp.position.longitude_deg.toFixed(6)}`}>
                       {wp.position.latitude_deg.toFixed(6)}
                       <span className="text-muted"> · </span>
                       {wp.position.longitude_deg.toFixed(6)}
                     </span>
-                    <span className="shrink-0 text-right">
+                    <span className="min-w-0 max-w-[50%] shrink text-right">
                       <HeightReadout
                         wp={wp}
                         groundM={groundBySeq?.[idx] ?? null}
@@ -307,7 +307,7 @@ export default function WaypointsStep({ importNotice }: { importNotice: string[]
                   </span>
                 )}
                 {idx === currentSeq ? (
-                  <span className="shrink-0 rounded bg-ok/20 px-1 text-[10px] text-ok">
+                  <span data-testid="mission-current-marker" className="shrink-0 rounded bg-ok/20 px-1 text-[10px] text-ok">
                     {t('plan.current')}
                   </span>
                 ) : null}

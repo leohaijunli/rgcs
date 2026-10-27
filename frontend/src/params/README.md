@@ -43,6 +43,45 @@ full parameter download.
   standard parameter name can also be read directly from the empty search
   result. Such rows use the FC's reported type without invented descriptions.
 
+## Owned operations
+
+The AF-02b.2 implementation and AF-02b.3 regression checkpoint bind parameter
+transfers/writes to native client, module-instance and target identities:
+
+- `runtime_client_attach` issues the Parameters session for the actual webview.
+  Pull/read/set requests carry this session and a fresh request ID. Native
+  admission checks the captured target and transport generation.
+- **Cancel** uses the exact locally owned pull reference. A second client may
+  observe progress, but its Cancel button is disabled for that pull. Native IPC
+  also rejects a forged foreign-owner cancellation.
+- `params_event` includes the source target and optional operation ID;
+  `params_operation` carries lifecycle and cleanup status. Old-target data and
+  delayed write results cannot overwrite the current view or remove its staging.
+- Native window destruction cancels only that captured client's operations.
+  Another client's transaction and the primary transport/cache remain usable.
+- A dispatched write interrupted by close/cancellation requires read-back through
+  its original worker. Its operation outcome remains uncertain; unavailable
+  read-back retains the write resource claim and a reconciliation alert.
+- Pull/read/write budgets are 60/5/5 seconds. Cancellation acknowledgement and
+  interrupted-write read-back each have a separate one-second budget.
+
+See the [contract](../../../docs/architecture/runtime-contracts.md#9-parameters-owned-operation-checkpoint)
+and [acceptance record](../../../docs/verification/af-02b-parameters-20261025.md).
+AF-06 covers the full Module Host/SDK and batch-reconciliation migration;
+AF-02b.4a now owns `params_reboot` through the shared command worker:
+
+- The reboot request carries the clicked Parameters session and a fresh request
+  ID. Native admission requires fresh telemetry proving the target is disarmed
+  and on ground, plus the exact current transport generation.
+- Cancellation/close retires only that command's retries. A possibly dispatched
+  command remains uncertain; same-command ACKs are quarantined until reconnect,
+  while emergency effects remain sendable without claiming an ambiguous success.
+- `accepted` means the FC accepted the command, not that reboot completed. Native
+  code immediately retires the old Runtime target generation and the UI removes
+  the reboot action. Reconnect creates a fresh session and never replays intent.
+- Denied, uncertain, stale-result and accepted states are covered by the
+  [AF-02b.4a record](../../../docs/verification/af-02b-command-reboot-20261025.md).
+
 ## Catalog
 
 The bundle contains **1912 parameters** from official PX4 v1.17.0
@@ -56,13 +95,19 @@ From the repository root:
 
 ```bash
 cargo test -p maggcs-core --test params_service_integration
+cargo test -p maggcs-core --test params_owned_integration
 cargo test -p maggcs-app params_service --lib
+cargo test -p maggcs-app --lib params_operations::tests
+cargo test -p maggcs-app --lib runtime_clients::tests
+cargo test -p maggcs-core --test command_service_integration
+cargo test -p maggcs-app --lib command_operations::tests
 ```
 
 From `frontend/`, with Vite and Playwright installed (examples use port 5199):
 
 ```bash
 npm run typecheck
+npm run check:params-ownership -- http://localhost:5199/params.html screenshots/params/ownership/clients
 npm run check:params-connection -- http://localhost:5199/params.html screenshots/params/connection
 npm run check:params -- http://localhost:5199/params.html screenshots/params
 ```
@@ -85,8 +130,24 @@ The layout check verifies column widths, origins and actual value-text
 alignment within 1 CSS px at 1366, 1920 and 900 px widths, horizontal overflow
 at the maximum pane width, pane controls, virtualization and Field-mode rows.
 
+The ownership check uses two real React pages with an isolated IPC fixture. It
+checks owner-only cancellation, close isolation, generation-bound writes,
+staging retention when an obsolete write result arrives, and target-bound reboot
+denial/uncertainty/acceptance with no reconnect replay. Native cancellation,
+read-back and command retirement are separately exercised by production-worker
+UDP/PTY tests. The
+[acceptance record](../../../docs/verification/af-02b-parameters-20261025.md)
+also records the rebuilt Linux Tauri native-close result and reproduction steps.
+
 ### Screenshots (isolated IPC)
 
+- [Observer Cancel disabled](../../screenshots/params/ownership/clients/params-observer-cancel-disabled.png)
+- [Owned cancellation finished](../../screenshots/params/ownership/clients/params-owned-cancel-finished.png)
+- [Stale write retains the staged change](../../screenshots/params/ownership/clients/params-stale-write-retains-staging.png)
+- [Reboot denied](../../screenshots/params/ownership/clients/params-reboot-denied.png)
+- [Reboot outcome uncertain](../../screenshots/params/ownership/clients/params-reboot-uncertain.png)
+- [Stale reboot result ignored](../../screenshots/params/ownership/clients/params-stale-reboot-ignored.png)
+- [Current target reboot accepted](../../screenshots/params/ownership/clients/params-reboot-accepted.png)
 - [USB_MAV_MODE displayed](../../screenshots/params/connection/params-live-usb.png)
 - [Delayed numeric reply with synchronized editor](../../screenshots/params/connection/params-delayed-float.png)
 - [Disconnected](../../screenshots/params/connection/params-disconnected.png)
@@ -126,6 +187,14 @@ The test sends version/parameter reads and does not change parameter values.
    Narrow the editor; confirm both values remain visible above the long
    description and their meanings wrap in full. Scroll the detail pane down,
    then select another parameter and confirm its value summary is back on top.
+6. On an isolated synthetic target, follow the
+   [two-client native-close recipe](../../../docs/verification/af-02b-parameters-20261025.md#native-close-evidence-and-manual-reproduction).
+   Confirm closing idle Parameters does not cancel the main-webview client's
+   held write, and the primary value remains readable after close.
+7. In the ownership fixture, observe another client's pull, cancel from its
+   owner, and retarget during a staged write. Compare the three ownership
+   screenshots above: disabled foreign Cancel, terminal cancellation and retained
+   staging with an explicit Apply action.
 
 The automated serial test reopens the transport; physically unplugging USB in
 the native desktop window is the manual review step above.

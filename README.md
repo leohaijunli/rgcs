@@ -15,6 +15,16 @@ for survey / geophysics drone operations (multirotor first).
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System architecture: crates, processes/windows, MAVLink data flow, height conventions, ADR index |
 | [docs/FEATURES.md](docs/FEATURES.md) | Feature guide: what each view/window does and how to use it |
 | [docs/RELEASES.md](docs/RELEASES.md) | Release checks, installer formats, download warnings, and Windows tool-window verification |
+| [Architecture-first delivery](docs/plans/architecture-first-delivery-plan.md) | AF execution order and engineering gates |
+| [AF-00 ownership inventory](docs/architecture/af-00-current-system.md) | Current service owners, lifecycle paths, API directory and extraction constraints |
+| [Runtime contracts](docs/architecture/runtime-contracts.md) | Minimum target/operation/subscription vocabulary and AF-01 acceptance fixtures |
+| [AF-00 measured baseline](docs/verification/af-00-baseline-20261025.md) | Native startup/tool resources, browser cold/warm loading and reproducible idle profile |
+| [AF-01 facade checkpoint](docs/verification/af-01-facade-20261025.md) | Explicit target read APIs, shared ownership, generated types and native/software verification |
+| [AF-02 operation/client groundwork](docs/verification/af-02b-client-foundation-20261025.md) | Owner-bound records, native client lifecycle, current checks and remaining adapter integration |
+| [AF-02b.2 / .3 Parameters acceptance](docs/verification/af-02b-parameters-20261025.md) | Owned parameter operations, cross-client/native-close regression, screenshots and reproduction steps |
+| [AF-02b.4a Command/reboot acceptance](docs/verification/af-02b-command-reboot-20261025.md) | Owned command transactions, ACK quarantine, safe reboot admission and target retirement |
+| [AF-02b.4b Flight-command acceptance](docs/verification/af-02b-flight-commands-20261026.md) | Typed owned flight commands, emergency/preflight isolation, 46 screenshots and reproducible build evidence |
+| [AF-02b.4 Mission acceptance](docs/verification/af-02b-mission-20261026.md) | Owned mission transfers/current control, snapshot/read-back isolation, exact cancellation and reproducible evidence |
 | [issues.md](issues.md) | Open issues, deferred work and items awaiting bench verification |
 
 ## Build & run

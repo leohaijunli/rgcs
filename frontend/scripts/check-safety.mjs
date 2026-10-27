@@ -3,9 +3,9 @@
 // still goes out immediately while another command is in flight").
 //   node check-safety.mjs <viteUrl> <shotsDir>
 //
-// The fake FC lives in the page and records every command the UI hands to the
-// backend (`__mockCommands`); acks are driven from Node through the `command`
-// event, exactly the payload Rust publishes (app-tauri `command_service`).
+// The fake FC lives in the page, owns a Runtime flight-controls session, and
+// records every typed `flight_command_execute` request. Deferred replies and
+// structured command errors model terminal native operation outcomes.
 //
 // The priority arbitration itself is Rust's (A7: `begin_with_priority` +
 // `an_emergency_command_preempts_an_in_flight_goto`); what is checked here is
@@ -101,7 +101,7 @@ await page.addInitScript(() => {
       time_boot_ms: 1,
       latitude_deg: 49.2831,
       longitude_deg: -123.1207,
-      altitude: { datum: 'AMSL', meters: 61.5 },
+      altitude: { datum: 'AMSL_EGM96', meters: 61.5 },
       relative_alt_m: 52,
       velocity: { x_m_s: 0, y_m_s: 0, z_m_s: 0 },
       heading_deg: 12,
@@ -127,6 +127,41 @@ await page.addInitScript(() => {
 
   window.__mockCommands = []
   window.__mockUnhandled = []
+  const target = {
+    vehicle_id: 'safety-vehicle',
+    session_id: 'safety-target-session',
+    link_id: 'safety-link',
+    generation: '1',
+    mavlink_target: { system_id: 1, component_id: 1 },
+  }
+  const runtimeSession = {
+    owner: { client_id: 'safety-client', instance_id: 'safety-flight-controls' },
+    target,
+    module_id: 'flight-controls',
+  }
+  const pendingFlights = []
+  let operation = 0
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
+  window.__mockFlightReply = (kind, result = 'accepted') => {
+    const index = pendingFlights.findIndex((entry) => entry.request.intent.kind === kind)
+    if (index < 0) throw new Error(`no pending ${kind} flight command`)
+    const [entry] = pendingFlights.splice(index, 1)
+    entry.resolve({
+      operation: {
+        id: `safety-operation-${++operation}`,
+        owner: structuredClone(entry.request.context.session.owner),
+        target: structuredClone(entry.request.context.session.target),
+      },
+      command: entry.request.intent.kind,
+      steps: [{ step: entry.request.intent.kind, result }],
+    })
+  }
+  window.__mockFlightError = (kind, error) => {
+    const index = pendingFlights.findIndex((entry) => entry.request.intent.kind === kind)
+    if (index < 0) throw new Error(`no pending ${kind} flight command`)
+    const [entry] = pendingFlights.splice(index, 1)
+    entry.reject(error)
+  }
   window.__mockTelemetry = (atMs) => deliver('telemetry', snapshot(atMs))
   window.__mockFeedStart = (intervalMs = 250) => {
     clearInterval(feedTimer)
@@ -143,8 +178,6 @@ await page.addInitScript(() => {
     modeLabel = label
     window.__mockTelemetry(Date.now())
   }
-  window.__mockCommandEvent = (payload) => deliver('command', payload)
-
   const modeEntry = (id, label, main, sub, confirm) => ({
     option: { id, label, main_mode: main, sub_mode: sub, confirm, advanced: false },
     enabled: true,
@@ -169,6 +202,28 @@ await page.addInitScript(() => {
       if (cmd === 'alert_snapshot') return []
       if (cmd === 'enumerate_devices') return []
       if (cmd === 'link_status' || cmd === 'connect' || cmd === 'link_error') return null
+      if (cmd === 'runtime_targets') {
+        return [{
+          link_id: target.link_id,
+          target,
+          availability: 'available',
+          heartbeat_age_ms: 0,
+          parameter_service_available: true,
+          roles: ['primary'],
+          transport_owner: 'primary',
+          endpoint: 'mock-primary',
+        }]
+      }
+      if (cmd === 'runtime_client_attach') return structuredClone(runtimeSession)
+      if (cmd === 'runtime_client_validate') {
+        if (!same(args.session, runtimeSession)) throw { code: 'not_owner' }
+        return null
+      }
+      if (cmd === 'runtime_client_detach') return null
+      if (cmd === 'flight_command_execute') {
+        window.__mockCommands.push({ cmd, ...(args ?? {}) })
+        return new Promise((resolve, reject) => pendingFlights.push({ request: structuredClone(args.request), resolve, reject }))
+      }
       if (cmd === 'flight_mode_table') {
         return [modeEntry('hold', 'Hold', 4, 3, false), modeEntry('altitude', 'Altitude', 2, 0, false)]
       }
@@ -203,9 +258,7 @@ await waitUntil(async () => (await page.locator('[data-testid="rtl-always"]').co
 
 const commands = () =>
   page.evaluate(() =>
-    window.__mockCommands.filter((c) =>
-      ['send_command', 'send_set_mode', 'send_arm_disarm'].includes(c.cmd),
-    ),
+    window.__mockCommands.filter((c) => c.cmd === 'flight_command_execute'),
   )
 const rtl = page.locator('[data-testid="rtl-always"]')
 const hold = page.locator('[data-testid="hold-always"]')
@@ -222,6 +275,11 @@ async function hold_(locator, ms, midShot = null) {
   await page.mouse.up()
 }
 
+async function selectStage(stage) {
+  await page.locator('[data-testid="workflow-open"]').click()
+  await page.locator(`[data-testid="workflow-stage-${stage}"]`).click()
+}
+
 // --- 1. the pair is on the bar, whatever the view ---------------------------
 check((await rtl.count()) === 1, 'RTL is a visible button, not a menu entry')
 check((await hold.count()) === 1, 'Hold is a visible button, not a menu entry')
@@ -231,11 +289,11 @@ check(
   'the Hold button knows the vehicle is not in Hold yet',
 )
 
-await page.getByRole('button', { name: 'Plan', exact: true }).click()
+await selectStage('plan')
 await waitUntil(async () => (await rtl.count()) === 1, 5000)
 check((await rtl.count()) === 1, 'the pair survives the switch to the Plan stage')
 await page.screenshot({ path: join(shotsDir, 'safety-plan.png') })
-await page.getByRole('button', { name: 'Fly', exact: true }).click()
+await selectStage('fly')
 await page.waitForTimeout(300)
 
 // --- 2. a stray click cannot RTL --------------------------------------------
@@ -244,7 +302,7 @@ await page.waitForTimeout(200)
 check((await commands()).length === 0, 'one click on RTL sends nothing')
 
 // --- 3. one hold from the Plan stage is the whole interaction ---------------
-await page.getByRole('button', { name: 'Plan', exact: true }).click()
+await selectStage('plan')
 await page.waitForTimeout(300)
 let interactions = 1 // the single hold below
 let barSeen = null
@@ -254,7 +312,7 @@ await hold_(rtl, HOLD_AT_MS, async () => {
 })
 const afterPlan = await commands()
 check(
-  afterPlan.some((c) => c.cmd === 'send_command' && c.name === 'rtl'),
+  afterPlan.some((c) => c.request.intent.kind === 'return_to_launch'),
   'RTL goes out from the Plan stage',
 )
 check(interactions <= 2, `RTL costs at most two interactions (got ${interactions})`)
@@ -262,25 +320,21 @@ check(
   barSeen !== null && /MODE/.test(barSeen) && /AGL/.test(barSeen) && /BATT/.test(barSeen),
   `the confirm bar shows mode, height above ground and battery while holding (got "${barSeen}")`,
 )
-await page.evaluate(() => window.__mockCommandEvent({ command: 'rtl', kind: 'sent' }))
-await page.evaluate(() =>
-  window.__mockCommandEvent({ command: 'rtl', kind: 'completed', result: 'accepted' }),
-)
+await page.evaluate(() => window.__mockFlightReply('return_to_launch'))
 await waitUntil(async () => (await status.innerText()).includes('Accepted'), 5000)
-await page.getByRole('button', { name: 'Fly', exact: true }).click()
+await selectStage('fly')
 await page.waitForTimeout(300)
 
 // --- 4. an in-flight command does not take the pair away --------------------
 await page.locator('[data-testid="flight-menu"]').click()
-await hold_(page.locator('[data-testid="flight-cmd-land"]'), HOLD_AT_MS)
+await hold_(page.locator('[data-testid="flight-cmd-takeoff"]'), HOLD_AT_MS)
 const sent = await commands()
 check(
-  sent.some((c) => c.cmd === 'send_command' && c.name === 'land'),
+  sent.some((c) => c.request.intent.kind === 'takeoff'),
   'the dropdown still sends its own commands',
 )
-await page.evaluate(() => window.__mockCommandEvent({ command: 'land', kind: 'sent' }))
 check(
-  await waitUntil(async () => await page.locator('[data-testid="flight-cmd-land"]').isDisabled(), 5000),
+  await waitUntil(async () => await page.locator('[data-testid="flight-cmd-takeoff"]').isDisabled(), 5000),
   'the dropdown is gated while a command is in flight',
 )
 await page.keyboard.press('Escape')
@@ -290,22 +344,31 @@ const before = (await commands()).length
 await hold_(rtl, HOLD_AT_MS)
 const after = await commands()
 check(
-  after.length === before + 1 && after[after.length - 1].name === 'rtl',
+  after.length === before + 1 && after[after.length - 1].request.intent.kind === 'return_to_launch',
   'RTL still goes out immediately (the backend arbitrates priority)',
 )
 await page.screenshot({ path: join(shotsDir, 'safety-in-flight.png') })
 
 // --- 5. a rejection is kept until it is acknowledged ------------------------
-await page.evaluate(() =>
-  window.__mockCommandEvent({ command: 'land', kind: 'completed', result: 'superseded' }),
-)
-check(
-  await waitUntil(async () => (await status.innerText()).includes('Superseded'), 5000),
-  'the superseded command is reported on the status strip',
-)
+await page.evaluate(() => window.__mockFlightError('takeoff', {
+  code: 'command',
+  error: { code: 'protocol', error: { code: 'superseded' } },
+}))
+await page.waitForTimeout(300)
+check((await status.innerText()).includes('RTL') && (await status.innerText()).includes('Sent — awaiting ack'),
+  'the old superseded result cannot settle the newer pending RTL')
+const supersededLogged = await page.evaluate(async () => {
+  const { useEventLog } = await import('/src/stores/eventlog.ts')
+  return useEventLog.getState().events.some((event) => event.text === 'takeoff: superseded')
+})
+check(supersededLogged, 'the displaced same-target result is retained in the event log')
+await page.screenshot({ path: join(shotsDir, 'safety-old-request.png') })
+await page.evaluate(() => window.__mockFlightReply('return_to_launch', 'denied'))
+check(await waitUntil(async () => (await status.innerText()).includes('Denied'), 5000),
+  'the current RTL verdict settles its own status strip')
 await page.waitForTimeout(1500)
 check(
-  (await status.innerText()).includes('Superseded'),
+  (await status.innerText()).includes('Denied'),
   'the rejection is not swallowed by itself — it waits for the operator',
 )
 check(
@@ -314,21 +377,22 @@ check(
 )
 await page.locator('[data-testid="command-status-dismiss"]').click()
 check(await waitUntil(async () => (await status.count()) === 0, 5000), 'acknowledging clears it')
+await page.screenshot({ path: join(shotsDir, 'safety-denied-acknowledged.png') })
 
 // --- 6. Hold is one click (low risk) and lights up when it lands -------------
-const modeBefore = (await commands()).filter((c) => c.cmd === 'send_set_mode').length
+const modeBefore = (await commands()).filter((c) => c.request.intent.kind === 'set_mode').length
 await hold.click()
 check(
-  await waitUntil(async () => (await commands()).filter((c) => c.cmd === 'send_set_mode').length === modeBefore + 1, 5000),
+  await waitUntil(async () => (await commands()).filter((c) => c.request.intent.kind === 'set_mode').length === modeBefore + 1, 5000),
   'Hold switches on a single click',
 )
-const pair = (await commands()).filter((c) => c.cmd === 'send_set_mode').pop()
+const pair = (await commands()).filter((c) => c.request.intent.kind === 'set_mode').pop()
 check(
-  pair?.mainMode === 4 && pair?.subMode === 3,
-  `Hold sends the PX4 Auto·Loiter pair (got ${pair?.mainMode}/${pair?.subMode})`,
+  pair?.request.intent.main_mode === 4 && pair?.request.intent.sub_mode === 3,
+  `Hold sends the PX4 Auto·Loiter pair (got ${pair?.request.intent.main_mode}/${pair?.request.intent.sub_mode})`,
 )
 await page.evaluate(() => {
-  window.__mockCommandEvent({ command: 'set_mode', kind: 'completed', result: 'accepted' })
+  window.__mockFlightReply('set_mode')
   window.__mockMode(4, 3, 'Hold')
 })
 check(
@@ -346,6 +410,17 @@ check(
 )
 check(await hold.isDisabled(), 'Hold is gated when the heartbeat is gone')
 await page.screenshot({ path: join(shotsDir, 'safety-no-link.png') })
+
+const scoped = await commands()
+const requestIds = scoped.map((entry) => entry.request?.context?.request_id)
+check(
+  scoped.every((entry) =>
+    entry.request?.context?.session?.module_id === 'flight-controls'
+    && typeof entry.request.context.request_id === 'string'
+    && entry.request.context.request_id.length > 0),
+  'every safety execute carries its exact session and request identity',
+)
+check(new Set(requestIds).size === requestIds.length, 'safety executes use fresh request identities')
 
 const unhandled = await page.evaluate(() => window.__mockUnhandled)
 if (unhandled.length > 0) {

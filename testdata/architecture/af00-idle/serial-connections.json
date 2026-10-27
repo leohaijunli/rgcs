@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "fc": { "policy": { "enabled": false, "paused_by_user": true } },
+  "rtk": { "policy": { "enabled": false, "paused_by_user": true } }
+}

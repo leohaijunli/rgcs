@@ -1,0 +1,65 @@
+{
+  "record_date": "2026-10-25",
+  "source_base": "e0c1b45e8b435ebfb586375b7d1520762d8a762c",
+  "source_includes_uncommitted_implementation": true,
+  "scope": "Parameters owned transfer/write implementation and regression acceptance",
+  "checkpoints": {
+    "AF-02b.2": "complete",
+    "AF-02b.3": "complete",
+    "AF-02b.4": "pending",
+    "G1": "open"
+  },
+  "tests": {
+    "core_lib": { "passed": 1007, "failed": 0, "ignored": 1, "duration_s": 5.20 },
+    "app_lib": { "passed": 203, "failed": 0, "ignored": 8, "duration_s": 7.09 },
+    "params_owned_integration": { "passed": 6, "failed": 0, "ignored": 0, "duration_s": 0.22 },
+    "params_service_integration": { "passed": 4, "failed": 0, "ignored": 1, "duration_s": 14.20 }
+  },
+  "checks": {
+    "clippy_core_app_all_targets_deny_warnings": "pass",
+    "cargo_fmt_all_check": "pass",
+    "frontend_strict_typecheck_and_build": "pass",
+    "release_native_build": "pass",
+    "params_ownership_browser": "pass",
+    "params_connection_browser": "pass",
+    "params_layout_browser": "pass",
+    "browser_page_errors": 0
+  },
+  "frontend_build": {
+    "modules_transformed": 3470,
+    "vite_duration_s": 26.58,
+    "existing_mixed_import_and_large_chunk_warnings": true
+  },
+  "native_close": {
+    "result": "PASS",
+    "fixture": "real release Tauri/WebKit, loopback MAVLink 2 common peer, native Parameters close",
+    "target": [42, 1],
+    "closed_ms": 155,
+    "clients_distinct": true,
+    "b_write_confirmed": 77,
+    "b_outcome": "succeeded",
+    "primary_cache_read_after_close": 77,
+    "exit_code": 0,
+    "measured_at": "2026-10-26T00:45:42.537Z",
+    "command": "AF00_RUNS=0 node /tmp/opencode/af02b-params-native/check-close.mjs",
+    "profile_root": "/tmp/opencode/af02b-params-native",
+    "automatic_connections_disabled": ["legacy", "fc", "rtk"],
+    "measurement": "native close request to Parameters renderer disappearance"
+  },
+  "artifact_sha256": {
+    "target/release/maggcs-app": "b4f886d5713a5eaab59c5333bd46c947973428ace78e18c8ac361b332506289d",
+    "frontend/dist/assets/params-BYfZjaNI.js": "3798a5caa3f65a868e8975d36cd031119fd944add03e04f866b70b01959d7d74",
+    "/tmp/opencode/af02b-params-native/check-close.mjs": "8976a9ed9153c148c162136eb19ccc881a0abf671ded17b670982c21c681422f",
+    "/tmp/opencode/af02b-params-native/peer.py": "e479edba6f68ec4129acd08d9d13cfe8b245dd0b4f5f37b60f8a2bec6292ed82",
+    "/tmp/opencode/af00-native/measure.mjs": "06a0094b90b150cf7766708743344b4a0b2cd7aeb1a24e7cdb8a8b0ba7acf52b"
+  },
+  "screenshots": {
+    "root": "frontend/screenshots/params/ownership",
+    "clients": 3,
+    "connection": 7,
+    "layout": 6,
+    "total": 16,
+    "layout_viewports": [[1366, 768], [1920, 1080], [900, 600]],
+    "column_alignment_tolerance_css_px": 1
+  }
+}

@@ -4,7 +4,6 @@
 //! link connects and survives window close (the cache is read by
 //! other services too, PM9), with a fresh task per reconnect.
 
-use serde::Serialize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
@@ -13,14 +12,21 @@ use tauri::Manager;
 use tauri::Runtime;
 use tauri::State;
 use tauri::WebviewUrl;
+use tauri::WebviewWindow;
 use tauri::WebviewWindowBuilder;
-use tauri::WindowEvent;
 
 use maggcs_core::lifecycle::StopOutcome;
 use maggcs_core::mavlink::ConnectionHandle;
-use maggcs_core::params::model::{ParamType, ParamValue};
-use maggcs_core::params::service::{ParamEvent, ParamService, SetResult};
+use maggcs_core::params::operation_types::{
+    ParameterCommandError, ParameterEventEnvelope, ParameterEventPayload, ParameterReadRequest,
+    ParameterRequestContext, ParameterSetEcho, ParameterSetRequest,
+};
+use maggcs_core::params::service::{ParamService, ScopedParamEvent};
+use maggcs_core::runtime::operations::{OperationRef, OperationStatus, RuntimeClientSession};
+use maggcs_core::runtime::TargetRole;
 
+use crate::params_operations::{self, ParameterAction, ParameterResult};
+use crate::runtime_facade::{RuntimeFacade, TargetRuntime};
 use crate::state::AppState;
 
 /// `params_fc_version` retry budget: 2 attempts × 1.2 s settle ≈ 2.5 s
@@ -120,9 +126,14 @@ impl ParamsState {
                 handle.config().target_system_id,
                 handle.config().target_component_id,
             ));
-        let (svc, evt_rx, protocol_task) = ParamService::spawn_with_task(handle, sys, comp);
+        let (svc, _evt_rx, protocol_task) =
+            ParamService::spawn_with_task(handle.clone(), sys, comp);
         *self.last_cache.lock().expect("params cache lock") = Some(svc.cache());
-        let forwarder = tauri::async_runtime::spawn(forward_events(app.clone(), evt_rx));
+        let forwarder = tauri::async_runtime::spawn(forward_events(
+            app.clone(),
+            handle,
+            svc.subscribe_scoped(),
+        ));
         ParamsRuntime {
             svc,
             protocol_task: Some(protocol_task),
@@ -143,29 +154,54 @@ impl ParamsState {
 /// ride the same channel, ~100 entries each).
 async fn forward_events<R: Runtime>(
     app: AppHandle<R>,
-    mut rx: tokio::sync::broadcast::Receiver<ParamEvent>,
+    handle: ConnectionHandle,
+    mut rx: tokio::sync::broadcast::Receiver<ScopedParamEvent>,
 ) {
     use maggcs_core::params::service::ParamEvent as E;
     while let Some(ev) = next_param_event(&mut rx).await {
-        let payload = match &ev {
-            E::PullStarted { total } => ParamsEvent::PullStarted { total: *total },
-            E::Batch(entries) => ParamsEvent::Batch {
+        if ev.generation != handle.generation()
+            || app
+                .state::<AppState>()
+                .connection()
+                .is_none_or(|current| current.handle_id() != handle.handle_id())
+        {
+            continue;
+        }
+        let Some(target) = RuntimeFacade::new(&app).targets().ok().and_then(|targets| {
+            targets
+                .into_iter()
+                .find(|target| target.roles.contains(&TargetRole::Primary))
+                .and_then(|target| target.target)
+        }) else {
+            continue;
+        };
+        if target.generation.get() != ev.generation {
+            continue;
+        }
+        let event = match &ev.event {
+            E::PullStarted { total } => ParameterEventPayload::PullStarted { total: *total },
+            E::Batch(entries) => ParameterEventPayload::Batch {
                 entries: entries.clone(),
             },
-            E::Progress { received, total } => ParamsEvent::Progress {
+            E::Progress { received, total } => ParameterEventPayload::Progress {
                 received: *received,
                 total: *total,
             },
-            E::PullDone { received, total } => ParamsEvent::PullDone {
+            E::PullDone { received, total } => ParameterEventPayload::PullDone {
                 received: *received,
                 total: *total,
             },
-            E::ExternalChange(entry) => ParamsEvent::ExternalChange {
+            E::ExternalChange(entry) => ParameterEventPayload::ExternalChange {
                 name: entry.name.clone(),
                 value: entry.value,
                 ptype: entry.ptype,
             },
-            E::FcVersion(v) => ParamsEvent::FcVersion { version: v.clone() },
+            E::FcVersion(v) => ParameterEventPayload::FcVersion { version: v.clone() },
+        };
+        let payload = ParameterEventEnvelope {
+            target,
+            operation_id: ev.transaction_id,
+            event,
         };
         let _ = app.emit("params_event", &payload);
     }
@@ -173,9 +209,7 @@ async fn forward_events<R: Runtime>(
 
 /// Losing older events during a large pull must not permanently disconnect
 /// the window's event forwarder. Continue with the retained events.
-async fn next_param_event(
-    rx: &mut tokio::sync::broadcast::Receiver<ParamEvent>,
-) -> Option<ParamEvent> {
+async fn next_param_event<T: Clone>(rx: &mut tokio::sync::broadcast::Receiver<T>) -> Option<T> {
     loop {
         match rx.recv().await {
             Ok(event) => return Some(event),
@@ -183,34 +217,6 @@ async fn next_param_event(
             Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
         }
     }
-}
-
-/// Serializable event payloads (`params_event`).
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum ParamsEvent {
-    PullStarted {
-        total: u16,
-    },
-    Batch {
-        entries: Vec<maggcs_core::params::model::ParamEntry>,
-    },
-    Progress {
-        received: u16,
-        total: u16,
-    },
-    PullDone {
-        received: u16,
-        total: u16,
-    },
-    ExternalChange {
-        name: String,
-        value: ParamValue,
-        ptype: ParamType,
-    },
-    FcVersion {
-        version: String,
-    },
 }
 
 /// Open the parameters window, or focus it if it already exists.
@@ -222,127 +228,124 @@ pub async fn params_open(app: AppHandle) -> Result<(), String> {
         let _ = win.set_focus();
         return Ok(());
     }
-    let win = WebviewWindowBuilder::new(&app, "params", WebviewUrl::App("params.html".into()))
+    WebviewWindowBuilder::new(&app, "params", WebviewUrl::App("params.html".into()))
         .title("Parameters")
         .min_inner_size(900.0, 600.0)
         .build()
         .map_err(|e| e.to_string())?;
-    // Closing the window cancels any running pull (plan §4.3).
-    let app_for_cleanup = app.clone();
-    win.on_window_event(move |event| {
-        if let WindowEvent::Destroyed = event {
-            let state = app_for_cleanup.state::<AppState>();
-            if let Some(svc) = state.primary_params() {
-                tauri::async_runtime::spawn(async move {
-                    svc.cancel().await;
-                });
-            }
-        }
+    // Native client registration captures this window's actual owner IDs.
+    // Its Destroyed handler cancels only those operations, never a global service.
+    Ok(())
+}
+
+/// Admit an owned pull. Its reference is returned before background protocol
+/// completion; `params_operation` carries terminal/cleanup evidence.
+#[tauri::command]
+pub async fn params_pull(
+    app: AppHandle,
+    window: WebviewWindow,
+    request: ParameterRequestContext,
+) -> Result<OperationRef, ParameterCommandError> {
+    let work = params_operations::begin(&app, window.label(), request, ParameterAction::Pull)?;
+    let operation = work.operation().clone();
+    tauri::async_runtime::spawn(async move {
+        let _ = work.run().await;
     });
-    Ok(())
+    Ok(operation)
 }
 
-/// Start a full pull. Events arrive on `params_event`; `Err` when a
-/// transaction is already running or there is no link.
+/// Request cancellation of the caller's exact operation, never a global slot.
 #[tauri::command]
-pub async fn params_pull(state: State<'_, AppState>) -> Result<(), String> {
-    let Some(svc) = state.primary_params() else {
-        return Err("no link — connect first".into());
-    };
-    svc.pull().await.map_err(|e| format!("{e:?}"))
+pub async fn params_cancel(
+    app: AppHandle,
+    window: WebviewWindow,
+    session: RuntimeClientSession,
+    operation: OperationRef,
+) -> Result<OperationStatus, ParameterCommandError> {
+    params_operations::cancel(&app, window.label(), &session, &operation)
 }
 
-/// Cancel the running transaction (idempotent).
 #[tauri::command]
-pub async fn params_cancel(state: State<'_, AppState>) -> Result<(), String> {
-    if let Some(svc) = state.primary_params() {
-        svc.cancel().await;
-    }
-    Ok(())
+pub fn params_operation_status(
+    app: AppHandle,
+    window: WebviewWindow,
+    session: RuntimeClientSession,
+    operation: OperationRef,
+) -> Result<OperationStatus, ParameterCommandError> {
+    params_operations::owned_status(&app, window.label(), &session, &operation)
 }
 
 /// Set one parameter; resolves with the FC's echo.
 #[tauri::command]
 pub async fn params_set(
-    state: State<'_, AppState>,
-    name: String,
-    value: maggcs_core::params::model::ParamValue,
-    ptype: maggcs_core::params::model::ParamType,
-) -> Result<SetEcho, String> {
-    let Some(svc) = state.primary_params() else {
-        return Err("no link — connect first".into());
-    };
-    let result = svc
-        .set(&name, value, ptype)
+    app: AppHandle,
+    window: WebviewWindow,
+    request: ParameterSetRequest,
+) -> Result<ParameterSetEcho, ParameterCommandError> {
+    let work = params_operations::begin(
+        &app,
+        window.label(),
+        request.context,
+        ParameterAction::Set {
+            name: request.name,
+            value: request.value,
+            ptype: request.ptype,
+        },
+    )?;
+    let operation = work.operation().clone();
+    let result = tauri::async_runtime::spawn(work.run())
         .await
-        .map_err(|e| format!("{e:?}"))?;
-    Ok(match result {
-        SetResult::Confirmed(actual) => SetEcho {
-            status: "confirmed".into(),
-            actual,
-            requested: None,
-        },
-        SetResult::Clamped { requested, actual } => SetEcho {
-            status: "clamped".into(),
-            actual,
-            requested: Some(requested),
-        },
-        SetResult::Timeout => SetEcho {
-            status: "timeout".into(),
-            actual: value,
-            requested: None,
-        },
-    })
+        .map_err(|_| maggcs_core::runtime::operations::OperationError::RegistryUnavailable)??;
+    match result {
+        ParameterResult::Set(result) => params_operations::set_echo(operation, result),
+        _ => Err(maggcs_core::runtime::operations::OperationError::RegistryUnavailable.into()),
+    }
 }
-
-/// Serializable set outcome for the window.
-#[derive(Debug, Clone, Serialize)]
-pub struct SetEcho {
-    /// `confirmed` | `clamped` | `timeout`.
-    pub status: String,
-    /// The value the FC actually holds (the echo), or the request on timeout.
-    pub actual: ParamValue,
-    /// Present only when clamped: what we asked for.
-    pub requested: Option<ParamValue>,
-}
-
-/// Reboot the flight controller (MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN,
-/// param1 = 1). The link drops and comes back per the ADR-011 state model;
-/// the window should re-pull after reconnecting.
-/// How long `params_reboot` waits for the FC's `COMMAND_ACK`. The session's
-/// own retry budget is ~4 s; the headroom tolerates slow links.
-const REBOOT_ACK_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Reboot the flight controller (`MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN`,
 /// param1=1). Awaits the FC's verdict: SITL denies this command (PX4 only
 /// compiles the reboot path for `CONFIG_BOARDCTL_RESET` boards), so the UI
 /// must see `denied` instead of assuming the reboot is on its way.
 #[tauri::command]
-pub async fn params_reboot(state: State<'_, AppState>) -> Result<String, String> {
-    let service = state.command().ok_or("not connected")?;
-    let result = maggcs_core::CommandService::send_await(
-        &service,
-        ::mavlink::common::MavCmd::MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN,
-        [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-        REBOOT_ACK_TIMEOUT,
-    )
-    .await
-    .map_err(|e| e.to_string())?;
-    Ok(crate::command_service::result_name(result).to_string())
+pub async fn params_reboot(
+    app: AppHandle,
+    window: WebviewWindow,
+    request: maggcs_core::commands::operation_types::CommandRequestContext,
+) -> Result<
+    maggcs_core::commands::operation_types::CommandReply,
+    maggcs_core::commands::operation_types::CommandOperationError,
+> {
+    let work = crate::command_operations::begin_reboot(&app, window.label(), request)?;
+    tauri::async_runtime::spawn(work.run())
+        .await
+        .map_err(|_| maggcs_core::runtime::operations::OperationError::RegistryUnavailable)?
 }
 
 /// The FC's firmware version (null until AUTOPILOT_VERSION arrives). Waits
 /// for a requested reply when empty; the reply also lands on `params_event`.
 #[tauri::command]
-pub async fn params_fc_version(state: State<'_, AppState>) -> Result<Option<String>, String> {
-    let Some(svc) = state.primary_params() else {
-        return Ok(None);
-    };
+pub async fn params_fc_version(
+    app: AppHandle,
+    window: WebviewWindow,
+    session: RuntimeClientSession,
+) -> Result<Option<String>, ParameterCommandError> {
+    app.state::<AppState>()
+        .runtime_clients
+        .authorize(window.label(), &session)?;
+    let runtime = RuntimeFacade::new(&app);
+    let binding = runtime
+        .parameter_binding(&session.target)
+        .map_err(|error| maggcs_core::runtime::operations::OperationError::Runtime { error })?;
     // Queueing a request is not receiving its reply. Return the arrived
     // version, with a bounded wait rather than racing the cache read.
-    Ok(svc
+    let version = binding
+        .service
         .wait_fc_version(FC_VERSION_ATTEMPTS, FC_VERSION_SETTLE)
-        .await)
+        .await;
+    runtime
+        .bind(&session.target)
+        .map_err(|error| maggcs_core::runtime::operations::OperationError::Runtime { error })?;
+    Ok(version)
 }
 
 /// Lazy-load one parameter's current value from the FC (by name). The
@@ -350,20 +353,38 @@ pub async fn params_fc_version(state: State<'_, AppState>) -> Result<Option<Stri
 /// (operator request 2026-10-11).
 #[tauri::command]
 pub async fn params_read(
-    state: State<'_, AppState>,
-    name: String,
-) -> Result<Option<maggcs_core::params::model::ParamEntry>, String> {
-    let Some(svc) = state.primary_params() else {
-        return Err("no link — connect first".into());
-    };
-    // Serve from the cache when fresh (a value already pulled/read).
-    if let Some(entry) = svc.cache().get(&name) {
-        return Ok(Some(entry));
+    app: AppHandle,
+    window: WebviewWindow,
+    request: ParameterReadRequest,
+) -> Result<Option<maggcs_core::params::model::ParamEntry>, ParameterCommandError> {
+    app.state::<AppState>()
+        .runtime_clients
+        .authorize(window.label(), &request.context.session)?;
+    let target = RuntimeFacade::new(&app)
+        .bind(&request.context.session.target)
+        .map_err(|error| maggcs_core::runtime::operations::OperationError::Runtime { error })?;
+    if let Some(observation) = target
+        .parameter_observation(&request.name)
+        .map_err(|error| maggcs_core::runtime::operations::OperationError::Runtime { error })?
+    {
+        return Ok(Some(observation.entry));
     }
-    match svc.read(&name).await {
-        Ok(entry) => Ok(Some(entry)),
-        Err(maggcs_core::params::service::ParamError::Timeout) => Ok(None),
-        Err(e) => Err(format!("{e:?}")),
+    let work = params_operations::begin(
+        &app,
+        window.label(),
+        request.context,
+        ParameterAction::Read { name: request.name },
+    )?;
+    match tauri::async_runtime::spawn(work.run())
+        .await
+        .map_err(|_| maggcs_core::runtime::operations::OperationError::RegistryUnavailable)?
+    {
+        Ok(ParameterResult::Read(entry)) => Ok(Some(entry)),
+        Err(ParameterCommandError::Protocol {
+            error: maggcs_core::params::service::ParamError::Timeout,
+        }) => Ok(None),
+        Err(error) => Err(error),
+        _ => Err(maggcs_core::runtime::operations::OperationError::RegistryUnavailable.into()),
     }
 }
 
@@ -385,6 +406,7 @@ pub fn params_cache_len(state: State<'_, AppState>) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use maggcs_core::params::service::ParamEvent;
     use std::sync::atomic::{AtomicBool, Ordering};
 
     #[tokio::test]

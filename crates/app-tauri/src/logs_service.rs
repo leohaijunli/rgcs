@@ -13,7 +13,7 @@ use tauri::{AppHandle, Emitter, Runtime, State};
 use maggcs_core::lifecycle::StopOutcome;
 use maggcs_core::logs::protocol::{LogEvent, LogProtocol};
 use maggcs_core::mavlink::connection::{ConnectionEvent, ConnectionHandle};
-use maggcs_core::mavlink::router::RoutedEvents;
+use maggcs_core::mavlink::router::{MessageRoute, RoutedEvents};
 
 use crate::state::AppState;
 
@@ -122,11 +122,28 @@ impl LogsState {
         self.busy.store(false, Ordering::Release);
         let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel::<LogCommand>(4);
 
-        let mut route: RoutedEvents = handle.subscribe_log_messages();
+        // Pin the discovered node from this existing handle. A non-default FC
+        // must not receive requests addressed to 1/1, and another node's log
+        // frames must not complete this owner's protocol transaction.
+        use ::mavlink::MessageData;
+        let (target_system, target_component) = handle
+            .target_identity()
+            .map(|identity| (identity.system_id, identity.component_id))
+            .unwrap_or((
+                handle.config().target_system_id,
+                handle.config().target_component_id,
+            ));
+        let mut route: RoutedEvents = handle.subscribe_route(
+            MessageRoute::messages(&[
+                ::mavlink::common::LOG_ENTRY_DATA::ID,
+                ::mavlink::common::LOG_DATA_DATA::ID,
+            ])
+            .from(target_system, target_component),
+        );
         let state = Arc::clone(self);
         let task = tauri::async_runtime::spawn(async move {
             let _clear_busy = ClearBusy(state.clone());
-            let mut protocol = LogProtocol::new(1, 1);
+            let mut protocol = LogProtocol::new(target_system, target_component);
             let mut save_paths: std::collections::HashMap<u16, String> =
                 std::collections::HashMap::new();
             let mut tick = tokio::time::interval(std::time::Duration::from_millis(200));
@@ -535,6 +552,92 @@ pub async fn logs_delete(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn log_requests_and_replies_bind_the_nondefault_owner_node() {
+        use maggcs_core::mavlink::{ConnectionConfig, Endpoint, MavMessage};
+        let peer = tokio::net::UdpSocket::bind("127.0.0.1:0")
+            .await
+            .expect("peer");
+        let (handle, _, first) =
+            maggcs_core::mavlink::connection::spawn_connection(ConnectionConfig {
+                endpoint: Endpoint::UdpClient {
+                    addr: peer.local_addr().expect("peer address"),
+                },
+                target_system_id: 42,
+                target_component_id: 1,
+                auto_discover_target: false,
+                ..Default::default()
+            })
+            .await
+            .expect("connection");
+        first.await.expect("first result").expect("opened");
+        let app = tauri::test::mock_app();
+        let state = Arc::new(LogsState::default());
+        let runtime = state.spawn(app.handle().clone(), handle.clone());
+        let requests = runtime.sender().expect("requests");
+        requests.send(LogCommand::List).await.expect("list");
+        let destination = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let mut packet = [0; 512];
+                let (size, address) = peer.recv_from(&mut packet).await.expect("datagram");
+                let mut reader = ::mavlink::peek_reader::PeekReader::new(&packet[..size]);
+                let (_, message) =
+                    ::mavlink::read_v2_msg::<MavMessage, _>(&mut reader).expect("decode");
+                if let MavMessage::LOG_REQUEST_LIST(request) = message {
+                    assert_eq!((request.target_system, request.target_component), (42, 1));
+                    return address;
+                }
+            }
+        })
+        .await
+        .expect("request deadline");
+        for (system_id, size) in [(43, 666), (42, 777)] {
+            let message = MavMessage::LOG_ENTRY(::mavlink::common::LOG_ENTRY_DATA {
+                id: 0,
+                num_logs: 1,
+                last_log_num: 0,
+                time_utc: 1,
+                size,
+            });
+            let mut packet = Vec::new();
+            ::mavlink::write_v2_msg(
+                &mut packet,
+                ::mavlink::MavHeader {
+                    system_id,
+                    component_id: 1,
+                    sequence: system_id,
+                },
+                &message,
+            )
+            .expect("encode");
+            peer.send_to(&packet, destination).await.expect("reply");
+        }
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Some(entries) = state.last_list.lock().expect("list").clone() {
+                    assert_eq!(entries.len(), 1);
+                    assert_eq!(
+                        entries[0].size, 777,
+                        "foreign reply must not finish the list"
+                    );
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("list deadline");
+        drop(requests);
+        assert!(matches!(
+            runtime.stop(Duration::from_secs(1)).await,
+            StopOutcome::Stopped { .. }
+        ));
+        handle
+            .shutdown_and_wait(Duration::from_secs(1))
+            .await
+            .expect("shutdown");
+    }
     use maggcs_core::mavlink::{MavMessage, MessageEnvelope};
     use std::sync::atomic::{AtomicBool, Ordering};
 

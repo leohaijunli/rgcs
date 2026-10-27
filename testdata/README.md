@@ -2,6 +2,18 @@
 
 Committed test fixtures for unit/SITL tests.
 
+- `architecture/af00-idle/` — clean, disabled-auto-role desktop profile for
+  architecture startup/cleanup measurements; use a temporary XDG profile as
+  described in its README.
+- Flight-command ownership fixtures generate isolated loopback UDP traffic and
+  Unix PTYs at test time. Browser fixtures inject typed Runtime/FC replies;
+  captures are retained in `frontend/screenshots/commands/ownership/`. See the
+  [AF-02b.4b acceptance record](../docs/verification/af-02b-flight-commands-20261026.md).
+- Owned Mission protocol fixtures also generate loopback UDP/PTY exchanges at
+  test time. Browser IPC fixtures and captures live under
+  `frontend/screenshots/mission/ownership/`; no persisted FC mission recording is
+  required. See [AF-02b.4 Mission acceptance](../docs/verification/af-02b-mission-20261026.md).
+
 - `qgc-survey.plan` — a QGroundControl plan with a `SimpleItem` followed by a
   `Survey` `ComplexItem` (with generated `simpleItems`). Used to exercise the
   `.plan` importer, including complex-item handling (issues.md #12).

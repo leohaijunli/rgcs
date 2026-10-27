@@ -20,13 +20,13 @@ import { listen } from '@tauri-apps/api/event'
 import { useTeardownStore } from '../stores/teardown'
 import type { LinkStatus } from '../generated-types/LinkStatus'
 import type { TelemetrySnapshot } from '../generated-types/TelemetrySnapshot'
-import type { MissionItem } from '../generated-types/MissionItem'
+import type { MissionProgressEnvelope } from '../generated-types/MissionProgressEnvelope'
+import type { MissionCurrentSnapshot } from '../generated-types/MissionCurrentSnapshot'
+import type { OperationStatus } from '../generated-types/OperationStatus'
 import type { TelemetryError } from '../generated-types/TelemetryError'
-import type { MissionEventPayload } from '../stores/mission'
 import i18n from '../i18n'
 import { logEvent } from '../stores/eventlog'
 import { syncSitlHome, usePrefsStore } from './prefs'
-import type { CommandEventPayload } from '../stores/command'
 import { useCommandStore } from '../stores/command'
 import { useDevicesStore } from '../stores/devices'
 import { useLinkStore } from '../stores/link'
@@ -72,6 +72,16 @@ export function useTelemetryBridge() {
       startDeviceWatcher()
       startSerialAutoWatcher()
       const un1 = await listen<TelemetrySnapshot>('telemetry', (e) => {
+        const previous = useTelemetryStore.getState().snapshot?.heartbeat
+        const next = e.payload.heartbeat
+        if (
+          previous
+          && next
+          && (previous.system_id !== next.system_id || previous.component_id !== next.component_id)
+        ) {
+          useCommandStore.getState().reset()
+          useMissionStore.getState().linkLost()
+        }
         useTelemetryStore.getState().applySnapshot(e.payload)
       })
       if (disposed) return un1()
@@ -80,7 +90,17 @@ export function useTelemetryBridge() {
       const un2 = await listen<LinkStatus>('link', (e) => {
         // The lost->alive edge is the reconnect (L3): read it *before* the
         // store is updated, because `setLink` is what consumes it.
-        const wasAlive = useLinkStore.getState().link?.fc_alive
+        const previous = useLinkStore.getState().link
+        const wasAlive = previous?.fc_alive
+        if (
+          previous
+          && (previous.endpoint !== e.payload.endpoint
+            || previous.link_state !== e.payload.link_state
+            || previous.fc_alive !== e.payload.fc_alive)
+        ) {
+          useCommandStore.getState().reset()
+          useMissionStore.getState().linkLost()
+        }
         useLinkStore.getState().setLink(e.payload)
         // A dead link ends any in-flight command or mission operation; their
         // acks/events will never arrive (the mission service exits with the
@@ -121,20 +141,19 @@ export function useTelemetryBridge() {
       // `useAlertStream()` in the shared alert layer, so the main window and
       // the tool windows all get the same `alert` + `statustext` stream.
 
-      const un4 = await listen<MissionEventPayload>('mission', (e) => {
-        useMissionStore.getState().handleEvent(e.payload)
+      const un4 = await listen<OperationStatus>('mission_operation', (e) => {
+        useMissionStore.getState().handleOperation(e.payload)
       })
       if (disposed) return un4()
       unlisteners.push(un4)
 
-      const un5 = await listen<MissionItem[]>('mission_plan', (e) => {
-        useMissionStore.getState().handlePlan(e.payload)
+      const un5 = await listen<MissionProgressEnvelope>('mission_progress', (e) => {
+        useMissionStore.getState().handleProgress(e.payload)
       })
       if (disposed) return un5()
       unlisteners.push(un5)
-
-      const un6 = await listen<CommandEventPayload>('command', (e) => {
-        useCommandStore.getState().handleEvent(e.payload)
+      const un6 = await listen<MissionCurrentSnapshot>('mission_current', (e) => {
+        useMissionStore.getState().handleCurrent(e.payload)
       })
       if (disposed) return un6()
       unlisteners.push(un6)
@@ -169,6 +188,8 @@ export function useTelemetryBridge() {
     return () => {
       disposed = true
       unlisteners.forEach((u) => u())
+      useCommandStore.getState().reset()
+      useMissionStore.getState().linkLost()
       if (mockTimer !== undefined) window.clearInterval(mockTimer)
     }
   }, [])

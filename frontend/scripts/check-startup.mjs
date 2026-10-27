@@ -197,7 +197,8 @@ const targetDialog = (page) => page.locator('[data-testid="target-change-dialog"
   )
 
   // --- 6. the Prepare stage carries the self-check rows --------------------
-  await page.getByRole('button', { name: 'Prepare', exact: true }).click()
+  await page.locator('[data-testid="workflow-open"]').click()
+  await page.locator('[data-testid="workflow-stage-prepare"]').click()
   check(await page.waitForSelector('[data-testid="prepare-panel"]', { timeout: 8000 }).then(() => true).catch(() => false), 'the Prepare panel renders')
   const panel = await page.locator('[data-testid="prepare-panel"]').innerText()
   check(/ab12cd34/.test(panel), 'the calibration row shows the sha256 prefix')

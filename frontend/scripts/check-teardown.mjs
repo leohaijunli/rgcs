@@ -270,10 +270,11 @@ check((await closeRefusal.count()) === 0, 'window-close refusal notice can be di
 await page.evaluate(() =>
   window.__mockSetGuard({ refusal: null, keyword: null, keywordWhenAtStake: true }),
 )
-// Close the Settings dialog left open by step 3: the Plan tab is behind it.
+// Close Settings, then navigate through the current workflow menu.
 await page.keyboard.press('Escape')
 await page.waitForTimeout(300)
-await page.getByRole('button', { name: 'Plan' }).click()
+await page.locator('[data-testid="workflow-open"]').click()
+await page.locator('[data-testid="workflow-stage-plan"]').click()
 await page.locator('button', { hasText: 'Waypoints' }).first().click()
 const coordInput = page.getByLabel('Add by coordinates')
 await coordInput.fill('49.2831, -123.1207')

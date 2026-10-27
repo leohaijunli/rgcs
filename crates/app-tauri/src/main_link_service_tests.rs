@@ -3,11 +3,12 @@
 use super::*;
 use std::io::{Read, Write};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU16, Ordering},
     Arc,
 };
 use std::time::Instant;
 
+use crate::runtime_facade::{RuntimeFacade, TargetRuntime};
 use maggcs_core::mavlink::{ConnectionConfig, ConnectionHandle, MavMessage};
 use maggcs_core::params::{codec::decode_param_id, model::ParamValue};
 use serialport::SerialPort;
@@ -17,16 +18,118 @@ const FC_SYS: u8 = 42;
 const WAIT: Duration = Duration::from_secs(8);
 type Trace = Arc<parking_lot::Mutex<Vec<MavMessage>>>;
 
-struct Harness {
-    app: tauri::App<MockRuntime>,
-    handle: ConnectionHandle,
+#[derive(Clone)]
+pub(crate) struct CommandPeer {
+    pub(crate) hold_ack: Arc<AtomicBool>,
+    pub(crate) result: Arc<parking_lot::Mutex<mavlink::common::MavResult>>,
+    pub(crate) armed: Arc<AtomicBool>,
+    pub(crate) airborne: Arc<AtomicBool>,
+    pub(crate) publish_landed: Arc<AtomicBool>,
+}
+
+impl Default for CommandPeer {
+    fn default() -> Self {
+        Self {
+            hold_ack: Arc::new(AtomicBool::new(false)),
+            result: Arc::new(parking_lot::Mutex::new(
+                mavlink::common::MavResult::MAV_RESULT_ACCEPTED,
+            )),
+            armed: Arc::new(AtomicBool::new(false)),
+            airborne: Arc::new(AtomicBool::new(false)),
+            publish_landed: Arc::new(AtomicBool::new(true)),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct MissionPeer {
+    pub(crate) items: Arc<parking_lot::Mutex<Vec<maggcs_core::mission::MissionItem>>>,
+    pub(crate) result: Arc<parking_lot::Mutex<mavlink::common::MavMissionResult>>,
+    pub(crate) hold_upload: Arc<AtomicBool>,
+    pub(crate) hold_download: Arc<AtomicBool>,
+    pub(crate) hold_ack: Arc<AtomicBool>,
+    pub(crate) hold_current: Arc<AtomicBool>,
+    pub(crate) current: Arc<AtomicU16>,
+    pub(crate) publish_current: Arc<AtomicBool>,
+}
+
+impl Default for MissionPeer {
+    fn default() -> Self {
+        let items = (0..2)
+            .map(|seq| {
+                let mut item = maggcs_core::mission::MissionItem::waypoint(
+                    49.25 + f64::from(seq) * 0.001,
+                    -123.1,
+                    50.0,
+                    maggcs_core::mission::MissionFrame::GlobalInt,
+                );
+                item.seq = seq;
+                item
+            })
+            .collect();
+        Self {
+            items: Arc::new(parking_lot::Mutex::new(items)),
+            result: Arc::new(parking_lot::Mutex::new(
+                mavlink::common::MavMissionResult::MAV_MISSION_ACCEPTED,
+            )),
+            hold_upload: Arc::new(AtomicBool::new(false)),
+            hold_download: Arc::new(AtomicBool::new(false)),
+            hold_ack: Arc::new(AtomicBool::new(false)),
+            hold_current: Arc::new(AtomicBool::new(false)),
+            current: Arc::new(AtomicU16::new(0)),
+            publish_current: Arc::new(AtomicBool::new(true)),
+        }
+    }
+}
+
+pub(crate) struct Harness {
+    pub(crate) app: tauri::App<MockRuntime>,
+    pub(crate) handle: ConnectionHandle,
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
-    trace: Trace,
+    pub(crate) trace: Trace,
+    pub(crate) hold_set_echo: Arc<AtomicBool>,
+    pub(crate) hold_pull: Arc<AtomicBool>,
+    pub(crate) hold_reads: Arc<AtomicBool>,
+    pub(crate) command_peer: Option<CommandPeer>,
+    pub(crate) mission_peer: Option<MissionPeer>,
 }
 
 impl Harness {
-    async fn new() -> Self {
+    pub(crate) async fn new() -> Self {
+        Self::with_parameters(false).await
+    }
+
+    pub(crate) async fn parameters() -> Self {
+        Self::with_parameters(true).await
+    }
+
+    pub(crate) async fn commands() -> Self {
+        Self::with_options(true, Some(CommandPeer::default())).await
+    }
+
+    pub(crate) async fn missions() -> Self {
+        Self::with_all_options(
+            true,
+            Some(CommandPeer::default()),
+            Some(MissionPeer::default()),
+        )
+        .await
+    }
+
+    async fn with_parameters(parameter_transactions: bool) -> Self {
+        Self::with_options(parameter_transactions, None).await
+    }
+
+    async fn with_options(parameter_transactions: bool, command_peer: Option<CommandPeer>) -> Self {
+        Self::with_all_options(parameter_transactions, command_peer, None).await
+    }
+
+    async fn with_all_options(
+        parameter_transactions: bool,
+        command_peer: Option<CommandPeer>,
+        mission_peer: Option<MissionPeer>,
+    ) -> Self {
         let (mut master, slave) = serialport::TTYPort::pair().expect("PTY pair");
         master
             .set_timeout(Duration::from_millis(10))
@@ -37,7 +140,24 @@ impl Harness {
         let reader_stop = stop.clone();
         let trace = Trace::default();
         let reader_trace = trace.clone();
-        let thread = std::thread::spawn(move || fake_px4(master, reader_stop, reader_trace));
+        let hold_set_echo = Arc::new(AtomicBool::new(false));
+        let hold_pull = Arc::new(AtomicBool::new(false));
+        let hold_reads = Arc::new(AtomicBool::new(false));
+        let holds = (hold_set_echo.clone(), hold_pull.clone(), hold_reads.clone());
+        let peer_commands = command_peer.clone();
+        let peer_missions = mission_peer.clone();
+        let thread = std::thread::spawn(move || {
+            fake_px4_with_options(
+                master,
+                reader_stop,
+                reader_trace,
+                FC_SYS,
+                parameter_transactions,
+                holds,
+                peer_commands,
+                peer_missions,
+            )
+        });
         let (handle, events, first) =
             maggcs_core::mavlink::connection::spawn_connection(ConnectionConfig {
                 endpoint: Endpoint::Serial {
@@ -61,7 +181,9 @@ impl Harness {
             20,
             maggcs_core::telemetry::VehicleId::new(FC_SYS, 1),
         );
-        let (mission, _) = maggcs_core::mission::service::MissionService::spawn(
+        let link_id = crate::state::LinkId::next().expect("link ID");
+        let mission = crate::mission_service::spawn(
+            app.handle().clone(),
             handle.clone(),
             maggcs_core::mission::service::MissionIds {
                 self_system: handle.config().system_id,
@@ -69,10 +191,11 @@ impl Harness {
                 target_system: FC_SYS,
                 target_component: TARGET_COMPONENT_ID,
             },
+            link_id,
         );
         let (command, _) = maggcs_core::CommandService::spawn(handle.clone(), FC_SYS, 1);
         state.set_primary_link(crate::state::ActiveLink {
-            id: crate::state::LinkId::next(),
+            id: link_id,
             connection: handle.clone(),
             hub,
             mission,
@@ -93,14 +216,19 @@ impl Harness {
             stop,
             thread: Some(thread),
             trace,
+            hold_set_echo,
+            hold_pull,
+            hold_reads,
+            command_peer,
+            mission_peer,
         }
     }
 
-    fn state(&self) -> State<'_, AppState> {
+    pub(crate) fn state(&self) -> State<'_, AppState> {
         self.app.state::<AppState>()
     }
 
-    async fn attach(&self) -> MainSerialTarget {
+    pub(crate) async fn attach(&self) -> MainSerialTarget {
         let expected = candidate(&self.state()).expect("main serial offer");
         actuator_use_main_target(self.app.handle().clone(), self.state(), expected.clone())
             .await
@@ -112,7 +240,7 @@ impl Harness {
         expected
     }
 
-    async fn shutdown(mut self) {
+    pub(crate) async fn shutdown(mut self) {
         cleanup(self.app.handle(), &self.state()).await;
         if let Some(logs) = self.state().take_primary_logs() {
             let _ = logs.stop(Duration::from_secs(1)).await;
@@ -137,7 +265,7 @@ impl Drop for Harness {
     }
 }
 
-async fn wait_until(mut ready: impl FnMut() -> bool) {
+pub(crate) async fn wait_until(mut ready: impl FnMut() -> bool) {
     tokio::time::timeout(WAIT, async {
         while !ready() {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -147,7 +275,12 @@ async fn wait_until(mut ready: impl FnMut() -> bool) {
     .expect("fixture deadline");
 }
 
-fn send(master: &mut serialport::TTYPort, message: &MavMessage, system_id: u8, sequence: &mut u8) {
+fn send_from(
+    master: &mut serialport::TTYPort,
+    message: &MavMessage,
+    system_id: u8,
+    sequence: &mut u8,
+) {
     let mut bytes = Vec::new();
     mavlink::write_v2_msg(
         &mut bytes,
@@ -168,32 +301,190 @@ fn fake_px4(master: serialport::TTYPort, stop: Arc<AtomicBool>, trace: Trace) {
 }
 
 fn fake_px4_for_system(
+    master: serialport::TTYPort,
+    stop: Arc<AtomicBool>,
+    trace: Trace,
+    system_id: u8,
+) {
+    let idle = Arc::new(AtomicBool::new(false));
+    fake_px4_with_options(
+        master,
+        stop,
+        trace,
+        system_id,
+        false,
+        (idle.clone(), idle.clone(), idle),
+        None,
+        None,
+    );
+}
+
+#[allow(deprecated)]
+fn fake_px4_with_options(
     mut master: serialport::TTYPort,
     stop: Arc<AtomicBool>,
     trace: Trace,
     system_id: u8,
+    parameter_transactions: bool,
+    holds: (Arc<AtomicBool>, Arc<AtomicBool>, Arc<AtomicBool>),
+    command_peer: Option<CommandPeer>,
+    mission_peer: Option<MissionPeer>,
 ) {
     use mavlink::common::*;
     let mut buffer = Vec::new();
     let mut bytes = [0; 2048];
     let mut last_heartbeat = Instant::now() - Duration::from_secs(1);
     let mut sequence = 0;
+    let mut send = |master: &mut serialport::TTYPort, message: &MavMessage| {
+        send_from(master, message, system_id, &mut sequence);
+    };
+    let mut held_command = None;
+    let mut held_upload = None;
+    let mut held_download = None;
+    let mut held_ack = None;
+    let mut held_current = None;
+    let mut incoming_mission = Vec::new();
+    let mut incoming_count = 0u16;
+    let mut parameters: std::collections::BTreeMap<String, (f32, MavParamType)> =
+        Default::default();
     while !stop.load(Ordering::Acquire) {
+        if let Some(peer) = &mission_peer {
+            if !peer.hold_upload.load(Ordering::Acquire) {
+                if let Some(message) = held_upload.take() {
+                    send(&mut master, &message);
+                }
+            }
+            if !peer.hold_download.load(Ordering::Acquire) {
+                if let Some(message) = held_download.take() {
+                    send(&mut master, &message);
+                }
+            }
+            if !peer.hold_ack.load(Ordering::Acquire) {
+                if let Some(message) = held_ack.take() {
+                    send(&mut master, &message);
+                }
+            }
+            if !peer.hold_current.load(Ordering::Acquire) {
+                if let Some(seq) = held_current.take() {
+                    peer.current.store(seq, Ordering::Release);
+                }
+            }
+        }
+        if let Some(peer) = &command_peer {
+            if !peer.hold_ack.load(Ordering::Acquire) {
+                if let Some(command) = held_command.take() {
+                    send(
+                        &mut master,
+                        &MavMessage::COMMAND_ACK(COMMAND_ACK_DATA {
+                            command,
+                            result: *peer.result.lock(),
+                            ..Default::default()
+                        }),
+                    );
+                }
+            }
+        }
         if last_heartbeat.elapsed() >= Duration::from_millis(50) {
             send(
                 &mut master,
                 &MavMessage::HEARTBEAT(HEARTBEAT_DATA {
                     mavtype: MavType::MAV_TYPE_QUADROTOR,
                     autopilot: MavAutopilot::MAV_AUTOPILOT_PX4,
-                    base_mode: MavModeFlag::empty(),
+                    base_mode: if command_peer
+                        .as_ref()
+                        .is_some_and(|peer| peer.armed.load(Ordering::Acquire))
+                    {
+                        MavModeFlag::MAV_MODE_FLAG_SAFETY_ARMED
+                    } else {
+                        MavModeFlag::empty()
+                    },
                     system_status: MavState::MAV_STATE_STANDBY,
                     mavlink_version: 3,
                     custom_mode: 0,
                 }),
-                system_id,
-                &mut sequence,
             );
+            if command_peer
+                .as_ref()
+                .is_some_and(|peer| peer.publish_landed.load(Ordering::Acquire))
+            {
+                send(
+                    &mut master,
+                    &MavMessage::EXTENDED_SYS_STATE(EXTENDED_SYS_STATE_DATA {
+                        vtol_state: MavVtolState::MAV_VTOL_STATE_UNDEFINED,
+                        landed_state: if command_peer
+                            .as_ref()
+                            .is_some_and(|peer| peer.airborne.load(Ordering::Acquire))
+                        {
+                            MavLandedState::MAV_LANDED_STATE_IN_AIR
+                        } else {
+                            MavLandedState::MAV_LANDED_STATE_ON_GROUND
+                        },
+                    }),
+                );
+                send(
+                    &mut master,
+                    &MavMessage::GLOBAL_POSITION_INT(GLOBAL_POSITION_INT_DATA {
+                        time_boot_ms: 1,
+                        lat: 492_500_000,
+                        lon: -1_231_000_000,
+                        alt: 50_000,
+                        relative_alt: 10_000,
+                        vx: 0,
+                        vy: 0,
+                        vz: 0,
+                        hdg: 0,
+                    }),
+                );
+                send(
+                    &mut master,
+                    &MavMessage::GPS_RAW_INT(GPS_RAW_INT_DATA {
+                        time_usec: 1,
+                        lat: 492_500_000,
+                        lon: -1_231_000_000,
+                        alt: 50_000,
+                        eph: 50,
+                        epv: 80,
+                        vel: 0,
+                        cog: 0,
+                        fix_type: GpsFixType::GPS_FIX_TYPE_3D_FIX,
+                        satellites_visible: 12,
+                        ..Default::default()
+                    }),
+                );
+                send(
+                    &mut master,
+                    &MavMessage::SYS_STATUS(SYS_STATUS_DATA {
+                        onboard_control_sensors_present: MavSysStatusSensor::empty(),
+                        onboard_control_sensors_enabled: MavSysStatusSensor::empty(),
+                        onboard_control_sensors_health: MavSysStatusSensor::empty(),
+                        voltage_battery: 16_000,
+                        current_battery: 100,
+                        battery_remaining: 80,
+                        ..Default::default()
+                    }),
+                );
+                send(
+                    &mut master,
+                    &MavMessage::HOME_POSITION(HOME_POSITION_DATA {
+                        latitude: 492_500_000,
+                        longitude: -1_231_000_000,
+                        altitude: 40_000,
+                        ..Default::default()
+                    }),
+                );
+            }
             last_heartbeat = Instant::now();
+            if let Some(peer) = &mission_peer {
+                if peer.publish_current.load(Ordering::Acquire) {
+                    send(
+                        &mut master,
+                        &MavMessage::MISSION_CURRENT(MISSION_CURRENT_DATA {
+                            seq: peer.current.load(Ordering::Acquire),
+                            ..Default::default()
+                        }),
+                    );
+                }
+            }
         }
         match master.read(&mut bytes) {
             Ok(size) => buffer.extend_from_slice(&bytes[..size]),
@@ -215,9 +506,175 @@ fn fake_px4_for_system(
                 &mut mavlink::peek_reader::PeekReader::new(&buffer[..size]),
             );
             buffer.drain(..size);
-            let Ok((_, message)) = parsed else { continue };
+            let Ok((header, message)) = parsed else {
+                continue;
+            };
             trace.lock().push(message.clone());
+            if let Some(peer) = &mission_peer {
+                let ack = || {
+                    MavMessage::MISSION_ACK(MISSION_ACK_DATA {
+                        target_system: header.system_id,
+                        target_component: header.component_id,
+                        mavtype: *peer.result.lock(),
+                        ..Default::default()
+                    })
+                };
+                match &message {
+                    MavMessage::MISSION_COUNT(count) => {
+                        incoming_mission.clear();
+                        incoming_count = count.count;
+                        let request = MavMessage::MISSION_REQUEST_INT(MISSION_REQUEST_INT_DATA {
+                            target_system: header.system_id,
+                            target_component: header.component_id,
+                            seq: 0,
+                            ..Default::default()
+                        });
+                        if peer.hold_upload.load(Ordering::Acquire) {
+                            held_upload = Some(request);
+                        } else {
+                            send(&mut master, &request);
+                        }
+                    }
+                    MavMessage::MISSION_ITEM_INT(item) => {
+                        if usize::from(item.seq) == incoming_mission.len() {
+                            incoming_mission.push(
+                                maggcs_core::mission::protocol::mission_item_from_mav(item)
+                                    .expect("fixture item"),
+                            );
+                        }
+                        if incoming_mission.len() == usize::from(incoming_count) {
+                            if *peer.result.lock() == MavMissionResult::MAV_MISSION_ACCEPTED {
+                                *peer.items.lock() = incoming_mission.clone();
+                            }
+                            if peer.hold_ack.load(Ordering::Acquire) {
+                                held_ack = Some(ack());
+                            } else {
+                                send(&mut master, &ack());
+                            }
+                        } else {
+                            let request =
+                                MavMessage::MISSION_REQUEST_INT(MISSION_REQUEST_INT_DATA {
+                                    target_system: header.system_id,
+                                    target_component: header.component_id,
+                                    seq: incoming_mission.len() as u16,
+                                    ..Default::default()
+                                });
+                            if peer.hold_upload.load(Ordering::Acquire) {
+                                held_upload = Some(request);
+                            } else {
+                                send(&mut master, &request);
+                            }
+                        }
+                    }
+                    MavMessage::MISSION_REQUEST_LIST(_) => {
+                        let count = MavMessage::MISSION_COUNT(MISSION_COUNT_DATA {
+                            target_system: header.system_id,
+                            target_component: header.component_id,
+                            count: peer.items.lock().len() as u16,
+                            ..Default::default()
+                        });
+                        if peer.hold_download.load(Ordering::Acquire) {
+                            held_download = Some(count);
+                        } else {
+                            send(&mut master, &count);
+                        }
+                    }
+                    MavMessage::MISSION_REQUEST_INT(request) => {
+                        if let Some(item) = peer.items.lock().get(usize::from(request.seq)) {
+                            let message = MavMessage::MISSION_ITEM_INT(
+                                maggcs_core::mission::protocol::mission_item_to_mav(
+                                    header.system_id,
+                                    header.component_id,
+                                    item,
+                                ),
+                            );
+                            if peer.hold_download.load(Ordering::Acquire) {
+                                held_download = Some(message);
+                            } else {
+                                send(&mut master, &message);
+                            }
+                        }
+                    }
+                    MavMessage::MISSION_CLEAR_ALL(_) => {
+                        if *peer.result.lock() == MavMissionResult::MAV_MISSION_ACCEPTED {
+                            peer.items.lock().clear();
+                        }
+                        if peer.hold_ack.load(Ordering::Acquire) {
+                            held_ack = Some(ack());
+                        } else {
+                            send(&mut master, &ack());
+                        }
+                    }
+                    MavMessage::MISSION_SET_CURRENT(request) => {
+                        if peer.hold_current.load(Ordering::Acquire) {
+                            held_current = Some(request.seq);
+                        } else {
+                            peer.current.store(request.seq, Ordering::Release);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if let (Some(peer), MavMessage::COMMAND_LONG(command)) = (&command_peer, &message) {
+                if peer.hold_ack.load(Ordering::Acquire) {
+                    held_command = Some(command.command);
+                } else {
+                    send(
+                        &mut master,
+                        &MavMessage::COMMAND_ACK(COMMAND_ACK_DATA {
+                            command: command.command,
+                            result: *peer.result.lock(),
+                            ..Default::default()
+                        }),
+                    );
+                }
+            }
+            if parameter_transactions {
+                if let MavMessage::PARAM_SET(set) = &message {
+                    parameters.insert(
+                        decode_param_id(&set.param_id),
+                        (set.param_value, set.param_type),
+                    );
+                    if !holds.0.load(Ordering::Acquire) {
+                        send(
+                            &mut master,
+                            &MavMessage::PARAM_VALUE(PARAM_VALUE_DATA {
+                                param_id: set.param_id,
+                                param_type: set.param_type,
+                                param_value: set.param_value,
+                                param_count: 2,
+                                param_index: 0,
+                            }),
+                        );
+                    }
+                    continue;
+                }
+                if matches!(message, MavMessage::PARAM_REQUEST_LIST(_)) {
+                    for (index, name, value) in [(0, "MR_SHARED", 17u32), (1, "OWNED_EXTRA", 18u32)]
+                    {
+                        if index == 1 && holds.1.load(Ordering::Acquire) {
+                            continue;
+                        }
+                        let mut id = [0; 16];
+                        id[..name.len()].copy_from_slice(name.as_bytes());
+                        send(
+                            &mut master,
+                            &MavMessage::PARAM_VALUE(PARAM_VALUE_DATA {
+                                param_id: id.into(),
+                                param_type: MavParamType::MAV_PARAM_TYPE_INT32,
+                                param_value: f32::from_bits(value),
+                                param_count: 2,
+                                param_index: index,
+                            }),
+                        );
+                    }
+                    continue;
+                }
+            }
             if let MavMessage::PARAM_REQUEST_READ(read) = message {
+                if parameter_transactions && holds.2.load(Ordering::Acquire) {
+                    continue;
+                }
                 let name = decode_param_id(&read.param_id);
                 let value = match name.as_str() {
                     "COM_MOT_TEST_EN" | "SDLOG_BACKEND" => 1,
@@ -228,17 +685,19 @@ fn fake_px4_for_system(
                     name if name.contains("_MAX") => 1900,
                     _ => 0,
                 };
+                let (raw, ptype) = parameters
+                    .get(&name)
+                    .copied()
+                    .unwrap_or((f32::from_bits(value), MavParamType::MAV_PARAM_TYPE_INT32));
                 send(
                     &mut master,
                     &MavMessage::PARAM_VALUE(PARAM_VALUE_DATA {
                         param_id: read.param_id,
-                        param_type: MavParamType::MAV_PARAM_TYPE_INT32,
-                        param_value: f32::from_bits(value),
+                        param_type: ptype,
+                        param_value: raw,
                         param_count: 100,
                         param_index: u16::MAX,
                     }),
-                    system_id,
-                    &mut sequence,
                 );
             }
         }
@@ -342,7 +801,26 @@ async fn dedicated_serial_target_is_the_fc_without_a_primary_connection() {
 #[tokio::test(flavor = "multi_thread")]
 async fn borrowed_serial_target_reuses_worker_and_detach_keeps_primary_alive() {
     let h = Harness::new().await;
+    let runtime = RuntimeFacade::new(h.app.handle());
+    let primary_context = runtime
+        .targets()
+        .expect("Runtime targets")
+        .remove(0)
+        .target
+        .expect("verified primary");
+    let reader = runtime
+        .bind(&primary_context)
+        .expect("bind primary context");
     let offer = h.attach().await;
+    let shared_context = runtime.targets().expect("shared targets").remove(0);
+    assert_eq!(shared_context.target.as_ref(), Some(&primary_context));
+    assert_eq!(
+        shared_context.roles,
+        vec![
+            maggcs_core::runtime::TargetRole::Primary,
+            maggcs_core::runtime::TargetRole::MotorTest
+        ]
+    );
     assert_eq!(offer.target.connection_id, h.handle.handle_id());
     assert!(is_attached(&h.state()));
     assert!(!crate::motor_control_service::status(&h.state()).enabled);
@@ -381,6 +859,14 @@ async fn borrowed_serial_target_reuses_worker_and_detach_keeps_primary_alive() {
         .await
         .expect("shared parameter read");
     assert_eq!(entry.value, ParamValue::Int(17));
+    assert_eq!(
+        reader
+            .parameter_observation("MR_SHARED")
+            .expect("scoped observation")
+            .expect("same live cache")
+            .entry,
+        entry
+    );
     assert_eq!(
         h.state()
             .primary_params()
@@ -426,6 +912,20 @@ async fn borrowed_serial_target_reuses_worker_and_detach_keeps_primary_alive() {
     assert!(!is_attached(&h.state()));
     assert!(!crate::motor_control_service::status(&h.state()).enabled);
     assert_eq!(h.handle.state().await, LinkState::Connected);
+    assert_eq!(reader.target(), &primary_context);
+    assert!(reader
+        .parameter_observation("MR_SHARED")
+        .expect("main retained")
+        .is_some());
+    assert_eq!(
+        runtime
+            .targets()
+            .expect("detached targets")
+            .remove(0)
+            .target
+            .as_ref(),
+        Some(&primary_context)
+    );
     assert_eq!(
         h.state()
             .connection()
@@ -463,6 +963,14 @@ async fn borrowed_serial_target_reuses_worker_and_detach_keeps_primary_alive() {
 #[tokio::test(flavor = "multi_thread")]
 async fn reconnect_expires_attachment_and_rejects_old_offer() {
     let h = Harness::new().await;
+    let runtime = RuntimeFacade::new(h.app.handle());
+    let original = runtime
+        .targets()
+        .expect("targets")
+        .remove(0)
+        .target
+        .expect("target");
+    let reader = runtime.bind(&original).expect("bind");
     let old = h.attach().await;
     crate::motor_control_service::set_control(&h.state(), true)
         .await
@@ -470,6 +978,10 @@ async fn reconnect_expires_attachment_and_rejects_old_offer() {
     h.handle.reconnect().await.expect("reconnect");
     wait_until(|| h.handle.generation() > old.transport_generation && !is_attached(&h.state()))
         .await;
+    assert!(matches!(
+        reader.telemetry_snapshot(),
+        Err(maggcs_core::runtime::RuntimeError::TargetChanged)
+    ));
     assert!(!crate::motor_control_service::status(&h.state()).enabled);
     assert!(
         actuator_use_main_target(h.app.handle().clone(), h.state(), old)
@@ -478,6 +990,19 @@ async fn reconnect_expires_attachment_and_rejects_old_offer() {
     );
     assert_eq!(h.handle.state().await, LinkState::Connected);
     wait_until(|| candidate(&h.state()).is_some()).await;
+    let current = runtime
+        .targets()
+        .expect("new context")
+        .remove(0)
+        .target
+        .expect("fresh target");
+    assert_ne!(original.session_id, current.session_id);
+    assert_ne!(original.generation, current.generation);
+    assert!(runtime
+        .bind(&current)
+        .expect("new context bind")
+        .telemetry_snapshot()
+        .is_ok());
     h.attach().await;
     assert!(!crate::motor_control_service::status(&h.state()).enabled);
     before_primary_replace(h.app.handle(), &h.state())

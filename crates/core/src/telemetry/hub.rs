@@ -217,6 +217,13 @@ async fn pump(
                     endpoint: connected,
                     ..
                 }) => {
+                    // The same handle can reopen a transport. Old positions,
+                    // heartbeat ages and partial status text must not become
+                    // data belonging to that new Runtime target generation.
+                    agg = TelemetryAggregator::for_vehicle(target);
+                    statuses = StatusTextAssembler::new();
+                    rejections = RejectionCorrelator::default();
+                    dirty = true;
                     endpoint = connected.to_address_string();
                     alive = false;
                     let _ = link_tx.send(LinkStatus {
@@ -283,6 +290,7 @@ mod tests {
     use crate::mavlink::message::{MavMessage, MessageEnvelope};
     use crate::mavlink::{Endpoint, LinkState};
     use crate::telemetry::statustext::StatusSeverity;
+    use std::time::Instant;
 
     fn link_error_event(message: &str) -> ConnectionEvent {
         ConnectionEvent::LinkError(LinkFailure {
@@ -308,6 +316,65 @@ mod tests {
             }),
             received_at: std::time::Instant::now(),
         }))
+    }
+
+    #[tokio::test]
+    async fn transport_reopen_clears_previous_generation_telemetry_and_ages() {
+        let (events, receiver) = broadcast::channel(16);
+        let hub = TelemetryHub::spawn(receiver, 100, VehicleId::new(1, 1));
+        let mut snapshots = hub.subscribe_snapshot();
+        events
+            .send(heartbeat_event(1, 1, 7))
+            .expect("old heartbeat");
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                snapshots.changed().await.expect("snapshot");
+                if snapshots.borrow().heartbeat.is_some() {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("old snapshot deadline");
+        events
+            .send(ConnectionEvent::Connected {
+                endpoint: Endpoint::UdpListener {
+                    addr: "127.0.0.1:0".parse().expect("endpoint"),
+                },
+                generation: 2,
+                started_at: Instant::now(),
+            })
+            .expect("reopen");
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                snapshots.changed().await.expect("new generation snapshot");
+                if snapshots.borrow().heartbeat.is_none() {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("cleared snapshot deadline");
+        assert!(snapshots.borrow().field_ages.heartbeat_at_ms.is_none());
+        events
+            .send(heartbeat_event(1, 1, 9))
+            .expect("new heartbeat");
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                snapshots.changed().await.expect("fresh snapshot");
+                if snapshots
+                    .borrow()
+                    .heartbeat
+                    .as_ref()
+                    .is_some_and(|heartbeat| heartbeat.custom_mode == 9)
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("fresh snapshot deadline");
+        hub.shutdown();
     }
 
     fn statustext_event(id: u16, chunk_seq: u8, severity: u8, text: &str) -> ConnectionEvent {

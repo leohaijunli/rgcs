@@ -1,6 +1,6 @@
 // Preflight checklist (L5): maps the frontend mission-sync state onto the
 // backend's `PlanState` and fetches the evaluated checklist. The arm gate is
-// authoritative in core (`send_arm_disarm`); this module only renders it and
+// authoritative in core (`flight_command_execute`); this module only renders it and
 // reproduces the gate shape for the one-click Takeoff button (a pure display
 // rule — the backend still enforces the arm gate itself).
 

@@ -54,6 +54,10 @@ function commandName(t: Translate, command: string, armed: boolean): string {
       return t('link.mode')
     case 'arm_disarm':
       return armed ? t('plan.cmd.disarm') : t('plan.cmd.arm')
+    case 'arm':
+      return t('plan.cmd.arm')
+    case 'disarm':
+      return t('plan.cmd.disarm')
     default:
       return command
   }

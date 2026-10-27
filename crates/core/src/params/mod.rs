@@ -8,6 +8,7 @@ pub mod codec;
 pub mod diff;
 pub mod file;
 pub mod model;
+pub mod operation_types;
 pub mod service;
 pub mod session;
 

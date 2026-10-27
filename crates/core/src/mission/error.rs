@@ -5,6 +5,8 @@ use thiserror::Error;
 /// Errors from the mission protocol state machine.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum MissionError {
+    #[error("invalid mission request: {message}")]
+    InvalidRequest { message: String },
     /// A reply was not received in time.
     #[error("mission protocol timeout waiting for {0}")]
     Timeout(&'static str),

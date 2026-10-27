@@ -1,0 +1,46 @@
+{
+  "record_date": "2026-10-25",
+  "source_base": "e0c1b45e8b435ebfb586375b7d1520762d8a762c",
+  "source_includes_uncommitted_implementation": true,
+  "scope": "AF-02b.4a owned command primitive and Parameters reboot adapter",
+  "checkpoints": {
+    "AF-02b.4a": "complete",
+    "AF-02b.4b+": "pending",
+    "G1": "open"
+  },
+  "tests": {
+    "core_lib": { "passed": 1013, "failed": 0, "ignored": 1 },
+    "app_lib": { "passed": 211, "failed": 0, "ignored": 8 },
+    "command_service_integration": { "passed": 20, "failed": 0 },
+    "params_owned_integration": { "passed": 6, "failed": 0 },
+    "params_service_integration": { "passed": 4, "failed": 0, "ignored": 1 }
+  },
+  "checks": {
+    "clippy_core_app_all_targets_deny_warnings": "pass",
+    "cargo_fmt_all_check": "pass",
+    "git_diff_check": "pass",
+    "frontend_strict_typecheck_and_build": "pass",
+    "release_native_build": "pass",
+    "params_ownership_browser": "pass",
+    "params_connection_browser": "pass",
+    "params_layout_browser": "pass",
+    "browser_page_errors": 0
+  },
+  "frontend_build": {
+    "modules_transformed": 3470,
+    "existing_mixed_import_and_large_chunk_warnings": true
+  },
+  "screenshots": {
+    "root": "frontend/screenshots/params/ownership",
+    "clients": 7,
+    "connection": 7,
+    "layout": 6,
+    "total": 20,
+    "new_reboot_states": ["denied", "uncertain", "stale_ignored", "accepted"]
+  },
+  "physical_qualification": {
+    "installed_fc_reboot_continuity": "not_run",
+    "external_qgc_rc_exclusion": "not_claimed",
+    "electrical_behavior": "not_applicable_to_this_software_slice"
+  }
+}
