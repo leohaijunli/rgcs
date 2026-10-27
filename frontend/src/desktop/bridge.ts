@@ -28,6 +28,8 @@ import i18n from '../i18n'
 import { logEvent } from '../stores/eventlog'
 import { syncSitlHome, usePrefsStore } from './prefs'
 import { useCommandStore } from '../stores/command'
+import { useConsoleStore } from '../stores/console'
+import { useLogsStore } from '../stores/logs'
 import { useDevicesStore } from '../stores/devices'
 import { useLinkStore } from '../stores/link'
 import { useMissionStore } from '../stores/mission'
@@ -81,6 +83,8 @@ export function useTelemetryBridge() {
         ) {
           useCommandStore.getState().reset()
           useMissionStore.getState().linkLost()
+          useConsoleStore.getState().reset()
+          useLogsStore.getState().reset()
         }
         useTelemetryStore.getState().applySnapshot(e.payload)
       })
@@ -100,6 +104,8 @@ export function useTelemetryBridge() {
         ) {
           useCommandStore.getState().reset()
           useMissionStore.getState().linkLost()
+          useConsoleStore.getState().reset()
+          useLogsStore.getState().reset()
         }
         useLinkStore.getState().setLink(e.payload)
         // A dead link ends any in-flight command or mission operation; their
@@ -113,6 +119,8 @@ export function useTelemetryBridge() {
         if (!e.payload.fc_alive) {
           useCommandStore.getState().reset()
           useMissionStore.getState().linkLost()
+          useConsoleStore.getState().reset()
+          useLogsStore.getState().reset()
         } else if (wasAlive === false) {
           // Reconnect: mode and armed state resume with the heartbeat; the
           // mission state is only known from an exchange, so re-read it, and
@@ -190,6 +198,7 @@ export function useTelemetryBridge() {
       unlisteners.forEach((u) => u())
       useCommandStore.getState().reset()
       useMissionStore.getState().linkLost()
+      useConsoleStore.getState().reset()
       if (mockTimer !== undefined) window.clearInterval(mockTimer)
     }
   }, [])

@@ -1,52 +1,155 @@
-//! Log download service (issues O1 / operator request): runs the core
-//! `LogProtocol` task on the primary link (spawned on connect like the
-//! command/params services), forwards events onto `logs_event`, and
-//! persists finished downloads through a save-dialog path.
+//! Owner-bound primary FC log list/download/delete adapter.
 
+use std::collections::BTreeMap;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
-use tauri::{AppHandle, Emitter, Runtime, State};
-
 use maggcs_core::lifecycle::StopOutcome;
-use maggcs_core::logs::protocol::{LogEvent, LogProtocol};
-use maggcs_core::mavlink::connection::{ConnectionEvent, ConnectionHandle};
-use maggcs_core::mavlink::router::{MessageRoute, RoutedEvents};
+use maggcs_core::logs::operation_types::{
+    delete_confirmation, LogDeleteRequest, LogDownloadRequest, LogEraseRequest, LogOperationError,
+    LogProgressEnvelope, LogProtocolError, LogReply, LogRequestContext, LogResult,
+    DELETE_ALL_CONFIRMATION,
+};
+use maggcs_core::logs::{LogEntryInfo, LogService, LogServiceEvent, LogTransaction};
+use maggcs_core::runtime::operations::{
+    CleanupOutcome, OperationError, OperationLease, OperationOutcome, OperationRef,
+    OperationRequest, OperationResource, OperationStatus, RuntimeClientSession,
+};
+use maggcs_core::runtime::{OperationId, RuntimeError};
+use parking_lot::Mutex;
+use tauri::{AppHandle, Emitter, Manager, Runtime, State, WebviewWindow};
 
+use crate::runtime_facade::{LogBinding, RuntimeFacade, TargetRuntime};
 use crate::state::AppState;
+
+const LIST_BUDGET: Duration = Duration::from_secs(10);
+const DOWNLOAD_BUDGET: Duration = Duration::from_secs(10 * 60);
+const DELETE_BUDGET: Duration = Duration::from_secs(20);
+const TARGET_POLL: Duration = Duration::from_millis(100);
+const WRITE_TIMEOUT: Duration = Duration::from_millis(500);
+const MAX_SAVE_PATH_BYTES: usize = 4096;
+const MAX_ACTIVE_LOG_OPERATIONS: usize = 32;
+const FILE_CHUNK_BYTES: usize = 64 * 1024;
+const FILE_CLEANUP_BUDGET: Duration = Duration::from_millis(750);
+const ERASE_READBACK_BUDGET: Duration = Duration::from_secs(10);
+const ERASE_POLL: Duration = Duration::from_millis(250);
 
 #[derive(Default)]
 pub struct LogsState {
-    busy: AtomicBool,
-    last_error: std::sync::Mutex<Option<String>>,
-    last_list: std::sync::Mutex<Option<Vec<maggcs_core::logs::LogEntryInfo>>>,
+    active: Mutex<BTreeMap<OperationId, OperationRef>>,
+    reconciliation: Mutex<Option<OperationRef>>,
 }
 
-struct ClearBusy(Arc<LogsState>);
-impl Drop for ClearBusy {
-    fn drop(&mut self) {
-        self.0.busy.store(false, Ordering::Release);
+impl LogsState {
+    pub(crate) async fn stop_operations<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        budget: Duration,
+    ) -> StopOutcome {
+        let operations = self.active.lock().values().cloned().collect::<Vec<_>>();
+        if operations.is_empty() {
+            return StopOutcome::NotRunning;
+        }
+        let started = Instant::now();
+        for operation in &operations {
+            match app
+                .state::<AppState>()
+                .runtime_clients
+                .operations
+                .cancel(&operation.owner, operation)
+            {
+                Ok(status) => publish(app, &status),
+                Err(error) => {
+                    return StopOutcome::Failed {
+                        message: error.to_string(),
+                    }
+                }
+            }
+        }
+        if tokio::time::timeout(budget, async {
+            while !self.active.lock().is_empty() {
+                tokio::time::sleep(TARGET_POLL).await;
+            }
+        })
+        .await
+        .is_err()
+        {
+            return StopOutcome::TimedOut {
+                elapsed_ms: elapsed_ms(started),
+            };
+        }
+        if operations.iter().any(|operation| {
+            !retained_status(app, operation)
+                .is_ok_and(|status| status.cleanup != CleanupOutcome::Uncertain)
+        }) {
+            StopOutcome::Failed {
+                message: "log operation cleanup is unconfirmed".into(),
+            }
+        } else {
+            StopOutcome::Stopped {
+                elapsed_ms: elapsed_ms(started),
+            }
+        }
+    }
+
+    pub(crate) fn is_busy(&self) -> bool {
+        !self.active.lock().is_empty()
+    }
+    pub(crate) fn operation(&self, id: &OperationId) -> Option<OperationRef> {
+        self.active.lock().get(id).cloned()
+    }
+    fn register(&self, operation: &OperationRef) -> Result<(), OperationError> {
+        let mut active = self.active.lock();
+        if active.len() >= MAX_ACTIVE_LOG_OPERATIONS {
+            return Err(OperationError::CapacityExceeded);
+        }
+        active.insert(operation.id.clone(), operation.clone());
+        Ok(())
+    }
+
+    pub fn spawn<R: Runtime>(
+        self: &Arc<Self>,
+        app: AppHandle<R>,
+        connection: maggcs_core::mavlink::ConnectionHandle,
+    ) -> LogsRuntime {
+        let identity = connection.target_identity();
+        let (target_system, target_component) = identity
+            .map(|identity| (identity.system_id, identity.component_id))
+            .unwrap_or((
+                connection.config().target_system_id,
+                connection.config().target_component_id,
+            ));
+        let (service, mut events) = LogService::spawn(connection, target_system, target_component);
+        let forwarder = tauri::async_runtime::spawn(async move {
+            while let Some(event) = events.recv().await {
+                forward_event(&app, event);
+            }
+        });
+        LogsRuntime {
+            service: Some(service),
+            forwarder: Some(forwarder),
+        }
     }
 }
 
-/// Runtime owned by one active link; its task is joined before link shutdown.
 pub struct LogsRuntime {
-    commands: Option<tokio::sync::mpsc::Sender<LogCommand>>,
-    task: Option<tauri::async_runtime::JoinHandle<()>>,
+    service: Option<LogService>,
+    forwarder: Option<tauri::async_runtime::JoinHandle<()>>,
 }
 
 impl LogsRuntime {
-    pub(crate) fn sender(&self) -> Option<tokio::sync::mpsc::Sender<LogCommand>> {
-        self.commands.clone()
+    pub(crate) fn service(&self) -> Option<LogService> {
+        self.service.clone()
     }
-
-    /// Close the command channel and wait for the log protocol task to exit.
     pub async fn stop(mut self, deadline: Duration) -> StopOutcome {
         let started = Instant::now();
-        self.commands.take();
-        let Some(mut task) = self.task.take() else {
+        if let Some(service) = self.service.take() {
+            service.shutdown();
+        }
+        let Some(mut task) = self.forwarder.take() else {
             return StopOutcome::NotRunning;
         };
         match tokio::time::timeout(deadline, &mut task).await {
@@ -54,7 +157,7 @@ impl LogsRuntime {
                 elapsed_ms: elapsed_ms(started),
             },
             Ok(Err(error)) => StopOutcome::Failed {
-                message: format!("log service task failed: {error}"),
+                message: format!("log event forwarder failed: {error}"),
             },
             Err(_) => {
                 task.abort();
@@ -69,7 +172,10 @@ impl LogsRuntime {
 
 impl Drop for LogsRuntime {
     fn drop(&mut self) {
-        if let Some(task) = &self.task {
+        if let Some(service) = self.service.take() {
+            service.shutdown();
+        }
+        if let Some(task) = &self.forwarder {
             task.abort();
         }
     }
@@ -79,646 +185,1001 @@ fn elapsed_ms(started: Instant) -> u64 {
     started.elapsed().as_millis().min(u64::MAX as u128) as u64
 }
 
-pub(crate) enum LogCommand {
-    List,
-    Download {
-        id: u16,
-        size: u32,
-        save_path: String,
-    },
-    Cancel,
-}
-
-/// Serializable event payloads (`logs_event`).
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "snake_case", tag = "kind")]
-pub enum LogsEventPayload {
-    #[serde(rename_all = "snake_case")]
-    List {
-        entries: Vec<maggcs_core::logs::LogEntryInfo>,
-    },
-    #[serde(rename_all = "snake_case")]
-    Progress { id: u16, fetched: u32, total: u32 },
-    /// The log finished downloading and was written to `path`.
-    #[serde(rename_all = "snake_case")]
-    Downloaded { id: u16, path: String },
-    #[serde(rename_all = "snake_case")]
-    Failed { message: String },
-}
-
-impl LogsState {
-    pub(crate) fn is_busy(&self) -> bool {
-        self.busy.load(Ordering::Acquire)
-    }
-
-    /// Spawn a protocol runtime bound to one active link.
-    pub fn spawn<R: Runtime>(
-        self: &Arc<Self>,
-        app: AppHandle<R>,
-        handle: ConnectionHandle,
-    ) -> LogsRuntime {
-        *self.last_error.lock().expect("logs err lock") = None;
-        *self.last_list.lock().expect("logs list lock") = None;
-        self.busy.store(false, Ordering::Release);
-        let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel::<LogCommand>(4);
-
-        // Pin the discovered node from this existing handle. A non-default FC
-        // must not receive requests addressed to 1/1, and another node's log
-        // frames must not complete this owner's protocol transaction.
-        use ::mavlink::MessageData;
-        let (target_system, target_component) = handle
-            .target_identity()
-            .map(|identity| (identity.system_id, identity.component_id))
-            .unwrap_or((
-                handle.config().target_system_id,
-                handle.config().target_component_id,
-            ));
-        let mut route: RoutedEvents = handle.subscribe_route(
-            MessageRoute::messages(&[
-                ::mavlink::common::LOG_ENTRY_DATA::ID,
-                ::mavlink::common::LOG_DATA_DATA::ID,
-            ])
-            .from(target_system, target_component),
-        );
-        let state = Arc::clone(self);
-        let task = tauri::async_runtime::spawn(async move {
-            let _clear_busy = ClearBusy(state.clone());
-            let mut protocol = LogProtocol::new(target_system, target_component);
-            let mut save_paths: std::collections::HashMap<u16, String> =
-                std::collections::HashMap::new();
-            let mut tick = tokio::time::interval(std::time::Duration::from_millis(200));
-            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-            let emit_failed = |state: &LogsState, app: &AppHandle<R>, message: String| {
-                *state.last_error.lock().expect("logs err lock") = Some(message.clone());
-                let _ = app.emit("logs_event", &LogsEventPayload::Failed { message });
-            };
-
-            loop {
-                tokio::select! {
-                    cmd = cmd_rx.recv() => {
-                        let Some(cmd) = cmd else { return };
-                        let frames = match cmd {
-                            LogCommand::List => protocol.begin_list(),
-                            LogCommand::Download { id, size, save_path } => {
-                                save_paths.insert(id, save_path);
-                                protocol.begin_download(id, size)
-                            }
-                            LogCommand::Cancel => protocol.cancel(),
-                        };
-                        for f in frames {
-                            if handle.send(f).await.is_err() { return; }
-                        }
-                        if !protocol.is_busy() { state.busy.store(false, Ordering::Release); }
-                    }
-                    msg = route.recv() => {
-                        let envelope = match classify_route(msg) {
-                            RouteStep::Message(envelope) => envelope,
-                            // Ordinary lifecycle reports and broadcast lag are
-                            // not download failures; keep serving the link.
-                            RouteStep::Skip => continue,
-                            RouteStep::Closed => return,
-                        };
-                        let was_busy = protocol.is_busy();
-                        let (events, frames) = match protocol.handle(
-                            &envelope.message,
-                            std::time::Instant::now(),
-                        ) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                protocol.cancel();
-                                if was_busy { state.busy.store(false, Ordering::Release); }
-                                emit_failed(&state, &app, e.to_string());
-                                continue;
-                            }
-                        };
-                        for f in frames {
-                            if handle.send(f).await.is_err() { return; }
-                        }
-                        for e in events {
-                            match e {
-                                LogEvent::List { entries } => {
-                                    *state.last_list.lock().expect("logs list lock") = Some(entries.clone());
-                                    let _ = app.emit("logs_event", &LogsEventPayload::List { entries });
-                                }
-                                LogEvent::Progress { id, fetched, total } => {
-                                    let _ = app.emit("logs_event", &LogsEventPayload::Progress { id, fetched, total });
-                                }
-                                LogEvent::Downloaded { id, bytes } => {
-                                    let path = save_paths.get(&id).cloned()
-                                        .unwrap_or_else(|| format!("log{id}.ulg"));
-                                    let payload = match std::fs::write(&path, &bytes) {
-                                        Ok(()) => LogsEventPayload::Downloaded { id, path },
-                                        Err(e) => LogsEventPayload::Failed { message: format!("write {}: {e}", path) },
-                                    };
-                                    let _ = app.emit("logs_event", &payload);
-                                }
-                            }
-                        }
-                        if was_busy && !protocol.is_busy() { state.busy.store(false, Ordering::Release); }
-                    }
-                    _ = tick.tick() => {
-                        match protocol.tick(std::time::Instant::now()) {
-                            Ok(frames) => {
-                                for f in frames {
-                                    if handle.send(f).await.is_err() { return; }
-                                }
-                            }
-                            Err(e) => {
-                                let _ = protocol.cancel();
-                                state.busy.store(false, Ordering::Release);
-                                emit_failed(&state, &app, e.to_string());
-                            }
-                        }
-                    }
-                }
-            }
-        });
-        LogsRuntime {
-            commands: Some(cmd_tx),
-            task: Some(task),
-        }
-    }
-}
-
-fn sender(state: &AppState) -> Option<tokio::sync::mpsc::Sender<LogCommand>> {
-    state.primary_logs_sender()
-}
-
-async fn submit(state: &AppState, command: LogCommand) -> Result<(), String> {
-    let _ops = state.ops().lock().await;
-    crate::main_link_service::ensure_primary_tools_available(state)?;
-    let tx = sender(state).ok_or("not connected")?;
-    let starts = !matches!(command, LogCommand::Cancel);
-    if !starts && !state.logs.is_busy() {
-        return Ok(());
-    }
-    if starts && state.logs.busy.swap(true, Ordering::AcqRel) {
-        return Err("a main-window log operation is already active; cancel it first".into());
-    }
-    if tx.send(command).await.is_err() {
-        state.logs.busy.store(false, Ordering::Release);
-        return Err("service stopped".into());
-    }
-    Ok(())
-}
-
-// Non-Debug fields are behind the Mutexes; a manual Debug keeps State usable
-// in AppState's derive.
-impl std::fmt::Debug for LogsState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LogsState").finish()
-    }
-}
-
-/// What one `RoutedEvents` wake means for the download task. Only a closed
-/// bus ends the task; a lagged subscriber simply misses frames, and link
-/// lifecycle reports are irrelevant to the protocol.
+// Shared with the dedicated Motor log adapter until its owned migration.
 pub(crate) enum RouteStep {
     Message(Box<maggcs_core::mavlink::MessageEnvelope>),
     Skip,
     Closed,
 }
-
 pub(crate) fn classify_route(
-    msg: Result<ConnectionEvent, tokio::sync::broadcast::error::RecvError>,
+    event: Result<maggcs_core::mavlink::ConnectionEvent, tokio::sync::broadcast::error::RecvError>,
 ) -> RouteStep {
-    match msg {
-        Ok(ConnectionEvent::Message(envelope)) => RouteStep::Message(envelope),
-        Ok(_) => RouteStep::Skip,
-        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => RouteStep::Skip,
+    match event {
+        Ok(maggcs_core::mavlink::ConnectionEvent::Message(message)) => RouteStep::Message(message),
         Err(tokio::sync::broadcast::error::RecvError::Closed) => RouteStep::Closed,
+        _ => RouteStep::Skip,
     }
 }
 
-/// Request the FC's log list.
-///
-/// # Errors
-///
-/// "not connected" when the link is down.
-#[tauri::command]
-pub async fn logs_request_list(state: State<'_, AppState>) -> Result<(), String> {
-    submit(&state, LogCommand::List).await
+struct Registration<R: Runtime> {
+    app: AppHandle<R>,
+    id: OperationId,
+}
+impl<R: Runtime> Drop for Registration<R> {
+    fn drop(&mut self) {
+        self.app
+            .state::<AppState>()
+            .logs
+            .active
+            .lock()
+            .remove(&self.id);
+    }
 }
 
-/// Download one log into a save-dialog path.
-///
-/// # Errors
-///
-/// "not connected" when the link is down; a cancelled save dialog is not an
-/// error (returns Ok without starting).
-#[tauri::command]
-pub async fn logs_download(
-    id: u16,
-    size: u32,
-    state: State<'_, AppState>,
-    app: AppHandle,
-) -> Result<(), String> {
-    use tauri_plugin_dialog::DialogExt;
-    let path = app
-        .dialog()
-        .file()
-        .add_filter("ULog", &["ulg"])
-        .set_file_name(format!("log{id}.ulg"))
-        .blocking_save_file()
-        .and_then(|p| p.into_path().ok());
-    let Some(path) = path else { return Ok(()) };
-    submit(
-        &state,
-        LogCommand::Download {
-            id,
-            size,
-            save_path: path.display().to_string(),
+pub(crate) fn forward_event<R: Runtime>(app: &AppHandle<R>, event: LogServiceEvent) {
+    match event {
+        LogServiceEvent::Progress {
+            operation_id,
+            generation,
+            entry,
+            fetched,
+            total,
+        } => {
+            let state = app.state::<AppState>();
+            let Some(operation) = state.logs.operation(&operation_id) else {
+                return;
+            };
+            if operation.target.generation != generation
+                || RuntimeFacade::new(app).bind(&operation.target).is_err()
+            {
+                return;
+            }
+            let Ok(status) = retained_status(app, &operation) else {
+                return;
+            };
+            if status.phase != maggcs_core::runtime::operations::OperationPhase::Running {
+                return;
+            }
+            let _ = app.emit(
+                "logs_progress",
+                LogProgressEnvelope {
+                    operation,
+                    request_id: status.request_id,
+                    entry,
+                    fetched,
+                    total,
+                },
+            );
+        }
+    }
+}
+
+pub(crate) enum LogAction {
+    List,
+    Download {
+        entry: LogEntryInfo,
+        save_path: String,
+    },
+    Delete {
+        entry: LogEntryInfo,
+    },
+    Erase,
+}
+
+impl LogAction {
+    fn budget(&self) -> Duration {
+        match self {
+            Self::List => LIST_BUDGET,
+            Self::Download { .. } => DOWNLOAD_BUDGET,
+            _ => DELETE_BUDGET,
+        }
+    }
+    fn resources(&self) -> Vec<OperationResource> {
+        match self {
+            Self::List | Self::Delete { .. } | Self::Erase => {
+                vec![OperationResource::Shell, OperationResource::LogTransfer]
+            }
+            _ => vec![OperationResource::LogTransfer],
+        }
+    }
+    fn uses_shell(&self) -> bool {
+        matches!(self, Self::Delete { .. } | Self::Erase)
+    }
+}
+
+pub(crate) struct LogWork<R: Runtime> {
+    app: AppHandle<R>,
+    window: String,
+    session: RuntimeClientSession,
+    binding: LogBinding,
+    lease: OperationLease,
+    transaction: Mutex<Option<LogTransaction>>,
+    action: Option<LogAction>,
+    console: Option<Arc<crate::console_service::ConsoleState>>,
+    destructive_dispatched: Arc<AtomicBool>,
+    shell_used: Arc<AtomicBool>,
+    file: Arc<FileControl>,
+    _registration: Registration<R>,
+}
+
+struct FileControl {
+    cancelled: maggcs_core::devices::SerialCancellation,
+    finished: AtomicBool,
+    may_commit: AtomicBool,
+}
+impl Default for FileControl {
+    fn default() -> Self {
+        Self {
+            cancelled: maggcs_core::devices::SerialCancellation::new(),
+            finished: AtomicBool::new(true),
+            may_commit: AtomicBool::new(false),
+        }
+    }
+}
+struct CancelFile(Arc<FileControl>);
+impl Drop for CancelFile {
+    fn drop(&mut self) {
+        self.0.cancelled.cancel();
+    }
+}
+struct FinishedFile(Arc<FileControl>);
+impl Drop for FinishedFile {
+    fn drop(&mut self) {
+        self.0.finished.store(true, Ordering::Release);
+    }
+}
+
+fn runtime_error(error: RuntimeError) -> LogOperationError {
+    OperationError::Runtime { error }.into()
+}
+
+fn validate_path(path: &str) -> Result<(), LogProtocolError> {
+    if path.is_empty() || path.len() > MAX_SAVE_PATH_BYTES || path.contains('\0') {
+        Err(LogProtocolError::InvalidRequest {
+            message: "save path is empty, oversized or contains NUL".into(),
+        })
+    } else {
+        Ok(())
+    }
+}
+
+fn epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u64::MAX as u128) as u64)
+        .unwrap_or(0)
+}
+
+fn destructive_admission<R: Runtime>(
+    app: &AppHandle<R>,
+    session: &RuntimeClientSession,
+) -> Result<(), LogOperationError> {
+    let snapshot = RuntimeFacade::new(app)
+        .bind(&session.target)
+        .map_err(runtime_error)?
+        .telemetry_snapshot()
+        .map_err(runtime_error)?
+        .ok_or_else(|| {
+            runtime_error(RuntimeError::ServiceUnavailable {
+                service: "telemetry".into(),
+            })
+        })?;
+    let heartbeat_fresh = snapshot.field_ages.heartbeat_at_ms.is_some_and(|at| {
+        epoch_ms().saturating_sub(at) <= maggcs_core::runtime::TARGET_HEARTBEAT_FRESH_MS
+    });
+    let landed_fresh = snapshot
+        .field_ages
+        .extended_sys_state_at_ms
+        .is_some_and(|at| {
+            epoch_ms().saturating_sub(at) <= maggcs_core::runtime::TARGET_HEARTBEAT_FRESH_MS
+        });
+    if !heartbeat_fresh
+        || !landed_fresh
+        || snapshot
+            .heartbeat
+            .as_ref()
+            .is_none_or(|heartbeat| heartbeat.base_mode.safety_armed)
+        || snapshot
+            .extended_sys_state
+            .as_ref()
+            .is_none_or(|state| state.landed_state != maggcs_core::telemetry::LandedState::OnGround)
+    {
+        return Err(OperationError::InvalidRequest {
+            message:
+                "SD-log deletion requires fresh telemetry confirming a disarmed, landed target"
+                    .into(),
+        }
+        .into());
+    }
+    crate::main_link_service::ensure_primary_tools_available(&app.state::<AppState>())
+        .map_err(|message| OperationError::InvalidRequest { message }.into())
+}
+
+pub(crate) fn begin<R: Runtime>(
+    app: &AppHandle<R>,
+    window: &str,
+    context: LogRequestContext,
+    action: LogAction,
+    console: Option<Arc<crate::console_service::ConsoleState>>,
+) -> Result<LogWork<R>, LogOperationError> {
+    if let LogAction::Download { save_path, entry } = &action {
+        validate_path(save_path)?;
+        if entry.size > maggcs_core::logs::operation_types::MAX_LOG_DOWNLOAD_BYTES {
+            return Err(LogProtocolError::InvalidRequest {
+                message: "log exceeds the 256 MiB buffered-download limit".into(),
+            }
+            .into());
+        }
+    }
+    let state = app.state::<AppState>();
+    state.runtime_clients.authorize(window, &context.session)?;
+    crate::main_link_service::ensure_primary_tools_available(&state)
+        .map_err(|message| OperationError::InvalidRequest { message })?;
+    let runtime = RuntimeFacade::new(app);
+    let binding = runtime
+        .log_binding(&context.session.target)
+        .map_err(runtime_error)?;
+    if action.uses_shell() {
+        if state.logs.reconciliation.lock().is_some() {
+            return Err(LogProtocolError::InvalidRequest {
+                message: "refresh the verified FC log list before another destructive action"
+                    .into(),
+            }
+            .into());
+        }
+        destructive_admission(app, &context.session)?;
+        if console.as_ref().is_none_or(|console| console.is_active()) {
+            return Err(OperationError::InvalidRequest {
+                message: "close the interactive console before deleting logs".into(),
+            }
+            .into());
+        }
+    }
+    let lease = state.runtime_clients.operations.prepare(OperationRequest {
+        request_id: context.request_id,
+        owner: context.session.owner.clone(),
+        target: context.session.target.clone(),
+        resources: action.resources(),
+        budget_ms: action.budget().as_millis() as u64,
+    })?;
+    state.runtime_clients.authorize(window, &context.session)?;
+    runtime
+        .bind(&context.session.target)
+        .map_err(runtime_error)?;
+    state.logs.register(lease.operation())?;
+    let registration = Registration {
+        app: app.clone(),
+        id: lease.operation().id.clone(),
+    };
+    Ok(LogWork {
+        app: app.clone(),
+        window: window.into(),
+        session: context.session,
+        binding,
+        lease,
+        transaction: Mutex::new(None),
+        action: Some(action),
+        console,
+        destructive_dispatched: Arc::new(AtomicBool::new(false)),
+        shell_used: Arc::new(AtomicBool::new(false)),
+        file: Arc::new(FileControl::default()),
+        _registration: registration,
+    })
+}
+
+fn publish<R: Runtime>(app: &AppHandle<R>, status: &OperationStatus) {
+    let _ = app.emit("logs_operation", status);
+}
+fn retained_status<R: Runtime>(
+    app: &AppHandle<R>,
+    operation: &OperationRef,
+) -> Result<OperationStatus, LogOperationError> {
+    Ok(app
+        .state::<AppState>()
+        .runtime_clients
+        .operations
+        .status(&operation.owner, operation)?)
+}
+fn finish<R: Runtime>(
+    app: &AppHandle<R>,
+    lease: OperationLease,
+    outcome: OperationOutcome,
+    cleanup: CleanupOutcome,
+) -> Result<(), LogOperationError> {
+    let operation = lease.operation().clone();
+    match lease.finish(outcome, cleanup) {
+        Ok(status) => {
+            publish(app, &status);
+            Ok(())
+        }
+        Err(error) => {
+            if let Ok(status) = retained_status(app, &operation) {
+                publish(app, &status);
+                if status.cleanup == CleanupOutcome::Uncertain {
+                    return Err(LogOperationError::ReconciliationRequired {
+                        operation: Box::new(operation),
+                        reason: error.to_string(),
+                    });
+                }
+            }
+            Err(error.into())
+        }
+    }
+}
+
+fn map_shell(error: maggcs_core::shell::ShellProtocolError) -> LogProtocolError {
+    use maggcs_core::shell::ShellProtocolError;
+    match error {
+        ShellProtocolError::TargetChanged => LogProtocolError::TargetChanged,
+        ShellProtocolError::Cancelled => LogProtocolError::Cancelled,
+        ShellProtocolError::TimedOut => LogProtocolError::TimedOut,
+        ShellProtocolError::Stopped => LogProtocolError::Stopped,
+        other => LogProtocolError::InvalidRequest {
+            message: other.to_string(),
         },
+    }
+}
+
+async fn verify_delete_shell<R: Runtime>(
+    work: &LogWork<R>,
+    console: &crate::console_service::ConsoleState,
+) -> Result<(), LogOperationError> {
+    destructive_admission(&work.app, &work.session)?;
+    work.shell_used.store(true, Ordering::Release);
+    if crate::console_service::probe_binding(console, &work.binding.connection, &work.session)
+        .await
+        .map_err(map_shell)?
+        != crate::px4_shell::ShellKind::NuttShell
+    {
+        return Err(LogProtocolError::InvalidRequest {
+            message:
+                "SD-log deletion requires a NuttX FC; this target exposes the SITL/POSIX shell"
+                    .into(),
+        }
+        .into());
+    }
+    verify_logger_stopped(work, console).await
+}
+
+async fn verify_logger_stopped<R: Runtime>(
+    work: &LogWork<R>,
+    console: &crate::console_service::ConsoleState,
+) -> Result<(), LogOperationError> {
+    work.check()?;
+    let output = crate::console_service::exec_binding(
+        console,
+        &work.binding.connection,
+        &work.session,
+        "logger status",
     )
+    .await
+    .map_err(map_shell)?;
+    let logger = maggcs_core::logs::parse_logger_status(&output).map_err(|error| {
+        LogProtocolError::InvalidRequest {
+            message: error.to_string(),
+        }
+    })?;
+    if logger.file_logging {
+        return Err(LogProtocolError::InvalidRequest {
+            message: "the FC logger is recording; stop it before deleting logs".into(),
+        }
+        .into());
+    }
+    destructive_admission(&work.app, &work.session)
+}
+
+async fn list_for_readback<R: Runtime>(
+    work: &LogWork<R>,
+) -> Result<Vec<LogEntryInfo>, LogOperationError> {
+    let transaction = work.new_transaction()?;
+    match work.binding.service.list_owned(transaction.clone()).await {
+        Ok(entries) => Ok(entries),
+        Err(error @ LogProtocolError::NoAck { .. }) if work.console.is_some() => {
+            work.binding.service.cancel_owned(&transaction).await?;
+            work.check()?;
+            let console = work
+                .console
+                .as_ref()
+                .ok_or(OperationError::RegistryUnavailable)?;
+            work.shell_used.store(true, Ordering::Release);
+            let output = crate::console_service::exec_binding(
+                console,
+                &work.binding.connection,
+                &work.session,
+                &format!("ls -R {}", crate::px4_shell::LOG_DIRECTORY),
+            )
+            .await
+            .map_err(map_shell)?;
+            if crate::px4_shell::parse_empty_log_directory(&output)
+                .map_err(|message| LogProtocolError::InvalidRequest { message })?
+            {
+                Ok(Vec::new())
+            } else {
+                Err(error.into())
+            }
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+async fn atomic_write(
+    path: String,
+    bytes: Vec<u8>,
+    operation: OperationId,
+    control: Arc<FileControl>,
+    check: impl Fn() -> Result<(), LogOperationError> + Send + 'static,
+) -> Result<(), LogOperationError> {
+    control.finished.store(false, Ordering::Release);
+    let _cancel = CancelFile(control.clone());
+    tauri::async_runtime::spawn_blocking(move || {
+        let _finished = FinishedFile(control.clone());
+        let destination = PathBuf::from(path);
+        let parent = destination
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let name = destination
+            .file_name()
+            .ok_or_else(|| "destination has no file name".to_string())?;
+        let temporary = parent.join(format!(".{}.{}.partial", name.to_string_lossy(), operation));
+        let mut created = false;
+        let result = (|| -> Result<(), String> {
+            let authorized = || -> Result<(), String> {
+                if control.cancelled.is_cancelled() {
+                    return Err("local file write was cancelled".into());
+                }
+                check().map_err(|error| error.to_string())
+            };
+            authorized()?;
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)
+                .map_err(|error| error.to_string())?;
+            created = true;
+            for chunk in bytes.chunks(FILE_CHUNK_BYTES) {
+                authorized()?;
+                file.write_all(chunk).map_err(|error| error.to_string())?;
+            }
+            file.sync_all().map_err(|error| error.to_string())?;
+            authorized()?;
+            control.may_commit.store(true, Ordering::Release);
+            // Do not delete an existing destination as a non-atomic fallback.
+            std::fs::rename(&temporary, &destination).map_err(|error| error.to_string())?;
+            #[cfg(unix)]
+            std::fs::File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|error| error.to_string())?;
+            Ok(())
+        })();
+        if created && result.is_err() {
+            let _ = std::fs::remove_file(&temporary);
+        }
+        result
+    })
+    .await
+    .map_err(|error| LogOperationError::LocalIo {
+        message: error.to_string(),
+    })?
+    .map_err(|message| LogOperationError::LocalIo { message })
+}
+
+impl<R: Runtime> LogWork<R> {
+    pub(crate) fn operation(&self) -> &OperationRef {
+        self.lease.operation()
+    }
+    fn new_transaction(&self) -> Result<LogTransaction, LogOperationError> {
+        self.check()?;
+        let remaining = retained_status(&self.app, self.operation())?.remaining_budget_ms;
+        let transaction = LogTransaction::new(
+            self.operation().id.clone(),
+            self.session.target.generation,
+            Duration::from_millis(remaining),
+        )?
+        .with_owner_cancellation(self.lease.cancellation());
+        *self.transaction.lock() = Some(transaction.clone());
+        Ok(transaction)
+    }
+    fn check(&self) -> Result<(), LogOperationError> {
+        self.lease.check()?;
+        let state = self.app.state::<AppState>();
+        state
+            .runtime_clients
+            .authorize(&self.window, &self.session)?;
+        RuntimeFacade::new(&self.app)
+            .bind(&self.session.target)
+            .map_err(runtime_error)?;
+        crate::main_link_service::ensure_primary_tools_available(&state)
+            .map_err(|message| OperationError::InvalidRequest { message }.into())
+    }
+
+    async fn execute(&self, action: LogAction) -> Result<LogResult, LogOperationError> {
+        match action {
+            LogAction::List => list_for_readback(self)
+                .await
+                .map(|entries| LogResult::Listed { entries }),
+            LogAction::Download { entry, save_path } => {
+                let entries = list_for_readback(self).await?;
+                if !entries.contains(&entry) {
+                    return Err(LogProtocolError::InvalidRequest {
+                        message: "log identity changed; refresh the list before downloading".into(),
+                    }
+                    .into());
+                }
+                let transaction = self.new_transaction()?;
+                let bytes = self
+                    .binding
+                    .service
+                    .download_owned(transaction, entry.clone())
+                    .await?;
+                self.check()?;
+                let app = self.app.clone();
+                let window = self.window.clone();
+                let session = self.session.clone();
+                let cancellation = self.lease.cancellation();
+                let operation = self.operation().clone();
+                atomic_write(
+                    save_path.clone(),
+                    bytes,
+                    operation.id.clone(),
+                    self.file.clone(),
+                    move || {
+                        if cancellation.is_cancelled() {
+                            return Err(OperationError::Cancelled.into());
+                        }
+                        app.state::<AppState>()
+                            .runtime_clients
+                            .authorize(&window, &session)?;
+                        RuntimeFacade::new(&app)
+                            .bind(&session.target)
+                            .map_err(runtime_error)?;
+                        if retained_status(&app, &operation)?.remaining_budget_ms == 0 {
+                            return Err(OperationError::DeadlineExceeded.into());
+                        }
+                        Ok(())
+                    },
+                )
+                .await?;
+                Ok(LogResult::Downloaded {
+                    entry,
+                    path: save_path,
+                })
+            }
+            LogAction::Delete { entry } => {
+                let console = self
+                    .console
+                    .as_ref()
+                    .ok_or(OperationError::RegistryUnavailable)?;
+                verify_delete_shell(self, console).await?;
+                let listing = crate::console_service::exec_binding(
+                    console,
+                    &self.binding.connection,
+                    &self.session,
+                    "cat /fs/microsd/logdata.txt",
+                )
+                .await
+                .map_err(map_shell)?;
+                let path = crate::px4_shell::log_path_from_listing(&listing, &entry)
+                    .map_err(|message| LogProtocolError::InvalidRequest { message })?;
+                verify_logger_stopped(self, console).await?;
+                destructive_admission(&self.app, &self.session)?;
+                self.check()?;
+                self.destructive_dispatched.store(true, Ordering::Release);
+                let output = crate::console_service::exec_binding(
+                    console,
+                    &self.binding.connection,
+                    &self.session,
+                    &format!("rm {path}"),
+                )
+                .await
+                .map_err(map_shell)?;
+                if let Some(error) = crate::px4_shell::command_error(&output) {
+                    return Err(LogProtocolError::InvalidRequest {
+                        message: format!("SD log deletion failed: {error}"),
+                    }
+                    .into());
+                }
+                let output = crate::console_service::exec_binding(
+                    console,
+                    &self.binding.connection,
+                    &self.session,
+                    &format!("ls -l {path}"),
+                )
+                .await
+                .map_err(map_shell)?;
+                if !output.lines().any(|line| {
+                    line.starts_with("nsh: ls: stat failed:")
+                        && line.contains("No such file or directory")
+                }) {
+                    return Err(LogProtocolError::InvalidRequest {
+                        message: "FC did not confirm the log was removed".into(),
+                    }
+                    .into());
+                }
+                list_for_readback(self)
+                    .await
+                    .map(|entries| LogResult::Deleted { entries })
+            }
+            LogAction::Erase => {
+                let console = self
+                    .console
+                    .as_ref()
+                    .ok_or(OperationError::RegistryUnavailable)?;
+                verify_delete_shell(self, console).await?;
+                destructive_admission(&self.app, &self.session)?;
+                self.check()?;
+                self.destructive_dispatched.store(true, Ordering::Release);
+                let mut protocol = maggcs_core::logs::LogProtocol::new(
+                    self.session.target.mavlink_target.system_id,
+                    self.session.target.mavlink_target.component_id,
+                );
+                for frame in protocol.begin_erase() {
+                    let deadline = tokio::time::Instant::now() + WRITE_TIMEOUT;
+                    self.binding
+                        .connection
+                        .send_in_generation(frame, self.session.target.generation.get(), deadline)
+                        .await
+                        .map_err(|_| LogProtocolError::TargetChanged)?;
+                }
+                let deadline = Instant::now() + ERASE_READBACK_BUDGET;
+                loop {
+                    self.check()?;
+                    let output = crate::console_service::exec_binding(
+                        console,
+                        &self.binding.connection,
+                        &self.session,
+                        &format!("ls -R {}", crate::px4_shell::LOG_DIRECTORY),
+                    )
+                    .await
+                    .map_err(map_shell)?;
+                    if crate::px4_shell::parse_empty_log_directory(&output)
+                        .map_err(|message| LogProtocolError::InvalidRequest { message })?
+                    {
+                        return Ok(LogResult::Erased);
+                    }
+                    if Instant::now() >= deadline {
+                        return Err(LogProtocolError::TimedOut.into());
+                    }
+                    tokio::time::sleep(ERASE_POLL).await;
+                }
+            }
+        }
+    }
+
+    pub(crate) async fn run(mut self) -> Result<LogReply, LogOperationError> {
+        if let Err(error) = self
+            .check()
+            .and_then(|()| self.lease.mark_running().map_err(Into::into))
+        {
+            let app = self.app.clone();
+            let operation = self.operation().clone();
+            drop(self);
+            if let Ok(status) = retained_status(&app, &operation) {
+                publish(&app, &status);
+            }
+            return Err(error);
+        }
+        if let Ok(status) = retained_status(&self.app, self.operation()) {
+            publish(&self.app, &status);
+        }
+        let action = self
+            .action
+            .take()
+            .ok_or(OperationError::RegistryUnavailable)?;
+        let uses_shell = action.uses_shell();
+        let cancellation = self.lease.cancellation();
+        let mut execution = Box::pin(self.execute(action));
+        let mut tick = tokio::time::interval(TARGET_POLL);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let result = loop {
+            tokio::select! { biased;
+                _ = cancellation.cancelled() => break Err(self.lease.check().err().unwrap_or(OperationError::Cancelled).into()),
+                result = &mut execution => break result,
+                _ = tick.tick() => if let Err(error) = self.check() { break Err(error); },
+            }
+        };
+        drop(execution);
+        let uses_shell = uses_shell || self.shell_used.load(Ordering::Acquire);
+        let shell_cleanup = if uses_shell {
+            let console = self
+                .console
+                .as_ref()
+                .ok_or(OperationError::RegistryUnavailable)?;
+            Some(
+                crate::console_service::release_binding(
+                    console,
+                    &self.binding.connection,
+                    &self.session,
+                )
+                .await,
+            )
+        } else {
+            None
+        };
+        let result = result.and_then(|result| self.check().map(|()| result));
+        match result {
+            Ok(result) if shell_cleanup.as_ref().is_none_or(Result::is_ok) => {
+                let operation = self.operation().clone();
+                let cleanup = if uses_shell {
+                    CleanupOutcome::Confirmed
+                } else {
+                    CleanupOutcome::NotRequired
+                };
+                finish(&self.app, self.lease, OperationOutcome::Succeeded, cleanup)?;
+                if matches!(
+                    result,
+                    LogResult::Listed { .. } | LogResult::Deleted { .. } | LogResult::Erased
+                ) {
+                    self.app
+                        .state::<AppState>()
+                        .logs
+                        .reconciliation
+                        .lock()
+                        .take();
+                }
+                Ok(LogReply { operation, result })
+            }
+            Ok(_) => {
+                self.failed(LogProtocolError::CleanupTimeout.into(), shell_cleanup)
+                    .await
+            }
+            Err(error) => self.failed(error, shell_cleanup).await,
+        }
+    }
+
+    async fn failed(
+        self,
+        error: LogOperationError,
+        shell_cleanup: Option<Result<(), maggcs_core::shell::ShellProtocolError>>,
+    ) -> Result<LogReply, LogOperationError> {
+        let operation = self.operation().clone();
+        let transaction = self.transaction.lock().clone();
+        let worker_cleanup = match transaction {
+            Some(transaction) => self
+                .binding
+                .service
+                .cancel_owned(&transaction)
+                .await
+                .map(|_| ()),
+            None => Ok(()),
+        };
+        self.file.cancelled.cancel();
+        let file_cleanup = tokio::time::timeout(FILE_CLEANUP_BUDGET, async {
+            while !self.file.finished.load(Ordering::Acquire) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        let destructive = self.destructive_dispatched.load(Ordering::Acquire)
+            || self.file.may_commit.load(Ordering::Acquire);
+        let protocol_uncertain = matches!(
+            &error,
+            LogOperationError::Protocol {
+                error: LogProtocolError::CleanupTimeout
+                    | LogProtocolError::TargetChanged
+                    | LogProtocolError::Stopped
+            }
+        );
+        let cleanup_confirmed = worker_cleanup.is_ok()
+            && file_cleanup.is_ok()
+            && shell_cleanup.as_ref().is_none_or(Result::is_ok)
+            && !matches!(
+                &error,
+                LogOperationError::Protocol {
+                    error: LogProtocolError::CleanupTimeout
+                }
+            );
+        if destructive || protocol_uncertain || !cleanup_confirmed {
+            if self.destructive_dispatched.load(Ordering::Acquire) {
+                *self.app.state::<AppState>().logs.reconciliation.lock() = Some(operation.clone());
+            }
+            let reason = format!("{error}; log cleanup: {worker_cleanup:?}; shell release: {shell_cleanup:?}; target log state requires read-back");
+            let cleanup = if cleanup_confirmed {
+                CleanupOutcome::Confirmed
+            } else {
+                CleanupOutcome::Uncertain
+            };
+            finish(
+                &self.app,
+                self.lease,
+                OperationOutcome::Uncertain {
+                    reason: reason.clone(),
+                },
+                cleanup,
+            )?;
+            self.app
+                .state::<AppState>()
+                .alerts()
+                .raise(maggcs_core::alerts::AlertInput::new(
+                    maggcs_core::alerts::AlertSource::System,
+                    maggcs_core::alerts::Severity::Warn,
+                    format!(
+                        "Log operation {} requires reconciliation: {reason}",
+                        operation.id
+                    ),
+                ));
+            return Err(LogOperationError::ReconciliationRequired {
+                operation: Box::new(operation),
+                reason,
+            });
+        }
+        let cancelled = matches!(
+            &error,
+            LogOperationError::Operation {
+                error: OperationError::Cancelled
+                    | OperationError::NotOwner
+                    | OperationError::TargetChanged
+            } | LogOperationError::Protocol {
+                error: LogProtocolError::Cancelled | LogProtocolError::TargetChanged
+            }
+        );
+        let outcome = if cancelled {
+            OperationOutcome::Cancelled
+        } else {
+            OperationOutcome::Failed {
+                message: error.to_string(),
+            }
+        };
+        finish(&self.app, self.lease, outcome, CleanupOutcome::Confirmed)?;
+        Err(error)
+    }
+}
+
+fn owned_status<R: Runtime>(
+    app: &AppHandle<R>,
+    window: &str,
+    session: &RuntimeClientSession,
+    operation: &OperationRef,
+) -> Result<OperationStatus, LogOperationError> {
+    let state = app.state::<AppState>();
+    state.runtime_clients.authorize(window, session)?;
+    if operation.owner != session.owner || operation.target != session.target {
+        return Err(OperationError::NotOwner.into());
+    }
+    let status = retained_status(app, operation)?;
+    if !status.resources.contains(&OperationResource::LogTransfer) {
+        return Err(OperationError::InvalidRequest {
+            message: "operation is not an owned log operation".into(),
+        }
+        .into());
+    }
+    Ok(status)
+}
+
+async fn execute<R: Runtime>(work: LogWork<R>) -> Result<LogReply, LogOperationError> {
+    tauri::async_runtime::spawn(work.run())
+        .await
+        .map_err(|_| OperationError::RegistryUnavailable)?
+}
+
+#[tauri::command]
+pub async fn logs_request_list(
+    app: AppHandle,
+    window: WebviewWindow,
+    console: State<'_, Arc<crate::console_service::ConsoleState>>,
+    request: LogRequestContext,
+) -> Result<LogReply, LogOperationError> {
+    execute(begin(
+        &app,
+        window.label(),
+        request,
+        LogAction::List,
+        Some(Arc::clone(&console)),
+    )?)
     .await
 }
 
-/// Cancel any running list/download.
 #[tauri::command]
-pub async fn logs_cancel(state: State<'_, AppState>) -> Result<(), String> {
-    submit(&state, LogCommand::Cancel).await
-}
-
-// ---------------------------------------------------------------------------
-// SD-log deletion (primary link). Both commands confirm over the primary
-// link's NuttShell, sharing the MAVLink console's exclusive shell.
-// ---------------------------------------------------------------------------
-
-/// Refuse SD-log deletion while the FC logger is writing. A fresh observation
-/// is required because a cached state can be stale after a reconnect.
-async fn ensure_primary_logger_not_recording(
-    console: &crate::console_service::ConsoleState,
-    app: &AppHandle,
-    state: &AppState,
-) -> Result<(), String> {
-    let output = crate::console_service::exec(console, app, state, "logger status").await?;
-    let status = maggcs_core::logs::parse_logger_status(&output).map_err(|e| e.to_string())?;
-    if status.file_logging {
-        return Err(
-            "the FC logger is recording; stop logging on the FC before deleting logs".into(),
-        );
-    }
-    Ok(())
-}
-
-/// SD-log deletion drives the FC's NuttShell (`cat`, `rm`, `ls`, `echo`).
-/// PX4's POSIX shell (`pxh`, used by SITL) lacks all of those, so a marker
-/// exchange would only ever time out. Refuse it with an actionable message
-/// first; NuttShell (or an inconclusive probe) falls through to the
-/// logger-recording gate.
-async fn ensure_shell_supports_delete(
-    console: &crate::console_service::ConsoleState,
-    app: &AppHandle,
-    state: &AppState,
-) -> Result<(), String> {
-    if crate::console_service::probe_shell(console, app, state).await?
-        == crate::px4_shell::ShellKind::Pxh
-    {
-        return Err(
-            "SD-log deletion needs a NuttX flight controller; this link's shell is PX4's POSIX shell (SITL)"
-                .into(),
-        );
-    }
-    ensure_primary_logger_not_recording(console, app, state).await
-}
-
-fn publish_primary_log_list<R: Runtime>(
-    app: &AppHandle<R>,
-    state: &AppState,
-    entries: Vec<maggcs_core::logs::LogEntryInfo>,
-) {
-    *state.logs.last_list.lock().expect("logs list lock") = Some(entries.clone());
-    *state.logs.last_error.lock().expect("logs err lock") = None;
-    let _ = app.emit("logs_event", &LogsEventPayload::List { entries });
-}
-
-/// Request the primary link's log list and wait for a completed `List` event.
-/// `Ok(None)` means the FC stayed silent (flat `num_logs == 0`), so the caller
-/// must verify emptiness over the shell instead.
-async fn primary_refresh_list(
-    connection: &ConnectionHandle,
-) -> Result<Option<Vec<maggcs_core::logs::LogEntryInfo>>, String> {
-    let mut route = connection.subscribe_log_messages();
-    let mut protocol = LogProtocol::new(
-        connection.config().target_system_id,
-        connection.config().target_component_id,
-    );
-    for frame in protocol.begin_list() {
-        connection
-            .send_confirmed(frame)
-            .await
-            .map_err(|error| error.to_string())?;
-    }
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Ok(None);
-        }
-        match tokio::time::timeout(remaining, route.recv()).await {
-            Err(_) => return Ok(None),
-            Ok(Ok(ConnectionEvent::Message(envelope))) => {
-                match protocol.handle(&envelope.message, Instant::now()) {
-                    Ok((events, frames)) => {
-                        for frame in frames {
-                            let _ = connection.send(frame).await;
-                        }
-                        for event in events {
-                            if let LogEvent::List { entries } = event {
-                                return Ok(Some(entries));
-                            }
-                        }
-                    }
-                    Err(error) => return Err(error.to_string()),
-                }
-            }
-            Ok(Ok(_)) => continue,
-            Ok(Err(_)) => return Err("log list failed: the connection closed".into()),
-        }
-    }
-}
-
-/// Shell-verify the SD log directory is empty after a delete that left no
-/// protocol list.
-async fn confirm_directory_empty(
-    console: &crate::console_service::ConsoleState,
-    app: &AppHandle,
-    state: &AppState,
-) -> Result<bool, String> {
-    let output = crate::console_service::exec(
-        console,
-        app,
-        state,
-        &format!("ls -R {}", crate::px4_shell::LOG_DIRECTORY),
-    )
-    .await?;
-    crate::px4_shell::parse_empty_log_directory(&output)
-}
-
-/// Permanently delete every SD log on the primary link's FC. The UI performs
-/// two confirmations; this command additionally requires a fresh observation
-/// that the logger is not recording, then confirms the empty directory.
-#[tauri::command]
-pub async fn logs_erase_all(
+pub async fn logs_download(
     app: AppHandle,
-    state: State<'_, AppState>,
-    console: State<'_, Arc<crate::console_service::ConsoleState>>,
-) -> Result<Vec<maggcs_core::logs::LogEntryInfo>, String> {
-    let _ops = state.ops().lock().await;
-    let connection = state
-        .connection()
-        .ok_or_else(|| "not connected".to_string())?;
-    ensure_shell_supports_delete(&console, &app, &state).await?;
-    let mut protocol = LogProtocol::new(
-        connection.config().target_system_id,
-        connection.config().target_component_id,
-    );
-    for frame in protocol.begin_erase() {
-        connection
-            .send_confirmed(frame)
-            .await
-            .map_err(|error| error.to_string())?;
-    }
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        if confirm_directory_empty(&console, &app, &state).await? {
-            publish_primary_log_list(&app, &state, Vec::new());
-            tracing::info!("all SD logs deleted and empty directory confirmed");
-            return Ok(Vec::new());
-        }
-        if Instant::now() >= deadline {
-            let entries = primary_refresh_list(&connection).await?.unwrap_or_default();
-            publish_primary_log_list(&app, &state, entries);
-            return Err(
-                "the FC has not confirmed deletion of every SD log; inspect the refreshed list"
-                    .into(),
-            );
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
+    window: WebviewWindow,
+    request: LogDownloadRequest,
+) -> Result<LogReply, LogOperationError> {
+    execute(begin(
+        &app,
+        window.label(),
+        request.context,
+        LogAction::Download {
+            entry: request.entry,
+            save_path: request.save_path,
+        },
+        None,
+    )?)
+    .await
 }
 
-/// Permanently delete one SD log by id on the primary link's FC. The id comes
-/// from the current list; `logdata.txt` (id order) maps it to a safe path, and
-/// the entry's identity is re-checked before removal.
 #[tauri::command]
 pub async fn logs_delete(
     app: AppHandle,
-    state: State<'_, AppState>,
+    window: WebviewWindow,
     console: State<'_, Arc<crate::console_service::ConsoleState>>,
-    id: u16,
-    size: u32,
-    time_utc: u32,
-) -> Result<Vec<maggcs_core::logs::LogEntryInfo>, String> {
-    let _ops = state.ops().lock().await;
-    let connection = state
-        .connection()
-        .ok_or_else(|| "not connected".to_string())?;
-    ensure_shell_supports_delete(&console, &app, &state).await?;
-    let expected = maggcs_core::logs::LogEntryInfo { id, size, time_utc };
-    let listing =
-        crate::console_service::exec(&console, &app, &state, "cat /fs/microsd/logdata.txt").await?;
-    let path = crate::px4_shell::log_path_from_listing(&listing, &expected)?;
-    let output =
-        crate::console_service::exec(&console, &app, &state, &format!("rm {path}")).await?;
-    if let Some(error) = crate::px4_shell::command_error(&output) {
-        return Err(format!("SD log deletion failed: {error}"));
-    }
-    let output =
-        crate::console_service::exec(&console, &app, &state, &format!("ls -l {path}")).await?;
-    if !output.lines().any(|line| {
-        line.starts_with("nsh: ls: stat failed:") && line.contains("No such file or directory")
-    }) {
-        return Err("the FC has not confirmed the SD log was removed; refresh the list".into());
-    }
-    // Re-list so ids renumber exactly as PX4 assigns them after a deletion.
-    let entries = match primary_refresh_list(&connection).await? {
-        Some(entries) => entries,
-        None => {
-            if confirm_directory_empty(&console, &app, &state).await? {
-                Vec::new()
-            } else {
-                return Err(
-                    "the FC did not return the refreshed log list; refresh the list".into(),
-                );
-            }
+    request: LogDeleteRequest,
+) -> Result<LogReply, LogOperationError> {
+    if request.confirmation != delete_confirmation(&request.entry) {
+        return Err(LogProtocolError::InvalidRequest {
+            message: "single-log deletion confirmation does not match its id".into(),
         }
-    };
-    publish_primary_log_list(&app, &state, entries.clone());
-    Ok(entries)
+        .into());
+    }
+    execute(begin(
+        &app,
+        window.label(),
+        request.context,
+        LogAction::Delete {
+            entry: request.entry,
+        },
+        Some(Arc::clone(&console)),
+    )?)
+    .await
 }
+
+#[tauri::command]
+pub async fn logs_erase_all(
+    app: AppHandle,
+    window: WebviewWindow,
+    console: State<'_, Arc<crate::console_service::ConsoleState>>,
+    request: LogEraseRequest,
+) -> Result<LogReply, LogOperationError> {
+    if request.confirmation != DELETE_ALL_CONFIRMATION {
+        return Err(LogProtocolError::InvalidRequest {
+            message: "erase-all confirmation must be DELETE ALL LOGS".into(),
+        }
+        .into());
+    }
+    execute(begin(
+        &app,
+        window.label(),
+        request.context,
+        LogAction::Erase,
+        Some(Arc::clone(&console)),
+    )?)
+    .await
+}
+
+#[tauri::command]
+pub fn logs_cancel(
+    app: AppHandle,
+    window: WebviewWindow,
+    session: RuntimeClientSession,
+    operation: OperationRef,
+) -> Result<OperationStatus, LogOperationError> {
+    owned_status(&app, window.label(), &session, &operation)?;
+    let status = app
+        .state::<AppState>()
+        .runtime_clients
+        .operations
+        .cancel(&session.owner, &operation)?;
+    publish(&app, &status);
+    Ok(status)
+}
+
+#[tauri::command]
+pub fn logs_operation_status(
+    app: AppHandle,
+    window: WebviewWindow,
+    session: RuntimeClientSession,
+    operation: OperationRef,
+) -> Result<OperationStatus, LogOperationError> {
+    owned_status(&app, window.label(), &session, &operation)
+}
+
+#[cfg(all(test, unix))]
+#[path = "logs_operation_tests.rs"]
+pub(crate) mod operation_tests;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn log_requests_and_replies_bind_the_nondefault_owner_node() {
-        use maggcs_core::mavlink::{ConnectionConfig, Endpoint, MavMessage};
-        let peer = tokio::net::UdpSocket::bind("127.0.0.1:0")
-            .await
-            .expect("peer");
-        let (handle, _, first) =
-            maggcs_core::mavlink::connection::spawn_connection(ConnectionConfig {
-                endpoint: Endpoint::UdpClient {
-                    addr: peer.local_addr().expect("peer address"),
-                },
-                target_system_id: 42,
-                target_component_id: 1,
-                auto_discover_target: false,
-                ..Default::default()
-            })
-            .await
-            .expect("connection");
-        first.await.expect("first result").expect("opened");
-        let app = tauri::test::mock_app();
-        let state = Arc::new(LogsState::default());
-        let runtime = state.spawn(app.handle().clone(), handle.clone());
-        let requests = runtime.sender().expect("requests");
-        requests.send(LogCommand::List).await.expect("list");
-        let destination = tokio::time::timeout(Duration::from_secs(2), async {
-            loop {
-                let mut packet = [0; 512];
-                let (size, address) = peer.recv_from(&mut packet).await.expect("datagram");
-                let mut reader = ::mavlink::peek_reader::PeekReader::new(&packet[..size]);
-                let (_, message) =
-                    ::mavlink::read_v2_msg::<MavMessage, _>(&mut reader).expect("decode");
-                if let MavMessage::LOG_REQUEST_LIST(request) = message {
-                    assert_eq!((request.target_system, request.target_component), (42, 1));
-                    return address;
-                }
-            }
-        })
-        .await
-        .expect("request deadline");
-        for (system_id, size) in [(43, 666), (42, 777)] {
-            let message = MavMessage::LOG_ENTRY(::mavlink::common::LOG_ENTRY_DATA {
-                id: 0,
-                num_logs: 1,
-                last_log_num: 0,
-                time_utc: 1,
-                size,
-            });
-            let mut packet = Vec::new();
-            ::mavlink::write_v2_msg(
-                &mut packet,
-                ::mavlink::MavHeader {
-                    system_id,
-                    component_id: 1,
-                    sequence: system_id,
-                },
-                &message,
-            )
-            .expect("encode");
-            peer.send_to(&packet, destination).await.expect("reply");
-        }
-        tokio::time::timeout(Duration::from_secs(2), async {
-            loop {
-                if let Some(entries) = state.last_list.lock().expect("list").clone() {
-                    assert_eq!(entries.len(), 1);
-                    assert_eq!(
-                        entries[0].size, 777,
-                        "foreign reply must not finish the list"
-                    );
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await
-        .expect("list deadline");
-        drop(requests);
-        assert!(matches!(
-            runtime.stop(Duration::from_secs(1)).await,
-            StopOutcome::Stopped { .. }
-        ));
-        handle
-            .shutdown_and_wait(Duration::from_secs(1))
-            .await
-            .expect("shutdown");
-    }
-    use maggcs_core::mavlink::{MavMessage, MessageEnvelope};
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    #[tokio::test]
-    async fn stopping_link_owned_runtime_closes_and_joins_its_task() {
-        let (commands, mut receiver) = tokio::sync::mpsc::channel::<LogCommand>(1);
-        let exited = Arc::new(AtomicBool::new(false));
-        let task_exited = Arc::clone(&exited);
-        let task = tauri::async_runtime::spawn(async move {
-            let _ = receiver.recv().await;
-            task_exited.store(true, Ordering::SeqCst);
-        });
-        let runtime = LogsRuntime {
-            commands: Some(commands),
-            task: Some(task),
-        };
-
-        let outcome = runtime.stop(Duration::from_secs(1)).await;
-
-        assert!(matches!(outcome, StopOutcome::Stopped { .. }));
-        assert!(exited.load(Ordering::SeqCst));
-    }
-
-    #[tokio::test]
-    async fn dropping_a_replaced_runtime_stops_its_task() {
-        struct Signal(Arc<AtomicBool>);
-        impl Drop for Signal {
-            fn drop(&mut self) {
-                self.0.store(true, Ordering::SeqCst);
-            }
-        }
-
-        let dropped = Arc::new(AtomicBool::new(false));
-        let signal = Signal(Arc::clone(&dropped));
-        let (commands, _receiver) = tokio::sync::mpsc::channel::<LogCommand>(1);
-        let task = tauri::async_runtime::spawn(async move {
-            let _signal = signal;
-            std::future::pending::<()>().await;
-        });
-        let runtime = LogsRuntime {
-            commands: Some(commands),
-            task: Some(task),
-        };
-
-        // Replacement drops the previous runtime without a graceful stop.
-        drop(runtime);
-        for _ in 0..50 {
-            if dropped.load(Ordering::SeqCst) {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(2)).await;
-        }
-        assert!(
-            dropped.load(Ordering::SeqCst),
-            "the replaced runtime's task must be aborted"
-        );
-    }
-
     #[test]
-    fn route_classifier_skips_lag_and_lifecycle_events() {
-        assert!(matches!(
-            classify_route(Ok(ConnectionEvent::HeartbeatRestored)),
-            RouteStep::Skip
-        ));
-        assert!(matches!(
-            classify_route(Err(tokio::sync::broadcast::error::RecvError::Lagged(3))),
-            RouteStep::Skip
-        ));
-        assert!(matches!(
-            classify_route(Err(tokio::sync::broadcast::error::RecvError::Closed)),
-            RouteStep::Closed
-        ));
-
-        let envelope = MessageEnvelope {
-            header: Default::default(),
-            message: MavMessage::HEARTBEAT(Default::default()),
-            received_at: std::time::Instant::now(),
+    fn save_paths_and_delete_confirmations_fail_closed() {
+        assert!(validate_path("").is_err());
+        assert!(validate_path("log.ulg").is_ok());
+        let entry = LogEntryInfo {
+            id: 7,
+            size: 1,
+            time_utc: 2,
         };
-        assert!(matches!(
-            classify_route(Ok(ConnectionEvent::Message(Box::new(envelope)))),
-            RouteStep::Message(_)
-        ));
+        assert_eq!(delete_confirmation(&entry), "DELETE LOG 7");
     }
 }

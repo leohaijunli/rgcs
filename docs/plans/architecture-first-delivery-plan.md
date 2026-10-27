@@ -100,12 +100,21 @@ G1 remains open for Shell/Logs/Motor and the final cross-adapter matrix.
 | AF-02b.4a — Command primitive and Parameters reboot | Complete |
 | AF-02b.4b — General flight Command migration and acceptance | Complete within software scope |
 | AF-02b.4 — Mission adapter and acceptance | Complete within software scope |
-| AF-02b.4 — Shell/Logs / Motor adapters and cross-adapter matrix | Pending; G1 open |
+| AF-02b.4 — Primary Shell/Logs adapter and acceptance | Complete within software scope |
+| AF-02b.4 — Motor adapters and cross-adapter matrix | Pending; G1 open |
 
 AF-06 retains the full Parameters Module Host/SDK and batch-reconciliation
 acceptance. The Command checkpoints do not imply the remaining legacy effect
 callers are migrated. The [Mission contract](../architecture/af-02b4-mission-ownership-proposal.md)
-is implemented; Shell/Logs is the next interface/risk slice.
+is implemented; primary Shell/Logs is also implemented and accepted.
+Its [owned Shell/Logs contract](../architecture/af-02b4-shell-logs-ownership.md)
+records the approved signatures, serial-write/deletion risk controls and
+measurable acceptance. [Shell/Logs evidence](../verification/af-02b-shell-logs-20261026.md)
+records exact actor/cancel/status, complete shell framing/priority close, durable
+local files, delete/empty-directory read-back, 293 synchronized contracts,
+330 browser assertions/68 screenshots, 1463 workspace tests (12 opt-in ignores)
+and all 26 production/release gates. Dedicated Motor ownership and the final
+cross-adapter/native-client/fault matrix are next; G1 stays open.
 
 ## 1. Outcome and ordering decision
 

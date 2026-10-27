@@ -369,3 +369,34 @@ html.field-mode .main-topbar {
 html.field-mode .workflow-trigger {
   height: 44px;
 }
+
+/* Keep tool/navigation hit areas intact when a full vehicle row cannot fit. */
+@media (max-width: 760px) {
+  .main-topbar {
+    flex-wrap: wrap;
+    height: auto;
+    min-height: var(--mg-topbar-h);
+    padding: 4px 8px;
+  }
+
+  .topbar-app-group {
+    flex: none;
+  }
+
+  .main-topbar > span {
+    display: none;
+  }
+
+  .topbar-vehicle {
+    order: 1;
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+
+  .topbar-vehicle [data-testid='topbar-status'],
+  .topbar-vehicle [data-testid='link-stale'] {
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+}

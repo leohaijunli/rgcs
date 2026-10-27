@@ -42,7 +42,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_millis(1200);
 const MAX_RETRIES: u32 = 4;
 
 /// One log on the FC's SD card.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 #[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub struct LogEntryInfo {
@@ -184,6 +184,12 @@ impl LogProtocol {
         } else {
             Vec::new()
         }
+    }
+
+    /// Send END even when an error/terminal handler already retired local state.
+    pub fn retire(&mut self) -> Vec<MavMessage> {
+        self.state = State::Idle;
+        vec![end_msg(self.target_sys, self.target_comp)]
     }
 
     /// One inbound MAVLink frame. `now` resets the retry window as soon as a

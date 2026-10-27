@@ -5,7 +5,10 @@
 
 pub mod capture;
 pub mod error;
+pub mod operation_types;
 pub mod protocol;
+pub mod service;
+mod transaction;
 
 pub use capture::{
     parse_logger_status, CaptureConfig, CapturePhase, LoggerBackend, LoggerStatus, SdCapture,
@@ -13,3 +16,5 @@ pub use capture::{
 };
 pub use error::LogError;
 pub use protocol::{LogEntryInfo, LogEvent, LogOutbound, LogProtocol, LOG_DATA_CHUNK};
+pub use service::{LogService, LogServiceEvent};
+pub use transaction::{LogTransaction, OWNED_CANCEL_TIMEOUT};

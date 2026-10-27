@@ -117,6 +117,11 @@ pub async fn actuator_use_main_target<R: Runtime>(
         Some(console) => Some(console.lock_shell().await),
         None => None,
     };
+    if console.as_ref().is_some_and(|console| console.is_active()) {
+        return Err(
+            "close the primary MAVLink console before borrowing its shell for Motor Test".into(),
+        );
+    }
     if candidate(&state).as_ref() != Some(&expected) {
         return Err(
             "main serial target changed or is unavailable; refresh the target offer".into(),

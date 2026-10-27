@@ -227,10 +227,37 @@ impl<R: Runtime> ManagedService for LogsStage<R> {
         deadline: Duration,
     ) -> Pin<Box<dyn Future<Output = StopOutcome> + Send + 'a>> {
         Box::pin(async move {
+            let started = Instant::now();
+            let shell = crate::console_service::stop(&self.app, deadline).await;
             let state = self.app.state::<AppState>();
-            match state.take_primary_logs() {
-                Some(runtime) => runtime.stop(deadline).await,
+            let actors = state
+                .logs
+                .stop_operations(&self.app, deadline.saturating_sub(started.elapsed()))
+                .await;
+            let worker = match state.take_primary_logs() {
+                Some(runtime) => {
+                    runtime
+                        .stop(deadline.saturating_sub(started.elapsed()))
+                        .await
+                }
                 None => StopOutcome::NotRunning,
+            };
+            for outcome in [&shell, &actors, &worker] {
+                if matches!(
+                    outcome,
+                    StopOutcome::Failed { .. } | StopOutcome::TimedOut { .. }
+                ) {
+                    return outcome.clone();
+                }
+            }
+            if matches!(worker, StopOutcome::NotRunning) {
+                if matches!(actors, StopOutcome::NotRunning) {
+                    shell
+                } else {
+                    actors
+                }
+            } else {
+                worker
             }
         })
     }

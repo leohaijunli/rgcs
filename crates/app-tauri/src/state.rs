@@ -198,14 +198,6 @@ impl AppState {
         old
     }
 
-    /// Command sender for the primary link's log runtime.
-    pub(crate) fn primary_logs_sender(
-        &self,
-    ) -> Option<tokio::sync::mpsc::Sender<crate::logs_service::LogCommand>> {
-        self.with_primary(|link| link.logs.as_ref().and_then(LogsRuntime::sender))
-            .flatten()
-    }
-
     /// Attach the RTK runtime to the primary link.
     pub fn set_primary_rtk(&self, rtk: RtkRuntime) {
         let mut inner = self.inner.lock();
@@ -305,6 +297,7 @@ impl AppState {
                 self.params.service(link),
                 link.command.clone(),
                 link.mission.clone(),
+                link.logs.as_ref().and_then(LogsRuntime::service),
             )
         })
     }

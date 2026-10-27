@@ -28,6 +28,14 @@
   set-current, exact cancellation, sent-snapshot read-back and stale-target/editor
   isolation are verified. Shell/Logs/Motor and the cross-adapter matrix remain;
   G1 stays open.
+  The [Shell/Logs contract](../architecture/af-02b4-shell-logs-ownership.md)
+  is implemented and accepted within software scope without another confirmation
+  round: [evidence](../verification/af-02b-shell-logs-20261026.md). Exact session/
+  cancellation, priority close, durable downloads, delete/directory read-back,
+  293 synchronized contracts, 330 browser assertions/68 screenshots, 1463
+  workspace tests (12 opt-in ignores) and all 26 delivery gates pass. Dedicated
+  Motor ownership and the final cross-adapter/client/fault matrix are next; G1
+  stays open.
 - **优先级决定：** 先做架构、按需加载、现有工具、执行与监控；**Flight Plan 和 Drape 放到最后的功能阶段。**
 - **近期范围：** 单个作业飞行器，保留既有专用台架、SITL 来源和独立基站角色。未来多机兼容仅作为接口设计考虑，不列入近期功能开发包。
 - **顺序依据：** 本文替代此前 Survey／工具方案中的实施排序；原功能设计和 BL／SW／TM 编号继续作为参考。

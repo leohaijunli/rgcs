@@ -1,0 +1,493 @@
+{
+  "record_date": "2026-10-26",
+  "generated_at": "2026-10-27T04:37:29.438Z",
+  "source_base": "89f612fff4ba7be35da58b66e2c289acc4c975c2",
+  "source_includes_uncommitted_implementation": true,
+  "scope": "AF-02b.4 owned Shell/Logs and Mission/flight regression",
+  "reproduction": [
+    "node",
+    "scripts/check-flight-acceptance.mjs",
+    "--shell-logs",
+    "shell_logs,mission,ux,safety,preflight,topbar,teardown,startup,heartbeat"
+  ],
+  "result": "pass",
+  "checks": [
+    {
+      "name": "shell_logs",
+      "command": [
+        "node",
+        "scripts/check-shell-logs.mjs",
+        "http://127.0.0.1:4181/",
+        "screenshots/shell-logs/ownership/shell_logs"
+      ],
+      "exit_code": 0,
+      "passed": 29,
+      "failed": 0,
+      "elapsed_ms": 7537,
+      "log": "/tmp/opencode/af02b-shell-logs-browser-shell_logs.log",
+      "log_sha256": "09b975de6b8a92935ea79b613a9b18f7769a5177077a105af8e619fb5544e55e"
+    },
+    {
+      "name": "mission",
+      "command": [
+        "node",
+        "scripts/check-mission-ownership.mjs",
+        "http://127.0.0.1:4181/",
+        "screenshots/shell-logs/ownership/mission"
+      ],
+      "exit_code": 0,
+      "passed": 37,
+      "failed": 0,
+      "elapsed_ms": 7579,
+      "log": "/tmp/opencode/af02b-shell-logs-browser-mission.log",
+      "log_sha256": "1dea4dcecd29242e9386ea0f836dc98dd58a0dca01deaf62319451a8cf1d584f"
+    },
+    {
+      "name": "ux",
+      "command": [
+        "node",
+        "scripts/check-command-ux.mjs",
+        "http://127.0.0.1:4181/",
+        "screenshots/shell-logs/ownership/ux"
+      ],
+      "exit_code": 0,
+      "passed": 66,
+      "failed": 0,
+      "elapsed_ms": 25584,
+      "log": "/tmp/opencode/af02b-shell-logs-browser-ux.log",
+      "log_sha256": "7b254724b8a5276249d127e276aa6bd8283236e8f99a212e4ea296babb775205"
+    },
+    {
+      "name": "safety",
+      "command": [
+        "node",
+        "scripts/check-safety.mjs",
+        "http://127.0.0.1:4181/",
+        "screenshots/shell-logs/ownership/safety"
+      ],
+      "exit_code": 0,
+      "passed": 26,
+      "failed": 0,
+      "elapsed_ms": 14382,
+      "log": "/tmp/opencode/af02b-shell-logs-browser-safety.log",
+      "log_sha256": "8f994e984f418245514d749ebcb67892aba4241d67b0f7ece143e4bbb9e0d9b5"
+    },
+    {
+      "name": "preflight",
+      "command": [
+        "node",
+        "scripts/check-preflight.mjs",
+        "http://127.0.0.1:4181/",
+        "screenshots/shell-logs/ownership/preflight"
+      ],
+      "exit_code": 0,
+      "passed": 43,
+      "failed": 0,
+      "elapsed_ms": 9881,
+      "log": "/tmp/opencode/af02b-shell-logs-browser-preflight.log",
+      "log_sha256": "80ee7bd14af1631212595afb6452234dec79b5e47bb3d6d5472d38393345ec2e"
+    },
+    {
+      "name": "topbar",
+      "command": [
+        "node",
+        "scripts/check-topbar.mjs",
+        "http://127.0.0.1:4181/",
+        "screenshots/shell-logs/ownership/topbar"
+      ],
+      "exit_code": 0,
+      "passed": 69,
+      "failed": 0,
+      "elapsed_ms": 7518,
+      "log": "/tmp/opencode/af02b-shell-logs-browser-topbar.log",
+      "log_sha256": "82cb6ec606b2ed4287baba062ecbdd0b94859bf957f85f4f1c19dcc01f92666c"
+    },
+    {
+      "name": "teardown",
+      "command": [
+        "node",
+        "scripts/check-teardown.mjs",
+        "http://127.0.0.1:4181/",
+        "screenshots/shell-logs/ownership/teardown"
+      ],
+      "exit_code": 0,
+      "passed": 22,
+      "failed": 0,
+      "elapsed_ms": 9393,
+      "log": "/tmp/opencode/af02b-shell-logs-browser-teardown.log",
+      "log_sha256": "0c0741a8408e41a05e55a810b372b23e330d053f4b8c9f9a151de089e0a7100d"
+    },
+    {
+      "name": "startup",
+      "command": [
+        "node",
+        "scripts/check-startup.mjs",
+        "http://127.0.0.1:4181/",
+        "screenshots/shell-logs/ownership/startup"
+      ],
+      "exit_code": 0,
+      "passed": 14,
+      "failed": 0,
+      "elapsed_ms": 16143,
+      "log": "/tmp/opencode/af02b-shell-logs-browser-startup.log",
+      "log_sha256": "5091cc3879d1b7b2307348d0c869c82b7307f8b45ec04ba67aec75b5c3385ed7"
+    },
+    {
+      "name": "heartbeat",
+      "command": [
+        "node",
+        "scripts/check-heartbeat.mjs",
+        "http://127.0.0.1:4181/",
+        "screenshots/shell-logs/ownership/heartbeat"
+      ],
+      "exit_code": 0,
+      "passed": 24,
+      "failed": 0,
+      "elapsed_ms": 22717,
+      "log": "/tmp/opencode/af02b-shell-logs-browser-heartbeat.log",
+      "log_sha256": "cc2db616f077427158b00606fd60377d695df90f1531a30af24f60ce125a0c55"
+    }
+  ],
+  "screenshots": [
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/heartbeat/heartbeat-lost.png",
+      "bytes": 52296,
+      "sha256": "dba7accf40455e5b4fe4447ece382ff318580ec4d79619c2a581a38554f0f034"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/heartbeat/heartbeat-restored.png",
+      "bytes": 43695,
+      "sha256": "24be4b7b9d8010444b0b41debbaef76fba6aff46082ccb35b5f10a321fb1149f"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/mission/mission-cancelled-uncertain.png",
+      "bytes": 76251,
+      "sha256": "1315c1a3e01777bd5c90604d74ea58b4da4542162b51a4d8765f94a36e7f6e90"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/mission/mission-cancelling.png",
+      "bytes": 77168,
+      "sha256": "1afea61f9cdf3a1d56cd10aaa19e8913f25d94d5d3bca1d3c54fdddbf6c8035c"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/mission/mission-clear-denied.png",
+      "bytes": 78994,
+      "sha256": "957cab4a7edd38ac3e544c8deecdbb816b5db9570f7a5d2643284fbab530426f"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/mission/mission-download-not-applied.png",
+      "bytes": 79629,
+      "sha256": "fa3d0fcdd3d3e943e5aca740822beb74a6f37bad59cf4b70403ed9cee63b42d6"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/mission/mission-editor-changed.png",
+      "bytes": 76724,
+      "sha256": "4a2f0d80096d27a8c748477a00291491a66ded6d480419c24afd68d2f8b328c7"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/mission/mission-set-current-confirmed.png",
+      "bytes": 84634,
+      "sha256": "43fc0e0d94061bf5e8bb255bf347014ce023b8aa9f1ff760412a0adece137608"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/mission/mission-silent-target-loss.png",
+      "bytes": 73901,
+      "sha256": "d4f39a07af031627bd320c5f87692f036e6cddb0e074189d44418684aab83da8"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/mission/mission-stale-reply.png",
+      "bytes": 80556,
+      "sha256": "b35aa522f7b5158285c8c902ab113c1e16a79da728fe4c57f5fe5ab95030df67"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/mission/mission-upload-progress.png",
+      "bytes": 75335,
+      "sha256": "23b669e35bce6a4b2d306e521c0440ba4f66ec918f48c0c114dff5e5c189b336"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/mission/mission-verified.png",
+      "bytes": 75498,
+      "sha256": "549582e8e2dd06ce00e5ba847e87603218fecd977aa434242273a96f4eca1299"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/mission/mission-verifying.png",
+      "bytes": 76310,
+      "sha256": "13f7deaae419d3965d4690857f2cc531f5140ebbf36b0f02a7dff489ddd3d092"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/preflight/preflight-force-accepted.png",
+      "bytes": 42984,
+      "sha256": "fde6fc580ff90f1d19252082b36d6bd7f77bd67a131f17afd6b8bad7a5391602"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/preflight/preflight-force-denied.png",
+      "bytes": 86574,
+      "sha256": "b1da028bdce6089520900ea6a73f8782122c21bec85405384430f72e83a7272e"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/preflight/preflight-force-ready.png",
+      "bytes": 93348,
+      "sha256": "8ef300110762450b43ff1397ce02d7816a8fcf2cb4ab10dd8629c588261b267b"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/preflight/preflight-force-uncertain.png",
+      "bytes": 87821,
+      "sha256": "4be777bd0904cba91ff2b9d5327e1ab25268d33c55f9bf44c558672a469d2525"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/preflight/preflight-panel.png",
+      "bytes": 92773,
+      "sha256": "eb7d4a27390203a4c973f40731e0599ac69df51dbe4a16b9442b494a16e87d86"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/preflight/preflight-u5-repairs.png",
+      "bytes": 84315,
+      "sha256": "a47f7f9bf461dd71461fa984c3d6fc7ba9b72596e03705e1a82512ab2b1244d6"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/preflight/preflight-warnings-accepted.png",
+      "bytes": 42962,
+      "sha256": "67471cc5ee3d043da9ac3fff7ae612e9a986091bc16b0775b90ed385a7403084"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/safety/safety-denied-acknowledged.png",
+      "bytes": 42766,
+      "sha256": "6a2db64e6a4ca617fb87240da3a59ae1fc873a38fec3ea49cd76ba93ab7a9bd1"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/safety/safety-holding.png",
+      "bytes": 85645,
+      "sha256": "411ca9387f78302eb6273859ba9ef67aaf818f3cb5ca78275d0daf3f87e6acf3"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/safety/safety-in-flight.png",
+      "bytes": 42983,
+      "sha256": "94972468e573ce68f7ca4cd183dcdc26f9b7b322aaf24a6bccdda3e359030f5c"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/safety/safety-no-link.png",
+      "bytes": 52043,
+      "sha256": "332b2a03fe0030884a3d959c3a70c106d7890b9fdc90ab803972aab11ad107ac"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/safety/safety-old-request.png",
+      "bytes": 43017,
+      "sha256": "925f53d7f2a71ccee7d73f3bce2cc55f6cb54c666b9a7f9691681fd3c9f19687"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/safety/safety-plan.png",
+      "bytes": 81520,
+      "sha256": "1471e832dc3a96bafe9d7ab4ae503eb266131da299eb7ec6e7e9fe120128c21e"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/shell_logs/connected-list.png",
+      "bytes": 60602,
+      "sha256": "ac731f80193f08d4861b289ee657acd76502f36e0d678b624cef41792d10785e"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/shell_logs/deletion-uncertain.png",
+      "bytes": 62165,
+      "sha256": "67bf4066bd5c0143a22f550a1d0fc5c490a07df98d3ec7b3d3d24e048ad28ddb"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/shell_logs/disconnected-logs.png",
+      "bytes": 30455,
+      "sha256": "4af457ceee08c18dd1743ae712de29285b28eed3be2cd102680cc67743802eff"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/shell_logs/download-progress.png",
+      "bytes": 60965,
+      "sha256": "f4d93bac5f04302ef4e247d845cbc6b9724e5e939c84d3e88c5105e7dddb008f"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/shell_logs/durable-download.png",
+      "bytes": 61379,
+      "sha256": "ff08ba0637bff703d34258ab7026d23f9b1fa4c210d61bc9de83a0eaa7cfda95"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/shell_logs/empty-list.png",
+      "bytes": 59398,
+      "sha256": "76ac971ff1c31c5f76a0cc0c05d283e0dc746472b6b9ee7fc170dbdc92545a1d"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/shell_logs/field-mode-logs.png",
+      "bytes": 36071,
+      "sha256": "ef849500a0e62f9335ee71ac3828257fc8082f14b168255cfd0676d90828b996"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/shell_logs/reopened-logs.png",
+      "bytes": 32567,
+      "sha256": "b94b850b50891b75603e2ab8f1f02f14c4747add52d723e01dad93880f07c75a"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/shell_logs/responsive-logs.png",
+      "bytes": 33888,
+      "sha256": "d30029a56525dc8e3d8a4ef4c149bba90a7a8a081facf9688cc2f99d48ebf758"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/shell_logs/shell-bounded-output.png",
+      "bytes": 62433,
+      "sha256": "f088a4ddae2fa13d1e48d8f19a6a8c4791166fe4d36057bf69106d473cf3dd86"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/shell_logs/shell-confirm.png",
+      "bytes": 71913,
+      "sha256": "5981da548e8f24cef589ec99193b4d9109fb014ea5a0fe7634ed0a1d6bf6cf94"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/startup/startup-autoconnect.png",
+      "bytes": 33242,
+      "sha256": "170d54dd4024a4100db250a06bb9ee0ff24bac51464a183d235bc017c745da5c"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/startup/startup-prepare-rows.png",
+      "bytes": 63197,
+      "sha256": "6672d7b93e60452da0e218f34cd14c553619ad9995ee52632bfe994fe2883101"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/startup/startup-target-change.png",
+      "bytes": 50028,
+      "sha256": "112850db54aed1a9edb6787c364014527dca2b171d299ed9c8e138132a64df7c"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/teardown/teardown-at-stake.png",
+      "bytes": 88006,
+      "sha256": "5aeef857b2b5454ce7db208d983b49e757038d5c3c812d757acc1e10d9bcfa12"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/teardown/teardown-keyword.png",
+      "bytes": 74212,
+      "sha256": "35066031ec29efeee58ce024d5f08dc092241f66e4d343172a7124d57dd3bb5f"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/teardown/teardown-quit.png",
+      "bytes": 68197,
+      "sha256": "4fa4185205c2ab512af409eacde3664158c12469cf164f9153772a5167f17b72"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/teardown/teardown-refused.png",
+      "bytes": 48238,
+      "sha256": "409d715af87ab977a10c3d299ed9354002544576bb14dbc89e5f917278942206"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/topbar/about-dark.png",
+      "bytes": 124160,
+      "sha256": "053e50631c6597781c27e94e7773b448f8d1c2f5f544ffed3eea3ba12f28f933"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/topbar/about-light.png",
+      "bytes": 127227,
+      "sha256": "d31a4ccc90fe6126904f24f65ea3fd881edf16226518bb83444fe6bf8bf39fd2"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/topbar/tools-1280.png",
+      "bytes": 45791,
+      "sha256": "75bd53462da1522b4b1ac69f37059cd79bd0132896cdd880e5147724fe01b95e"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/topbar/tools-1920.png",
+      "bytes": 98808,
+      "sha256": "a2c350a80e2dfe6acaceaad0c53dd7aefc2de38e2747cb7ae09a8787e6500d54"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/topbar/topbar-1024.png",
+      "bytes": 31208,
+      "sha256": "a69cce8400f278013ee804e1cb5a0f92d29560b4b9e7f324e0e00a5c61ebe677"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/topbar/topbar-1280.png",
+      "bytes": 33345,
+      "sha256": "df4e865d2138efbb1d21b61f3b5f6fc7b29303616fb67a62a65eea6a4d21d570"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/topbar/topbar-1920.png",
+      "bytes": 47658,
+      "sha256": "d71c02718dcfd8c56856c09b1ee3f6e97eb5b623e8eedc90c9b1b9205ce50bfc"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/topbar/topbar-light-1920.png",
+      "bytes": 89532,
+      "sha256": "6afc4ceded373e1953adbce1e1d1425291eaf26e203438e75ffc59f8e538f743"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/topbar/topbar-night-red-1920.png",
+      "bytes": 87247,
+      "sha256": "5637fbc8138f78c038693e95a012aa7ec74fd56007c364f34f54c2726a7427da"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/topbar/workflow-1920.png",
+      "bytes": 72813,
+      "sha256": "990b703ec946a0adc680fa4ba7ef55f185e4833369c14682a48604539786f820"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/ux/command-disarm-accepted.png",
+      "bytes": 55621,
+      "sha256": "c4043812c2029c7add06f51728f1e601b6b824773c4bc09ca6fcb02bba9a466e"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/ux/command-holding.png",
+      "bytes": 56602,
+      "sha256": "e0ccee8065278e1b5e6e356a57f11ff54e3d04565586dc8fdc1dd0b8fadf177e"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/ux/command-home-owner.png",
+      "bytes": 45761,
+      "sha256": "2b3e1fba0784f9bba6482451500e4622906395748da8d2955a1c955d57420026"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/ux/command-long-error-1024.png",
+      "bytes": 37951,
+      "sha256": "9f838ddf88a36985ecbc9195aa698ce61d4f91799d15583fa00f621a976c671e"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/ux/command-long-error-1280.png",
+      "bytes": 40819,
+      "sha256": "0a63444ea60aea3996425e0490f67f0e9419bac816b1ab58b56c9f974aa6c84f"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/ux/command-long-error-1440.png",
+      "bytes": 44645,
+      "sha256": "15a50d63cda5786ed6c1aedd9d4fe50b98bbf08aa2774fa6275086e0014d7f86"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/ux/command-long-error-1920.png",
+      "bytes": 50292,
+      "sha256": "f7b34df8e65071df2e41163fe8237e16defa7ac24a31e29632bb420b2a537922"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/ux/command-menu.png",
+      "bytes": 55086,
+      "sha256": "012a2ad5569186244de631cd44a05522e58300efbc452a18abf0ce8632c95358"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/ux/command-native-target-loss.png",
+      "bytes": 44888,
+      "sha256": "328013b26561219342695e53c3113584fbfdb64c442e8e71261ef066b57cff34"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/ux/command-replaced-target.png",
+      "bytes": 44645,
+      "sha256": "15a50d63cda5786ed6c1aedd9d4fe50b98bbf08aa2774fa6275086e0014d7f86"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/ux/command-request-isolation.png",
+      "bytes": 45539,
+      "sha256": "d838119829bace49f8596cf90b12ce90c87be46c3f42a873e55fba2423bc7769"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/ux/command-result.png",
+      "bytes": 56011,
+      "sha256": "00abdd8494d008df0350cc1bc857d13fc97a09d3f2dbb5b0c866a83dbcf501ff"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/ux/command-stale-checklist.png",
+      "bytes": 51697,
+      "sha256": "222534def89ba4957328a1327daacfc2ab5ef112ce5172610c17b6ea9a22ad42"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/ux/command-stale-terrain.png",
+      "bytes": 51951,
+      "sha256": "8e56ccb147d64dc76d85ef2db856a47fcc0900527935dbea45be106cebeda7f5"
+    }
+  ]
+}

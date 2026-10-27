@@ -1,0 +1,548 @@
+{
+  "record_date": "2026-10-26",
+  "generated_at": "2026-10-27T04:53:34.668Z",
+  "source_base": "89f612fff4ba7be35da58b66e2c289acc4c975c2",
+  "source_includes_uncommitted_implementation": true,
+  "scope": "AF-02b.4 Shell/Logs final workspace/protocol/static/production/release gates",
+  "reproduction": [
+    "npm",
+    "--prefix",
+    "frontend",
+    "run",
+    "check:shell-logs-delivery"
+  ],
+  "source_before": {
+    "file_count": 766,
+    "sha256": "5fd7ca26fb68d09f3ab644f324396c5c57e59a77d11f1dcefe25af954491bff1"
+  },
+  "result": "pass",
+  "checks": [
+    {
+      "name": "frontend-build",
+      "command": [
+        "npm",
+        "run",
+        "build"
+      ],
+      "cwd": "frontend",
+      "exit_code": 0,
+      "elapsed_ms": 26225,
+      "log": "/tmp/opencode/af02b-shell-logs-build-frontend-build.log",
+      "log_sha256": "a7638ccb471681ac0490ea40f9ccaa2158fa75dc6bc7345dc53666b75c7242a8",
+      "modules_transformed": 3476
+    },
+    {
+      "name": "dem-helper",
+      "command": [
+        "cargo",
+        "build",
+        "-p",
+        "dem-prep",
+        "--bin",
+        "dem-prep"
+      ],
+      "cwd": ".",
+      "exit_code": 0,
+      "elapsed_ms": 356,
+      "log": "/tmp/opencode/af02b-shell-logs-build-dem-helper.log",
+      "log_sha256": "8a2933ae25e59188be988ea6218274cb341f13d8bc4b533f57b12ececd4be8b3"
+    },
+    {
+      "name": "rust-all-targets",
+      "command": [
+        "cargo",
+        "test",
+        "--workspace",
+        "--all-targets"
+      ],
+      "cwd": ".",
+      "exit_code": 0,
+      "elapsed_ms": 83442,
+      "log": "/tmp/opencode/af02b-shell-logs-build-rust-all-targets.log",
+      "log_sha256": "8267bb679c9c1692a66b4e8d7504eddc75c31261779549391bab6696132f74f5",
+      "test_summaries": [
+        {
+          "result": "ok",
+          "passed": 62,
+          "failed": 0,
+          "ignored": 2
+        },
+        {
+          "result": "ok",
+          "passed": 260,
+          "failed": 0,
+          "ignored": 8
+        },
+        {
+          "result": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "result": "ok",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "result": "ok",
+          "passed": 1065,
+          "failed": 0,
+          "ignored": 1
+        },
+        {
+          "result": "ok",
+          "passed": 20,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "result": "ok",
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "result": "ok",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "result": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "result": "ok",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "result": "ok",
+          "passed": 9,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "result": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "result": "ok",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "result": "ok",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "result": "ok",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 1
+        },
+        {
+          "result": "ok",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "result": "ok",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "result": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "result": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "result": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "result": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "total_passed": 1463,
+      "total_ignored": 12
+    },
+    {
+      "name": "rust-doc-tests",
+      "command": [
+        "cargo",
+        "test",
+        "--workspace",
+        "--doc"
+      ],
+      "cwd": ".",
+      "exit_code": 0,
+      "elapsed_ms": 24094,
+      "log": "/tmp/opencode/af02b-shell-logs-build-rust-doc-tests.log",
+      "log_sha256": "0a46b04af8fc2b78fca831218b94109674c8843f7418a9eae710c4092a857be3",
+      "test_summaries": [
+        {
+          "result": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "result": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "total_passed": 0,
+      "total_ignored": 0
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "cwd": ".",
+      "exit_code": 0,
+      "elapsed_ms": 6862,
+      "log": "/tmp/opencode/af02b-shell-logs-build-clippy.log",
+      "log_sha256": "f0afa8780afc4eb10e4c5f15cff01ec4ec996c52d86cf3642e81b4185ae5e778"
+    },
+    {
+      "name": "format",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "cwd": ".",
+      "exit_code": 0,
+      "elapsed_ms": 814,
+      "log": "/tmp/opencode/af02b-shell-logs-build-format.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "frontend-generated-types",
+      "command": [
+        "npm",
+        "run",
+        "check:generated-types"
+      ],
+      "cwd": "frontend",
+      "exit_code": 0,
+      "elapsed_ms": 260,
+      "log": "/tmp/opencode/af02b-shell-logs-build-frontend-generated-types.log",
+      "log_sha256": "c95605d23148500d4e11357e938b11b41d7bfda55d1b10855183ec1883a5c2fd"
+    },
+    {
+      "name": "frontend-i18n",
+      "command": [
+        "npm",
+        "run",
+        "check:i18n"
+      ],
+      "cwd": "frontend",
+      "exit_code": 0,
+      "elapsed_ms": 251,
+      "log": "/tmp/opencode/af02b-shell-logs-build-frontend-i18n.log",
+      "log_sha256": "bd94cb00e41ae246885571ae0e45c079863320f20f6f9613942cf1e64eef26c2"
+    },
+    {
+      "name": "frontend-colors",
+      "command": [
+        "npm",
+        "run",
+        "check:colors"
+      ],
+      "cwd": "frontend",
+      "exit_code": 0,
+      "elapsed_ms": 110,
+      "log": "/tmp/opencode/af02b-shell-logs-build-frontend-colors.log",
+      "log_sha256": "698c409823a617f2233e0b6a1eee39553d7bf7eb268b428fa1d73db95b233610"
+    },
+    {
+      "name": "frontend-contrast",
+      "command": [
+        "npm",
+        "run",
+        "check:contrast"
+      ],
+      "cwd": "frontend",
+      "exit_code": 0,
+      "elapsed_ms": 134,
+      "log": "/tmp/opencode/af02b-shell-logs-build-frontend-contrast.log",
+      "log_sha256": "65607687209d1f56ade58b4eab263ae014398b14a6a02352453a6c13b7aba435"
+    },
+    {
+      "name": "frontend-planfile",
+      "command": [
+        "npm",
+        "run",
+        "check:planfile"
+      ],
+      "cwd": "frontend",
+      "exit_code": 0,
+      "elapsed_ms": 168,
+      "log": "/tmp/opencode/af02b-shell-logs-build-frontend-planfile.log",
+      "log_sha256": "0f959793f4e64409b0cb066e57db31f087d82246c67c509d0171bd0b94cd46e9"
+    },
+    {
+      "name": "frontend-mission-sync",
+      "command": [
+        "npm",
+        "run",
+        "check:mission-sync"
+      ],
+      "cwd": "frontend",
+      "exit_code": 0,
+      "elapsed_ms": 306,
+      "log": "/tmp/opencode/af02b-shell-logs-build-frontend-mission-sync.log",
+      "log_sha256": "a15f4f3ae5c3d3ff570382560f601bdf5edb66f6a207d4d1114195ab477b1cb9"
+    },
+    {
+      "name": "frontend-undo",
+      "command": [
+        "npm",
+        "run",
+        "check:undo"
+      ],
+      "cwd": "frontend",
+      "exit_code": 0,
+      "elapsed_ms": 184,
+      "log": "/tmp/opencode/af02b-shell-logs-build-frontend-undo.log",
+      "log_sha256": "d3415e9dcac79a98b2149950a8e65b829903e1ea0434d18f42b8ce7828c9b145"
+    },
+    {
+      "name": "frontend-survey-prep",
+      "command": [
+        "npm",
+        "run",
+        "check:survey-prep"
+      ],
+      "cwd": "frontend",
+      "exit_code": 0,
+      "elapsed_ms": 150,
+      "log": "/tmp/opencode/af02b-shell-logs-build-frontend-survey-prep.log",
+      "log_sha256": "36e5eae9177849a4adb3e2cd81d9ef304b8e1da6c1293ceb731730c2c812b4da"
+    },
+    {
+      "name": "frontend-surface",
+      "command": [
+        "npm",
+        "run",
+        "check:surface"
+      ],
+      "cwd": "frontend",
+      "exit_code": 0,
+      "elapsed_ms": 157,
+      "log": "/tmp/opencode/af02b-shell-logs-build-frontend-surface.log",
+      "log_sha256": "ae19e6933c65258d5c1db3d50172ddca864d9d9bef2f49091918d0af5961a432"
+    },
+    {
+      "name": "frontend-plan-steps",
+      "command": [
+        "npm",
+        "run",
+        "check:plan-steps"
+      ],
+      "cwd": "frontend",
+      "exit_code": 0,
+      "elapsed_ms": 157,
+      "log": "/tmp/opencode/af02b-shell-logs-build-frontend-plan-steps.log",
+      "log_sha256": "fbdcf544cfe4fada125c4c1d526afa5d47e957e2405e60007f98dfccd3a4bbac"
+    },
+    {
+      "name": "frontend-coords",
+      "command": [
+        "npm",
+        "run",
+        "check:coords"
+      ],
+      "cwd": "frontend",
+      "exit_code": 0,
+      "elapsed_ms": 155,
+      "log": "/tmp/opencode/af02b-shell-logs-build-frontend-coords.log",
+      "log_sha256": "7c408c832678a72c7c78e80a211793be95228c7d9f574a3416e96073b6ca1e07"
+    },
+    {
+      "name": "frontend-agl",
+      "command": [
+        "npm",
+        "run",
+        "check:agl"
+      ],
+      "cwd": "frontend",
+      "exit_code": 0,
+      "elapsed_ms": 158,
+      "log": "/tmp/opencode/af02b-shell-logs-build-frontend-agl.log",
+      "log_sha256": "be1020787978a17e8bd33bd9653e8932349dc11b40eb3443233dedda86144829"
+    },
+    {
+      "name": "frontend-progress",
+      "command": [
+        "npm",
+        "run",
+        "check:progress"
+      ],
+      "cwd": "frontend",
+      "exit_code": 0,
+      "elapsed_ms": 155,
+      "log": "/tmp/opencode/af02b-shell-logs-build-frontend-progress.log",
+      "log_sha256": "646ab559236586d969d6284fd75e06e6ac5aafa7d8965b4998757678164d535b"
+    },
+    {
+      "name": "frontend-polygon",
+      "command": [
+        "npm",
+        "run",
+        "check:polygon"
+      ],
+      "cwd": "frontend",
+      "exit_code": 0,
+      "elapsed_ms": 146,
+      "log": "/tmp/opencode/af02b-shell-logs-build-frontend-polygon.log",
+      "log_sha256": "a8d4b38d88870c52f958951bbbe92c2ae077e060744d31379d4c408bb57a7948"
+    },
+    {
+      "name": "frontend-drape-error",
+      "command": [
+        "npm",
+        "run",
+        "check:drape-error"
+      ],
+      "cwd": "frontend",
+      "exit_code": 0,
+      "elapsed_ms": 148,
+      "log": "/tmp/opencode/af02b-shell-logs-build-frontend-drape-error.log",
+      "log_sha256": "df29ca5205a67d972703a47c0eae4efd4e33c33cb0ce7f8f96c63dca85f91440"
+    },
+    {
+      "name": "frontend-plan-profile",
+      "command": [
+        "npm",
+        "run",
+        "check:plan-profile"
+      ],
+      "cwd": "frontend",
+      "exit_code": 0,
+      "elapsed_ms": 159,
+      "log": "/tmp/opencode/af02b-shell-logs-build-frontend-plan-profile.log",
+      "log_sha256": "5bcf4c202e677246fa96bb91cea36d0c7f4da398fb65842bc138c2549e9c8633"
+    },
+    {
+      "name": "frontend-motor-scope",
+      "command": [
+        "npm",
+        "run",
+        "check:motor-scope"
+      ],
+      "cwd": "frontend",
+      "exit_code": 0,
+      "elapsed_ms": 446,
+      "log": "/tmp/opencode/af02b-shell-logs-build-frontend-motor-scope.log",
+      "log_sha256": "574468f4ed5f850501a631fe7cd024e48f4e51b01ee9b69fb9df8a3a25a648e4"
+    },
+    {
+      "name": "stream-catalog",
+      "command": [
+        "python3",
+        "scripts/generate-stream-catalog.py",
+        "--check"
+      ],
+      "cwd": ".",
+      "exit_code": 0,
+      "elapsed_ms": 612,
+      "log": "/tmp/opencode/af02b-shell-logs-build-stream-catalog.log",
+      "log_sha256": "b69a2ffcebc4860466796226f86cad71425dc43cf2eeb0fe973d2a4ac8274519"
+    },
+    {
+      "name": "whitespace",
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "cwd": ".",
+      "exit_code": 0,
+      "elapsed_ms": 62,
+      "log": "/tmp/opencode/af02b-shell-logs-build-whitespace.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "release",
+      "command": [
+        "cargo",
+        "build",
+        "--release",
+        "--workspace"
+      ],
+      "cwd": ".",
+      "exit_code": 0,
+      "elapsed_ms": 80930,
+      "log": "/tmp/opencode/af02b-shell-logs-build-release.log",
+      "log_sha256": "1769fecec063f2a76255fe32da0df8b745b1fcbd826608361e1a60a34fc091bc"
+    }
+  ],
+  "browser_evidence": {
+    "path": "docs/verification/af-02b-shell-logs-browser-20261026.json",
+    "sha256": "cec7a8bb09b89b3350ae93567c609a96c2cbdfe5644fa381783fdd92e94d3b5e",
+    "checks": 9,
+    "passed": 330,
+    "screenshots": 68
+  },
+  "source_after": {
+    "file_count": 766,
+    "sha256": "5fd7ca26fb68d09f3ab644f324396c5c57e59a77d11f1dcefe25af954491bff1"
+  },
+  "artifacts": {
+    "frontend": {
+      "path": "frontend/dist",
+      "file_count": 241,
+      "bytes": 23815849,
+      "manifest_sha256": "fe9f25c47ec2319b2c0899302db62330e83820d5fde2dd079f1458a94d109f96"
+    },
+    "desktop": {
+      "path": "target/release/maggcs-app",
+      "bytes": 47118344,
+      "sha256": "cda6f99f7326ec51108f5e901a4a51de7e5061f0a792c888d32f031e2d455ec8"
+    },
+    "dem_helper": {
+      "path": "target/release/dem-prep",
+      "bytes": 3127952,
+      "sha256": "6d6f17163cafc80ae31b437278476eee870d6e09943308c21e3bd8bb6d99c1e9"
+    }
+  },
+  "completed_at": "2026-10-27T04:57:21.765Z"
+}

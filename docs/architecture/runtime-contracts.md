@@ -441,6 +441,8 @@ The confirmed [Mission contract](af-02b4-mission-ownership-proposal.md) is
 implemented by `MissionTransaction`, the existing single `MissionService` worker,
 native `mission_operations` and the target-scoped frontend adapter.
 
+The subsequent primary Shell/Logs checkpoint is described in section 13 below.
+
 `mission_upload`, `mission_download`, `mission_clear` and `mission_set_current`
 return `MissionReply { operation, result }`. Their input contexts contain the
 native-issued `RuntimeClientSession` and fresh `RequestId`. Exact
@@ -471,4 +473,33 @@ uncertain FC result and read-back requirement; failed retirement keeps uncertain
 cleanup. Reboot and borrowed Motor policies are rechecked at admission/dispatch.
 [Acceptance evidence](../verification/af-02b-mission-20261026.md) records the
 core/native/browser matrices, generated contracts and complete build gates.
-Shell/Logs/Motor and the final cross-adapter matrix keep G1 open.
+The Shell/Logs checkpoint follows below; Motor and the final cross-adapter matrix
+keep G1 open.
+
+## 13. Owned primary Shell/Logs checkpoint
+
+The [Shell/Logs contract](af-02b4-shell-logs-ownership.md) is implemented. Native
+`console_open/send/close/cancel/operation_status` bind the actual window,
+Runtime session, operation, target and generation. Complete lines use bounded
+SERIAL_CONTROL framing, request history is retained for the live session, and
+priority close retires queued writes. Reviewed free-form intent carries `RUN` and
+the reviewed target; output carries exact operation/target/lossless sequence.
+
+`logs_request_list/download/delete/erase_all` return `LogReply { operation, result }`.
+Exact `logs_cancel/operation_status` operate only on the native-issued session/ref.
+Progress/terminal status are operation/request scoped. List/deletion reserve Shell
+and LogTransfer; download reserves LogTransfer. The single core log worker uses
+`LogTransaction` for cancellation/deadline/generation fences and independently
+bounded END/quiet cleanup. Missing receipts cannot release uncertain claims.
+
+Deletion validates current logger/landed/disarmed/capability/path/id/time/size
+before dispatch, then verifies the directory/list. Uncertain delete retains a
+read-back barrier. Silence never proves emptiness. Local download selection
+precedes operation admission; exclusive temporary files, final ownership checks
+and file/directory sync precede a durable result. The current buffered adapter is
+limited to 256 MiB. Lifecycle cancels recorded Shell/Logs actors and local I/O
+before stopping their worker and primary I/O.
+
+[Acceptance](../verification/af-02b-shell-logs-20261026.md) records 293 synchronized
+contracts, 330 browser assertions/68 screenshots and all 26 workspace/static/
+production/release gates. Dedicated Motor adapters and the final G1 matrix remain.

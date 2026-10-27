@@ -1,6 +1,6 @@
 // FC SD-card logs (moved out of Settings into the Tools menu, following the
 // motor-test plan's window-launcher grouping): MAVLink LOG list + download
-// with per-file progress, fed by the `logs_event` shell watcher.
+// with target/operation-bound progress and durable local-file receipts.
 
 import { useEffect, useRef, useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
@@ -8,8 +8,10 @@ import { X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useLinkStore } from '../../stores/link'
 import { startLogsWatcher, useLogsStore } from '../../stores/logs'
-import { CONSOLE_PRESETS, useConsoleStore } from '../../stores/console'
+import { CONSOLE_PRESETS, isReadOnlyConsoleCommand, useConsoleStore } from '../../stores/console'
 import type { LogEntryInfo } from '../../generated-types/LogEntryInfo'
+import type { RuntimeTargetRef } from '../../generated-types/RuntimeTargetRef'
+import { consoleContext } from '../../desktop/consoleRuntime'
 import AppLogo from '../AppLogo'
 
 /** Modal shell for the FC logs panel (same skin as the Settings dialog). */
@@ -21,8 +23,13 @@ export default function LogsDialog({
   onOpenChange: (open: boolean) => void
 }) {
   const { t } = useTranslation()
+  const closeConsole = useConsoleStore((state) => state.close)
+  const cancelLogs = useLogsStore((state) => state.cancel)
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+    <Dialog.Root open={open} onOpenChange={(next) => {
+      if (!next) { void closeConsole(); void cancelLogs() }
+      onOpenChange(next)
+    }}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/50" />
         <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex h-[min(94vh,900px)] w-[min(96vw,960px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-line bg-panel shadow-2xl">
@@ -66,9 +73,10 @@ function LogsPanel() {
   const cancel = useLogsStore((s) => s.cancel)
   const eraseAll = useLogsStore((s) => s.eraseAll)
   const remove = useLogsStore((s) => s.remove)
+  const reconciliation = useLogsStore((s) => s.reconciliation)
+  const consoleActive = useConsoleStore((s) => s.operation !== null)
 
-  // Idempotent watcher start (the shell events are cheap; the store only
-  // updates on `logs_event`).
+  // Observer events are matched against the active native session/request.
   useEffect(() => {
     startLogsWatcher()
   }, [])
@@ -92,10 +100,10 @@ function LogsPanel() {
 
   return (
     <div className="space-y-3 text-sm">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <button
           onClick={() => void requestList()}
-          disabled={!fcAlive || busy}
+          disabled={!fcAlive || busy || consoleActive}
           className="touch-target h-9 rounded border border-line bg-canvas px-3 text-xs text-ink hover:bg-panel disabled:opacity-50"
         >
           {t('settings.logs.refresh')}
@@ -110,14 +118,14 @@ function LogsPanel() {
         )}
         <button
           onClick={() => void eraseAllLogs()}
-          disabled={!fcAlive || busy || entries.length === 0}
+          disabled={!fcAlive || busy || consoleActive || reconciliation || entries.length === 0}
           className="touch-target h-9 rounded border border-line bg-canvas px-3 text-xs text-error hover:bg-panel disabled:opacity-50"
         >
           {t('settings.logs.deleteAll')}
         </button>
         <span className="text-xs text-muted">{t('settings.logs.hint')}</span>
       </div>
-      {error && <div className="text-xs text-error">{error}</div>}
+       {error && <div role="status" className="break-words text-xs text-error">{error}</div>}
       {!fcAlive && <div className="text-xs text-muted">{t('link.noLink')}</div>}
       {fcAlive && entries.length === 0 && !busy && (
         <div className="text-xs text-muted">{t('settings.logs.emptyList')}</div>
@@ -129,7 +137,7 @@ function LogsPanel() {
           const date = entry.time_utc > 0 ? new Date(entry.time_utc * 1000).toISOString().slice(0, 16).replace('T', ' ') : '—'
           return (
             <li key={entry.id} className="rounded border border-line bg-canvas px-2 py-1.5">
-              <div className="flex items-center gap-2 text-xs">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
                 <span className="mono w-10 text-muted">#{entry.id}</span>
                 <span className="mono w-32 text-muted">{date}</span>
                 <span className="mono flex-1 text-ink">{(entry.size / 1024 / 1024).toFixed(1)} MB</span>
@@ -138,7 +146,7 @@ function LogsPanel() {
                 ) : (
                   <button
                     onClick={() => void download(entry.id, entry.size)}
-                    disabled={busy}
+                    disabled={!fcAlive || busy || consoleActive}
                     className="rounded border border-line bg-canvas px-2 py-0.5 text-[11px] text-ink hover:bg-panel disabled:opacity-50"
                   >
                     {t('settings.logs.download')}
@@ -146,7 +154,7 @@ function LogsPanel() {
                 )}
                 <button
                   onClick={() => void removeLog(entry)}
-                  disabled={busy}
+                  disabled={!fcAlive || busy || consoleActive || reconciliation}
                   className="rounded border border-line bg-canvas px-2 py-0.5 text-[11px] text-error hover:bg-panel disabled:opacity-50"
                 >
                   {t('settings.logs.delete')}
@@ -174,7 +182,9 @@ const CONSOLE_H_KEY = 'maggcs.consoleHeight'
 /** Persisted console height (px), falling back to the default. */
 function loadConsoleHeight(): number {
   try {
-    const v = Number(localStorage.getItem(CONSOLE_H_KEY))
+    const saved = localStorage.getItem(CONSOLE_H_KEY)
+    if (saved === null) return 160
+    const v = Number(saved)
     if (Number.isFinite(v)) return Math.min(CONSOLE_MAX_H, Math.max(CONSOLE_MIN_H, v))
   } catch {
     /* storage unavailable */
@@ -189,14 +199,23 @@ function loadConsoleHeight(): number {
 function ConsolePanel() {
   const { t } = useTranslation()
   const link = useLinkStore((s) => s.link)
-  const lines = useConsoleStore((s) => s.lines)
+  const transcript = useConsoleStore((s) => s.transcript)
   const busy = useConsoleStore((s) => s.busy)
   const send = useConsoleStore((s) => s.send)
   const startWatcher = useConsoleStore((s) => s.startWatcher)
+  const nativeError = useConsoleStore((s) => s.error)
+  const operation = useConsoleStore((s) => s.operation)
+  const closeConsole = useConsoleStore((s) => s.close)
+  const logsBusy = useLogsStore((s) => s.busy)
   const [draft, setDraft] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [confirmation, setConfirmation] = useState<string | null>(null)
+  const reviewedTarget = useRef<RuntimeTargetRef | null>(null)
+  const [typed, setTyped] = useState('')
   const [height, setHeight] = useState(loadConsoleHeight)
   const outRef = useRef<HTMLDivElement | null>(null)
+  const follow = useRef(true)
+  const heightRef = useRef(height)
 
   useEffect(() => {
     startWatcher()
@@ -205,8 +224,8 @@ function ConsolePanel() {
   // Stick to the bottom unless the operator scrolled up.
   useEffect(() => {
     const el = outRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [lines, height])
+    if (el && follow.current) el.scrollTop = el.scrollHeight
+  }, [transcript, height])
 
   // Vertical drag on the grip: pointer capture keeps the gesture even when
   // the cursor leaves the grip; the delta inverts (drag up = taller).
@@ -218,6 +237,7 @@ function ConsolePanel() {
     const startH = height
     const onMove = (ev: PointerEvent) => {
       const next = Math.min(CONSOLE_MAX_H, Math.max(CONSOLE_MIN_H, startH - (ev.clientY - startY)))
+      heightRef.current = next
       setHeight(next)
     }
     const onUp = (ev: PointerEvent) => {
@@ -225,7 +245,7 @@ function ConsolePanel() {
       grip.removeEventListener('pointermove', onMove)
       grip.removeEventListener('pointerup', onUp)
       try {
-        localStorage.setItem(CONSOLE_H_KEY, String(height))
+        localStorage.setItem(CONSOLE_H_KEY, String(heightRef.current))
       } catch {
         /* storage unavailable */
       }
@@ -237,6 +257,15 @@ function ConsolePanel() {
   const fcAlive = link?.fc_alive === true
 
   const run = async (command: string) => {
+    if (!isReadOnlyConsoleCommand(command)) {
+      try {
+        const context = await consoleContext()
+        reviewedTarget.current = context.session.target
+        setConfirmation(command)
+        setTyped('')
+      } catch (error) { setError(String(error)) }
+      return
+    }
     setError(null)
     try {
       await send(command)
@@ -245,14 +274,25 @@ function ConsolePanel() {
     }
   }
 
+  const runConfirmed = async () => {
+    if (!confirmation || typed !== 'RUN') return
+    const command = confirmation
+    setConfirmation(null)
+    setTyped('')
+    setError(null)
+    try { await send(command, true, reviewedTarget.current ?? undefined) } catch (e) { setError(String(e)) }
+  }
+
   return (
     <div className="space-y-2">
       <div className="flex items-baseline justify-between">
         <span className="text-xs font-medium text-ink">{t('console.title')}</span>
+        {operation && <button data-testid="console-close" onClick={() => void closeConsole()} className="touch-target text-xs text-warn">Close console</button>}
         <span className="text-[10px] text-muted">{t('console.hint')}</span>
       </div>
       <div
         onPointerDown={onGripDown}
+        data-testid="console-grip"
         aria-label={t('console.resize')}
         className="flex h-2 cursor-ns-resize items-center justify-center rounded text-muted hover:bg-panel"
       >
@@ -260,20 +300,33 @@ function ConsolePanel() {
       </div>
       <div
         ref={outRef}
+        data-testid="console-output"
+        onScroll={() => { const el = outRef.current; if (el) follow.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 12 }}
         style={{ height: `${height}px` }}
-        className="mono overflow-y-auto whitespace-pre-wrap rounded border border-line bg-canvas p-2 text-[11px] leading-relaxed text-ink"
+        className="mono overflow-y-auto whitespace-pre-wrap break-words rounded border border-line bg-canvas p-2 text-[11px] leading-relaxed text-ink"
       >
-        {lines.length === 0 && <span className="text-muted">{t('console.empty')}</span>}
-        {lines.map((line, i) => (
-          <div key={i}>{line || '\u00a0'}</div>
-        ))}
+        {transcript === '' ? <span className="text-muted">{t('console.empty')}</span> : transcript}
       </div>
+      {confirmation && (
+        <div data-testid="console-confirm" className="space-y-2 rounded border border-warn p-2 text-xs">
+          <div className="text-warn">{t('console.confirmRisk')}</div>
+          <code className="block break-all text-ink">{confirmation}</code>
+          <input value={typed} onChange={(event) => setTyped(event.target.value)}
+            aria-label={t('console.confirmKeyword')} placeholder="RUN"
+            className="mono h-9 w-full rounded border border-line bg-canvas px-2 text-ink" />
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setConfirmation(null)} className="h-8 rounded border border-line px-2">{t('console.cancel')}</button>
+            <button data-testid="console-confirm-run" disabled={typed !== 'RUN'} onClick={() => void runConfirmed()}
+              className="h-8 rounded border border-warn px-2 text-warn disabled:opacity-40">{t('console.send')}</button>
+          </div>
+        </div>
+      )}
       <div className="flex flex-wrap gap-1">
         {CONSOLE_PRESETS.map((cmd) => (
           <button
             key={cmd}
             onClick={() => void run(cmd)}
-            disabled={!fcAlive || busy}
+            disabled={!fcAlive || busy || logsBusy}
             className="mono rounded border border-line bg-canvas px-1.5 py-0.5 text-[10px] text-muted hover:text-ink disabled:opacity-50"
           >
             {cmd}
@@ -282,17 +335,18 @@ function ConsolePanel() {
       </div>
       <div className="flex items-center gap-2">
         <input
+          data-testid="console-command"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key !== 'Enter' || !fcAlive || busy) return
+             if (e.key !== 'Enter' || !fcAlive || busy || logsBusy) return
             const cmd = draft.trim()
             if (!cmd) return
             setDraft('')
             void run(cmd)
           }}
           placeholder={fcAlive ? t('console.placeholder') : t('console.noLink')}
-          disabled={!fcAlive}
+           disabled={!fcAlive || logsBusy}
           className="mono h-9 flex-1 rounded border border-line bg-canvas px-2 text-sm text-ink disabled:opacity-50"
         />
         <button
@@ -302,13 +356,13 @@ function ConsolePanel() {
             setDraft('')
             void run(cmd)
           }}
-          disabled={!fcAlive || busy || draft.trim() === ''}
+           disabled={!fcAlive || busy || logsBusy || draft.trim() === ''}
           className="touch-target h-9 rounded border border-line bg-canvas px-3 text-xs text-ink hover:bg-panel disabled:opacity-50"
         >
           {t('console.send')}
         </button>
       </div>
-      {error && <div className="text-[11px] text-error">{error}</div>}
+       {(error || nativeError) && <div className="break-words text-[11px] text-error">{error ?? nativeError}</div>}
     </div>
   )
 }

@@ -16,7 +16,7 @@ use super::{ClientId, ModuleInstanceId, OperationId, RequestId, RuntimeError, Ta
 const DEFAULT_MAX_ACTIVE: usize = 32;
 const DEFAULT_RESERVED_EMERGENCY: usize = 2;
 const DEFAULT_MAX_RETAINED: usize = 128;
-const DEFAULT_MAX_BUDGET_MS: u64 = 60_000;
+const DEFAULT_MAX_BUDGET_MS: u64 = 86_400_000;
 const MAX_CONFIGURED_ACTIVE: usize = 256;
 const MAX_CONFIGURED_RETAINED: usize = 4_096;
 const MAX_CONFIGURED_BUDGET_MS: u64 = 86_400_000;

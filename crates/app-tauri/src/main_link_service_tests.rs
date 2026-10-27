@@ -93,6 +93,7 @@ pub(crate) struct Harness {
     pub(crate) hold_reads: Arc<AtomicBool>,
     pub(crate) command_peer: Option<CommandPeer>,
     pub(crate) mission_peer: Option<MissionPeer>,
+    pub(crate) log_peer: Option<crate::logs_service::operation_tests::LogPeer>,
 }
 
 impl Harness {
@@ -113,6 +114,7 @@ impl Harness {
             true,
             Some(CommandPeer::default()),
             Some(MissionPeer::default()),
+            None,
         )
         .await
     }
@@ -122,13 +124,24 @@ impl Harness {
     }
 
     async fn with_options(parameter_transactions: bool, command_peer: Option<CommandPeer>) -> Self {
-        Self::with_all_options(parameter_transactions, command_peer, None).await
+        Self::with_all_options(parameter_transactions, command_peer, None, None).await
+    }
+
+    pub(crate) async fn logs() -> Self {
+        Self::with_all_options(
+            true,
+            Some(CommandPeer::default()),
+            None,
+            Some(crate::logs_service::operation_tests::LogPeer::default()),
+        )
+        .await
     }
 
     async fn with_all_options(
         parameter_transactions: bool,
         command_peer: Option<CommandPeer>,
         mission_peer: Option<MissionPeer>,
+        log_peer: Option<crate::logs_service::operation_tests::LogPeer>,
     ) -> Self {
         let (mut master, slave) = serialport::TTYPort::pair().expect("PTY pair");
         master
@@ -146,6 +159,7 @@ impl Harness {
         let holds = (hold_set_echo.clone(), hold_pull.clone(), hold_reads.clone());
         let peer_commands = command_peer.clone();
         let peer_missions = mission_peer.clone();
+        let peer_logs = log_peer.clone();
         let thread = std::thread::spawn(move || {
             fake_px4_with_options(
                 master,
@@ -156,6 +170,7 @@ impl Harness {
                 holds,
                 peer_commands,
                 peer_missions,
+                peer_logs,
             )
         });
         let (handle, events, first) =
@@ -221,6 +236,7 @@ impl Harness {
             hold_reads,
             command_peer,
             mission_peer,
+            log_peer,
         }
     }
 
@@ -316,6 +332,7 @@ fn fake_px4_for_system(
         (idle.clone(), idle.clone(), idle),
         None,
         None,
+        None,
     );
 }
 
@@ -329,6 +346,7 @@ fn fake_px4_with_options(
     holds: (Arc<AtomicBool>, Arc<AtomicBool>, Arc<AtomicBool>),
     command_peer: Option<CommandPeer>,
     mission_peer: Option<MissionPeer>,
+    log_peer: Option<crate::logs_service::operation_tests::LogPeer>,
 ) {
     use mavlink::common::*;
     let mut buffer = Vec::new();
@@ -348,6 +366,20 @@ fn fake_px4_with_options(
     let mut parameters: std::collections::BTreeMap<String, (f32, MavParamType)> =
         Default::default();
     while !stop.load(Ordering::Acquire) {
+        if log_peer
+            .as_ref()
+            .is_some_and(|peer| peer.flood.load(Ordering::Acquire))
+        {
+            send(
+                &mut master,
+                &MavMessage::LOG_DATA(LOG_DATA_DATA {
+                    id: 0,
+                    ofs: 0,
+                    count: 1,
+                    data: [7; 90],
+                }),
+            );
+        }
         if let Some(peer) = &mission_peer {
             if !peer.hold_upload.load(Ordering::Acquire) {
                 if let Some(message) = held_upload.take() {
@@ -510,6 +542,31 @@ fn fake_px4_with_options(
                 continue;
             };
             trace.lock().push(message.clone());
+            if let Some(peer) = &log_peer {
+                for response in peer.respond(&message, header.system_id, header.component_id) {
+                    send(&mut master, &response);
+                }
+            } else if let MavMessage::SERIAL_CONTROL(request) = &message {
+                if request.count > 0 && request.device == SerialControlDev::SERIAL_CONTROL_DEV_SHELL
+                {
+                    let reply = b"shell-output\n";
+                    let mut data = [0; 70];
+                    data[..reply.len()].copy_from_slice(reply);
+                    send(
+                        &mut master,
+                        &MavMessage::SERIAL_CONTROL(SERIAL_CONTROL_DATA {
+                            device: SerialControlDev::SERIAL_CONTROL_DEV_SHELL,
+                            flags: SerialControlFlag::SERIAL_CONTROL_FLAG_REPLY,
+                            timeout: 0,
+                            baudrate: 0,
+                            count: reply.len() as u8,
+                            data,
+                            target_system: header.system_id,
+                            target_component: header.component_id,
+                        }),
+                    );
+                }
+            }
             if let Some(peer) = &mission_peer {
                 let ack = || {
                     MavMessage::MISSION_ACK(MISSION_ACK_DATA {
@@ -1044,9 +1101,30 @@ async fn primary_log_operation_and_shared_target_are_mutually_exclusive() {
         .logs
         .spawn(h.app.handle().clone(), h.handle.clone());
     h.state().set_primary_logs(logs);
-    crate::logs_service::logs_request_list(h.state())
-        .await
-        .expect("main log request");
+    let target = RuntimeFacade::new(h.app.handle())
+        .targets()
+        .expect("targets")
+        .remove(0)
+        .target
+        .expect("target");
+    let session = h
+        .state()
+        .runtime_clients
+        .attach("main", "logs".into(), target)
+        .expect("attach")
+        .0;
+    let work = crate::logs_service::begin(
+        h.app.handle(),
+        "main",
+        maggcs_core::logs::operation_types::LogRequestContext {
+            session: session.clone(),
+            request_id: maggcs_core::runtime::RequestId::fresh().expect("request"),
+        },
+        crate::logs_service::LogAction::List,
+        None,
+    )
+    .expect("main log request");
+    let operation = work.operation().clone();
     assert!(
         h.state().logs.is_busy(),
         "reserve the protocol before the worker receives its command"
@@ -1056,13 +1134,24 @@ async fn primary_log_operation_and_shared_target_are_mutually_exclusive() {
         .await
         .expect_err("busy main log transfer");
     assert!(error.contains("log transfer"));
-    crate::logs_service::logs_cancel(h.state())
-        .await
-        .expect("cancel main log request");
+    h.state()
+        .runtime_clients
+        .operations
+        .cancel(&session.owner, &operation)
+        .expect("cancel exact log request");
+    assert!(work.run().await.is_err());
     wait_until(|| !h.state().logs.is_busy()).await;
     h.attach().await;
-    assert!(crate::logs_service::logs_request_list(h.state())
-        .await
-        .is_err());
+    assert!(crate::logs_service::begin(
+        h.app.handle(),
+        "main",
+        maggcs_core::logs::operation_types::LogRequestContext {
+            session,
+            request_id: maggcs_core::runtime::RequestId::fresh().expect("request"),
+        },
+        crate::logs_service::LogAction::List,
+        None
+    )
+    .is_err());
     h.shutdown().await;
 }

@@ -41,7 +41,7 @@ admission capacity. Caller-scoped cancellation remains distinct from this truste
 native safety arbitration.
 
 Defaults: 32 active/pinned operations, 128 retained records, at most eight distinct
-resource kinds and a 60 s general ceiling (native services select shorter actual
+resource kinds and a 24 h general ceiling (native services select shorter actual
 deadlines). Config validation caps active at 256, retained at 4096 and ceiling at
 24 h; these are metadata/number-representation bounds, not hardware timing claims.
 Only finished, unpinned history is evicted. Uncertain pinned work is never removed
@@ -62,7 +62,10 @@ Emergency fixtures also cover nonblocking claims and reserved active capacity.
 includes both client and module instance. Native attach/validate/detach APIs are
 documented in the [client foundation checkpoint](../../../../docs/verification/af-02b-client-foundation-20261025.md).
 
-AF-02b now connects Parameters, reboot and general flight commands to this
+AF-02b now connects Parameters, reboot, general flight commands, Mission and
+primary Shell/Logs to this
 primitive; see the [flight-command acceptance](../../../../docs/verification/af-02b-flight-commands-20261026.md).
-G1 cannot close until the remaining Mission/Shell/Logs/Motor adapters and
+The 24 h ceiling permits a long-lived shell lease; write/list/download/delete
+deadlines remain independently bounded by their native adapters.
+G1 cannot close until the remaining Motor adapters and
 cross-client protocol fixtures exercise the actual effect/cancel paths.

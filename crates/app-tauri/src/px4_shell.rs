@@ -116,6 +116,25 @@ pub(crate) async fn exchange(
     route: &mut RoutedEvents,
     command: &str,
 ) -> Result<String, SdCaptureError> {
+    exchange_in_generation(
+        handle,
+        handle.generation(),
+        target_system_id,
+        target_component_id,
+        route,
+        command,
+    )
+    .await
+}
+
+pub(crate) async fn exchange_in_generation(
+    handle: &ConnectionHandle,
+    generation: u64,
+    target_system_id: u8,
+    target_component_id: u8,
+    route: &mut RoutedEvents,
+    command: &str,
+) -> Result<String, SdCaptureError> {
     let marker = format!(
         "__MAGDEL_{:08x}_{}__",
         std::process::id(),
@@ -123,7 +142,7 @@ pub(crate) async fn exchange(
     );
     send_lines(
         handle,
-        handle.generation(),
+        generation,
         target_system_id,
         target_component_id,
         vec![String::new(), command.to_string(), format!("echo {marker}")],
@@ -134,6 +153,9 @@ pub(crate) async fn exchange(
     let mut output = String::new();
     let mut line_buffer = String::new();
     loop {
+        if handle.generation() != generation {
+            return Err(SdCaptureError::TargetChanged);
+        }
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             return Err(SdCaptureError::ShellTimeout {
@@ -208,13 +230,13 @@ pub(crate) fn classify_shell_text(text: &str) -> ShellKind {
 /// Ask the shell to emit a prompt and classify it. Deletion drives NuttShell
 /// file tools, so a POSIX `pxh` link (SITL) is refused here instead of letting
 /// every [`exchange`] time out waiting for a marker `echo` that `pxh` rejects.
-pub(crate) async fn probe_shell(
+pub(crate) async fn probe_shell_in_generation(
     handle: &ConnectionHandle,
+    generation: u64,
     target_system_id: u8,
     target_component_id: u8,
     route: &mut RoutedEvents,
 ) -> Result<ShellKind, SdCaptureError> {
-    let generation = handle.generation();
     send_lines(
         handle,
         generation,
@@ -225,7 +247,7 @@ pub(crate) async fn probe_shell(
     .await?;
     // Discard the shell's first (dropped-command) reply, then read the reply to
     // a harmless command, whose prompt identifies the shell.
-    read_shell_text(route, handle, SHELL_WARMUP, false).await?;
+    read_shell_text(route, handle, generation, SHELL_WARMUP, false).await?;
     send_lines(
         handle,
         generation,
@@ -234,7 +256,7 @@ pub(crate) async fn probe_shell(
         vec![SHELL_PROBE_COMMAND.to_string()],
     )
     .await?;
-    let text = read_shell_text(route, handle, SHELL_PROBE_TIMEOUT, true).await?;
+    let text = read_shell_text(route, handle, generation, SHELL_PROBE_TIMEOUT, true).await?;
     Ok(classify_shell_text(&text))
 }
 
@@ -243,12 +265,16 @@ pub(crate) async fn probe_shell(
 async fn read_shell_text(
     route: &mut RoutedEvents,
     handle: &ConnectionHandle,
+    generation: u64,
     window: Duration,
     stop_on_kind: bool,
 ) -> Result<String, SdCaptureError> {
     let deadline = Instant::now() + window;
     let mut text = String::new();
     loop {
+        if handle.generation() != generation {
+            return Err(SdCaptureError::TargetChanged);
+        }
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             return Ok(text);

@@ -1,85 +1,157 @@
-// MAVLink console (QGC-style, see `console_service.rs`): sends PX4 NuttShell
-// commands over `SERIAL_CONTROL` (device SHELL) and renders the reply frames
-// the shell echoes back as one scrolling transcript. Preset buttons offer
-// the commands that matter for a survey flight.
-
 import { create } from 'zustand'
+import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import type { OperationRef } from '../generated-types/OperationRef'
+import type { OperationStatus } from '../generated-types/OperationStatus'
+import type { ShellCommandRequest } from '../generated-types/ShellCommandRequest'
+import type { ShellOutputEnvelope } from '../generated-types/ShellOutputEnvelope'
+import type { ShellSessionReply } from '../generated-types/ShellSessionReply'
+import type { RuntimeClientSession } from '../generated-types/RuntimeClientSession'
+import type { RuntimeTargetRef } from '../generated-types/RuntimeTargetRef'
+import { consoleContext, consoleError, isCurrentConsoleSession, resetConsoleRuntime } from '../desktop/consoleRuntime'
+import { operationMatchesSession, sameRuntimeTarget } from '../desktop/flightRuntime'
 
-/** Keep at most this many transcript lines (ring). */
-const MAX_LINES = 1000
+const MAX_TRANSCRIPT_CHARS = 64 * 1024
+const SHELL_CONFIRMATION = 'RUN'
 
-/** PX4 NuttShell commands useful for a survey flight / motor test. */
 export const CONSOLE_PRESETS: string[] = [
-  'help',
-  'ver',
-  'top',
-  'dmesg',
-  'free',
-  'ps',
-  'listener sensor_combined',
-  'listener vehicle_gps_position',
-  'param show',
-  'gps status',
+  'help', 'ver', 'top', 'dmesg', 'free', 'ps', 'listener sensor_combined',
+  'listener vehicle_gps_position', 'param show', 'gps status',
 ]
+const READ_ONLY = new Set(['help', 'ver', 'top', 'dmesg', 'free', 'ps', 'param show', 'gps status'])
+export function isReadOnlyConsoleCommand(command: string): boolean {
+  return READ_ONLY.has(command) || (/^[A-Za-z0-9 _.*:-]+$/.test(command)
+    && (command.startsWith('listener ') || command.startsWith('param show ')))
+}
 
 interface ConsoleState {
-  /** Transcript lines (output reassembled from reply chunks). */
-  lines: string[]
-  /** True while a command is being sent. */
+  transcript: string
   busy: boolean
-  send: (command: string) => Promise<void>
+  operation: OperationRef | null
+  error: string | null
+  outputGap: boolean
+  send: (command: string, confirmed?: boolean, reviewedTarget?: RuntimeTargetRef) => Promise<void>
   close: () => Promise<void>
+  cancel: () => Promise<void>
   startWatcher: () => void
+  reset: () => void
 }
 
 let started = false
+let shellSession: RuntimeClientSession | null = null
+let expectedSequence = 1n
+let consoleEpoch = 0
+
+function appendOutput(envelope: ShellOutputEnvelope): void {
+  const state = useConsoleStore.getState()
+  if (!state.operation || !shellSession || !isCurrentConsoleSession(shellSession)
+    || !operationMatchesSession(envelope.operation, shellSession)
+    || envelope.operation.id !== state.operation.id
+    || !sameRuntimeTarget(envelope.target, shellSession.target)) return
+  let sequence: bigint | null = null
+  try { sequence = BigInt(envelope.sequence) } catch { /* malformed wire counter */ }
+  const gap = sequence === null || sequence !== expectedSequence
+  expectedSequence = sequence !== null ? sequence + 1n : expectedSequence + 1n
+  const prefix = gap ? '\n[console output gap]\n' : ''
+  const combined = `${state.transcript}${prefix}${envelope.chunk}`
+  useConsoleStore.setState({ transcript: combined.slice(-MAX_TRANSCRIPT_CHARS), outputGap: state.outputGap || gap })
+}
+
+async function ensureConsole(): Promise<{ session: RuntimeClientSession; operation: OperationRef }> {
+  const epoch = consoleEpoch
+  const current = useConsoleStore.getState()
+  if (current.operation && shellSession && isCurrentConsoleSession(shellSession)) {
+    await invoke('runtime_client_validate', { session: shellSession })
+    if (epoch !== consoleEpoch || !shellSession) throw new Error('The console target changed')
+    return { session: shellSession, operation: current.operation }
+  }
+  const context = await consoleContext()
+  if (epoch !== consoleEpoch) throw new Error('The console target changed')
+  const reply = await invoke<ShellSessionReply>('console_open', { request: context })
+  if (epoch !== consoleEpoch || !isCurrentConsoleSession(context.session)) {
+    void invoke('console_cancel', { session: context.session, operation: reply.operation }).catch(() => {})
+    throw new Error('The console target changed while opening')
+  }
+  if (!operationMatchesSession(reply.operation, context.session)) throw new Error('Console open reply target does not match its session')
+  shellSession = context.session
+  expectedSequence = 1n
+  useConsoleStore.setState({ operation: reply.operation, outputGap: false })
+  return { session: context.session, operation: reply.operation }
+}
+
+function retireConsole(): void {
+  consoleEpoch += 1
+  shellSession = null
+  resetConsoleRuntime()
+  expectedSequence = 1n
+  useConsoleStore.setState({ busy: false, operation: null, outputGap: false })
+}
 
 export const useConsoleStore = create<ConsoleState>((set, get) => ({
-  lines: [],
-  busy: false,
-  send: async (command) => {
-    if (!command.trim() || get().busy) return
-    set({ busy: true })
+  transcript: '', busy: false, operation: null, error: null, outputGap: false,
+  send: async (command, confirmed = false, reviewedTarget) => {
+    if (!command || get().busy) return
+    const epoch = consoleEpoch
+    set({ busy: true, error: null })
     try {
-      const { invoke } = await import('@tauri-apps/api/core')
-      await invoke('console_send', { command })
-    } catch (e) {
+      if (reviewedTarget) {
+        const context = await consoleContext()
+        if (!sameRuntimeTarget(reviewedTarget, context.session.target)) throw new Error('The reviewed console target changed; review the command again')
+      }
+      const owner = await ensureConsole()
+      if (epoch !== consoleEpoch) return
+      if (reviewedTarget && !sameRuntimeTarget(reviewedTarget, owner.session.target)) throw new Error('The reviewed console target changed')
+      const request: ShellCommandRequest = {
+        session: owner.session, operation: owner.operation, request_id: crypto.randomUUID(), command,
+        confirmation: confirmed ? SHELL_CONFIRMATION : null,
+      }
+      await invoke('console_send', { request })
+      if (epoch !== consoleEpoch || !isCurrentConsoleSession(owner.session)) return
       set({ busy: false })
-      throw e
+    } catch (error) {
+      if (epoch !== consoleEpoch) return
+      const decoded = consoleError(error)
+      set({ busy: false, error: decoded.message })
+      if (['target_changed', 'target_unavailable', 'not_owner', 'stopped'].includes(decoded.code ?? '')) retireConsole()
+      throw error
     }
-    set({ busy: false })
   },
   close: async () => {
+    const epoch = consoleEpoch
+    const operation = get().operation
+    const session = shellSession
+    if (!operation || !session) { retireConsole(); return }
+    set({ busy: true })
     try {
-      const { invoke } = await import('@tauri-apps/api/core')
-      await invoke('console_close')
-    } catch {
-      /* no link */
+      const status = await invoke<OperationStatus>('console_close', { session, operation })
+      if (epoch !== consoleEpoch) return
+      if (status.cleanup === 'uncertain') set({ error: 'Console release is unconfirmed; reconnect before another shell/log operation' })
+    } catch (error) {
+      if (epoch !== consoleEpoch) return
+      set({ error: consoleError(error).message })
     }
+    retireConsole()
+  },
+  cancel: async () => {
+    const operation = get().operation
+    const session = shellSession
+    if (!operation || !session) { retireConsole(); return }
+    try { await invoke('console_cancel', { session, operation }) }
+    catch (error) { set({ error: consoleError(error).message }) }
   },
   startWatcher: () => {
     if (started) return
     started = true
-    const appendChunk = (chunk: string) => {
-      const normalized = chunk.replace(/\r/g, '')
-      const parts = normalized.split('\n')
-      const lines = [...get().lines]
-      if (lines.length === 0) lines.push('')
-      // First part continues the current line; the rest become new lines.
-      lines[lines.length - 1] += parts[0]
-      for (let i = 1; i < parts.length; i++) lines.push(parts[i])
-      // Drop a trailing empty line left by a chunk ending in '\n'.
-      while (lines.length > 1 && lines[lines.length - 1] === '') lines.pop()
-      if (lines.length > MAX_LINES) lines.splice(0, lines.length - MAX_LINES)
-      set({ lines })
-    }
-    void (async () => {
-      try {
-        await listen<string>('console_output', (e) => appendChunk(e.payload))
-      } catch {
-        /* events unavailable (browser dev) */
+    void listen<ShellOutputEnvelope>('console_output', (event) => appendOutput(event.payload)).catch(() => {})
+    void listen<OperationStatus>('console_operation', (event) => {
+      const operation = get().operation
+      if (!operation || !shellSession || event.payload.operation.id !== operation.id
+        || !operationMatchesSession(event.payload.operation, shellSession)) return
+      if (event.payload.phase === 'finished') {
+        if (event.payload.cleanup === 'uncertain') set({ error: 'Console release is unconfirmed; reconnect before another shell/log operation' })
+        retireConsole()
       }
-    })()
+    }).catch(() => {})
   },
+  reset: () => retireConsole(),
 }))

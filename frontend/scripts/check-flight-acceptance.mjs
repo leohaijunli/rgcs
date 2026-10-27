@@ -10,14 +10,17 @@ import { fileURLToPath } from 'node:url'
 const frontend = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const root = dirname(frontend)
 const missionMode = process.argv.includes('--mission')
-const port = Number(process.env.AF02B4B_PORT ?? (missionMode ? 4180 : 4179))
+const shellLogsMode = process.argv.includes('--shell-logs')
+const scope = shellLogsMode ? 'af-02b-shell-logs' : missionMode ? 'af-02b-mission' : 'af-02b-flight-command'
+const port = Number(process.env.AF02B4B_PORT ?? (shellLogsMode ? 4181 : missionMode ? 4180 : 4179))
 const url = `http://127.0.0.1:${port}/`
-const shotsRoot = join(frontend, missionMode ? 'screenshots/mission/ownership' : 'screenshots/commands/ownership')
+const shotsRoot = join(frontend, shellLogsMode ? 'screenshots/shell-logs/ownership' : missionMode ? 'screenshots/mission/ownership' : 'screenshots/commands/ownership')
 const logRoot = '/tmp/opencode'
-const recordPath = join(root, `docs/verification/${missionMode ? 'af-02b-mission' : 'af-02b-flight-command'}-browser-20261026.json`)
-const logPrefix = missionMode ? 'af02b-mission' : 'af02b4b'
+const recordPath = join(root, `docs/verification/${scope}-browser-20261026.json`)
+const logPrefix = shellLogsMode ? 'af02b-shell-logs' : missionMode ? 'af02b-mission' : 'af02b4b'
 const scripts = {
-  ...(missionMode ? { mission: 'check-mission-ownership.mjs' } : {}),
+  ...(shellLogsMode ? { shell_logs: 'check-shell-logs.mjs' } : {}),
+  ...(missionMode || shellLogsMode ? { mission: 'check-mission-ownership.mjs' } : {}),
   ux: 'check-command-ux.mjs',
   safety: 'check-safety.mjs',
   preflight: 'check-preflight.mjs',
@@ -26,7 +29,7 @@ const scripts = {
   startup: 'check-startup.mjs',
   heartbeat: 'check-heartbeat.mjs',
 }
-const selected = process.argv.slice(2).find((argument) => argument !== '--mission')?.split(',') ?? Object.keys(scripts)
+const selected = process.argv.slice(2).find((argument) => !argument.startsWith('--'))?.split(',') ?? Object.keys(scripts)
 if (selected.some((name) => !scripts[name])) throw new Error('Unknown browser check')
 const CHECK_TIMEOUT_MS = 180_000
 const START_TIMEOUT_MS = 30_000
@@ -97,8 +100,8 @@ try {
     generated_at: new Date().toISOString(),
     source_base: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
     source_includes_uncommitted_implementation: true,
-    scope: missionMode ? 'AF-02b.4 owned Mission and related flight/shell browser regression' : 'AF-02b.4b browser flight-command ownership and related shell regression',
-    reproduction: ['node', 'scripts/check-flight-acceptance.mjs', ...(missionMode ? ['--mission'] : []), selected.join(',')],
+    scope: shellLogsMode ? 'AF-02b.4 owned Shell/Logs and Mission/flight regression' : missionMode ? 'AF-02b.4 owned Mission and related flight/shell browser regression' : 'AF-02b.4b browser flight-command ownership and related shell regression',
+    reproduction: ['node', 'scripts/check-flight-acceptance.mjs', ...(shellLogsMode ? ['--shell-logs'] : missionMode ? ['--mission'] : []), selected.join(',')],
     result: results.every((result) => result.exit_code === 0) ? 'pass' : 'fail',
     checks: results,
     screenshots: await screenshots(shotsRoot),

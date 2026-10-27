@@ -43,6 +43,7 @@ pub(crate) struct TargetSource {
     params: Option<ParamService>,
     command: Option<maggcs_core::CommandService>,
     mission: Option<maggcs_core::mission::MissionService>,
+    logs: Option<maggcs_core::logs::LogService>,
     view: SourceView,
 }
 
@@ -63,6 +64,15 @@ pub(crate) struct MissionBinding {
     pub service: maggcs_core::mission::MissionService,
 }
 
+pub(crate) struct ShellBinding {
+    pub connection: ConnectionHandle,
+}
+
+pub(crate) struct LogBinding {
+    pub connection: ConnectionHandle,
+    pub service: maggcs_core::logs::LogService,
+}
+
 struct SourceRole {
     parameters: bool,
     link_id: Option<LinkId>,
@@ -77,6 +87,7 @@ impl TargetSource {
         params: Option<ParamService>,
         command: maggcs_core::CommandService,
         mission: maggcs_core::mission::MissionService,
+        logs: Option<maggcs_core::logs::LogService>,
     ) -> Self {
         let snapshot = hub.snapshot();
         let link = hub.subscribe_link();
@@ -102,6 +113,7 @@ impl TargetSource {
             params,
             command: Some(command),
             mission: Some(mission),
+            logs,
             view,
         }
     }
@@ -229,6 +241,7 @@ fn sources(state: &AppState) -> Vec<TargetSource> {
         params: Some(params),
         command: None,
         mission: None,
+        logs: None,
         view,
     });
     sources
@@ -458,6 +471,31 @@ impl<R: Runtime> RuntimeFacade<R> {
                 service: "mission".into(),
             })?;
         Ok(MissionBinding {
+            connection: source.connection,
+            service,
+        })
+    }
+
+    pub(crate) fn shell_binding(&self, expected: &TargetRef) -> Result<ShellBinding, RuntimeError> {
+        let source = self.resolve(expected)?;
+        if source.view.owner != TransportOwner::Primary {
+            return Err(RuntimeError::ServiceUnavailable {
+                service: "primary console".into(),
+            });
+        }
+        Ok(ShellBinding {
+            connection: source.connection,
+        })
+    }
+
+    pub(crate) fn log_binding(&self, expected: &TargetRef) -> Result<LogBinding, RuntimeError> {
+        let source = self.resolve(expected)?;
+        let service = source
+            .logs
+            .ok_or_else(|| RuntimeError::ServiceUnavailable {
+                service: "logs".into(),
+            })?;
+        Ok(LogBinding {
             connection: source.connection,
             service,
         })

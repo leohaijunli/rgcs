@@ -860,12 +860,15 @@ export default {
   },
   console: {
     title: 'MAVLink console',
-    hint: 'Send text commands (MAV_CMD_DO_SEND_SCRIPT / COMMAND_LONG)',
+    hint: 'PX4 shell over MAVLink SERIAL_CONTROL',
     resize: 'Resize console',
     empty: 'No messages yet',
     placeholder: 'Type a command and press Enter',
     noLink: 'No link — connect a vehicle first',
     send: 'Send',
+    cancel: 'Cancel',
+    confirmRisk: 'This free-form shell command may change flight-controller state or files. Review it, then type RUN.',
+    confirmKeyword: 'Type RUN to confirm this exact command',
   },
   map: {
     connect: 'Connect',
