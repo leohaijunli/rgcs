@@ -6,13 +6,14 @@ use std::time::Duration;
 
 use maggcs_core::mavlink::router::RoutedEvents;
 use maggcs_core::mavlink::ConnectionHandle;
+use maggcs_core::motor_test::operation_types::{MotorOperationError, MotorToneSettingsRequest};
 use maggcs_core::motor_test::tone::{commands_for_status, tone_outputs};
 pub use maggcs_core::motor_test::tone::{
     MotorTone, MotorToneError, MotorToneSettings, MotorToneTrigger,
 };
 use parking_lot::Mutex;
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, Manager, WebviewWindow};
 use tokio::sync::{oneshot, watch};
 
 use crate::motor_test_state::{CaptureRequest, MotorTestTargetRef, OutputConfigSnapshot};
@@ -233,21 +234,63 @@ impl Drop for StartLease {
 
 #[tauri::command]
 pub async fn actuator_set_tones(
-    state: State<'_, AppState>,
-    settings: MotorToneSettings,
-) -> Result<(), String> {
+    app: AppHandle,
+    window: WebviewWindow,
+    request: MotorToneSettingsRequest,
+) -> Result<(), MotorOperationError> {
+    set_tones_owned(&app, window.label(), request).await
+}
+
+pub(crate) async fn set_tones_owned<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    window: &str,
+    request: MotorToneSettingsRequest,
+) -> Result<(), MotorOperationError> {
+    crate::motor_operations::authorize_configuration(
+        app,
+        window,
+        &request.context,
+        &request.permission,
+        Some(request.config_revision),
+    )?;
+    let state = app.state::<AppState>();
     let _ops = state.ops().lock().await;
+    crate::motor_operations::authorize_configuration(
+        app,
+        window,
+        &request.context,
+        &request.permission,
+        Some(request.config_revision),
+    )?;
+    set_tones_locked(&state, request.settings).map_err(|error| {
+        maggcs_core::motor_test::operation_types::MotorProtocolError::InvalidRequest {
+            message: error.to_string(),
+        }
+        .into()
+    })
+}
+
+fn set_tones_locked(state: &AppState, settings: MotorToneSettings) -> Result<(), MotorToneError> {
     if state.motor_test.session().is_some_and(|session| {
         session.is_sending() || session == maggcs_core::motor_test::SessionState::Stopping
     }) {
-        return Err(MotorToneError::Busy.to_string());
+        return Err(MotorToneError::Busy);
     }
     let mut inner = state.motor_test.tones.inner.lock();
     if inner.status.starting || inner.status.busy {
-        return Err(MotorToneError::Busy.to_string());
+        return Err(MotorToneError::Busy);
     }
     inner.status.settings = settings;
     Ok(())
+}
+
+#[cfg(test)]
+pub(crate) async fn set_tones_legacy(
+    state: &AppState,
+    settings: MotorToneSettings,
+) -> Result<(), String> {
+    let _ops = state.ops().lock().await;
+    set_tones_locked(state, settings).map_err(|error| error.to_string())
 }
 
 fn validate(

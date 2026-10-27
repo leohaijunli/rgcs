@@ -77,7 +77,7 @@ function repairFor(
     case 'mission_ready':
       return { label: t('preflight.fix.uploadMission'), action: go(() => void useMissionStore.getState().upload()) }
     case 'motor_test_idle':
-      return { label: t('preflight.fix.stopMotorTest'), action: go(() => void invoke('actuator_stop')) }
+      return { label: t('preflight.fix.stopMotorTest'), action: go(() => void invoke('actuator_open')) }
     case 'sensor_health':
       return { label: t('preflight.fix.openInspector'), action: go(() => void invoke('inspector_open')) }
     case 'home_position': {

@@ -418,6 +418,21 @@ covers independent pane selections, one signal in both plots, mixed units,
 list resizing by pointer/keyboard with persistence, Clear, and old-preference
 migration.
 
+### Owned actuation checkpoint — 2026-10-27
+
+The production UI now attaches a native `motor-test` Runtime session and carries
+its exact permission, target, operation, request/config/value revision through
+ON/OFF, manual/preset/forward START, updates, STOP/E-STOP and RESET. A pending
+start learns its operation from `motor_operation`, so STOP does not wait for the
+first-bank invocation reply. Tone settings require that permission/config; mapping
+refresh and parameter access carry the selected Motor target context. Preflight
+opens the Motor tool instead of issuing a global STOP.
+
+The isolated IPC regression additionally asserts session-owned START and exact
+operation STOP. Its 12 scenario groups and 24 captures under
+`screenshots/motor-test-owned/` pass at 1024×640, 1366×768, 1920×1080 and Field/
+light variants. See the [native/core acceptance record](../../../docs/verification/af-02b-motor-actuation-20261027.md).
+
 ### Screenshots
 
 All captures use the simulated IPC fixture identified in the header.
@@ -521,4 +536,5 @@ plan's [remaining physical acceptance](../../../docs/plans/motor-test-review-rem
 lists the device/version, mapping, range, release, ESC telemetry and acoustic
 evidence needed for a hardware release. The baseline review findings and older
 per-task test counts remain historical records; the latest software results are
-158 app tests and 112 core motor-test tests, with the stated hardware tests ignored.
+263 app tests (8 opt-in ignored) and 146 filtered core Motor tests. Dedicated
+capture/log ownership and the stated hardware checks remain pending.

@@ -58,7 +58,8 @@ await page.addInitScript(() => {
   const streamRow = (request) => ({ message_id: request.message_id, requested_rate: request.rate, observed_hz: null, last_seen_age_ms: null, receive_state: 'waiting', error: null })
   const streams = { target: null, endpoint: 'isolated IPC test', transport_generation: 1, ready: true, statuses: [...initialStreams.values()].map(streamRow), error: null }
   const status = {
-    motor_control: { enabled: false },
+    operation: null, config_revision: '1', forward_source_ref: null,
+    motor_control: { enabled: false, permission: null },
     tones: {
       settings: { start: 'rising', stop: 'falling' }, starting: false, busy: false,
       phase: 'idle', trigger: null, error: null,
@@ -104,6 +105,10 @@ await page.addInitScript(() => {
     sd_capture: capture, run: { status: null, manifest_path: null },
   }
   let scopeRevision = 0
+  let runtimeSession = null
+  let operationSequence = 0
+  const runtimeTarget = () => ({ vehicle_id: 'motor-browser', session_id: `motor-${window.__bench?.connectionId ?? 1}`,
+    link_id: '1', generation: String(window.__bench?.connectionId ?? 1), mavlink_target: { system_id: status.target_system_id ?? 250, component_id: 1 } })
   let scopeSignature = ''
   let scopeConnection = 1
   const scopeOutputs = () => {
@@ -206,6 +211,20 @@ await page.addInitScript(() => {
         status.scope_outputs = scopeOutputs()
         return structuredClone(status)
       }
+      if (command === 'runtime_targets') return status.target_connected ? [{ target: runtimeTarget(), link_id: '1', availability: 'available',
+        roles: ['motor_test'], transport_owner: status.target_origin === 'main_serial' ? 'primary' : 'dedicated_motor_test',
+        endpoint: status.target_endpoint, parameter_service_available: true, heartbeat_age_ms: 0 }] : []
+      if (command === 'runtime_client_attach') {
+        runtimeSession = { owner: { client_id: 'actuator-window', instance_id: `motor-instance-${test.connectionId}` },
+          module_id: args.moduleId, target: structuredClone(args.target) }
+        return structuredClone(runtimeSession)
+      }
+      if (command === 'runtime_client_validate') {
+        if (JSON.stringify(runtimeSession) !== JSON.stringify(args.session)
+          || JSON.stringify(args.session.target) !== JSON.stringify(runtimeTarget())) throw { code: 'target_changed' }
+        return null
+      }
+      if (command === 'runtime_client_detach') { runtimeSession = null; return null }
       if (command === 'actuator_use_main_target') {
         if (test.mainLinkError) throw new Error(test.mainLinkError)
         if (JSON.stringify(args.expected) !== JSON.stringify(status.main_serial_target)) throw new Error('main serial target changed')
@@ -218,6 +237,7 @@ await page.addInitScript(() => {
         status.target_endpoint = args.expected.endpoint
         status.target_system_id = args.expected.target.target_system_id
         status.motor_control.enabled = false
+        status.motor_control.permission = null
         return
       }
       if (command === 'actuator_disconnect_target') {
@@ -254,8 +274,11 @@ await page.addInitScript(() => {
         return
       }
       if (command === 'actuator_set_motor_control') {
-        status.motor_control.enabled = args.enabled
-        if (!args.enabled) {
+        const input = args.request
+        status.motor_control.enabled = input.enabled
+        status.motor_control.permission = input.enabled ? { owner: input.context.session.owner,
+          target: input.context.session.target, revision: String(++operationSequence) } : null
+        if (!input.enabled) {
           test.cancelMotorStart()
           if (status.session === 'running' || status.session === 'stopping') {
             status.session = 'idle'
@@ -264,7 +287,7 @@ await page.addInitScript(() => {
             test.emit('actuator_event', { kind: 'stopped', reason: 'motor control off' })
           }
         }
-        return structuredClone(status.motor_control)
+        return { permission: structuredClone(status.motor_control.permission) }
       }
       if (command === 'actuator_stream_catalog') {
         const query = args.query.trim().toUpperCase()
@@ -310,22 +333,27 @@ await page.addInitScript(() => {
       if (command.startsWith('actuator_start_')) {
         if (!status.motor_control.enabled) throw new Error('Motor control is OFF')
         if (test.startError) throw new Error(test.startError)
+        const context = args.request.context
+        status.operation = { id: `motor-operation-${++operationSequence}`, owner: structuredClone(context.session.owner), target: structuredClone(context.session.target) }
+        test.emit('motor_operation', { operation: structuredClone(status.operation), request_id: context.request_id,
+          resources: ['actuator_output'], phase: 'running', cleanup: 'not_required', outcome: null, stop_reason: null, remaining_budget_ms: 300000 })
         const complete = () => {
           status.session = 'running'
           status.output_values = [0.5, 0.5, 0.25, 0]
           status.output_pwm = [1500, 1500, 1750, null]
           test.emit('actuator_event', { kind: 'state', state: 'manual_running' })
+          return { operation: structuredClone(status.operation), config_revision: args.request.config_revision }
         }
         if (test.holdMotorStart) {
           Object.assign(status.tones, { starting: true, busy: true, trigger: 'starting', phase: 'playing' })
           return new Promise((resolve, reject) => {
-            test.pendingMotorStart = { cancelled: false, reject, complete: () => { complete(); resolve() } }
+            test.pendingMotorStart = { cancelled: false, reject, complete: () => resolve(complete()) }
           })
         }
         return complete()
       }
       if (command === 'actuator_set_tones') {
-        status.tones.settings = structuredClone(args.settings)
+        status.tones.settings = structuredClone(args.request.settings)
         return
       }
       if (command === 'actuator_stop') {
@@ -334,7 +362,7 @@ await page.addInitScript(() => {
         status.output_values = []
         status.output_pwm = []
         test.emit('actuator_event', { kind: 'stopped', reason: 'command' })
-        return
+        return { operation: structuredClone(args.request.operation), released_motors: 4, state: 'idle' }
       }
       if (command === 'actuator_estop') {
         test.cancelMotorStart()
@@ -343,10 +371,11 @@ await page.addInitScript(() => {
         status.output_pwm = []
         test.emit('actuator_event', { kind: 'state', state: 'emergency' })
         test.emit('actuator_event', { kind: 'stopped', reason: 'emergency' })
-        return
+        return { operation: structuredClone(args.request.operation), released_motors: 4, state: 'emergency' }
       }
       if (command === 'actuator_reset_emergency') {
         status.session = 'idle'
+        status.operation = null
         return
       }
       if (command === 'actuator_refresh_mapping') {
@@ -572,7 +601,7 @@ try {
     await holdStart()
     await page.waitForFunction(() => document.querySelector('button.start-btn')?.textContent === 'STOP')
     const request = await page.evaluate(() => window.__bench.calls.find((call) => call.command === 'actuator_start_manual'))
-    assert.deepEqual(request.args.values, [1, 1, 1, 1], '100% reaches the command API without a 30% cap')
+    assert.deepEqual(request.args.request.source.values, [1, 1, 1, 1], '100% reaches the owned command API without a 30% cap')
     await page.evaluate(() => {
       const test = window.__bench
       Object.assign(test.status, {
@@ -737,6 +766,10 @@ try {
   await holdStart()
   await page.waitForFunction(() => document.querySelector('button.start-btn')?.textContent === 'STOP')
   assert.equal(await calls('actuator_start_manual'), 1, 'one 3 s hold starts once')
+  const ownedStart = await page.evaluate(() => window.__bench.calls.find((call) => call.command === 'actuator_start_manual'))
+  assert.equal(ownedStart.args.request.context.session.module_id, 'motor-test', 'start carries its native-issued module session')
+  assert.deepEqual(ownedStart.args.request.permission.owner, ownedStart.args.request.context.session.owner, 'start permission belongs to that session')
+  assert.equal(ownedStart.args.request.config_revision, '1', 'start captures the output configuration revision')
   assert.equal(await calls('actuator_stop'), 0, 'release after the hold never clicks STOP')
   assert.equal(await start().textContent(), 'STOP')
   assert.equal(await trackingFold.textContent(), 'required')
@@ -755,6 +788,9 @@ try {
   await page.locator('.actuator-header .stop-tab').click()
   await page.waitForFunction(() => document.querySelector('button.start-btn')?.textContent === 'START')
   assert.equal(await calls('actuator_stop'), 1)
+  const ownedStop = await page.evaluate(() => window.__bench.calls.find((call) => call.command === 'actuator_stop'))
+  assert.equal(ownedStop.args.request.operation.id, await page.evaluate(() => window.__bench.status.operation.id), 'STOP names the active operation')
+  assert.deepEqual(ownedStop.args.request.session.owner, ownedStop.args.request.operation.owner, 'STOP carries the exact owner session')
   assert.equal(await trackingFold.isDisabled(), false)
   assert.equal(await page.locator('.motor-detail').count(), 1, 'pinned detail survives the temporary running requirement')
   await ensureUnlocked()

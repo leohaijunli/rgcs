@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use ts_rs::TS;
 
 use super::mapping::{OutputMap, OutputMapState, ServoChannel, ServoPort, MOTOR_FUNCTION_BASE};
 use super::pwm::PwmModel;
@@ -15,7 +16,8 @@ const SWEEP_MS: u64 = 600;
 const TRIPLE_MS: u64 = 225;
 const MAX_TONE_MOTORS: u8 = 4;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub enum MotorTone {
     Off,
@@ -46,7 +48,8 @@ impl MotorTone {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct MotorToneSettings {
     pub start: MotorTone,
     pub stop: MotorTone,

@@ -6,6 +6,8 @@ import {
   type MotorToneSettings,
   type MotorToneStatus,
 } from './benchTypes'
+import type { MotorPermissionRef } from '../generated-types/MotorPermissionRef'
+import { motorContext } from './runtime'
 
 const STORAGE_KEY = 'maggcs.actuator.tones'
 const CHOICES: { value: MotorTone; label: string }[] = [
@@ -35,22 +37,27 @@ export default function MotorToneControls(props: {
   status: MotorToneStatus
   onReady: (ready: boolean) => void
   onChange: () => void
+  permission: MotorPermissionRef | null
+  configRevision: string | null
 }) {
   const [settings, setSettings] = useState(loadSettings)
   const [saving, setSaving] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const { tauri, onReady } = props
+  const { tauri, onReady, permission, configRevision } = props
   useEffect(() => {
     let disposed = false
     const saved = loadSettings()
-    const sync = tauri ? invoke('actuator_set_tones', { settings: saved }) : Promise.resolve()
+    const sync = tauri && permission && configRevision
+      ? motorContext().then((context) => invoke('actuator_set_tones', { request: {
+        context, permission, config_revision: configRevision, settings: saved,
+      } })) : Promise.resolve()
     void sync.then(() => {
       if (!disposed) { setSettings(saved); onReady(true) }
     }).catch((error: unknown) => {
       if (!disposed) setError(String(error))
     }).finally(() => { if (!disposed) setSaving(false) })
     return () => { disposed = true }
-  }, [tauri, onReady])
+  }, [tauri, onReady, permission?.revision, configRevision])
 
   const change = async (field: keyof MotorToneSettings, value: MotorTone) => {
     const next = { ...settings, [field]: value }
@@ -59,7 +66,12 @@ export default function MotorToneControls(props: {
     onReady(false)
     props.onChange()
     try {
-      if (tauri) await invoke('actuator_set_tones', { settings: next })
+      if (tauri && permission && configRevision) {
+        const context = await motorContext()
+        await invoke('actuator_set_tones', { request: {
+          context, permission, config_revision: configRevision, settings: next,
+        } })
+      }
       setSettings(next)
       onReady(true)
       localStorage.setItem(STORAGE_KEY, JSON.stringify(next))

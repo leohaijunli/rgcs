@@ -33,14 +33,14 @@ use tauri::Manager;
 use tokio::net::UdpSocket;
 use tokio::time::timeout;
 
-use crate::actuator_service::{actuator_stop, emergency_stop_active_session, stop_active_session};
+use crate::actuator_service::{emergency_stop_active_session, stop_active_session};
 use crate::actuator_service::{start_source, StartSource};
 use crate::motor_test_state::OutputConfigSnapshot;
 use crate::motor_test_state::{
     motor_test_limits, AuxiliaryLinkRuntime, MotorTelemetry, MotorTestTarget, RunningMotorTest,
     TargetLinkRuntime,
 };
-use crate::motor_tone_service::{actuator_set_tones, MotorTone, MotorToneSettings};
+use crate::motor_tone_service::{set_tones_legacy, MotorTone, MotorToneSettings};
 use crate::run_service::ensure_coordinated_run_start;
 
 use super::*;
@@ -208,6 +208,7 @@ impl Harness {
         .await
         .expect("set models");
         *state.motor_test.running.lock() = Some(RunningMotorTest {
+            operation: None,
             svc,
             forwarder,
             output,
@@ -695,7 +696,7 @@ async fn assert_stop_preempts_capture(emergency: bool, operation: CaptureOperati
         if emergency {
             emergency_stop_active_session(&harness.state()).await
         } else {
-            actuator_stop(harness.state()).await
+            stop_active_session(&harness.state()).await
         }
     })
     .await
@@ -930,7 +931,7 @@ async fn am32_pending_start_is_cancelled_by_both_stop_paths() {
                 harness.state().motor_test.session(),
                 Some(SessionState::Emergency)
             );
-            crate::actuator_service::actuator_reset_emergency(harness.state())
+            crate::actuator_service::reset_emergency_legacy(&harness.state())
                 .await
                 .expect("reset without a spawned session");
             assert_eq!(
@@ -946,8 +947,8 @@ async fn am32_pending_start_is_cancelled_by_both_stop_paths() {
 async fn am32_next_off_start_waits_for_an_already_dispatched_stop_tone() {
     let harness = Harness::new().await;
     harness.dshot();
-    actuator_set_tones(
-        harness.state(),
+    set_tones_legacy(
+        &harness.state(),
         MotorToneSettings {
             start: MotorTone::Off,
             stop: MotorTone::Rising,
@@ -1007,8 +1008,8 @@ async fn am32_shell_failure_blocks_start_but_does_not_fail_motor_stop() {
     .expect_err("beep failed");
     assert!(error.contains("simulated command failure"));
     assert!(!harness.trace.lock().iter().any(is_active_output));
-    actuator_set_tones(
-        harness.state(),
+    set_tones_legacy(
+        &harness.state(),
         MotorToneSettings {
             start: MotorTone::Off,
             stop: MotorTone::Falling,
@@ -1098,8 +1099,8 @@ async fn am32_preset_completion_plays_one_stop_tone() {
     let harness = Harness::new().await;
     harness.dshot();
     harness.enable_control().await;
-    actuator_set_tones(
-        harness.state(),
+    set_tones_legacy(
+        &harness.state(),
         MotorToneSettings {
             start: MotorTone::Off,
             stop: MotorTone::Triple,
@@ -1280,12 +1281,11 @@ async fn motor_control_defaults_off_and_blocks_all_sources_and_tones() {
             .expect_err("OFF")
             .contains("OFF"));
     }
-    assert!(crate::actuator_service::actuator_set_values(
-        harness.state(),
-        vec![0.3; MOTORS.into()]
-    )
-    .await
-    .is_err());
+    assert!(
+        crate::actuator_service::set_values_legacy(&harness.state(), vec![0.3; MOTORS.into()])
+            .await
+            .is_err()
+    );
     stop_active_session(&harness.state())
         .await
         .expect("idle stop");

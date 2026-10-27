@@ -104,7 +104,7 @@ impl<R: Runtime> ManagedService for MotorTestStage<R> {
     ) -> Pin<Box<dyn Future<Output = StopOutcome> + Send + 'a>> {
         Box::pin(async move {
             let state = self.app.state::<AppState>();
-            stop_running_motor_test(&state, deadline).await
+            stop_running_motor_test(&self.app, &state, deadline).await
         })
     }
 }
@@ -145,7 +145,27 @@ where
     }
 }
 
-async fn stop_running_motor_test(state: &AppState, deadline: Duration) -> StopOutcome {
+async fn stop_running_motor_test<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    deadline: Duration,
+) -> StopOutcome {
+    if state.motor_test.operations.is_active() {
+        let started = Instant::now();
+        return match crate::motor_operations::stop_all(app, deadline).await {
+            Ok(()) => {
+                crate::motor_control_service::revoke(state);
+                state.motor_test.running.lock().take();
+                state
+                    .motor_test
+                    .note_state(maggcs_core::motor_test::SessionState::Idle);
+                StopOutcome::Stopped {
+                    elapsed_ms: elapsed_ms(started),
+                }
+            }
+            Err(message) => StopOutcome::Failed { message },
+        };
+    }
     crate::motor_control_service::revoke(state);
     let service = match state.motor_test.running.lock().as_ref() {
         Some(running) => running.svc.clone(),

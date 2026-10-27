@@ -130,6 +130,16 @@ blocked producers, event pressure is nonblocking and native state is retained
 independently. Three new fault fixtures, 139 core Motor checks and 260 native
 library checks pass; native permission/operation binding remains active.
 
+**Owned Motor actuation checkpoint — 2026-10-27:** Native permission, manual/
+preset/forward START, revised values, STOP/E-STOP, tones and mapping/parameter
+configuration now require the actual Motor window/session/target and exact grant/
+operation. Start waits for a full first bank; owner loss/deadline releases without
+a renderer; target replacement retains uncertainty without redirect. Three native
+PTY ownership cases, 146 core Motor checks, 263 native checks (8 opt-in ignores),
+315 generated mirrors, full workspace/static/production checks and 12 browser
+scenario groups/24 screenshots pass ([evidence](../verification/af-02b-motor-actuation-20261027.md)).
+Dedicated capture/log ownership and final Motor/G1 matrices remain.
+
 ## 1. Outcome and ordering decision
 
 The first deliverable is a reliable, efficient application platform that can host

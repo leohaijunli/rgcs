@@ -3,6 +3,9 @@
 // header do not reach into the panel component.
 
 import type { ScopeOutputMeta } from './scopeStore'
+import type { MotorForwardSourceRef } from '../generated-types/MotorForwardSourceRef'
+import type { MotorPermissionRef } from '../generated-types/MotorPermissionRef'
+import type { OperationRef } from '../generated-types/OperationRef'
 
 export type MotorTone = 'off' | 'rising' | 'falling' | 'sweep' | 'triple'
 export interface MotorToneSettings { start: MotorTone; stop: MotorTone }
@@ -239,7 +242,10 @@ export function motorGuide(input: MotorGuideInput): MotorGuide {
 }
 
 export interface ActuatorStatus {
-  motor_control: { enabled: boolean }
+  operation: OperationRef | null
+  config_revision: string | null
+  forward_source_ref: MotorForwardSourceRef | null
+  motor_control: { enabled: boolean; permission: MotorPermissionRef | null }
   tones: MotorToneStatus
   /** The selected dedicated or borrowed Motor Test FC is attached. */
   connected: boolean
@@ -447,7 +453,10 @@ export function assignmentFor(map: OutputMap, motor: number): OutputAssignment |
 }
 
 export const IDLE: ActuatorStatus = {
-  motor_control: { enabled: false },
+  operation: null,
+  config_revision: null,
+  forward_source_ref: null,
+  motor_control: { enabled: false, permission: null },
   tones: IDLE_TONES,
   mode_label: '',
   connected: false,

@@ -2,9 +2,11 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use super::tone::MotorToneSettings;
 use super::{
     PresetKind, ServoPort, SessionState, WaveformPreset, DEFAULT_TICK_HZ, MAX_MOTOR_FUNCTIONS,
 };
+use crate::params::{ParamType, ParamValue};
 use crate::runtime::operations::{
     OperationError, OperationOwner, OperationRef, RuntimeClientSession,
 };
@@ -39,6 +41,32 @@ pub struct MotorPermissionRequest {
 #[ts(export)]
 pub struct MotorPermissionStatus {
     pub permission: Option<MotorPermissionRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct MotorToneSettingsRequest {
+    pub context: MotorRequestContext,
+    pub permission: MotorPermissionRef,
+    pub config_revision: Revision,
+    pub settings: MotorToneSettings,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct MotorParameterReadRequest {
+    pub context: MotorRequestContext,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct MotorParameterSetRequest {
+    pub context: MotorRequestContext,
+    pub permission: MotorPermissionRef,
+    pub name: String,
+    pub value: ParamValue,
+    pub ptype: ParamType,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

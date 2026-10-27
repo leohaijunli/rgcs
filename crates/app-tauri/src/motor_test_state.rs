@@ -51,6 +51,7 @@ pub struct MainSerialTarget {
 /// The live service handle (plus the event-forwarder task handle, so the
 /// forwarder dies with the entry).
 pub struct RunningMotorTest {
+    pub operation: Option<maggcs_core::runtime::operations::OperationRef>,
     pub svc: MotorTestService,
     /// Held only so the forwarder aborts when the entry is replaced; never
     /// read directly.
@@ -262,6 +263,7 @@ pub struct MainSitlSource {
 
 /// The SITL source link plus its SERVO_OUTPUT_RAW forwarder runtime.
 pub struct SitlLinkRuntime {
+    pub source_ref: maggcs_core::motor_test::operation_types::MotorForwardSourceRef,
     pub slot: ForwardSlot,
     pub source: SitlSourceConfig,
     pub origin: SitlSourceOrigin,
@@ -451,6 +453,7 @@ pub struct MotorTelemetry {
 /// newest event so the status poll stays cheap (no service round-trip).
 #[derive(Default)]
 pub struct MotorTestState {
+    pub operations: crate::motor_operations::MotorOperations,
     pub control: crate::motor_control_service::MotorControlGate,
     pub running: PLMutex<Option<RunningMotorTest>>,
     pub last_state: PLMutex<Option<SessionState>>,

@@ -42,3 +42,27 @@ Closing the event receiver triggers owned-bank Release before service retirement
 Three controlled-transport fault tests cover full observer queues, blocked output
 plus eight queued/one waiting Start, and observer close. The complete Motor filter
 now passes 139 checks; native library regression passes 260 with 8 opt-in ignores.
+
+## Owned actuation checkpoint
+
+Core accepts an `OperationCancellation` and absolute native operation deadline
+before Start. Owner loss/deadline expiry interrupts waits/writes and performs the
+same full-bank Release without a renderer callback. Prepared owner loss writes
+nothing. First-control and terminal Release evidence are retained separately from
+bounded, droppable UI events.
+
+Native permission is an exact `OperationOwner`/`TargetRef`/`Revision` grant.
+Start owns `ActuatorOutput` through Release and replies only after a complete first
+control bank. Updates require the exact active operation, increasing revision and
+unique request ID. STOP/E-STOP name that operation; retained old STOP is idle and
+cannot stop a replacement. Target-generation loss never redirects Release and
+keeps uncertainty. Native close/lifecycle cancel recorded actors before cleaning
+observers/dedicated I/O; borrowed primary I/O remains open.
+
+Tone choices and mapping/parameter configuration now carry the actual Motor
+Runtime session; physical configuration writes reuse the existing owned Parameter
+worker and require the exact permission. The main preflight repair opens Motor
+Test rather than invoking a global STOP.
+
+See `docs/verification/af-02b-motor-actuation-20261027.md`. Dedicated capture/log
+ownership remains the next slice; this checkpoint does not close G1.

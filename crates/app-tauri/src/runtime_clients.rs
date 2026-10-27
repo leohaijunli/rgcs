@@ -30,6 +30,11 @@ pub struct RuntimeClients {
 }
 
 impl RuntimeClients {
+    pub(crate) fn owner_is_attached(&self, owner: &OperationOwner) -> bool {
+        self.windows.lock().values().any(|window| {
+            window.id == owner.client_id && window.modules.contains_key(&owner.instance_id)
+        })
+    }
     pub(crate) fn attach(
         &self,
         window: &str,

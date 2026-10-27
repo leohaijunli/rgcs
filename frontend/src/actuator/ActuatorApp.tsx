@@ -18,6 +18,14 @@ import { listen } from '@tauri-apps/api/event'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { readTextFile } from '@tauri-apps/plugin-fs'
 import type { LogEntryInfo } from '../generated-types/LogEntryInfo'
+import type { MotorPermissionStatus } from '../generated-types/MotorPermissionStatus'
+import type { MotorStartReply } from '../generated-types/MotorStartReply'
+import type { MotorStartRequest } from '../generated-types/MotorStartRequest'
+import type { MotorStopRequest } from '../generated-types/MotorStopRequest'
+import type { MotorValuesRequest } from '../generated-types/MotorValuesRequest'
+import type { OperationStatus } from '../generated-types/OperationStatus'
+import { currentMotorSession, motorContext, resetMotorRuntime } from './runtime'
+import { operationMatchesSession } from '../desktop/flightRuntime'
 import { isTauri } from '../inspector/mock'
 import BenchHeader, { type BenchFailure } from './BenchHeader'
 import {
@@ -311,6 +319,8 @@ export function ActuatorApp() {
   // is there when the operator looks at the scope below the controls.
   useScopeFeed()
   const [status, setStatus] = useState<ActuatorStatus>(IDLE)
+  const statusRef = useRef(status)
+  statusRef.current = status
   const [source, setSource] = useState<Source>('manual')
   /** Ordinary STOP retains the local unlock. Idle command edits and emergency
    * reset re-lock it; every start still requires the full 3 s hold. */
@@ -330,17 +340,28 @@ export function ActuatorApp() {
     setControlBusy(true)
     setControlError(null)
     setUnlocked(false)
-    if (!enabled) setStatus((current) => ({ ...current, motor_control: { enabled: false } }))
+    const existing = statusRef.current.motor_control.permission
+    if (!enabled) setStatus((current) => ({ ...current, motor_control: { enabled: false, permission: null } }))
     try {
-      const control = tauri
-        ? await invoke<{ enabled: boolean }>('actuator_set_motor_control', { enabled })
-        : { enabled }
-      setStatus((current) => ({ ...current, motor_control: control }))
+      if (!tauri) {
+        setStatus((current) => ({ ...current, motor_control: { enabled, permission: null } }))
+        return
+      }
+      if (!enabled && !existing) return
+      const context = await motorContext()
+      const control = await invoke<MotorPermissionStatus>('actuator_set_motor_control', {
+        request: { context, enabled, permission: enabled ? null : existing },
+      })
+      setStatus((current) => ({ ...current, motor_control: { enabled: control.permission !== null, permission: control.permission } }))
+      if (!enabled) resetMotorRuntime()
     } catch (error) {
       setControlError(String(error))
     } finally { setControlBusy(false) }
   }, [tauri])
-  useEffect(() => { void setMotorControl(false) }, [setMotorControl])
+  useEffect(() => {
+    setControlBusy(false)
+    return () => resetMotorRuntime()
+  }, [])
   // Manual source state.
   const [values, setValues] = useState<number[]>(() => new Array(MOTOR_COUNT).fill(0))
   const [sync, setSync] = useState(true)
@@ -397,6 +418,7 @@ export function ActuatorApp() {
   const valuesRef = useRef(values)
   valuesRef.current = values
   const lastSend = useRef(0)
+  const valueRevision = useRef(0)
 
   const running = status.session === 'running' || status.session === 'stopping'
   const releasing = status.session === 'stopping'
@@ -417,9 +439,26 @@ export function ActuatorApp() {
   const estop = useCallback(() => {
     setEmergency(true)
     if (!tauri) return
-    void invoke('actuator_estop').catch((error: unknown) => {
+    const operation = statusRef.current.operation
+    const session = currentMotorSession()
+    if (!operation || !session) return
+    const request: MotorStopRequest = { session, operation, request_id: crypto.randomUUID(), emergency: true }
+    void invoke('actuator_estop', { request }).catch((error: unknown) => {
       setFailure({ operation: 'emergency_stop', message: String(error) })
     })
+  }, [tauri])
+
+  useEffect(() => {
+    if (!tauri) return
+    let disposed = false
+    let unlisten: (() => void) | undefined
+    void listen<OperationStatus>('motor_operation', ({ payload }) => {
+      if (disposed) return
+      const session = currentMotorSession()
+      if (!session || !operationMatchesSession(payload.operation, session)) return
+      setStatus((current) => ({ ...current, operation: payload.operation }))
+    }).then((value) => { unlisten = value }).catch(() => {})
+    return () => { disposed = true; unlisten?.() }
   }, [tauri])
 
   useEffect(() => {
@@ -847,9 +886,12 @@ export function ActuatorApp() {
       const now = performance.now()
       if (now - lastSend.current < SET_VALUES_MIN_INTERVAL_MS) return
       lastSend.current = now
-      void invoke('actuator_set_values', {
-        values: next.slice(0, activeMotors),
-      }).catch(() => {})
+      const operation = statusRef.current.operation
+      const session = currentMotorSession()
+      if (!operation || !session) return
+      const request: MotorValuesRequest = { session, operation, request_id: crypto.randomUUID(),
+        revision: String(++valueRevision.current), values: next.slice(0, activeMotors) }
+      void invoke('actuator_set_values', { request }).catch(() => {})
     },
     [tauri, running, activeMotors],
   )
@@ -895,13 +937,22 @@ export function ActuatorApp() {
   const resetEmergency = () => {
     setEmergency(false)
     resetConfirmation()
-    if (tauri) void invoke('actuator_reset_emergency').catch(() => {})
+    const operation = statusRef.current.operation
+    const session = currentMotorSession()
+    if (tauri && operation && session) {
+      const request: MotorStopRequest = { session, operation, request_id: crypto.randomUUID(), emergency: true }
+      void invoke('actuator_reset_emergency', { request }).catch(() => {})
+    }
   }
 
   const stop = async () => {
     if (!tauri) return
     try {
-      await invoke('actuator_stop')
+      const operation = statusRef.current.operation
+      const session = currentMotorSession()
+      if (!operation || !session) throw new Error('No owned motor operation to stop')
+      const request: MotorStopRequest = { session, operation, request_id: crypto.randomUUID(), emergency: false }
+      await invoke('actuator_stop', { request })
       setFailure(null)
     } catch (error) {
       setFailure({ operation: 'stop', message: String(error) })
@@ -925,22 +976,30 @@ export function ActuatorApp() {
     setStopReason(null)
     setStarting(true)
     try {
-      if (source === 'manual') {
-        await invoke('actuator_start_manual', {
-          values: valuesRef.current.slice(0, activeMotors),
-        })
-      } else if (source === 'preset') {
-        await invoke('actuator_start_preset', {
-        preset: {
-          kind: preset,
-          amplitude,
-          frequency_hz: frequency,
-          duration_s: duration,
-        },
-        })
-      } else if (source === 'forward') {
-        await invoke('actuator_start_forward')
+      const context = await motorContext()
+      const permission = statusRef.current.motor_control.permission
+      const configRevision = statusRef.current.config_revision
+      if (!permission || !configRevision) throw new Error('Refresh and enable motor control for this target')
+      const request: MotorStartRequest = {
+        context, permission, config_revision: configRevision,
+        source: source === 'manual'
+          ? { kind: 'manual', values: valuesRef.current.slice(0, activeMotors) }
+          : source === 'preset'
+            ? { kind: 'preset', preset: { kind: preset, amplitude, frequency_hz: frequency, duration_s: duration } }
+            : statusRef.current.forward_source_ref
+              ? { kind: 'forward', source: statusRef.current.forward_source_ref }
+              : (() => { throw new Error('Reconnect the exact SITL source before START') })(),
       }
+      let reply: MotorStartReply
+      if (source === 'manual') {
+        reply = await invoke<MotorStartReply>('actuator_start_manual', { request })
+      } else if (source === 'preset') {
+        reply = await invoke<MotorStartReply>('actuator_start_preset', { request })
+      } else {
+        reply = await invoke<MotorStartReply>('actuator_start_forward', { request })
+      }
+      valueRevision.current = 0
+      setStatus((current) => ({ ...current, operation: reply.operation, config_revision: reply.config_revision }))
     } catch (error) {
       if (String(error).includes('motor start/tone cancelled')) return
       setFailure({
@@ -1019,7 +1078,7 @@ export function ActuatorApp() {
     if (!tauri) return
     resetConfirmation()
     setMappingError(null)
-    void invoke('actuator_refresh_mapping').catch((error: unknown) => {
+    void motorContext().then((request) => invoke('actuator_refresh_mapping', { request })).catch((error: unknown) => {
       setMappingError(String(error))
     })
   }
@@ -1302,6 +1361,8 @@ export function ActuatorApp() {
           status={status.tones ?? IDLE_TONES}
           onReady={setTonesReady}
           onChange={resetConfirmation}
+          permission={status.motor_control.permission}
+          configRevision={status.config_revision}
         />
 
         {/* The alarm observes the total field; its watchdog remains in core. */}

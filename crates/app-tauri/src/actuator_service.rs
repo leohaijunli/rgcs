@@ -14,8 +14,8 @@ use tauri::Emitter;
 use tauri::Manager;
 use tauri::State;
 use tauri::WebviewUrl;
+use tauri::WebviewWindow;
 use tauri::WebviewWindowBuilder;
-use tauri::WindowEvent;
 
 use maggcs_core::logs::capture::SdCaptureStatus;
 use maggcs_core::mavlink::connection::{spawn_connection, ConnectionEvent, ConnectionHandle};
@@ -25,6 +25,11 @@ use maggcs_core::motor_test::mapping::{
     build_output_map_checked, mapped_feedback_pwm, FunctionRead, MappingIssue, OutputMap,
     ServoPort, SERVO_CHANNELS_PER_PORT,
 };
+use maggcs_core::motor_test::operation_types::{
+    MotorForwardSourceRef, MotorOperationError, MotorParameterReadRequest,
+    MotorParameterSetRequest, MotorReleaseReceipt, MotorStartReply, MotorStartRequest,
+    MotorStartSource, MotorStopRequest, MotorValuesReceipt, MotorValuesRequest,
+};
 use maggcs_core::motor_test::protocol::{
     detect_bank_protocol_checked, OutputProtocol, OutputProtocols,
 };
@@ -33,8 +38,11 @@ use maggcs_core::motor_test::scope::{self, OutputScopeError, ScopeBus, ScopeOutp
 use maggcs_core::motor_test::service::{MotorTestCommand, MotorTestEvent, MotorTestService};
 use maggcs_core::motor_test::source::{ForwardSlot, ForwardState};
 use maggcs_core::motor_test::{SessionState, DEFAULT_TICK_HZ};
-use maggcs_core::params::model::{ParamType, ParamValue};
+use maggcs_core::params::model::ParamValue;
+use maggcs_core::params::operation_types::{ParameterCommandError, ParameterRequestContext};
 use maggcs_core::params::{ParamEntry, ParamObservation, ParamService};
+use maggcs_core::runtime::operations::OperationError;
+use maggcs_core::runtime::{Revision, TransportGeneration};
 use maggcs_core::signals::derived::esc_frame_range;
 
 /// Maximum time to observe the release pass before closing an actuator link.
@@ -67,6 +75,9 @@ use crate::state::AppState;
 /// the UI; safety-relevant signals are low-rate).
 #[derive(Debug, Clone, Serialize)]
 pub struct ActuatorStatus {
+    pub operation: Option<maggcs_core::runtime::operations::OperationRef>,
+    pub config_revision: Option<Revision>,
+    pub forward_source_ref: Option<MotorForwardSourceRef>,
     pub motor_control: crate::motor_control_service::MotorControlStatus,
     pub streams: crate::stream_service::StreamSnapshot,
     pub tones: crate::motor_tone_service::MotorToneStatus,
@@ -171,10 +182,8 @@ pub async fn actuator_open(app: AppHandle) -> Result<(), String> {
         let _ = win.set_focus();
         return Ok(());
     }
-    // A fresh tool window always begins in monitor-only mode, even if a prior
-    // window's failed release left a session available for a STOP retry.
-    let state = app.state::<AppState>();
-    let _ = crate::motor_control_service::set_control(&state, false).await;
+    // Permission belongs to a native-issued client instance. Opening a view
+    // cannot revoke another window's grant or stop its current operation.
     let win = WebviewWindowBuilder::new(&app, "actuator", WebviewUrl::App("actuator.html".into()))
         .devtools(true)
         .title("Motor test")
@@ -193,51 +202,47 @@ pub async fn actuator_open(app: AppHandle) -> Result<(), String> {
     if let Some((handle, target_system_id)) = target_handle {
         attach_motor_telemetry(&app, handle, target_system_id);
     }
-    // Closing the window must stop the motors (plan §8.3).
+    // runtime_client_attach installs an exact ClientId destruction hook. The
+    // owned service observes that cancellation directly and retains its receipts.
     let app_for_cleanup = app.clone();
     win.on_window_event(move |event| {
-        if let WindowEvent::Destroyed = event {
-            let app = app_for_cleanup.clone();
-            crate::motor_control_service::revoke(&app.state::<AppState>());
-            tauri::async_runtime::spawn(async move {
-                let state = app.state::<AppState>();
-                if let Err(error) = stop_active_session(&state).await {
-                    let _ = app.emit("actuator_stop_warning", error);
-                    return;
-                }
-                let _ops = state.ops().lock().await;
-                state.motor_test.running.lock().take();
-                crate::stream_service::stop(&state);
-                let sitl = state.motor_test.sitl.lock().take();
-                if let Some(sitl) = sitl {
-                    sitl.stop().await;
-                }
-                detach_motor_telemetry(&state).await;
-                let target = state.motor_test.target.lock().take();
-                if let Some(target) = target {
-                    target.stop().await;
-                }
-                stop_scope_flusher(&state);
-            });
+        if !matches!(event, tauri::WindowEvent::Destroyed) {
+            return;
         }
+        let cleanup_app = app_for_cleanup.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(error) =
+                crate::motor_operations::stop_all(&cleanup_app, MOTOR_TEST_STOP_TIMEOUT).await
+            {
+                let _ = cleanup_app.emit("actuator_stop_warning", error);
+                return;
+            }
+            let state = cleanup_app.state::<AppState>();
+            crate::motor_control_service::revoke(&state);
+            let _ops = state.ops().lock().await;
+            state.motor_test.running.lock().take();
+            crate::stream_service::stop(&state);
+            let sitl = state.motor_test.sitl.lock().take();
+            if let Some(sitl) = sitl {
+                sitl.stop().await;
+            }
+            detach_motor_telemetry(&state).await;
+            let target = state.motor_test.target.lock().take();
+            if let Some(target) = target {
+                target.stop().await;
+            }
+            if let Some(task) = state.motor_test.scope_flusher.lock().take() {
+                task.abort();
+            };
+        });
     });
     Ok(())
 }
 
 /// Close the motor-test window and run the stop path.
 #[tauri::command]
-pub async fn actuator_close(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    crate::motor_control_service::revoke(&state);
-    stop_active_session(&state).await?;
-    let _ops = state.ops().lock().await;
-    state.motor_test.running.lock().take();
-    detach_motor_telemetry(&state).await;
-    stop_auxiliary_links(&app, &state).await;
-    stop_scope_flusher(&state);
-    if let Some(win) = app.get_webview_window("actuator") {
-        let _ = win.close();
-    }
-    Ok(())
+pub async fn actuator_close(window: WebviewWindow) -> Result<(), String> {
+    window.close().map_err(|error| error.to_string())
 }
 
 /// Live link/FC status for the window's panels.
@@ -524,8 +529,7 @@ async fn reusable_session(
             "stop the motor test before changing the target or output configuration".into(),
         );
     }
-    service
-        .stop_and_wait()
+    confirmed_stop(&service, false)
         .await
         .map_err(|error| format!("cannot replace the old motor-test session: {error}"))?;
     state.motor_test.running.lock().take();
@@ -537,9 +541,19 @@ fn spawn_session<R: tauri::Runtime>(
     state: &AppState,
     prepared: &PreparedStart,
     tone_generation: u64,
-) -> MotorTestService {
+    owned: Option<(
+        &crate::motor_operations::MotorScope,
+        maggcs_core::runtime::operations::OperationCancellation,
+    )>,
+) -> Result<MotorTestService, String> {
     let (service, events, output) =
         MotorTestService::spawn(prepared.handle.clone(), prepared.limits.clone());
+    if let Some((scope, cancellation)) = &owned {
+        service
+            .bind_owner(cancellation.clone(), scope.deadline)
+            .map_err(|error| error.to_string())?;
+        *scope.service.lock() = Some(service.clone());
+    }
     let forwarder = tauri::async_runtime::spawn(forward_events(
         app.clone(),
         events,
@@ -547,6 +561,7 @@ fn spawn_session<R: tauri::Runtime>(
         tone_generation,
     ));
     *state.motor_test.running.lock() = Some(crate::motor_test_state::RunningMotorTest {
+        operation: owned.map(|(scope, _)| scope.operation.clone()),
         svc: service.clone(),
         forwarder,
         output,
@@ -554,7 +569,7 @@ fn spawn_session<R: tauri::Runtime>(
         scope_outputs: prepared.scope_outputs.clone(),
         tone_generation,
     });
-    service
+    Ok(service)
 }
 
 /// Send the target PWM models before a start. The session applies them to
@@ -584,10 +599,13 @@ async fn send_pwm_models(
 #[tauri::command]
 pub async fn actuator_start_manual(
     app: AppHandle,
-    state: State<'_, AppState>,
-    values: Vec<f32>,
-) -> Result<(), String> {
-    start_source(&app, &state, StartSource::Manual(values)).await
+    window: WebviewWindow,
+    request: MotorStartRequest,
+) -> Result<MotorStartReply, MotorOperationError> {
+    if !matches!(request.source, MotorStartSource::Manual { .. }) {
+        return Err(crate::motor_operations::invalid_source());
+    }
+    crate::motor_operations::start(&app, window.label(), request).await
 }
 
 pub(crate) enum StartSource {
@@ -597,14 +615,30 @@ pub(crate) enum StartSource {
 }
 
 /// All sources cross the same cancellable tone fence and atomic start commit.
+#[cfg(test)]
 pub(crate) async fn start_source<R: tauri::Runtime>(
     app: &AppHandle<R>,
     state: &AppState,
     source: StartSource,
 ) -> Result<(), String> {
+    start_scoped(app, state, source, None, || Ok(())).await
+}
+
+pub(crate) async fn start_scoped<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    source: StartSource,
+    owned: Option<(
+        &crate::motor_operations::MotorScope,
+        maggcs_core::runtime::operations::OperationCancellation,
+    )>,
+    authorize: impl Fn() -> Result<(), String> + Send + Sync,
+) -> Result<(), String> {
+    authorize()?;
     crate::motor_control_service::ensure_enabled(state).map_err(|error| error.to_string())?;
     let expected = state.motor_test.tones.generation();
     let _ops = state.ops().lock().await;
+    authorize()?;
     crate::motor_control_service::ensure_enabled(state).map_err(|error| error.to_string())?;
     ensure_idle_session(state)?;
     let prepared = prepare_start(state)?;
@@ -620,9 +654,7 @@ pub(crate) async fn start_source<R: tauri::Runtime>(
     // Each run gets an event observer bound to its generation. A delayed stop
     // event from a prior run must never schedule a tone for the new run.
     if let Some(old) = reusable_session(state, &prepared).await? {
-        old.stop_and_wait()
-            .await
-            .map_err(|error| error.to_string())?;
+        confirmed_stop(&old, false).await?;
     }
     let old = state.motor_test.running.lock().take();
     if let Some(old) = old {
@@ -645,8 +677,15 @@ pub(crate) async fn start_source<R: tauri::Runtime>(
     if current.target != prepared.target || current.scope_outputs != prepared.scope_outputs {
         return Err(crate::motor_tone_service::MotorToneError::TargetChanged.to_string());
     }
+    authorize()?;
     ensure_idle_session(state)?;
-    let service = spawn_session(app, state, &prepared, lease.request.session_generation);
+    let service = spawn_session(
+        app,
+        state,
+        &prepared,
+        lease.request.session_generation,
+        owned.clone(),
+    )?;
     send_pwm_models(&service, &prepared).await?;
     if let Some(values) = values {
         service
@@ -655,6 +694,7 @@ pub(crate) async fn start_source<R: tauri::Runtime>(
             .map_err(|error| error.to_string())?;
     }
     lease.commit(|| {
+        authorize()?;
         crate::motor_control_service::with_enabled(state, || {
             service
                 .try_send(command)
@@ -663,7 +703,11 @@ pub(crate) async fn start_source<R: tauri::Runtime>(
             Ok(())
         })
     })?;
-    confirm_start_or_release(app, state).await
+    if owned.is_some() {
+        Ok(())
+    } else {
+        confirm_start_or_release(app, state).await
+    }
 }
 
 /// The run manifest may only claim `MotorRunning` after the start was sent.
@@ -687,24 +731,33 @@ async fn confirm_start_or_release<R: tauri::Runtime>(
 #[tauri::command]
 pub async fn actuator_start_preset(
     app: AppHandle,
-    state: State<'_, AppState>,
-    preset: maggcs_core::motor_test::source::WaveformPreset,
-) -> Result<(), String> {
-    start_source(&app, &state, StartSource::Preset(preset)).await
+    window: WebviewWindow,
+    request: MotorStartRequest,
+) -> Result<MotorStartReply, MotorOperationError> {
+    if !matches!(request.source, MotorStartSource::Preset { .. }) {
+        return Err(crate::motor_operations::invalid_source());
+    }
+    crate::motor_operations::start(&app, window.label(), request).await
 }
 
 /// Latest-value-wins slider update (the UI throttles to ~30 Hz).
 #[tauri::command]
 pub async fn actuator_set_values(
-    state: State<'_, AppState>,
-    values: Vec<f32>,
-) -> Result<(), String> {
-    crate::motor_control_service::ensure_enabled(&state).map_err(|error| error.to_string())?;
-    let expected = session_identity(&state);
+    app: AppHandle,
+    window: WebviewWindow,
+    request: MotorValuesRequest,
+) -> Result<MotorValuesReceipt, MotorOperationError> {
+    crate::motor_operations::values(&app, window.label(), request)
+}
+
+#[cfg(test)]
+pub(crate) async fn set_values_legacy(state: &AppState, values: Vec<f32>) -> Result<(), String> {
+    crate::motor_control_service::ensure_enabled(state).map_err(|error| error.to_string())?;
+    let expected = session_identity(state);
     // Serialize slider updates with ordinary session start/stop operations.
     let _ops = state.ops().lock().await;
     if expected.is_none()
-        || session_identity(&state) != expected
+        || session_identity(state) != expected
         || !state
             .motor_test
             .session()
@@ -712,8 +765,8 @@ pub async fn actuator_set_values(
     {
         return Err(crate::motor_control_service::MotorControlError::Busy.to_string());
     }
-    let service = service_of(&state).ok_or("no motor-test session")?;
-    crate::motor_control_service::with_enabled(&state, || {
+    let service = service_of(state).ok_or("no motor-test session")?;
+    crate::motor_control_service::with_enabled(state, || {
         service
             .try_send(MotorTestCommand::SetValues(values))
             .map_err(|error| error.to_string())
@@ -722,19 +775,29 @@ pub async fn actuator_set_values(
 
 /// Operator stop. Idempotent: fine with no session (link already died).
 #[tauri::command]
-pub async fn actuator_stop(state: State<'_, AppState>) -> Result<(), String> {
-    stop_active_session(&state).await
+pub async fn actuator_stop(
+    app: AppHandle,
+    window: WebviewWindow,
+    request: MotorStopRequest,
+) -> Result<MotorReleaseReceipt, MotorOperationError> {
+    crate::motor_operations::stop(&app, window.label(), request).await
 }
 
 /// Emergency stop: latched in the session; the UI mirrors it.
 #[tauri::command]
-pub async fn actuator_estop(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    emergency_stop_active_session(&state).await?;
+pub async fn actuator_estop(
+    app: AppHandle,
+    window: WebviewWindow,
+    mut request: MotorStopRequest,
+) -> Result<MotorReleaseReceipt, MotorOperationError> {
+    request.emergency = true;
+    let receipt = crate::motor_operations::stop(&app, window.label(), request).await?;
     pin_window(&app, false);
-    Ok(())
+    Ok(receipt)
 }
 
 /// Release immediately without waiting for capture or connection-operation locks.
+#[cfg(test)]
 pub(crate) async fn emergency_stop_active_session(state: &AppState) -> Result<(), String> {
     state.motor_test.tones.cancel();
     let identity = session_identity(state);
@@ -755,9 +818,18 @@ pub(crate) async fn emergency_stop_active_session(state: &AppState) -> Result<()
 
 /// Explicit emergency reset (never automatic).
 #[tauri::command]
-pub async fn actuator_reset_emergency(state: State<'_, AppState>) -> Result<(), String> {
-    if service_of(&state).is_some() {
-        send_session(&state, MotorTestCommand::ResetEmergency).await
+pub async fn actuator_reset_emergency(
+    app: AppHandle,
+    window: WebviewWindow,
+    request: MotorStopRequest,
+) -> Result<(), MotorOperationError> {
+    crate::motor_operations::reset_emergency(&app, window.label(), request).await
+}
+
+#[cfg(test)]
+pub(crate) async fn reset_emergency_legacy(state: &AppState) -> Result<(), String> {
+    if service_of(state).is_some() {
+        send_session(state, MotorTestCommand::ResetEmergency).await
     } else {
         state.motor_test.note_state(SessionState::Idle);
         Ok(())
@@ -887,7 +959,7 @@ pub async fn actuator_connect_sitl(
         handle.shutdown().await;
         return Err(error);
     }
-    let runtime = sitl_feed_runtime(&state, handle, source, SitlSourceOrigin::Dedicated);
+    let runtime = sitl_feed_runtime(&state, handle, source, SitlSourceOrigin::Dedicated)?;
     *state.motor_test.sitl.lock() = Some(runtime);
     Ok(())
 }
@@ -900,7 +972,17 @@ fn sitl_feed_runtime(
     handle: ConnectionHandle,
     source: SitlSourceConfig,
     origin: SitlSourceOrigin,
-) -> SitlLinkRuntime {
+) -> Result<SitlLinkRuntime, String> {
+    let source_ref = MotorForwardSourceRef {
+        link_id: maggcs_core::runtime::LinkId::next().map_err(|error| error.to_string())?,
+        generation: TransportGeneration::new(handle.generation())
+            .map_err(|error| error.to_string())?,
+        mavlink_target: maggcs_core::telemetry::VehicleId::new(
+            source.system_id,
+            source.component_id,
+        ),
+        port: source.port,
+    };
     let slot: ForwardSlot = std::sync::Arc::new(std::sync::Mutex::new(ForwardState::new(
         usize::from(MOTOR_TEST_MOTOR_COUNT),
     )));
@@ -919,12 +1001,13 @@ fn sitl_feed_runtime(
             runtime
         }
     };
-    SitlLinkRuntime {
+    Ok(SitlLinkRuntime {
+        source_ref,
         slot,
         source,
         origin,
         runtime,
-    }
+    })
 }
 
 /// Offer the live primary connection as the SITL feed. The tap subscribes to
@@ -992,7 +1075,7 @@ pub async fn actuator_use_main_sitl(
         component_id: expected.component_id,
         port,
     };
-    let runtime = sitl_feed_runtime(&state, handle, source, SitlSourceOrigin::MainLink);
+    let runtime = sitl_feed_runtime(&state, handle, source, SitlSourceOrigin::MainLink)?;
     *state.motor_test.sitl.lock() = Some(runtime);
     Ok(())
 }
@@ -1364,9 +1447,13 @@ pub async fn actuator_disconnect_target<R: tauri::Runtime>(
 #[tauri::command]
 pub async fn actuator_start_forward(
     app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    start_source(&app, &state, StartSource::Forward).await
+    window: WebviewWindow,
+    request: MotorStartRequest,
+) -> Result<MotorStartReply, MotorOperationError> {
+    if !matches!(request.source, MotorStartSource::Forward { .. }) {
+        return Err(crate::motor_operations::invalid_source());
+    }
+    crate::motor_operations::start(&app, window.label(), request).await
 }
 
 /// Standard PPM range of `SERVO_OUTPUT_RAW`: 1000 µs = 0 %, 2000 µs = 100 %.
@@ -1491,92 +1578,88 @@ fn target_params(state: &AppState) -> Result<(usize, ParamService), String> {
         .ok_or_else(|| "no serial PX4 target — connect it first".into())
 }
 
-fn ensure_parameter_target(state: &AppState, link_id: usize) -> Result<(), String> {
-    if state
-        .motor_test
-        .target
-        .lock()
-        .as_ref()
-        .is_some_and(|runtime| runtime.target.handle.handle_id() == link_id)
-    {
-        Ok(())
-    } else {
-        Err("parameter target changed during transaction".into())
-    }
-}
-
 #[tauri::command]
 pub async fn actuator_param_read(
-    state: State<'_, AppState>,
-    name: String,
-) -> Result<ParamObservation, String> {
-    let (id, svc) = target_params(&state)?;
-    let entry = svc.read(&name).await.map_err(|error| error.to_string())?;
-    ensure_parameter_target(&state, id)?;
-    Ok(ParamObservation { entry, age_ms: 0 })
+    app: AppHandle,
+    window: WebviewWindow,
+    request: MotorParameterReadRequest,
+) -> Result<ParamObservation, ParameterCommandError> {
+    crate::motor_operations::authorize_context(&app, window.label(), &request.context)
+        .map_err(crate::motor_operations::parameter_error)?;
+    let work = crate::params_operations::begin(
+        &app,
+        window.label(),
+        ParameterRequestContext {
+            session: request.context.session,
+            request_id: request.context.request_id,
+        },
+        crate::params_operations::ParameterAction::Read { name: request.name },
+    )?;
+    match work.run().await? {
+        crate::params_operations::ParameterResult::Read(entry) => {
+            Ok(ParamObservation { entry, age_ms: 0 })
+        }
+        _ => Err(OperationError::RegistryUnavailable.into()),
+    }
 }
 
 #[tauri::command]
 pub async fn actuator_param_set(
-    state: State<'_, AppState>,
-    name: String,
-    value: ParamValue,
-    ptype: ParamType,
-) -> Result<ParamEntry, String> {
-    crate::motor_control_service::ensure_enabled(&state).map_err(|error| error.to_string())?;
-    let _ops = state.ops().lock().await;
-    if state
-        .motor_test
-        .session()
-        .is_some_and(|session| session.is_sending())
-    {
-        return Err("stop the motor test before changing target parameters".into());
-    }
-    let (id, svc) = target_params(&state)?;
-    let current = svc.read(&name).await.map_err(|error| error.to_string())?;
-    if current.ptype != ptype {
-        return Err(format!(
-            "{name} type mismatch: expected {:?}",
-            current.ptype
-        ));
-    }
-    crate::motor_control_service::ensure_enabled(&state).map_err(|error| error.to_string())?;
-    let entry = svc
-        .set_confirmed(&name, value, ptype)
-        .await
-        .map_err(|error| error.to_string())?;
-    ensure_parameter_target(&state, id)?;
+    app: AppHandle,
+    window: WebviewWindow,
+    request: MotorParameterSetRequest,
+) -> Result<ParamEntry, ParameterCommandError> {
+    let context = request.context.clone();
+    crate::motor_operations::authorize_configuration(
+        &app,
+        window.label(),
+        &context,
+        &request.permission,
+        None,
+    )
+    .map_err(crate::motor_operations::parameter_error)?;
+    let name = request.name.clone();
+    let (_, service) = target_params(&app.state::<AppState>())
+        .map_err(|message| OperationError::InvalidRequest { message })?;
+    let work = crate::params_operations::begin(
+        &app,
+        window.label(),
+        ParameterRequestContext {
+            session: request.context.session,
+            request_id: request.context.request_id,
+        },
+        crate::params_operations::ParameterAction::Set {
+            name: request.name,
+            value: request.value,
+            ptype: request.ptype,
+        },
+    )?;
+    let result = work.run().await?;
+    crate::motor_operations::authorize_configuration(
+        &app,
+        window.label(),
+        &context,
+        &request.permission,
+        None,
+    )
+    .map_err(crate::motor_operations::parameter_error)?;
+    let entry = service
+        .cache()
+        .get(&name)
+        .ok_or(OperationError::RegistryUnavailable)?;
     if matches!(
         name.as_str(),
         "SDLOG_MODE" | "SDLOG_BACKEND" | "SDLOG_PROFILE"
     ) {
-        if let Some(target) = state.motor_test.target.lock().as_ref() {
+        if let Some(target) = app.state::<AppState>().motor_test.target.lock().as_ref() {
             target
                 .target
                 .restart_pending
                 .store(true, std::sync::atomic::Ordering::Relaxed);
         }
     }
+    let _ = result;
     Ok(entry)
-}
-
-/// Enable or disable `COM_MOT_TEST_EN` on the target PX4. PX4 refuses
-/// `MAV_CMD_ACTUATOR_TEST` while this is not 1. Changes are explicit and require
-/// the Motor control gate; connecting the window only reads this parameter.
-#[tauri::command]
-pub async fn actuator_set_mot_test_en(
-    state: State<'_, AppState>,
-    enabled: bool,
-) -> Result<i32, String> {
-    let value = i32::from(enabled);
-    actuator_param_set(
-        state,
-        "COM_MOT_TEST_EN".into(),
-        ParamValue::Int(value as i64),
-        ParamType::I32,
-    )
-    .await?;
-    Ok(value)
 }
 
 /// Rebuild the SD-log runtime for the current serial target PX4. Idempotent:
@@ -2009,6 +2092,7 @@ pub fn actuator_logs_status(state: State<'_, AppState>) -> ActuatorLogsStatus {
 }
 
 /// Send one command to the stored session; `Err` = no session / dead link.
+#[cfg(test)]
 async fn send_session(state: &AppState, cmd: MotorTestCommand) -> Result<(), String> {
     match service_of(state) {
         Some(svc) => svc.send(cmd).await.map_err(|e| e.to_string()),
@@ -2054,7 +2138,7 @@ pub(crate) async fn stop_active_session(state: &AppState) -> Result<(), String> 
     let Some(service) = service_of(state) else {
         return Ok(());
     };
-    let receipt = tokio::time::timeout(MOTOR_TEST_STOP_TIMEOUT, service.stop_and_wait())
+    let receipt = tokio::time::timeout(MOTOR_TEST_STOP_TIMEOUT, confirmed_stop(&service, false))
         .await
         .map_err(|_| "timed out waiting for motor-test release; link kept open".to_string())?
         .map_err(|error| format!("motor-test release failed; link kept open: {error}"))?;
@@ -2063,6 +2147,24 @@ pub(crate) async fn stop_active_session(state: &AppState) -> Result<(), String> 
         crate::motor_tone_service::after_release(state, target, generation);
     }
     Ok(())
+}
+
+pub(crate) async fn confirmed_stop(
+    service: &MotorTestService,
+    emergency: bool,
+) -> Result<maggcs_core::motor_test::StopReceipt, String> {
+    let result = if emergency {
+        service.emergency_stop_and_wait().await
+    } else {
+        service.stop_and_wait().await
+    };
+    match result {
+        Ok(receipt) => Ok(receipt),
+        Err(error) => match service.release_result() {
+            Some(Ok(receipt)) => Ok(receipt),
+            _ => Err(error.to_string()),
+        },
+    }
 }
 
 fn session_identity(state: &AppState) -> Option<(MotorTestTargetRef, u64)> {
@@ -2369,8 +2471,36 @@ impl AppState {
             .lock()
             .as_ref()
             .map(TargetLinkRuntime::origin);
+        let operation = {
+            self.motor_test
+                .running
+                .lock()
+                .as_ref()
+                .and_then(|running| running.operation.clone())
+        };
+        let config_revision = {
+            self.motor_test.target.lock().as_ref().and_then(|runtime| {
+                runtime
+                    .target
+                    .config
+                    .lock()
+                    .as_ref()
+                    .and_then(|config| Revision::new(config.revision).ok())
+            })
+        };
+        let forward_source_ref = {
+            self.motor_test
+                .sitl
+                .lock()
+                .as_ref()
+                .map(|link| link.source_ref.clone())
+        };
+        let motor_control = crate::motor_control_service::status(self);
         ActuatorStatus {
-            motor_control: crate::motor_control_service::status(self),
+            operation,
+            config_revision,
+            forward_source_ref,
+            motor_control,
             streams: crate::stream_service::snapshot(self),
             tones: self.motor_test.tones.snapshot(),
             connected: target_connected,
@@ -2751,12 +2881,18 @@ async fn read_real_param(params: &ParamService, name: &str) -> Option<f32> {
 /// Re-read the target's output assignments and PWM models. Safe to call while
 /// idle; the UI freezes the action while a test is sending.
 #[tauri::command]
-pub async fn actuator_refresh_mapping(state: State<'_, AppState>) -> Result<OutputMap, String> {
+pub async fn actuator_refresh_mapping(
+    app: AppHandle,
+    window: WebviewWindow,
+    request: maggcs_core::motor_test::operation_types::MotorRequestContext,
+) -> Result<OutputMap, MotorOperationError> {
+    crate::motor_operations::authorize_context(&app, window.label(), &request)?;
+    let state = app.state::<AppState>();
     let (params, config_slot, config_stale, param_names_slot, target_ref) = {
         let guard = state.motor_test.target.lock();
-        let runtime = guard
-            .as_ref()
-            .ok_or("no serial PX4 target — connect it first")?;
+        let runtime = guard.as_ref().ok_or_else(|| {
+            crate::motor_operations::invalid_request("no serial PX4 target — connect it first")
+        })?;
         (
             runtime.target.params.clone(),
             runtime.target.config.clone(),
@@ -2769,14 +2905,17 @@ pub async fn actuator_refresh_mapping(state: State<'_, AppState>) -> Result<Outp
     // The read can take seconds (a first pull). Only the validation and the
     // publish are serialized with start/stop, so E-STOP never waits on I/O.
     let _ops = state.ops().lock().await;
-    ensure_idle_session(&state)?;
+    crate::motor_operations::authorize_context(&app, window.label(), &request)?;
+    ensure_idle_session(&state).map_err(crate::motor_operations::invalid_request)?;
     let current = {
         let guard = state.motor_test.target.lock();
-        let runtime = guard
-            .as_ref()
-            .ok_or("no serial PX4 target — connect it first")?;
+        let runtime = guard.as_ref().ok_or_else(|| {
+            crate::motor_operations::invalid_request("no serial PX4 target — connect it first")
+        })?;
         if runtime.target.target_ref() != target_ref {
-            return Err("target changed while reading — refresh again".into());
+            return Err(crate::motor_operations::invalid_request(
+                "target changed while reading — refresh again",
+            ));
         }
         let current = runtime.target.config.lock().clone();
         current
@@ -2789,14 +2928,15 @@ pub async fn actuator_refresh_mapping(state: State<'_, AppState>) -> Result<Outp
             .as_ref()
             .is_some_and(OutputConfigSnapshot::is_startable)
         {
-            return Err(refuse_unread_pwm_ranges(
+            let message = refuse_unread_pwm_ranges(
                 &read.map,
                 &read.models,
                 read.protocols_known,
                 read.dshot_3d_enable,
             )
             .err()
-            .unwrap_or_else(|| "output configuration is incomplete — refresh again".into()));
+            .unwrap_or_else(|| "output configuration is incomplete — refresh again".into());
+            return Err(crate::motor_operations::invalid_request(message));
         }
     }
     let revision = current
@@ -3149,13 +3289,6 @@ fn start_scope_flusher(app: &AppHandle) {
     }));
 }
 
-/// Stop the scope flusher (window closed).
-fn stop_scope_flusher(state: &AppState) {
-    if let Some(task) = state.motor_test.scope_flusher.lock().take() {
-        task.abort();
-    }
-}
-
 #[cfg(test)]
 mod auxiliary_link_lifecycle_tests {
     use super::{
@@ -3312,6 +3445,7 @@ mod auxiliary_link_lifecycle_tests {
         let forwarder =
             tauri::async_runtime::spawn(async move { while events.recv().await.is_some() {} });
         *state.motor_test.running.lock() = Some(crate::motor_test_state::RunningMotorTest {
+            operation: None,
             svc: service,
             forwarder,
             output,
@@ -4826,7 +4960,8 @@ mod main_sitl_feed_tests {
                 port: ServoPort::Main,
             },
             SitlSourceOrigin::MainLink,
-        );
+        )
+        .expect("feed runtime");
         *state.motor_test.sitl.lock() = Some(runtime);
     }
 

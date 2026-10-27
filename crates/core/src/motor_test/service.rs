@@ -22,6 +22,7 @@ use super::{MotorTestSession, SessionState};
 use crate::mavlink::connection::{ConnectionEvent, ConnectionHandle};
 use crate::mavlink::router::{MessageRoute, RoutedEvents};
 use crate::mavlink::{MavMessage, MavlinkError};
+use crate::runtime::operations::OperationCancellation;
 use crate::telemetry::BaseMode;
 
 /// Only these wake the shell: our acks and heartbeats (the armed interlock).
@@ -48,6 +49,8 @@ pub struct StopReceipt {
 /// A stop must never turn a failed or unconfirmed write into success.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum MotorTestStopError {
+    #[error("the motor service already has an operation owner")]
+    AlreadyOwned,
     #[error("motor-test service stopped before release confirmation")]
     ServiceStopped,
     #[error("timed out waiting for motor-test release confirmation")]
@@ -60,6 +63,9 @@ pub enum MotorTestStopError {
 /// Private transport boundary lets regression tests hold/fail the actual
 /// confirmation step rather than infer write ordering from UDP arrival times.
 trait MotorTestTransport: Send + Sync + 'static {
+    fn can_retry_release(&self) -> bool {
+        true
+    }
     fn subscribe_route(&self, route: MessageRoute) -> RoutedEvents;
     fn send(&self, frame: MavMessage) -> impl Future<Output = Result<(), MavlinkError>> + Send;
     fn send_confirmed(
@@ -74,6 +80,9 @@ struct BoundTransport {
 }
 
 impl MotorTestTransport for BoundTransport {
+    fn can_retry_release(&self) -> bool {
+        !self.handle.is_shutdown_requested() && self.handle.generation() == self.generation
+    }
     fn subscribe_route(&self, route: MessageRoute) -> RoutedEvents {
         self.handle.subscribe_route(route)
     }
@@ -177,6 +186,29 @@ pub struct MotorTestService {
     state_rx: tokio::sync::watch::Receiver<Option<SessionState>>,
     dropped_events: Arc<AtomicU64>,
     command_epoch: Arc<AtomicU64>,
+    owner_tx: tokio::sync::watch::Sender<Option<OwnerControl>>,
+    lifecycle_rx: tokio::sync::watch::Receiver<LifecycleReceipt>,
+}
+
+#[derive(Clone, Default)]
+struct LifecycleReceipt {
+    first_control_written: bool,
+    release: Option<Result<StopReceipt, MotorTestStopError>>,
+    reason: Option<StopReason>,
+}
+
+#[derive(Clone)]
+struct OwnerControl {
+    cancellation: OperationCancellation,
+    deadline: tokio::time::Instant,
+}
+impl OwnerControl {
+    fn is_stopped(&self) -> bool {
+        self.cancellation.is_cancelled() || tokio::time::Instant::now() >= self.deadline
+    }
+    async fn stopped(&self) {
+        tokio::select! { _ = self.cancellation.cancelled() => {}, _ = tokio::time::sleep_until(self.deadline) => {} }
+    }
 }
 
 struct QueuedCommand {
@@ -188,6 +220,7 @@ struct Receivers {
     commands: mpsc::Receiver<QueuedCommand>,
     priority: mpsc::Receiver<MotorTestCommand>,
     epoch: Arc<AtomicU64>,
+    owner: tokio::sync::watch::Receiver<Option<OwnerControl>>,
 }
 
 fn is_priority(command: &MotorTestCommand) -> bool {
@@ -201,6 +234,39 @@ fn is_priority(command: &MotorTestCommand) -> bool {
 }
 
 impl MotorTestService {
+    /// Bind exactly one native operation before Start; owner expiry directly
+    /// interrupts the ticker instead of relying on a renderer's STOP callback.
+    pub fn bind_owner(
+        &self,
+        owner: OperationCancellation,
+        deadline: tokio::time::Instant,
+    ) -> Result<(), MotorTestStopError> {
+        let accepted = self.owner_tx.send_if_modified(|current| {
+            if current.is_some() {
+                false
+            } else {
+                *current = Some(OwnerControl {
+                    cancellation: owner,
+                    deadline,
+                });
+                true
+            }
+        });
+        if accepted {
+            Ok(())
+        } else {
+            Err(MotorTestStopError::AlreadyOwned)
+        }
+    }
+    pub fn first_control_written(&self) -> bool {
+        self.lifecycle_rx.borrow().first_control_written
+    }
+    pub fn release_result(&self) -> Option<Result<StopReceipt, MotorTestStopError>> {
+        self.lifecycle_rx.borrow().release.clone()
+    }
+    pub fn stop_reason(&self) -> Option<StopReason> {
+        self.lifecycle_rx.borrow().reason
+    }
     /// Latest service transition, independent of event pressure. None preserves
     /// the native startup reservation until Start is actually processed.
     pub fn session_state(&self) -> Option<SessionState> {
@@ -328,6 +394,8 @@ fn spawn_on_transport(
     let (evt_tx, evt_rx) = mpsc::channel(EVENT_CAPACITY);
     let dropped_events = Arc::new(AtomicU64::new(0));
     let command_epoch = Arc::new(AtomicU64::new(1));
+    let (owner_tx, owner_rx) = tokio::sync::watch::channel(None);
+    let (lifecycle_tx, lifecycle_rx) = tokio::sync::watch::channel(LifecycleReceipt::default());
     let session = MotorTestSession::new(
         AnySource::Manual(super::source::ManualSource::new(vec![0.0; 4])),
         limits.clone(),
@@ -343,6 +411,7 @@ fn spawn_on_transport(
             commands: cmd_rx,
             priority: priority_rx,
             epoch: command_epoch.clone(),
+            owner: owner_rx,
         },
         EventSink {
             events: evt_tx,
@@ -352,6 +421,7 @@ fn spawn_on_transport(
             values: output_tx,
             pwm: pwm_tx,
             state: state_tx,
+            lifecycle: lifecycle_tx,
         },
         tick,
     ));
@@ -363,6 +433,8 @@ fn spawn_on_transport(
             state_rx,
             dropped_events,
             command_epoch,
+            owner_tx,
+            lifecycle_rx,
         },
         evt_rx,
         output_rx,
@@ -373,6 +445,7 @@ struct Outputs {
     values: tokio::sync::watch::Sender<Vec<f32>>,
     pwm: tokio::sync::watch::Sender<Vec<Option<f32>>>,
     state: tokio::sync::watch::Sender<Option<SessionState>>,
+    lifecycle: tokio::sync::watch::Sender<LifecycleReceipt>,
 }
 
 struct EventSink {
@@ -432,6 +505,13 @@ fn apply_priority(
 }
 
 /// The shell loop. The session is the pure core; this only moves frames.
+async fn owner_cancelled(owner: Option<OwnerControl>) {
+    match owner {
+        Some(owner) => owner.stopped().await,
+        None => std::future::pending().await,
+    }
+}
+
 async fn run(
     handle: impl MotorTestTransport,
     mut session: MotorTestSession<AnySource>,
@@ -450,19 +530,45 @@ async fn run(
     let mut ticker = tokio::time::interval(ticker_period(tick));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut last_state = session.state();
+    let mut owner_retired = false;
+    let mut may_have_dispatched = false;
 
-    loop {
+    'driver: loop {
         let mut outgoing: Vec<MavMessage> = Vec::new();
         let mut stop_reply = None;
         let mut exit_after_release = false;
+        let owner = receivers.owner.borrow().clone();
+        if !owner_retired && owner.as_ref().is_some_and(OwnerControl::is_stopped) {
+            owner_retired = true;
+            receivers.epoch.store(0, Ordering::Release);
+            if may_have_dispatched {
+                session.stop(StopReason::Command);
+            } else {
+                // A prepared/queued owner loss has no physical output to release.
+                let motors = session.output_values().len();
+                let limits = session.interlock().limits().clone();
+                session = MotorTestSession::new(
+                    AnySource::Manual(super::source::ManualSource::new(vec![0.0; motors])),
+                    limits,
+                );
+            }
+        }
+        let cancellation = if owner_retired { None } else { owner };
 
-        if events.events.is_closed() {
+        if owner_retired {
+            exit_after_release = true;
+        } else if events.events.is_closed() {
             session.stop(StopReason::LinkLost);
             exit_after_release = true;
         } else if let Ok(command) = receivers.priority.try_recv() {
             stop_reply = apply_priority(&mut session, command, &receivers.epoch);
         } else {
             tokio::select! {
+                _ = owner_cancelled(cancellation.clone()) => continue,
+                changed = receivers.owner.changed() => {
+                    if changed.is_ok() { continue; }
+                    session.stop(StopReason::LinkLost); exit_after_release = true;
+                },
                 command = receivers.priority.recv() => {
                     match command {
                         Some(command) => stop_reply = apply_priority(&mut session, command, &receivers.epoch),
@@ -540,10 +646,13 @@ async fn run(
         }
 
         if !session.release_pending() {
+            let bank_size = outgoing.len();
+            let mut written = 0;
             for frame in outgoing {
                 // A queued STOP interrupts a blocked control write rather than
                 // waiting for the rest of the motor bank or a UI event.
                 let result = tokio::select! { biased;
+                    _ = owner_cancelled(cancellation.clone()) => continue 'driver,
                     command = receivers.priority.recv() => {
                         match command {
                             Some(command) => stop_reply = apply_priority(&mut session, command, &receivers.epoch),
@@ -551,19 +660,26 @@ async fn run(
                         }
                         break;
                     }
-                    result = handle.send(frame) => result,
+                    result = async { may_have_dispatched = true; handle.send(frame).await } => result,
                 };
                 if result.is_err() {
                     session.stop(StopReason::LinkLost);
                     break;
                 }
+                written += 1;
+            }
+            if bank_size > 0 && written == bank_size {
+                output
+                    .lifecycle
+                    .send_modify(|receipt| receipt.first_control_written = true);
             }
         }
 
         // Release is an explicit delivery kind, independent of whether the
         // request came from a tick, command, emergency, ACK, or link event.
         // Generating frames never settles the session ahead of write evidence.
-        let result = if session.release_pending() {
+        let release_pass = session.release_pending();
+        let result = if release_pass {
             let deadline = stop_reply
                 .as_ref()
                 .map(|(deadline, _)| *deadline)
@@ -584,6 +700,13 @@ async fn run(
                 state: session.state(),
             })
         };
+        if release_pass || owner_retired || stop_reply.is_some() {
+            output.lifecycle.send_modify(|receipt| {
+                if release_pass || receipt.release.is_none() {
+                    receipt.release = Some(result.clone());
+                }
+            });
+        }
 
         // Never clear running demands or publish Stopped after a failed pass.
         // The readout is calculated/queued demand for controls, and zero only
@@ -604,9 +727,13 @@ async fn run(
             last_state = session.state();
             events.publish(MotorTestEvent::StateChanged(last_state));
         }
+        let release_ok = result.is_ok();
         match result {
             Ok(_) if !session.release_pending() => {
                 if let Some(reason) = session.take_stop_reason() {
+                    output
+                        .lifecycle
+                        .send_modify(|receipt| receipt.reason = Some(reason));
                     events.publish(MotorTestEvent::Stopped(reason));
                 }
             }
@@ -617,8 +744,11 @@ async fn run(
             }
             _ => {}
         }
-        if exit_after_release {
+        if exit_after_release && (release_ok || !handle.can_retry_release()) {
             return;
+        }
+        if exit_after_release {
+            tokio::time::sleep(ticker_period(tick)).await;
         }
     }
 }
@@ -657,6 +787,13 @@ fn ticker_period(tick: std::time::Duration) -> std::time::Duration {
 #[cfg(test)]
 mod stop_tests {
     use super::*;
+    use crate::runtime::operations::{
+        OperationCoordinator, OperationOwner, OperationRequest, OperationResource,
+    };
+    use crate::runtime::{
+        ClientId, LinkId, ModuleInstanceId, RequestId, TargetRef, TransportGeneration, VehicleId,
+        VehicleSessionId,
+    };
     use std::sync::{Arc, Mutex};
     use tokio::sync::{broadcast, oneshot};
 
@@ -809,6 +946,136 @@ mod stop_tests {
                 .await
                 .expect("stop task")
                 .expect("stop receipt")
+                .released_motors,
+            4
+        );
+    }
+
+    fn owned(
+        service: &MotorTestService,
+    ) -> (
+        OperationCoordinator,
+        crate::runtime::operations::OperationLease,
+    ) {
+        let coordinator = OperationCoordinator::default();
+        let owner = OperationOwner {
+            client_id: ClientId::new("motor-window").expect("client"),
+            instance_id: ModuleInstanceId::new("motor-module").expect("module"),
+        };
+        let target = TargetRef {
+            vehicle_id: VehicleId::new("bench").expect("vehicle"),
+            session_id: VehicleSessionId::new("session").expect("session"),
+            link_id: LinkId::new(1).expect("link"),
+            generation: TransportGeneration::new(1).expect("generation"),
+            mavlink_target: crate::telemetry::VehicleId::new(42, 1),
+        };
+        let lease = coordinator
+            .prepare(OperationRequest {
+                request_id: RequestId::fresh().expect("request"),
+                owner,
+                target,
+                resources: vec![OperationResource::ActuatorOutput],
+                budget_ms: 5000,
+            })
+            .expect("lease");
+        service
+            .bind_owner(
+                lease.cancellation(),
+                tokio::time::Instant::now() + Duration::from_secs(5),
+            )
+            .expect("bind owner");
+        (coordinator, lease)
+    }
+
+    #[tokio::test]
+    async fn owner_loss_before_dispatch_is_passive_but_after_dispatch_releases_full_bank() {
+        let (prepared_transport, mut prepared_writes) = transport();
+        let controls = prepared_transport.controls.clone();
+        let (service, _events, _) = spawn_on_transport(prepared_transport, limits());
+        let (coordinator, lease) = owned(&service);
+        coordinator
+            .cancel(&lease.operation().owner, lease.operation())
+            .expect("cancel prepared owner");
+        wait_for(|| service.release_result().is_some()).await;
+        assert_eq!(
+            service.release_result(),
+            Some(Ok(StopReceipt {
+                released_motors: 0,
+                state: SessionState::Idle
+            }))
+        );
+        assert!(controls.lock().expect("controls").is_empty());
+        assert!(prepared_writes.try_recv().is_err());
+
+        let (transport, mut writes) = transport();
+        let (service, _events) = started(transport.clone()).await;
+        heartbeat(&transport);
+        let (coordinator, lease) = owned(&service);
+        wait_for(|| service.first_control_written()).await;
+        coordinator
+            .cancel(&lease.operation().owner, lease.operation())
+            .expect("cancel running owner");
+        for motor in 1..=4 {
+            next_release(&mut writes, motor)
+                .await
+                .send(Ok(()))
+                .expect("release");
+        }
+        wait_for(|| service.release_result().is_some()).await;
+        assert_eq!(
+            service.release_result(),
+            Some(Ok(StopReceipt {
+                released_motors: 4,
+                state: SessionState::Idle
+            }))
+        );
+    }
+
+    #[tokio::test]
+    async fn owned_deadline_expires_without_a_renderer_stop_callback() {
+        let (transport, mut writes) = transport();
+        let (service, _events) = started(transport.clone()).await;
+        heartbeat(&transport);
+        let coordinator = OperationCoordinator::default();
+        let owner = OperationOwner {
+            client_id: ClientId::new("deadline-window").expect("client"),
+            instance_id: ModuleInstanceId::new("deadline-module").expect("module"),
+        };
+        let target = TargetRef {
+            vehicle_id: VehicleId::new("bench-deadline").expect("vehicle"),
+            session_id: VehicleSessionId::new("session-deadline").expect("session"),
+            link_id: LinkId::new(1).expect("link"),
+            generation: TransportGeneration::new(1).expect("generation"),
+            mavlink_target: crate::telemetry::VehicleId::new(42, 1),
+        };
+        let lease = coordinator
+            .prepare(OperationRequest {
+                request_id: RequestId::fresh().expect("request"),
+                owner,
+                target,
+                resources: vec![OperationResource::ActuatorOutput],
+                budget_ms: 100,
+            })
+            .expect("lease");
+        service
+            .bind_owner(
+                lease.cancellation(),
+                tokio::time::Instant::now() + Duration::from_millis(100),
+            )
+            .expect("bind");
+        wait_for(|| service.first_control_written()).await;
+        for motor in 1..=4 {
+            next_release(&mut writes, motor)
+                .await
+                .send(Ok(()))
+                .expect("deadline release");
+        }
+        wait_for(|| service.release_result().is_some()).await;
+        assert_eq!(
+            service
+                .release_result()
+                .expect("receipt")
+                .expect("release")
                 .released_motors,
             4
         );

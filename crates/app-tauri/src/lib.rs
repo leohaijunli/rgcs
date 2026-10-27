@@ -24,6 +24,7 @@ mod map_service;
 mod mission_operations;
 mod mission_service;
 mod motor_control_service;
+mod motor_operations;
 mod motor_test_state;
 mod motor_tone_service;
 mod params_operations;
@@ -164,6 +165,8 @@ pub fn run() {
             actuator_service::actuator_status,
             motor_tone_service::actuator_set_tones,
             motor_control_service::actuator_set_motor_control,
+            motor_operations::motor_operation_status,
+            motor_operations::motor_operation_cancel,
             stream_service::actuator_stream_catalog,
             stream_service::actuator_stream_status,
             stream_service::actuator_stream_set_rate,
@@ -190,7 +193,6 @@ pub fn run() {
             run_service::actuator_run_start,
             run_service::actuator_run_status,
             run_service::actuator_run_abort,
-            actuator_service::actuator_set_mot_test_en,
             actuator_service::actuator_param_read,
             actuator_service::actuator_param_set,
             actuator_service::actuator_logs_request_list,
