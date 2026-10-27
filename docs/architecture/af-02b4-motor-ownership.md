@@ -19,8 +19,10 @@ The native adapters still authorize global state: permission is bound to the
 target/generation but not the calling window/module; start/set/STOP resolve the
 current running service. A delayed window callback or main preflight repair can
 therefore affect a different owner's later session. Capture/log cancellation is
-also global. Core state/Stopped event publication can await a full observer queue;
-this must not prevent another STOP or its receipt.
+also global. At review, core state/Stopped publication could await a full observer
+queue. The [priority control-path checkpoint](../verification/af-02b-motor-priority-20261027.md)
+now supplies nonblocking events, retained state and a bounded urgent STOP channel;
+native permission/operation admission remains the next slice.
 
 ## Signatures and errors
 

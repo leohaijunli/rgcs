@@ -7,6 +7,8 @@
 //! `CommandService`).
 
 use std::future::Future;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
@@ -31,6 +33,9 @@ const WATCHED_MESSAGES: &[u32] = &[
 /// Overall stop budget, including command queueing and release writes.
 pub const MOTOR_TEST_STOP_TIMEOUT: Duration = Duration::from_secs(2);
 const CONTROL_WRITE_TIMEOUT: Duration = Duration::from_millis(200);
+const COMMAND_CAPACITY: usize = 8;
+const PRIORITY_CAPACITY: usize = 2;
+const EVENT_CAPACITY: usize = 32;
 
 /// Transport evidence for a completed release pass. This is not a PX4 ACK
 /// or a physical-output measurement. Zero releases means already stopped.
@@ -166,11 +171,45 @@ pub enum MotorTestEvent {
 /// Handle to the running motor-test service.
 #[derive(Clone)]
 pub struct MotorTestService {
-    cmd_tx: mpsc::Sender<MotorTestCommand>,
+    cmd_tx: mpsc::Sender<QueuedCommand>,
+    priority_tx: mpsc::Sender<MotorTestCommand>,
     pwm_rx: tokio::sync::watch::Receiver<Vec<Option<f32>>>,
+    state_rx: tokio::sync::watch::Receiver<Option<SessionState>>,
+    dropped_events: Arc<AtomicU64>,
+    command_epoch: Arc<AtomicU64>,
+}
+
+struct QueuedCommand {
+    command: MotorTestCommand,
+    epoch: u64,
+}
+
+struct Receivers {
+    commands: mpsc::Receiver<QueuedCommand>,
+    priority: mpsc::Receiver<MotorTestCommand>,
+    epoch: Arc<AtomicU64>,
+}
+
+fn is_priority(command: &MotorTestCommand) -> bool {
+    matches!(
+        command,
+        MotorTestCommand::Stop
+            | MotorTestCommand::Emergency
+            | MotorTestCommand::StopAndWait { .. }
+            | MotorTestCommand::EmergencyAndWait { .. }
+    )
 }
 
 impl MotorTestService {
+    /// Latest service transition, independent of event pressure. None preserves
+    /// the native startup reservation until Start is actually processed.
+    pub fn session_state(&self) -> Option<SessionState> {
+        *self.state_rx.borrow()
+    }
+    /// Observer pressure is explicit and never delays control or release.
+    pub fn dropped_events(&self) -> u64 {
+        self.dropped_events.load(Ordering::Relaxed)
+    }
     /// Converted command readback in microseconds, not measured FC feedback.
     /// None marks a released motor or an unavailable target PWM model.
     pub fn pwm_output(&self) -> Vec<Option<f32>> {
@@ -214,7 +253,7 @@ impl MotorTestService {
             MotorTestCommand::StopAndWait { deadline, reply }
         };
         tokio::time::timeout_at(deadline, async {
-            self.cmd_tx
+            self.priority_tx
                 .send(command)
                 .await
                 .map_err(|_| MotorTestStopError::ServiceStopped)?;
@@ -229,7 +268,21 @@ impl MotorTestService {
         &self,
         cmd: MotorTestCommand,
     ) -> Result<(), mpsc::error::SendError<MotorTestCommand>> {
-        self.cmd_tx.send(cmd).await
+        if is_priority(&cmd) {
+            self.priority_tx.send(cmd).await
+        } else {
+            let epoch = self.command_epoch.load(Ordering::Acquire);
+            if epoch == 0 {
+                return Err(mpsc::error::SendError(cmd));
+            }
+            self.cmd_tx
+                .send(QueuedCommand {
+                    command: cmd,
+                    epoch,
+                })
+                .await
+                .map_err(|error| mpsc::error::SendError(error.0.command))
+        }
     }
 
     /// Non-blocking stop-path send (window close): the buffered channel takes
@@ -238,7 +291,27 @@ impl MotorTestService {
         &self,
         cmd: MotorTestCommand,
     ) -> Result<(), mpsc::error::TrySendError<MotorTestCommand>> {
-        self.cmd_tx.try_send(cmd)
+        if is_priority(&cmd) {
+            self.priority_tx.try_send(cmd)
+        } else {
+            let epoch = self.command_epoch.load(Ordering::Acquire);
+            if epoch == 0 {
+                return Err(mpsc::error::TrySendError::Closed(cmd));
+            }
+            self.cmd_tx
+                .try_send(QueuedCommand {
+                    command: cmd,
+                    epoch,
+                })
+                .map_err(|error| match error {
+                    mpsc::error::TrySendError::Full(queued) => {
+                        mpsc::error::TrySendError::Full(queued.command)
+                    }
+                    mpsc::error::TrySendError::Closed(queued) => {
+                        mpsc::error::TrySendError::Closed(queued.command)
+                    }
+                })
+        }
     }
 }
 
@@ -250,29 +323,121 @@ fn spawn_on_transport(
     mpsc::Receiver<MotorTestEvent>,
     tokio::sync::watch::Receiver<Vec<f32>>,
 ) {
-    let (cmd_tx, cmd_rx) = mpsc::channel(8);
-    let (evt_tx, evt_rx) = mpsc::channel(32);
+    let (cmd_tx, cmd_rx) = mpsc::channel(COMMAND_CAPACITY);
+    let (priority_tx, priority_rx) = mpsc::channel(PRIORITY_CAPACITY);
+    let (evt_tx, evt_rx) = mpsc::channel(EVENT_CAPACITY);
+    let dropped_events = Arc::new(AtomicU64::new(0));
+    let command_epoch = Arc::new(AtomicU64::new(1));
     let session = MotorTestSession::new(
         AnySource::Manual(super::source::ManualSource::new(vec![0.0; 4])),
         limits.clone(),
     );
     let (output_tx, output_rx) = tokio::sync::watch::channel(session.output_values());
     let (pwm_tx, pwm_rx) = tokio::sync::watch::channel(session.pwm_output());
+    let (state_tx, state_rx) = tokio::sync::watch::channel(None);
     let tick = std::time::Duration::from_secs_f64(1.0 / super::DEFAULT_TICK_HZ);
     tokio::spawn(run(
-        handle, session, cmd_rx, evt_tx, output_tx, pwm_tx, tick,
+        handle,
+        session,
+        Receivers {
+            commands: cmd_rx,
+            priority: priority_rx,
+            epoch: command_epoch.clone(),
+        },
+        EventSink {
+            events: evt_tx,
+            dropped: dropped_events.clone(),
+        },
+        Outputs {
+            values: output_tx,
+            pwm: pwm_tx,
+            state: state_tx,
+        },
+        tick,
     ));
-    (MotorTestService { cmd_tx, pwm_rx }, evt_rx, output_rx)
+    (
+        MotorTestService {
+            cmd_tx,
+            priority_tx,
+            pwm_rx,
+            state_rx,
+            dropped_events,
+            command_epoch,
+        },
+        evt_rx,
+        output_rx,
+    )
+}
+
+struct Outputs {
+    values: tokio::sync::watch::Sender<Vec<f32>>,
+    pwm: tokio::sync::watch::Sender<Vec<Option<f32>>>,
+    state: tokio::sync::watch::Sender<Option<SessionState>>,
+}
+
+struct EventSink {
+    events: mpsc::Sender<MotorTestEvent>,
+    dropped: Arc<AtomicU64>,
+}
+impl EventSink {
+    fn publish(&self, event: MotorTestEvent) {
+        if self.events.try_send(event).is_err() {
+            let _ = self
+                .dropped
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                    Some(count.saturating_add(1))
+                });
+        }
+    }
+}
+
+type StopReply = (
+    tokio::time::Instant,
+    tokio::sync::oneshot::Sender<Result<StopReceipt, MotorTestStopError>>,
+);
+
+fn apply_priority(
+    session: &mut MotorTestSession<AnySource>,
+    command: MotorTestCommand,
+    epoch: &AtomicU64,
+) -> Option<StopReply> {
+    // Fence both buffered and blocked producers. Draining a queue can otherwise
+    // wake an old Start sender after STOP, or loop indefinitely under refill.
+    if epoch
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            (current != 0).then(|| current.checked_add(1)).flatten()
+        })
+        .is_err()
+    {
+        epoch.store(0, Ordering::Release); // Exhaustion retires ordinary commands; never wrap/replay.
+    }
+    match command {
+        MotorTestCommand::Emergency => {
+            session.emergency_stop();
+            None
+        }
+        MotorTestCommand::EmergencyAndWait { deadline, reply } => {
+            session.emergency_stop();
+            Some((deadline, reply))
+        }
+        MotorTestCommand::StopAndWait { deadline, reply } => {
+            session.stop(StopReason::Command);
+            Some((deadline, reply))
+        }
+        _ => {
+            session.stop(StopReason::Command);
+            None
+        }
+    }
 }
 
 /// The shell loop. The session is the pure core; this only moves frames.
 async fn run(
     handle: impl MotorTestTransport,
     mut session: MotorTestSession<AnySource>,
-    mut cmd_rx: mpsc::Receiver<MotorTestCommand>,
-    evt_tx: mpsc::Sender<MotorTestEvent>,
-    output_tx: tokio::sync::watch::Sender<Vec<f32>>,
-    pwm_tx: tokio::sync::watch::Sender<Vec<Option<f32>>>,
+    mut receivers: Receivers,
+    events: EventSink,
+    output: Outputs,
     tick: std::time::Duration,
 ) {
     // A shared MAVLink bus can carry multiple vehicles. Only the aircraft
@@ -291,70 +456,107 @@ async fn run(
         let mut stop_reply = None;
         let mut exit_after_release = false;
 
-        tokio::select! {
-            cmd = cmd_rx.recv() => {
-                match cmd {
-                    None => {
-                        session.stop(StopReason::LinkLost);
-                        exit_after_release = true;
-                    }
-                    Some(cmd) => match cmd {
-                    MotorTestCommand::StartManual => session.start_manual(Instant::now()),
-                    MotorTestCommand::StartPreset { preset } => {
-                        session.start_preset(preset, Instant::now())
-                    }
-                    MotorTestCommand::StartForward { slot } => {
-                        session.start_forward(slot, Instant::now())
-                    }
-                    MotorTestCommand::SetMotorCount { motors } => {
-                        session.set_motor_count(motors);
-                    }
-                    MotorTestCommand::SetPwmModels { models } => session.set_pwm_models(models),
-                    MotorTestCommand::SetValues(values) => session.set_any_values(values),
-                    MotorTestCommand::Stop => session.stop(StopReason::Command),
-                    MotorTestCommand::StopAndWait { deadline, reply } => {
-                        session.stop(StopReason::Command);
-                        stop_reply = Some((deadline, reply));
-                    }
-                    MotorTestCommand::Emergency => session.emergency_stop(),
-                    MotorTestCommand::EmergencyAndWait { deadline, reply } => {
-                        session.emergency_stop();
-                        stop_reply = Some((deadline, reply));
-                    }
-                    MotorTestCommand::ResetEmergency => session.reset_emergency(),
-                    },
-                }
-            }
-            ev = events_rx.recv() => {
-                match ev {
-                    Ok(ConnectionEvent::Message(env)) => match &env.message {
-                        ::mavlink::common::MavMessage::HEARTBEAT(hb) => {
-                            let armed = BaseMode::from_raw(hb.base_mode.bits()).safety_armed;
-                            session.interlock_mut().observe_heartbeat(armed, Instant::now());
-                        }
-                        ::mavlink::common::MavMessage::COMMAND_ACK(ack)
-                            if ack.command
-                                == ::mavlink::common::MavCmd::MAV_CMD_ACTUATOR_TEST =>
-                        {
-                            session.handle_ack(ack.result);
-                        }
-                        _ => {}
-                    },
-                    Ok(ConnectionEvent::Failed(_)) | Ok(ConnectionEvent::LinkError(_))
-                        | Ok(ConnectionEvent::Connected { .. }) | Ok(ConnectionEvent::HeartbeatLost { .. }) => {
-                        session.interlock_mut().link_lost();
-                        session.stop(StopReason::LinkLost);
-                    }
-                    Ok(_) => {}
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        session.stop(StopReason::LinkLost);
-                        exit_after_release = true;
+        if events.events.is_closed() {
+            session.stop(StopReason::LinkLost);
+            exit_after_release = true;
+        } else if let Ok(command) = receivers.priority.try_recv() {
+            stop_reply = apply_priority(&mut session, command, &receivers.epoch);
+        } else {
+            tokio::select! {
+                command = receivers.priority.recv() => {
+                    match command {
+                        Some(command) => stop_reply = apply_priority(&mut session, command, &receivers.epoch),
+                        None => { session.stop(StopReason::LinkLost); exit_after_release = true; }
                     }
                 }
+                cmd = receivers.commands.recv() => {
+                    match cmd {
+                        None => {
+                            session.stop(StopReason::LinkLost);
+                            exit_after_release = true;
+                        }
+                        Some(queued) => {
+                        let current_epoch = receivers.epoch.load(Ordering::Acquire);
+                        if current_epoch == 0 || queued.epoch != current_epoch { continue; }
+                        match queued.command {
+                        MotorTestCommand::StartManual => session.start_manual(Instant::now()),
+                        MotorTestCommand::StartPreset { preset } => {
+                            session.start_preset(preset, Instant::now())
+                        }
+                        MotorTestCommand::StartForward { slot } => {
+                            session.start_forward(slot, Instant::now())
+                        }
+                        MotorTestCommand::SetMotorCount { motors } => {
+                            session.set_motor_count(motors);
+                        }
+                        MotorTestCommand::SetPwmModels { models } => session.set_pwm_models(models),
+                        MotorTestCommand::SetValues(values) => session.set_any_values(values),
+                        MotorTestCommand::Stop => session.stop(StopReason::Command),
+                        MotorTestCommand::StopAndWait { deadline, reply } => {
+                            session.stop(StopReason::Command);
+                            stop_reply = Some((deadline, reply));
+                        }
+                        MotorTestCommand::Emergency => session.emergency_stop(),
+                        MotorTestCommand::EmergencyAndWait { deadline, reply } => {
+                            session.emergency_stop();
+                            stop_reply = Some((deadline, reply));
+                        }
+                        MotorTestCommand::ResetEmergency => session.reset_emergency(),
+                        } },
+                    }
+                }
+                ev = events_rx.recv() => {
+                    match ev {
+                        Ok(ConnectionEvent::Message(env)) => match &env.message {
+                            ::mavlink::common::MavMessage::HEARTBEAT(hb) => {
+                                let armed = BaseMode::from_raw(hb.base_mode.bits()).safety_armed;
+                                session.interlock_mut().observe_heartbeat(armed, Instant::now());
+                            }
+                            ::mavlink::common::MavMessage::COMMAND_ACK(ack)
+                                if ack.command
+                                    == ::mavlink::common::MavCmd::MAV_CMD_ACTUATOR_TEST =>
+                            {
+                                session.handle_ack(ack.result);
+                            }
+                            _ => {}
+                        },
+                        Ok(ConnectionEvent::Failed(_)) | Ok(ConnectionEvent::LinkError(_))
+                            | Ok(ConnectionEvent::Connected { .. }) | Ok(ConnectionEvent::HeartbeatLost { .. }) => {
+                            session.interlock_mut().link_lost();
+                            session.stop(StopReason::LinkLost);
+                        }
+                        Ok(_) => {}
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            session.stop(StopReason::LinkLost);
+                            exit_after_release = true;
+                        }
+                    }
+                }
+                _ = ticker.tick() => {
+                    outgoing = session.tick(Instant::now());
+                }
             }
-            _ = ticker.tick() => {
-                outgoing = session.tick(Instant::now());
+        }
+
+        if !session.release_pending() {
+            for frame in outgoing {
+                // A queued STOP interrupts a blocked control write rather than
+                // waiting for the rest of the motor bank or a UI event.
+                let result = tokio::select! { biased;
+                    command = receivers.priority.recv() => {
+                        match command {
+                            Some(command) => stop_reply = apply_priority(&mut session, command, &receivers.epoch),
+                            None => { session.stop(StopReason::LinkLost); exit_after_release = true; }
+                        }
+                        break;
+                    }
+                    result = handle.send(frame) => result,
+                };
+                if result.is_err() {
+                    session.stop(StopReason::LinkLost);
+                    break;
+                }
             }
         }
 
@@ -377,13 +579,6 @@ async fn run(
                 Err(error) => Err(error),
             }
         } else {
-            // A control tick is queued in order, not applied atomically by PX4.
-            for frame in outgoing {
-                if handle.send(frame).await.is_err() {
-                    session.stop(StopReason::LinkLost);
-                    break;
-                }
-            }
             Ok(StopReceipt {
                 released_motors: 0,
                 state: session.state(),
@@ -393,8 +588,11 @@ async fn run(
         // Never clear running demands or publish Stopped after a failed pass.
         // The readout is calculated/queued demand for controls, and zero only
         // once release transport writes are confirmed.
-        let _ = output_tx.send(session.output_values());
-        let _ = pwm_tx.send(session.pwm_output());
+        let _ = output.values.send(session.output_values());
+        let _ = output.pwm.send(session.pwm_output());
+        if session.state() != last_state {
+            output.state.send_replace(Some(session.state()));
+        }
 
         // Resolve the transport receipt before any slow event consumer can
         // block notification. Errors leave release pending for a later retry.
@@ -404,26 +602,18 @@ async fn run(
 
         if session.state() != last_state {
             last_state = session.state();
-            if evt_tx
-                .send(MotorTestEvent::StateChanged(last_state))
-                .await
-                .is_err()
-            {
-                return;
-            }
+            events.publish(MotorTestEvent::StateChanged(last_state));
         }
         match result {
             Ok(_) if !session.release_pending() => {
                 if let Some(reason) = session.take_stop_reason() {
-                    if evt_tx.send(MotorTestEvent::Stopped(reason)).await.is_err() {
-                        return;
-                    }
+                    events.publish(MotorTestEvent::Stopped(reason));
                 }
             }
             Err(error) => {
                 // Repeated write failures must not fill the event queue and
                 // block retries; a waiting stop caller receives the same error.
-                let _ = evt_tx.try_send(MotorTestEvent::ReleaseFailed(error));
+                events.publish(MotorTestEvent::ReleaseFailed(error));
             }
             _ => {}
         }
@@ -477,6 +667,8 @@ mod stop_tests {
         events: broadcast::Sender<ConnectionEvent>,
         controls: Arc<Mutex<Vec<MavMessage>>>,
         writes: mpsc::UnboundedSender<(MavMessage, WriteResult)>,
+        block_control: Arc<std::sync::atomic::AtomicBool>,
+        control_waiting: Arc<std::sync::atomic::AtomicBool>,
     }
 
     impl MotorTestTransport for ControlledTransport {
@@ -485,6 +677,10 @@ mod stop_tests {
         }
 
         async fn send(&self, frame: MavMessage) -> Result<(), MavlinkError> {
+            if self.block_control.load(Ordering::Acquire) {
+                self.control_waiting.store(true, Ordering::Release);
+                std::future::pending::<()>().await;
+            }
             self.controls.lock().expect("controls lock").push(frame);
             Ok(())
         }
@@ -509,6 +705,8 @@ mod stop_tests {
                 events,
                 controls: Arc::new(Mutex::new(Vec::new())),
                 writes,
+                block_control: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                control_waiting: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             },
             rx,
         )
@@ -560,6 +758,141 @@ mod stop_tests {
         assert_eq!(command.param5, motor as f32);
         assert_eq!(command.param2, 0.0);
         reply
+    }
+
+    fn heartbeat(transport: &ControlledTransport) {
+        transport
+            .events
+            .send(ConnectionEvent::Message(Box::new(
+                crate::mavlink::MessageEnvelope {
+                    header: ::mavlink::MavHeader {
+                        system_id: 42,
+                        component_id: 1,
+                        sequence: 0,
+                    },
+                    message: MavMessage::HEARTBEAT(::mavlink::common::HEARTBEAT_DATA {
+                        base_mode: ::mavlink::common::MavModeFlag::empty(),
+                        ..Default::default()
+                    }),
+                    received_at: Instant::now(),
+                },
+            )))
+            .expect("heartbeat");
+    }
+
+    async fn wait_for(mut predicate: impl FnMut() -> bool) {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !predicate() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("predicate deadline");
+    }
+
+    async fn stop_confirmed(
+        svc: &MotorTestService,
+        writes: &mut mpsc::UnboundedReceiver<(MavMessage, WriteResult)>,
+    ) {
+        let stopping = tokio::spawn({
+            let svc = svc.clone();
+            async move { svc.stop_and_wait().await }
+        });
+        for motor in 1..=4 {
+            next_release(writes, motor)
+                .await
+                .send(Ok(()))
+                .expect("confirmed release");
+        }
+        assert_eq!(
+            stopping
+                .await
+                .expect("stop task")
+                .expect("stop receipt")
+                .released_motors,
+            4
+        );
+    }
+
+    #[tokio::test]
+    async fn saturated_observer_cannot_block_stop_or_latest_state() {
+        let (transport, mut writes) = transport();
+        let (svc, _unread_events) = started(transport.clone()).await;
+        heartbeat(&transport);
+        wait_for(|| !transport.controls.lock().expect("controls").is_empty()).await;
+        for _ in 0..EVENT_CAPACITY / 2 {
+            stop_confirmed(&svc, &mut writes).await;
+            let before = transport.controls.lock().expect("controls").len();
+            svc.send(MotorTestCommand::StartManual)
+                .await
+                .expect("new start");
+            wait_for(|| transport.controls.lock().expect("controls").len() > before).await;
+        }
+        assert!(
+            svc.dropped_events() > 0,
+            "full event queue must expose dropped notifications"
+        );
+        stop_confirmed(&svc, &mut writes).await;
+        assert_eq!(svc.session_state(), Some(SessionState::Idle));
+    }
+
+    #[tokio::test]
+    async fn priority_stop_interrupts_blocked_write_and_discards_queued_restart() {
+        let (transport, mut writes) = transport();
+        transport.block_control.store(true, Ordering::Release);
+        let (svc, _events) = started(transport.clone()).await;
+        heartbeat(&transport);
+        wait_for(|| transport.control_waiting.load(Ordering::Acquire)).await;
+        for _ in 0..COMMAND_CAPACITY {
+            svc.try_send(MotorTestCommand::StartManual)
+                .expect("fill ordinary queue");
+        }
+        let blocked_start = tokio::spawn({
+            let svc = svc.clone();
+            async move { svc.send(MotorTestCommand::StartManual).await }
+        });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(
+            !blocked_start.is_finished(),
+            "old producer is waiting outside the full queue"
+        );
+        stop_confirmed(&svc, &mut writes).await;
+        blocked_start
+            .await
+            .expect("producer")
+            .expect("enqueue retired intent");
+        transport.block_control.store(false, Ordering::Release);
+        tokio::time::sleep(Duration::from_millis(220)).await;
+        assert_eq!(svc.session_state(), Some(SessionState::Idle));
+        assert!(
+            transport.controls.lock().expect("controls").is_empty(),
+            "cancelled control writes and queued restarts cannot run"
+        );
+        assert_eq!(
+            svc.stop_and_wait()
+                .await
+                .expect("idle stop")
+                .released_motors,
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn closed_observer_releases_before_retiring_the_service() {
+        let (transport, mut writes) = transport();
+        let (svc, events) = started(transport).await;
+        drop(events);
+        for motor in 1..=4 {
+            next_release(&mut writes, motor)
+                .await
+                .send(Ok(()))
+                .expect("close release");
+        }
+        wait_for(|| svc.session_state() == Some(SessionState::Idle)).await;
+        assert_eq!(
+            svc.stop_and_wait().await,
+            Err(MotorTestStopError::ServiceStopped)
+        );
     }
 
     #[tokio::test]

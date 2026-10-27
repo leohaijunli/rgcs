@@ -607,9 +607,14 @@ impl MotorTestState {
         *self.last_state.lock() = Some(state);
     }
 
-    /// Newest known session state, if any event arrived yet.
+    /// Retained service state, independent of event loss. Keep the native startup
+    /// reservation until the service processes its first transition.
     pub fn session(&self) -> Option<SessionState> {
-        *self.last_state.lock()
+        self.running
+            .lock()
+            .as_ref()
+            .and_then(|running| running.svc.session_state())
+            .or_else(|| *self.last_state.lock())
     }
 }
 

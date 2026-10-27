@@ -124,6 +124,12 @@ checks pass ([evidence](../verification/af-02b-motor-contract-20261027.md)). Nat
 window/permission/operation admission is the next small implementation slice;
 Motor migration and G1 are not yet complete.
 
+The [Motor priority prerequisite](../verification/af-02b-motor-priority-20261027.md)
+is also verified: urgent STOP interrupts control writes, command epochs fence old
+blocked producers, event pressure is nonblocking and native state is retained
+independently. Three new fault fixtures, 139 core Motor checks and 260 native
+library checks pass; native permission/operation binding remains active.
+
 ## 1. Outcome and ordering decision
 
 The first deliverable is a reliable, efficient application platform that can host

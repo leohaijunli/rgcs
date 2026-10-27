@@ -25,3 +25,20 @@ The contract/data checkpoint passes 136 filtered core checks, including three
 meaningful input/scope/serde fixtures, and 310 complete generated frontend mirrors.
 See `docs/architecture/af-02b4-motor-ownership.md` for signatures, serial-write/
 Release risks and the remaining native/core/browser/capture/log acceptance.
+
+## Priority control-path checkpoint
+
+STOP/Emergency use a separate bounded priority channel, interrupt an in-flight
+control write and retain the existing 2 s full-Release receipt. A non-wrapping
+command epoch rejects both buffered and blocked pre-STOP producers; clearing a
+queue cannot re-admit a delayed old Start. Telemetry/tick handling remains fair
+under continuous ordinary updates.
+
+State/Stopped notifications publish nonblocking, with `dropped_events()` accounting.
+`session_state() -> Option<SessionState>` supplies the retained transition independently
+of event delivery; native state uses it after the initial startup reservation.
+Closing the event receiver triggers owned-bank Release before service retirement.
+
+Three controlled-transport fault tests cover full observer queues, blocked output
+plus eight queued/one waiting Start, and observer close. The complete Motor filter
+now passes 139 checks; native library regression passes 260 with 8 opt-in ignores.
