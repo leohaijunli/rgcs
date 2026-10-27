@@ -8,6 +8,8 @@ import { applyFieldMode, applyThemePref, readFieldMode, readThemePref, saveField
 export type View = 'prepare' | 'plan' | 'preflight' | 'fly' | 'review'
 export type Theme = ThemePref
 export type DockTab = 'profile' | 'qc' | 'log'
+/** Fly-stage right column: the FC logs/console or the drape monitor. */
+export type FlyRightTab = 'logs' | 'drape'
 /** One planning step expanded at a time (P2 §4.2). */
 export type PlanStep = 'area' | 'pattern' | 'waypoints' | 'sync'
 /** Active map tool. `add` places a new waypoint on click; `polygon` draws a
@@ -25,7 +27,7 @@ export const VIEW_CONFIG: Record<View, ViewConfig> = {
   prepare: { rightTab: 'panels.prepare', dockTab: 'profile' },
   plan: { rightTab: 'panels.plan', dockTab: 'profile' },
   preflight: { rightTab: 'panels.preflight', dockTab: 'profile' },
-  fly: { rightTab: 'panels.telemetry', dockTab: 'qc' },
+  fly: { rightTab: 'panels.logs', dockTab: 'qc' },
   review: { rightTab: 'panels.review', dockTab: 'profile' },
 }
 
@@ -40,6 +42,10 @@ interface UiState {
   planStep: PlanStep
   dockTab: DockTab
   rightOpen: boolean
+  /** Right-column width in CSS pixels (Fly logs/drape dock and stage panels). */
+  rightWidth: number
+  /** Which Fly-stage tab is showing in the right column. */
+  flyRightTab: FlyRightTab
   dockOpen: boolean
   dockHeight: number
   follow: boolean
@@ -93,6 +99,10 @@ interface UiState {
   focusPlanField: (step: PlanStep, field: string) => void
   clearPlanFocus: () => void
   toggleRight: () => void
+  setRightWidth: (width: number) => void
+  setFlyRightTab: (tab: FlyRightTab) => void
+  /** Tools ▸ Logs: open the Fly-stage right dock on its Logs tab. */
+  openLogs: () => void
   setDockOpen: (open: boolean) => void
   setDockHeight: (h: number) => void
   setDockTab: (tab: DockTab) => void
@@ -114,8 +124,36 @@ const DOCK_MIN = 96
 const DOCK_MAX = 420
 const DOCK_DEFAULT = 180
 
+const RIGHT_WIDTH_KEY = 'maggcs.rightWidth'
+const RIGHT_MIN = 280
+const RIGHT_MAX = 560
+const RIGHT_DEFAULT = 360
+/** Keep at least this much room for the map at any viewport width. */
+const RIGHT_MAP_MIN = 160
+
 function narrowScreen(): boolean {
   return typeof window !== 'undefined' && window.innerWidth <= 1366
+}
+
+export function clampRightWidth(width: number): number {
+  const viewportMax =
+    typeof window === 'undefined'
+      ? RIGHT_MAX
+      : Math.max(RIGHT_MIN, window.innerWidth - RIGHT_MAP_MIN)
+  const max = Math.min(RIGHT_MAX, viewportMax)
+  return Math.min(max, Math.max(RIGHT_MIN, width))
+}
+
+function readRightWidth(): number {
+  try {
+    const raw = localStorage.getItem(RIGHT_WIDTH_KEY)
+    if (raw === null) return clampRightWidth(RIGHT_DEFAULT)
+    const value = Number(raw)
+    if (Number.isFinite(value)) return clampRightWidth(value)
+  } catch {
+    /* storage unavailable */
+  }
+  return clampRightWidth(RIGHT_DEFAULT)
 }
 
 const initialTheme: Theme = typeof localStorage !== 'undefined' ? readThemePref() : 'dark'
@@ -197,6 +235,8 @@ export const useUiStore = create<UiState>((set, get) => ({
   planStep: 'area',
   dockTab: 'qc',
   rightOpen: !narrowScreen(),
+  rightWidth: readRightWidth(),
+  flyRightTab: 'logs',
   dockOpen: true,
   dockHeight: narrowScreen() ? 160 : DOCK_DEFAULT,
   follow: true,
@@ -238,6 +278,23 @@ export const useUiStore = create<UiState>((set, get) => ({
     set((s) => ({ planStep, planFocus: { field, nonce: (s.planFocus?.nonce ?? 0) + 1 } })),
   clearPlanFocus: () => set({ planFocus: null }),
   toggleRight: () => set((s) => ({ rightOpen: !s.rightOpen })),
+  setRightWidth: (width) => {
+    const rightWidth = clampRightWidth(width)
+    try {
+      localStorage.setItem(RIGHT_WIDTH_KEY, String(rightWidth))
+    } catch {
+      /* storage unavailable */
+    }
+    set({ rightWidth })
+  },
+  setFlyRightTab: (flyRightTab) => set({ flyRightTab }),
+  openLogs: () =>
+    set((s) => ({
+      view: 'fly',
+      rightOpen: true,
+      flyRightTab: 'logs',
+      ...(s.view === 'plan' ? { mapTool: 'select' as const } : {}),
+    })),
   setDockOpen: (dockOpen) => set({ dockOpen }),
   setDockHeight: (h) => set({ dockHeight: Math.max(DOCK_MIN, Math.min(DOCK_MAX, h)) }),
   setDockTab: (dockTab) => set({ dockTab }),

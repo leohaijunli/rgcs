@@ -34,7 +34,6 @@ import { fetchChecklist } from '../stores/preflight'
 import { isTauri } from '../inspector/mock'
 import ProjectHome from './dialogs/ProjectHome'
 import SettingsDialog, { type SettingsTab } from './dialogs/SettingsDialog'
-import LogsDialog from './dialogs/LogsDialog'
 import LinkPopover from './LinkPopover'
 import RtkDrawer from './RtkDrawer'
 import ModePopover from './ModePopover'
@@ -235,12 +234,12 @@ export default function TopBar() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('connection')
   const [projectOpen, setProjectOpen] = useState(false)
   const [rtkDrawerOpen, setRtkDrawerOpen] = useState(false)
-  const [logsOpen, setLogsOpen] = useState(false)
   const [logDrawerOpen, setLogDrawerOpen] = useState(false)
   const alertCount = useAlerts((s) => s.count)
   const alertSeverity = useAlerts((s) => s.highest)
   const view = useUiStore((s) => s.view)
   const setView = useUiStore((s) => s.setView)
+  const openLogs = useUiStore((s) => s.openLogs)
   const project = useProjectStore((s) => s.project)
   const link = useLinkStore((s) => s.link)
   const heartbeatAgeMs = useHeartbeatAge()
@@ -361,7 +360,7 @@ export default function TopBar() {
             onInspector={openInspector}
             onMotorTest={openMotorTest}
             onParams={openParams}
-            onLogs={() => setLogsOpen(true)}
+            onLogs={openLogs}
           />
           <IconButton
             title={t('settings.menu')}
@@ -461,7 +460,6 @@ export default function TopBar() {
         tab={settingsTab}
         onTabChange={setSettingsTab}
       />
-      <LogsDialog open={logsOpen} onOpenChange={setLogsOpen} />
     </header>
   )
 }

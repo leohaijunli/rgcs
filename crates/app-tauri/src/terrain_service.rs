@@ -1274,7 +1274,7 @@ pub async fn vertical_datum_offset(points: Vec<(f64, f64)>) -> Result<Vec<Offset
 
 /// The H→AMSL chain offset at one point (`AMSL = H − offset`); `None`
 /// outside either committed extraction (fail-closed, never extrapolate).
-fn vertical_chain_offset(lat: f64, lon: f64) -> Option<f64> {
+pub(crate) fn vertical_chain_offset(lat: f64, lon: f64) -> Option<f64> {
     use maggcs_core::height::GeoidModel;
     let cgg = maggcs_core::height::cgg2013_model();
     let egm = maggcs_core::height::egm96_model();

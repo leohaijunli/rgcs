@@ -457,7 +457,7 @@ impl EventSink {
         if self.events.try_send(event).is_err() {
             let _ = self
                 .dropped
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
                     Some(count.saturating_add(1))
                 });
         }
@@ -477,7 +477,7 @@ fn apply_priority(
     // Fence both buffered and blocked producers. Draining a queue can otherwise
     // wake an old Start sender after STOP, or loop indefinitely under refill.
     if epoch
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+        .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
             (current != 0).then(|| current.checked_add(1)).flatten()
         })
         .is_err()

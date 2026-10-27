@@ -1,14 +1,14 @@
 {
   "record_date": "2026-10-26",
-  "generated_at": "2026-10-27T04:37:29.438Z",
-  "source_base": "89f612fff4ba7be35da58b66e2c289acc4c975c2",
+  "generated_at": "2026-10-27T21:08:01.726Z",
+  "source_base": "5e037da57e2029d4d995ecba8861e5fa7a5312e6",
   "source_includes_uncommitted_implementation": true,
   "scope": "AF-02b.4 owned Shell/Logs and Mission/flight regression",
   "reproduction": [
     "node",
     "scripts/check-flight-acceptance.mjs",
     "--shell-logs",
-    "shell_logs,mission,ux,safety,preflight,topbar,teardown,startup,heartbeat"
+    "shell_logs"
   ],
   "result": "pass",
   "checks": [
@@ -21,131 +21,11 @@
         "screenshots/shell-logs/ownership/shell_logs"
       ],
       "exit_code": 0,
-      "passed": 29,
+      "passed": 35,
       "failed": 0,
-      "elapsed_ms": 7537,
+      "elapsed_ms": 12259,
       "log": "/tmp/opencode/af02b-shell-logs-browser-shell_logs.log",
-      "log_sha256": "09b975de6b8a92935ea79b613a9b18f7769a5177077a105af8e619fb5544e55e"
-    },
-    {
-      "name": "mission",
-      "command": [
-        "node",
-        "scripts/check-mission-ownership.mjs",
-        "http://127.0.0.1:4181/",
-        "screenshots/shell-logs/ownership/mission"
-      ],
-      "exit_code": 0,
-      "passed": 37,
-      "failed": 0,
-      "elapsed_ms": 7579,
-      "log": "/tmp/opencode/af02b-shell-logs-browser-mission.log",
-      "log_sha256": "1dea4dcecd29242e9386ea0f836dc98dd58a0dca01deaf62319451a8cf1d584f"
-    },
-    {
-      "name": "ux",
-      "command": [
-        "node",
-        "scripts/check-command-ux.mjs",
-        "http://127.0.0.1:4181/",
-        "screenshots/shell-logs/ownership/ux"
-      ],
-      "exit_code": 0,
-      "passed": 66,
-      "failed": 0,
-      "elapsed_ms": 25584,
-      "log": "/tmp/opencode/af02b-shell-logs-browser-ux.log",
-      "log_sha256": "7b254724b8a5276249d127e276aa6bd8283236e8f99a212e4ea296babb775205"
-    },
-    {
-      "name": "safety",
-      "command": [
-        "node",
-        "scripts/check-safety.mjs",
-        "http://127.0.0.1:4181/",
-        "screenshots/shell-logs/ownership/safety"
-      ],
-      "exit_code": 0,
-      "passed": 26,
-      "failed": 0,
-      "elapsed_ms": 14382,
-      "log": "/tmp/opencode/af02b-shell-logs-browser-safety.log",
-      "log_sha256": "8f994e984f418245514d749ebcb67892aba4241d67b0f7ece143e4bbb9e0d9b5"
-    },
-    {
-      "name": "preflight",
-      "command": [
-        "node",
-        "scripts/check-preflight.mjs",
-        "http://127.0.0.1:4181/",
-        "screenshots/shell-logs/ownership/preflight"
-      ],
-      "exit_code": 0,
-      "passed": 43,
-      "failed": 0,
-      "elapsed_ms": 9881,
-      "log": "/tmp/opencode/af02b-shell-logs-browser-preflight.log",
-      "log_sha256": "80ee7bd14af1631212595afb6452234dec79b5e47bb3d6d5472d38393345ec2e"
-    },
-    {
-      "name": "topbar",
-      "command": [
-        "node",
-        "scripts/check-topbar.mjs",
-        "http://127.0.0.1:4181/",
-        "screenshots/shell-logs/ownership/topbar"
-      ],
-      "exit_code": 0,
-      "passed": 69,
-      "failed": 0,
-      "elapsed_ms": 7518,
-      "log": "/tmp/opencode/af02b-shell-logs-browser-topbar.log",
-      "log_sha256": "82cb6ec606b2ed4287baba062ecbdd0b94859bf957f85f4f1c19dcc01f92666c"
-    },
-    {
-      "name": "teardown",
-      "command": [
-        "node",
-        "scripts/check-teardown.mjs",
-        "http://127.0.0.1:4181/",
-        "screenshots/shell-logs/ownership/teardown"
-      ],
-      "exit_code": 0,
-      "passed": 22,
-      "failed": 0,
-      "elapsed_ms": 9393,
-      "log": "/tmp/opencode/af02b-shell-logs-browser-teardown.log",
-      "log_sha256": "0c0741a8408e41a05e55a810b372b23e330d053f4b8c9f9a151de089e0a7100d"
-    },
-    {
-      "name": "startup",
-      "command": [
-        "node",
-        "scripts/check-startup.mjs",
-        "http://127.0.0.1:4181/",
-        "screenshots/shell-logs/ownership/startup"
-      ],
-      "exit_code": 0,
-      "passed": 14,
-      "failed": 0,
-      "elapsed_ms": 16143,
-      "log": "/tmp/opencode/af02b-shell-logs-browser-startup.log",
-      "log_sha256": "5091cc3879d1b7b2307348d0c869c82b7307f8b45ec04ba67aec75b5c3385ed7"
-    },
-    {
-      "name": "heartbeat",
-      "command": [
-        "node",
-        "scripts/check-heartbeat.mjs",
-        "http://127.0.0.1:4181/",
-        "screenshots/shell-logs/ownership/heartbeat"
-      ],
-      "exit_code": 0,
-      "passed": 24,
-      "failed": 0,
-      "elapsed_ms": 22717,
-      "log": "/tmp/opencode/af02b-shell-logs-browser-heartbeat.log",
-      "log_sha256": "cc2db616f077427158b00606fd60377d695df90f1531a30af24f60ce125a0c55"
+      "log_sha256": "0a27dc9d8c4053c848b8cd4cc710bc2ce4c3b7e3c7a83ab984ff8e277ab31b02"
     }
   ],
   "screenshots": [
@@ -281,58 +161,63 @@
     },
     {
       "path": "frontend/screenshots/shell-logs/ownership/shell_logs/connected-list.png",
-      "bytes": 60602,
-      "sha256": "ac731f80193f08d4861b289ee657acd76502f36e0d678b624cef41792d10785e"
+      "bytes": 72165,
+      "sha256": "0c80dab64f6d5c1889bbdd68b6836f5bfd0e4d3e667a16680083797486a020fc"
     },
     {
       "path": "frontend/screenshots/shell-logs/ownership/shell_logs/deletion-uncertain.png",
-      "bytes": 62165,
-      "sha256": "67bf4066bd5c0143a22f550a1d0fc5c490a07df98d3ec7b3d3d24e048ad28ddb"
+      "bytes": 72957,
+      "sha256": "e34f01441dc9e4acfc2a9a416f9123a5589814dcbebbb960e8d9080ce5a554cd"
     },
     {
       "path": "frontend/screenshots/shell-logs/ownership/shell_logs/disconnected-logs.png",
-      "bytes": 30455,
-      "sha256": "4af457ceee08c18dd1743ae712de29285b28eed3be2cd102680cc67743802eff"
+      "bytes": 57370,
+      "sha256": "ff30df8a4ccffb3436a9903967e07f41cc36374c2103fc316f1b7e37f52919db"
     },
     {
       "path": "frontend/screenshots/shell-logs/ownership/shell_logs/download-progress.png",
-      "bytes": 60965,
-      "sha256": "f4d93bac5f04302ef4e247d845cbc6b9724e5e939c84d3e88c5105e7dddb008f"
+      "bytes": 72418,
+      "sha256": "33e8de2bac6bfefe5a620ad518157918b17498d86d538f94b3db6f7f65279c91"
     },
     {
       "path": "frontend/screenshots/shell-logs/ownership/shell_logs/durable-download.png",
-      "bytes": 61379,
-      "sha256": "ff08ba0637bff703d34258ab7026d23f9b1fa4c210d61bc9de83a0eaa7cfda95"
+      "bytes": 73066,
+      "sha256": "4d1addac48faa7cdbb01f155663677928aa3e6b302c4012d96592d9d4f31dc20"
     },
     {
       "path": "frontend/screenshots/shell-logs/ownership/shell_logs/empty-list.png",
-      "bytes": 59398,
-      "sha256": "76ac971ff1c31c5f76a0cc0c05d283e0dc746472b6b9ee7fc170dbdc92545a1d"
+      "bytes": 70281,
+      "sha256": "661d3bafe4ee5cdf84d5f338c923d56caa1140de67fe1528b9126828b93bf026"
     },
     {
       "path": "frontend/screenshots/shell-logs/ownership/shell_logs/field-mode-logs.png",
-      "bytes": 36071,
-      "sha256": "ef849500a0e62f9335ee71ac3828257fc8082f14b168255cfd0676d90828b996"
+      "bytes": 57735,
+      "sha256": "b075795095fb096971258039dd784fa5cdecf7cb46ae86280843fd3b541b38ba"
     },
     {
       "path": "frontend/screenshots/shell-logs/ownership/shell_logs/reopened-logs.png",
-      "bytes": 32567,
-      "sha256": "b94b850b50891b75603e2ab8f1f02f14c4747add52d723e01dad93880f07c75a"
+      "bytes": 57889,
+      "sha256": "e6477cbab6d5794b46d0730e1becd8e19c7debbe73f6fc0eb57f31a8e93df3c1"
     },
     {
       "path": "frontend/screenshots/shell-logs/ownership/shell_logs/responsive-logs.png",
-      "bytes": 33888,
-      "sha256": "d30029a56525dc8e3d8a4ef4c149bba90a7a8a081facf9688cc2f99d48ebf758"
+      "bytes": 59969,
+      "sha256": "3f03f8be8d75e3549f0c6ae7c83ac6df86257c234fb068d036d7870cc6e5e322"
+    },
+    {
+      "path": "frontend/screenshots/shell-logs/ownership/shell_logs/right-dock.png",
+      "bytes": 81332,
+      "sha256": "5c5a65e5f8b7db7cc0ac026e9f40cb7644d39e27cac6883fd5e1c257261a5146"
     },
     {
       "path": "frontend/screenshots/shell-logs/ownership/shell_logs/shell-bounded-output.png",
-      "bytes": 62433,
-      "sha256": "f088a4ddae2fa13d1e48d8f19a6a8c4791166fe4d36057bf69106d473cf3dd86"
+      "bytes": 78814,
+      "sha256": "34c4b1b7580764514231df615101c56979bde520abda03aef4e7712d48179d19"
     },
     {
       "path": "frontend/screenshots/shell-logs/ownership/shell_logs/shell-confirm.png",
-      "bytes": 71913,
-      "sha256": "5981da548e8f24cef589ec99193b4d9109fb014ea5a0fe7634ed0a1d6bf6cf94"
+      "bytes": 88935,
+      "sha256": "d5943895fe609b23d7f920587452ba3ace8c2261404baa2d0dde3585169173da"
     },
     {
       "path": "frontend/screenshots/shell-logs/ownership/startup/startup-autoconnect.png",

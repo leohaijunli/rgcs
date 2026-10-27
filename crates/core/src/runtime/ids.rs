@@ -186,7 +186,7 @@ impl LinkId {
 
 fn next_link_id(counter: &AtomicU64) -> Result<LinkId, RuntimeError> {
     let value = counter
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
             value.checked_add(1)
         })
         .map_err(|_| RuntimeError::IdentityExhausted {

@@ -26,6 +26,8 @@ use crate::state::AppState;
 const COMMAND_BUDGET: Duration = Duration::from_secs(10);
 const TAKEOFF_BUDGET: Duration = Duration::from_secs(20);
 const TARGET_POLL: Duration = Duration::from_millis(100);
+const MIN_ALTITUDE_AGL_M: f64 = 1.0;
+const MAX_ALTITUDE_AGL_M: f64 = 120.0;
 
 #[derive(Clone, Copy)]
 struct CommandSpec {
@@ -70,6 +72,7 @@ fn intent_kind(intent: &FlightCommandIntent) -> FlightCommandKind {
         FlightCommandIntent::Arm { .. } => FlightCommandKind::Arm,
         FlightCommandIntent::Disarm => FlightCommandKind::Disarm,
         FlightCommandIntent::Goto { .. } => FlightCommandKind::Goto,
+        FlightCommandIntent::ChangeAltitude { .. } => FlightCommandKind::ChangeAltitude,
         FlightCommandIntent::SetHome { .. } => FlightCommandKind::SetHome,
     }
 }
@@ -104,6 +107,80 @@ fn validate_height(height: Height) -> Result<f64, FlightCommandError> {
     Ok(height.meters())
 }
 
+fn validate_altitude_agl(agl_m: f64) -> Result<(), FlightCommandError> {
+    if !agl_m.is_finite() || !(MIN_ALTITUDE_AGL_M..=MAX_ALTITUDE_AGL_M).contains(&agl_m) {
+        return Err(invalid(format!(
+            "target altitude must be between {MIN_ALTITUDE_AGL_M:.0} and {MAX_ALTITUDE_AGL_M:.0} m AGL"
+        )));
+    }
+    Ok(())
+}
+
+fn ensure_altitude_change_allowed(
+    snapshot: &maggcs_core::telemetry::TelemetrySnapshot,
+) -> Result<(), FlightCommandError> {
+    let heartbeat = snapshot
+        .heartbeat
+        .as_ref()
+        .ok_or_else(|| invalid("no heartbeat yet - cannot change altitude"))?;
+    if !heartbeat.base_mode.safety_armed {
+        return Err(invalid("the vehicle must be armed to change altitude"));
+    }
+    let main_mode = ((heartbeat.custom_mode >> 16) & 0xff) as u8;
+    let sub_mode = ((heartbeat.custom_mode >> 24) & 0xff) as u8;
+    if main_mode == maggcs_core::telemetry::px4_mode::main_mode::AUTO
+        && sub_mode != maggcs_core::telemetry::px4_mode::auto_sub::LOITER
+    {
+        return Err(invalid(
+            "altitude changes are blocked during autonomous flight; pause into Hold first",
+        ));
+    }
+    Ok(())
+}
+
+fn ground_amsl_at(
+    state: &AppState,
+    latitude_deg: f64,
+    longitude_deg: f64,
+) -> Result<Height, FlightCommandError> {
+    use maggcs_core::terrain::ElevationSource;
+
+    let dem = state
+        .dem
+        .lock()
+        .as_ref()
+        .map(|(_, dem)| dem.clone())
+        .ok_or_else(|| invalid("no DTM is loaded - cannot convert AGL to AMSL"))?;
+    let (dtm, _) = dem
+        .sample_pair(maggcs_core::plan::GeoPoint::new(
+            latitude_deg,
+            longitude_deg,
+        ))
+        .map_err(|error| invalid(format!("DTM is unavailable under the vehicle: {error}")))?;
+    let meters = match dtm.datum() {
+        HeightDatum::AmslEgm96 => dtm.meters(),
+        HeightDatum::OrthometricCgvd2013 => {
+            let offset = crate::terrain_service::vertical_chain_offset(latitude_deg, longitude_deg)
+                .ok_or_else(|| {
+                    invalid(
+                        "vertical datum is unverified under the vehicle - cannot command altitude",
+                    )
+                })?;
+            dtm.meters() - offset
+        }
+        HeightDatum::EllipsoidWgs84 => dtm
+            .convert(
+                HeightDatum::AmslEgm96,
+                latitude_deg,
+                longitude_deg,
+                maggcs_core::height::egm96_model(),
+            )
+            .map_err(|error| invalid(format!("cannot convert DTM height to AMSL: {error}")))?
+            .meters(),
+    };
+    Ok(Height::new(HeightDatum::AmslEgm96, meters))
+}
+
 fn validate_intent(intent: &FlightCommandIntent) -> Result<(), FlightCommandError> {
     match intent {
         FlightCommandIntent::Land {
@@ -111,6 +188,7 @@ fn validate_intent(intent: &FlightCommandIntent) -> Result<(), FlightCommandErro
         } => {
             validate_height(*height)?;
         }
+        FlightCommandIntent::ChangeAltitude { agl_m } => validate_altitude_agl(*agl_m)?,
         FlightCommandIntent::Goto {
             latitude_deg,
             longitude_deg,
@@ -355,6 +433,17 @@ impl<R: Runtime> FlightCommandWork<R> {
         }
     }
 
+    fn recheck_altitude_change(&self) -> Result<(), FlightCommandError> {
+        match &self.intent {
+            FlightCommandIntent::ChangeAltitude { .. } => {
+                ensure_altitude_change_allowed(&self.telemetry()?)
+            }
+            _ => Err(invalid(
+                "the altitude-change step does not belong to this flight intent",
+            )),
+        }
+    }
+
     async fn primary_spec(&self) -> Result<(CommandSpec, bool), FlightCommandError> {
         let state = self.app.state::<AppState>();
         match &self.intent {
@@ -582,6 +671,23 @@ impl<R: Runtime> FlightCommandWork<R> {
                     false,
                 ))
             }
+            FlightCommandIntent::ChangeAltitude { agl_m } => {
+                let snapshot = self.telemetry()?;
+                ensure_altitude_change_allowed(&snapshot)?;
+                let fix = snapshot.global_position.ok_or_else(|| {
+                    invalid("no position fix yet - cannot compute the altitude target")
+                })?;
+                let ground = ground_amsl_at(&state, fix.latitude_deg, fix.longitude_deg)?;
+                let target = Height::new(HeightDatum::AmslEgm96, ground.meters() + *agl_m);
+                Ok((
+                    CommandSpec {
+                        step: FlightCommandStep::ChangeAltitude,
+                        command: MavCmd::MAV_CMD_DO_CHANGE_ALTITUDE,
+                        params: crate::commands::change_altitude_params(target.meters()),
+                    },
+                    false,
+                ))
+            }
             FlightCommandIntent::SetHome {
                 latitude_deg,
                 longitude_deg,
@@ -634,6 +740,10 @@ impl<R: Runtime> FlightCommandWork<R> {
         self.check().map_err(StepFailure::BeforeDispatch)?;
         if spec.step == FlightCommandStep::Arm {
             self.recheck_arm().map_err(StepFailure::BeforeDispatch)?;
+        }
+        if spec.step == FlightCommandStep::ChangeAltitude {
+            self.recheck_altitude_change()
+                .map_err(StepFailure::BeforeDispatch)?;
         }
         let transaction = self
             .next_transaction()

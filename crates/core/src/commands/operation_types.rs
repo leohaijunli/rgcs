@@ -77,6 +77,10 @@ pub enum FlightCommandIntent {
         latitude_deg: f64,
         longitude_deg: f64,
     },
+    ChangeAltitude {
+        /// Target height above the DTM at the vehicle's current position.
+        agl_m: f64,
+    },
     SetHome {
         latitude_deg: f64,
         longitude_deg: f64,
@@ -102,6 +106,7 @@ pub enum FlightCommandKind {
     Arm,
     Disarm,
     Goto,
+    ChangeAltitude,
     SetHome,
 }
 
@@ -116,6 +121,7 @@ pub enum FlightCommandStep {
     Arm,
     Disarm,
     Goto,
+    ChangeAltitude,
     SetHome,
 }
 

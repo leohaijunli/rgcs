@@ -201,11 +201,11 @@ impl Driver {
     }
     fn publish(&self, event: LogServiceEvent) {
         if self.events.try_send(event).is_err() {
-            let _ =
-                self.dropped_events
-                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
-                        Some(count.saturating_add(1))
-                    });
+            let _ = self
+                .dropped_events
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                    Some(count.saturating_add(1))
+                });
         }
     }
     fn begin(&mut self, mut request: Box<OwnedLog>, handle: &ConnectionHandle) -> Vec<MavMessage> {

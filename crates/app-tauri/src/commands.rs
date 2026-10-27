@@ -894,6 +894,14 @@ pub(crate) fn reposition_params(lat_deg: f64, lon_deg: f64, amsl_m: f64) -> [f32
     params
 }
 
+/// `MAV_CMD_DO_CHANGE_ALTITUDE` parameters. PX4 accepts absolute AMSL in
+/// `param1`; `param2 = MAV_FRAME_GLOBAL` (0) states that datum explicitly.
+pub(crate) fn change_altitude_params(amsl_m: f64) -> [f32; 7] {
+    let mut params = [0.0f32; 7];
+    params[0] = amsl_m as f32;
+    params
+}
+
 /// `MAV_CMD_DO_SET_HOME` parameters: `param1` = 0 selects the specified
 /// location (`param5/6/7`); 1 would mean "use the vehicle's current position",
 /// which PX4's commander reads as `cmd.param1 > 0.5f` and would ignore the
@@ -1242,6 +1250,14 @@ mod tests {
         assert_eq!(p[4], 48.6);
         assert_eq!(p[5], -123.4);
         assert_eq!(p[6], 45.0);
+    }
+
+    #[test]
+    fn change_altitude_params_carry_absolute_amsl() {
+        let p = change_altitude_params(95.25);
+        assert_eq!(p[0], 95.25);
+        assert_eq!(p[1], 0.0, "MAV_FRAME_GLOBAL");
+        assert_eq!(&p[2..], &[0.0; 5]);
     }
 
     #[test]

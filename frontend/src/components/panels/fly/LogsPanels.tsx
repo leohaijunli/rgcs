@@ -1,63 +1,25 @@
-// FC SD-card logs (moved out of Settings into the Tools menu, following the
-// motor-test plan's window-launcher grouping): MAVLink LOG list + download
-// with target/operation-bound progress and durable local-file receipts.
+// FC SD-card logs and the MAVLink console, docked in the Fly stage's right
+// column. The native ownership/progress rules are unchanged from the old
+// Tools dialog; only the presentation moved out of the modal.
 
 import { useEffect, useRef, useState } from 'react'
-import * as Dialog from '@radix-ui/react-dialog'
-import { X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { useLinkStore } from '../../stores/link'
-import { startLogsWatcher, useLogsStore } from '../../stores/logs'
-import { CONSOLE_PRESETS, isReadOnlyConsoleCommand, useConsoleStore } from '../../stores/console'
-import type { LogEntryInfo } from '../../generated-types/LogEntryInfo'
-import type { RuntimeTargetRef } from '../../generated-types/RuntimeTargetRef'
-import { consoleContext } from '../../desktop/consoleRuntime'
-import AppLogo from '../AppLogo'
+import { useLinkStore } from '../../../stores/link'
+import { startLogsWatcher, useLogsStore } from '../../../stores/logs'
+import { CONSOLE_PRESETS, isReadOnlyConsoleCommand, useConsoleStore } from '../../../stores/console'
+import type { LogEntryInfo } from '../../../generated-types/LogEntryInfo'
+import type { RuntimeTargetRef } from '../../../generated-types/RuntimeTargetRef'
+import { consoleContext } from '../../../desktop/consoleRuntime'
 
-/** Modal shell for the FC logs panel (same skin as the Settings dialog). */
-export default function LogsDialog({
-  open,
-  onOpenChange,
-}: {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-}) {
-  const { t } = useTranslation()
-  const closeConsole = useConsoleStore((state) => state.close)
-  const cancelLogs = useLogsStore((state) => state.cancel)
+/** The Fly-stage right dock content: FC log list above the MAVLink console. */
+export default function LogsPanels() {
   return (
-    <Dialog.Root open={open} onOpenChange={(next) => {
-      if (!next) { void closeConsole(); void cancelLogs() }
-      onOpenChange(next)
-    }}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/50" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex h-[min(94vh,900px)] w-[min(96vw,960px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-line bg-panel shadow-2xl">
-          <div className="flex items-center justify-between border-b border-line px-4 py-3">
-            <div className="flex items-center gap-2">
-              <span className="tool-header-brand is-compact">
-                <AppLogo variant="mark" />
-              </span>
-              <Dialog.Title className="text-sm font-medium text-ink">{t('tools.logs')}</Dialog.Title>
-            </div>
-            <Dialog.Close asChild>
-              <button
-                aria-label="close"
-                className="touch-target flex h-8 w-8 items-center justify-center rounded text-muted hover:text-ink"
-              >
-                <X size={16} />
-              </button>
-            </Dialog.Close>
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto p-4">
-            <LogsPanel />
-          </div>
-          <div className="border-t border-line p-4">
-            <ConsolePanel />
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <div className="min-w-0 space-y-4" data-testid="right-dock-logs">
+      <LogsPanel />
+      <div className="border-t border-line pt-3">
+        <ConsolePanel />
+      </div>
+    </div>
   )
 }
 
