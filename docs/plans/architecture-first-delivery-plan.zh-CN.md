@@ -36,6 +36,10 @@
   workspace tests (12 opt-in ignores) and all 26 delivery gates pass. Dedicated
   Motor ownership and the final cross-adapter/client/fault matrix are next; G1
   stays open.
+  Motor contract/data checkpoint (2026-10-27) is verified: owner/target/source/
+  revision DTOs and numeric validation, 136 filtered core Motor checks and 310
+  complete generated mirrors; see [evidence](../verification/af-02b-motor-contract-20261027.md).
+  Native permission/operation admission and the remaining G1 matrix are active.
 - **优先级决定：** 先做架构、按需加载、现有工具、执行与监控；**Flight Plan 和 Drape 放到最后的功能阶段。**
 - **近期范围：** 单个作业飞行器，保留既有专用台架、SITL 来源和独立基站角色。未来多机兼容仅作为接口设计考虑，不列入近期功能开发包。
 - **顺序依据：** 本文替代此前 Survey／工具方案中的实施排序；原功能设计和 BL／SW／TM 编号继续作为参考。

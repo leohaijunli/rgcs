@@ -116,6 +116,14 @@ local files, delete/empty-directory read-back, 293 synchronized contracts,
 and all 26 production/release gates. Dedicated Motor ownership and the final
 cross-adapter/native-client/fault matrix are next; G1 stays open.
 
+**Motor contract/data checkpoint — 2026-10-27:** The
+[owned Motor contract](../architecture/af-02b4-motor-ownership.md) and Rust-derived
+permission/start/update/Release/source/error DTOs are published. Scope/numeric/
+lossless-wire fixtures, 136 filtered Motor tests, 310 generated mirrors and strict
+checks pass ([evidence](../verification/af-02b-motor-contract-20261027.md)). Native
+window/permission/operation admission is the next small implementation slice;
+Motor migration and G1 are not yet complete.
+
 ## 1. Outcome and ordering decision
 
 The first deliverable is a reliable, efficient application platform that can host

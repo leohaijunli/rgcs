@@ -83,7 +83,8 @@ impl RpmSource for ManualSource {
 
 /// Built-in preset waveforms (plan §6.1). All start at 0 — spin-up is then
 /// shaped by the interlock's slew limit — and drive every motor in sync.
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[ts(export, rename = "MotorPresetKind")]
 #[serde(rename_all = "snake_case")]
 pub enum PresetKind {
     Step,
@@ -93,7 +94,8 @@ pub enum PresetKind {
 }
 
 /// One preset's parameters.
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[ts(export, rename = "MotorWaveformPreset")]
 pub struct WaveformPreset {
     pub kind: PresetKind,
     /// Peak output (0..=1 before the interlock clamps it).

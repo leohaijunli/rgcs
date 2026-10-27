@@ -20,6 +20,7 @@
 pub mod interlock;
 pub mod mag_alarm;
 pub mod mapping;
+pub mod operation_types;
 pub mod protocol;
 pub mod pwm;
 pub mod run;
@@ -62,10 +63,13 @@ pub const COMMAND_TIMEOUT_S: f32 = 0.3;
 
 /// Consecutive "busy" acks before the session gives up.
 pub const MAX_BUSY_STREAK: u32 = 3;
+/// Two existing eight-channel output banks; no wider session is supported.
+pub const MAX_MOTOR_FUNCTIONS: usize = 16;
 
 /// Session lifecycle (plan §8.3). Profile/Function states arrive with A6/A7;
 /// A2 wires Manual only.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[ts(export, rename = "MotorSessionState")]
 #[serde(rename_all = "snake_case")]
 pub enum SessionState {
     /// No confirmation, nothing running.
@@ -388,7 +392,7 @@ impl MotorTestSession<source::AnySource> {
     /// idle: a running preset/release still references the old width. The
     /// app calls this before every start, then sends that start's values.
     pub fn set_motor_count(&mut self, motors: usize) -> bool {
-        if motors == 0 || motors > 16 || self.state != SessionState::Idle {
+        if motors == 0 || motors > MAX_MOTOR_FUNCTIONS || self.state != SessionState::Idle {
             return false;
         }
         if self.last_values.len() == motors {
