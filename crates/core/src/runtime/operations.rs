@@ -20,7 +20,7 @@ const DEFAULT_MAX_BUDGET_MS: u64 = 86_400_000;
 const MAX_CONFIGURED_ACTIVE: usize = 256;
 const MAX_CONFIGURED_RETAINED: usize = 4_096;
 const MAX_CONFIGURED_BUDGET_MS: u64 = 86_400_000;
-const RESOURCE_KINDS: usize = 8;
+const RESOURCE_KINDS: usize = 9;
 const MAX_OUTCOME_TEXT_BYTES: usize = 2_048;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -62,6 +62,8 @@ pub enum OperationResource {
     EmergencyCommand,
     Shell,
     LogTransfer,
+    /// One FC SD-file recording identity; independent of actuator output.
+    Capture,
 }
 
 impl OperationResource {

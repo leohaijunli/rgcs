@@ -503,3 +503,22 @@ before stopping their worker and primary I/O.
 [Acceptance](../verification/af-02b-shell-logs-20261026.md) records 293 synchronized
 contracts, 330 browser assertions/68 screenshots and all 26 workspace/static/
 production/release gates. Dedicated Motor adapters and the final G1 matrix remain.
+
+## 14. Owned Motor checkpoint
+
+The [Motor contract](af-02b4-motor-ownership.md) is implemented. Native permission,
+manual/preset/forward START, revised values and STOP/E-STOP carry the actual Motor
+window's Runtime session, target, permission and operation. Core observes owner
+cancellation/deadline directly. START returns after a complete first bank; Release
+is priority/full-bank and retains failure evidence. Tone/config/parameter work is
+target/permission bound and uses the existing owned parameter worker.
+
+Capture independently owns `Capture` and exact test/path identity through confirmed
+logger stop. Motor logs use one existing `LogService` (dedicated or borrowed-primary),
+exact operations/progress/cancel, durable local completion and deletion read-back.
+Native close/lifecycle order is output Release, capture finalization, log cleanup,
+then tool observers/dedicated I/O. Borrowed primary I/O remains owned by primary.
+
+[Acceptance](../verification/af-02b-motor-20261027.md) records 323 synchronized
+contracts, 1511 workspace tests, 12 browser scenario groups/24 screenshots and all
+26 production/release gates. The final cross-adapter matrix alone keeps G1 open.

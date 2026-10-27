@@ -6,6 +6,7 @@ use super::tone::MotorToneSettings;
 use super::{
     PresetKind, ServoPort, SessionState, WaveformPreset, DEFAULT_TICK_HZ, MAX_MOTOR_FUNCTIONS,
 };
+use crate::logs::capture::{SdCaptureError, SdCaptureStatus};
 use crate::params::{ParamType, ParamValue};
 use crate::runtime::operations::{
     OperationError, OperationOwner, OperationRef, RuntimeClientSession,
@@ -67,6 +68,28 @@ pub struct MotorParameterSetRequest {
     pub name: String,
     pub value: ParamValue,
     pub ptype: ParamType,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct MotorCaptureStartRequest {
+    pub context: MotorRequestContext,
+    pub test_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct MotorCaptureStopRequest {
+    pub session: RuntimeClientSession,
+    pub operation: OperationRef,
+    pub request_id: RequestId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct MotorCaptureReply {
+    pub operation: OperationRef,
+    pub status: SdCaptureStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -163,6 +186,8 @@ pub enum MotorOperationError {
     Operation { error: OperationError },
     #[error("{error}")]
     Protocol { error: MotorProtocolError },
+    #[error("{error}")]
+    Capture { error: SdCaptureError },
     #[error("motor operation requires reconciliation: {reason}")]
     ReconciliationRequired {
         operation: Box<OperationRef>,
@@ -177,6 +202,11 @@ impl From<OperationError> for MotorOperationError {
 impl From<MotorProtocolError> for MotorOperationError {
     fn from(error: MotorProtocolError) -> Self {
         Self::Protocol { error }
+    }
+}
+impl From<SdCaptureError> for MotorOperationError {
+    fn from(error: SdCaptureError) -> Self {
+        Self::Capture { error }
     }
 }
 
@@ -257,6 +287,11 @@ impl MotorValuesRequest {
     }
 }
 impl MotorStopRequest {
+    pub fn validate(&self) -> Result<(), MotorOperationError> {
+        validate_operation(&self.session, &self.operation)
+    }
+}
+impl MotorCaptureStopRequest {
     pub fn validate(&self) -> Result<(), MotorOperationError> {
         validate_operation(&self.session, &self.operation)
     }

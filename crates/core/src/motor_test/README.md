@@ -66,3 +66,12 @@ Test rather than invoking a global STOP.
 
 See `docs/verification/af-02b-motor-actuation-20261027.md`. Dedicated capture/log
 ownership remains the next slice; this checkpoint does not close G1.
+
+## Software completion
+
+Owned SD capture and Motor Logs are now complete. Capture has an independent
+claim/file identity and owner-close finalization. Dedicated logs use one owned
+`LogService`; borrowed logs reuse primary. Exact cancellation, END/quiet cleanup,
+durable temporary-file commit, deletion read-back and lifecycle order are verified.
+See `docs/verification/af-02b-motor-20261027.md`. G1 remains open only for the
+cross-adapter matrix; electrical/acoustic behavior remains bench evidence.

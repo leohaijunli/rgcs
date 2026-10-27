@@ -42,6 +42,12 @@ use crate::motor_test_state::{
 };
 use crate::motor_tone_service::{set_tones_legacy, MotorTone, MotorToneSettings};
 use crate::run_service::ensure_coordinated_run_start;
+use crate::runtime_facade::RuntimeFacade;
+use maggcs_core::motor_test::operation_types::{
+    MotorCaptureStartRequest, MotorCaptureStopRequest, MotorRequestContext,
+};
+use maggcs_core::runtime::operations::{CleanupOutcome, OperationPhase, RuntimeClientSession};
+use maggcs_core::runtime::RequestId;
 
 use super::*;
 
@@ -374,6 +380,176 @@ impl Harness {
     }
 }
 
+fn owned_session(harness: &Harness, window: &str) -> RuntimeClientSession {
+    let target = RuntimeFacade::new(harness.app.handle())
+        .targets()
+        .expect("targets")
+        .into_iter()
+        .find(|target| {
+            target
+                .roles
+                .contains(&maggcs_core::runtime::TargetRole::MotorTest)
+        })
+        .expect("Motor target")
+        .target
+        .expect("verified target");
+    harness
+        .state()
+        .runtime_clients
+        .attach(window, "motor-test".into(), target)
+        .expect("attach")
+        .0
+}
+fn capture_context(session: &RuntimeClientSession) -> MotorRequestContext {
+    MotorRequestContext {
+        session: session.clone(),
+        request_id: RequestId::fresh().expect("request"),
+    }
+}
+fn capture_stop(
+    session: &RuntimeClientSession,
+    operation: &maggcs_core::runtime::operations::OperationRef,
+) -> MotorCaptureStopRequest {
+    MotorCaptureStopRequest {
+        session: session.clone(),
+        operation: operation.clone(),
+        request_id: RequestId::fresh().expect("request"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn owned_capture_start_stop_is_exact_and_retains_file_identity() {
+    let harness = Harness::new().await;
+    let a = owned_session(&harness, "a");
+    let b = owned_session(&harness, "b");
+    let started = crate::motor_capture_operations::start(
+        harness.app.handle(),
+        "a",
+        MotorCaptureStartRequest {
+            context: capture_context(&a),
+            test_id: "owned-capture-a".into(),
+        },
+    )
+    .await
+    .expect("confirmed recording");
+    assert_eq!(started.status.phase, CapturePhase::Recording);
+    assert_eq!(started.status.remote_path.as_deref(), Some(LOG_PATH));
+    assert!(crate::motor_capture_operations::stop(
+        harness.app.handle(),
+        "b",
+        capture_stop(&b, &started.operation)
+    )
+    .await
+    .is_err());
+    let stopped = crate::motor_capture_operations::stop(
+        harness.app.handle(),
+        "a",
+        capture_stop(&a, &started.operation),
+    )
+    .await
+    .expect("confirmed stop");
+    assert_eq!(stopped.status.phase, CapturePhase::Complete);
+    let status = harness
+        .state()
+        .runtime_clients
+        .operations
+        .status(&a.owner, &started.operation)
+        .expect("retained");
+    assert_eq!(status.phase, OperationPhase::Finished);
+    assert_eq!(status.cleanup, CleanupOutcome::Confirmed);
+    assert_eq!(shell_count(&harness.trace.lock(), "logger on"), 1);
+    assert_eq!(shell_count(&harness.trace.lock(), "logger off"), 1);
+    harness.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn capture_owner_close_stops_its_file_without_a_renderer_callback() {
+    let harness = Harness::new().await;
+    let session = owned_session(&harness, "owner");
+    let started = crate::motor_capture_operations::start(
+        harness.app.handle(),
+        "owner",
+        MotorCaptureStartRequest {
+            context: capture_context(&session),
+            test_id: "owned-close".into(),
+        },
+    )
+    .await
+    .expect("capture");
+    harness
+        .state()
+        .runtime_clients
+        .expire_window(&session.owner.client_id)
+        .expect("native close");
+    wait_until(|| {
+        harness
+            .state()
+            .runtime_clients
+            .operations
+            .status(&session.owner, &started.operation)
+            .is_ok_and(|status| status.phase == OperationPhase::Finished)
+    })
+    .await;
+    let status = harness
+        .state()
+        .runtime_clients
+        .operations
+        .status(&session.owner, &started.operation)
+        .expect("retained");
+    assert_eq!(status.cleanup, CleanupOutcome::Confirmed);
+    wait_until(|| shell_count(&harness.trace.lock(), "logger off") == 1).await;
+    harness.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn changed_capture_file_is_never_stopped_as_if_it_were_owned() {
+    let harness = Harness::new().await;
+    let session = owned_session(&harness, "owner");
+    let started = crate::motor_capture_operations::start(
+        harness.app.handle(),
+        "owner",
+        MotorCaptureStartRequest {
+            context: capture_context(&session),
+            test_id: "owned-path".into(),
+        },
+    )
+    .await
+    .expect("capture");
+    harness
+        .state()
+        .motor_test
+        .capture
+        .lock()
+        .status
+        .lock()
+        .remote_path = Some("/fs/microsd/log/external.ulg".into());
+    let before = shell_count(&harness.trace.lock(), "logger off");
+    assert!(matches!(
+        crate::motor_capture_operations::stop(
+            harness.app.handle(),
+            "owner",
+            capture_stop(&session, &started.operation)
+        )
+        .await,
+        Err(
+            maggcs_core::motor_test::operation_types::MotorOperationError::ReconciliationRequired { .. }
+        )
+    ));
+    assert_eq!(
+        shell_count(&harness.trace.lock(), "logger off"),
+        before,
+        "changed external file must not receive logger off under the old operation"
+    );
+    let status = harness
+        .state()
+        .runtime_clients
+        .operations
+        .status(&session.owner, &started.operation)
+        .expect("retained");
+    assert_eq!(status.cleanup, CleanupOutcome::Uncertain);
+    harness.shutdown().await;
+}
+
 impl Drop for Harness {
     fn drop(&mut self) {
         for task in &self.tasks {
@@ -607,9 +783,15 @@ enum CaptureOperation {
 impl CaptureOperation {
     async fn invoke(self, state: State<'_, AppState>) -> Result<SdCaptureStatus, String> {
         match self {
-            Self::Check => actuator_capture_verify(state).await,
-            Self::Start => actuator_capture_start(state, "mr16-manual".into()).await,
-            Self::Stop => actuator_capture_stop(state).await,
+            Self::Check => verify_capture_locked(&state).await,
+            Self::Start => {
+                let _ops = state.ops().lock().await;
+                start_capture_locked(&state, "mr16-manual".into()).await
+            }
+            Self::Stop => {
+                let _ops = state.ops().lock().await;
+                stop_capture_locked(&state).await
+            }
         }
     }
 }
@@ -1138,7 +1320,12 @@ async fn am32_busy_capture_cannot_delay_release_or_be_changed_by_stop_tones() {
     harness.hold_shell.store(true, Ordering::SeqCst);
     let app = harness.app.handle().clone();
     let capture = tokio::spawn(async move {
-        actuator_capture_start(app.state::<AppState>(), "tone-capture".into()).await
+        async {
+            let state = app.state::<AppState>();
+            let _ops = state.ops().lock().await;
+            start_capture_locked(&state, "tone-capture".into()).await
+        }
+        .await
     });
     wait_until(|| shell_count(&harness.trace.lock(), "logger status") == 1).await;
     let since = harness.trace.lock().len();

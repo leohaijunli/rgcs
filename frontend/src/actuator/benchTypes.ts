@@ -243,6 +243,7 @@ export function motorGuide(input: MotorGuideInput): MotorGuide {
 
 export interface ActuatorStatus {
   operation: OperationRef | null
+  capture_operation: OperationRef | null
   config_revision: string | null
   forward_source_ref: MotorForwardSourceRef | null
   motor_control: { enabled: boolean; permission: MotorPermissionRef | null }
@@ -454,6 +455,7 @@ export function assignmentFor(map: OutputMap, motor: number): OutputAssignment |
 
 export const IDLE: ActuatorStatus = {
   operation: null,
+  capture_operation: null,
   config_revision: null,
   forward_source_ref: null,
   motor_control: { enabled: false, permission: null },

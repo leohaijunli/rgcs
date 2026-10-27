@@ -101,7 +101,8 @@ G1 remains open for Shell/Logs/Motor and the final cross-adapter matrix.
 | AF-02b.4b — General flight Command migration and acceptance | Complete within software scope |
 | AF-02b.4 — Mission adapter and acceptance | Complete within software scope |
 | AF-02b.4 — Primary Shell/Logs adapter and acceptance | Complete within software scope |
-| AF-02b.4 — Motor adapters and cross-adapter matrix | Pending; G1 open |
+| AF-02b.4 — Motor adapters and acceptance | Complete within software scope |
+| AF-02b.4 — Final cross-adapter/client/fault matrix | Pending; G1 open |
 
 AF-06 retains the full Parameters Module Host/SDK and batch-reconciliation
 acceptance. The Command checkpoints do not imply the remaining legacy effect
@@ -113,8 +114,8 @@ measurable acceptance. [Shell/Logs evidence](../verification/af-02b-shell-logs-2
 records exact actor/cancel/status, complete shell framing/priority close, durable
 local files, delete/empty-directory read-back, 293 synchronized contracts,
 330 browser assertions/68 screenshots, 1463 workspace tests (12 opt-in ignores)
-and all 26 production/release gates. Dedicated Motor ownership and the final
-cross-adapter/native-client/fault matrix are next; G1 stays open.
+and all 26 production/release gates. Motor ownership is now also complete; the
+final cross-adapter/native-client/fault matrix is next, so G1 stays open.
 
 **Motor contract/data checkpoint — 2026-10-27:** The
 [owned Motor contract](../architecture/af-02b4-motor-ownership.md) and Rust-derived
@@ -139,6 +140,15 @@ PTY ownership cases, 146 core Motor checks, 263 native checks (8 opt-in ignores)
 315 generated mirrors, full workspace/static/production checks and 12 browser
 scenario groups/24 screenshots pass ([evidence](../verification/af-02b-motor-actuation-20261027.md)).
 Dedicated capture/log ownership and final Motor/G1 matrices remain.
+
+**Owned Motor final software checkpoint — 2026-10-27:** Capture now owns exact
+test/path identity and finalizes on owner close; dedicated Logs use one existing
+worker and borrowed Logs reuse primary, with exact cancel, durable files and
+verified deletion barriers. [Final evidence](../verification/af-02b-motor-20261027.md)
+records 149 core Motor checks, 270 app checks, 1511 workspace tests (12 opt-in
+ignores), 323 generated contracts, 12 browser groups/24 screenshots and all 26
+production/release gates. Motor is complete in software scope. Physical bench
+qualification remains separate; G1 now awaits only the final cross-adapter matrix.
 
 ## 1. Outcome and ordering decision
 

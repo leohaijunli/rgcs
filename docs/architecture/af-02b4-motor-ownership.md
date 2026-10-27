@@ -1,9 +1,9 @@
 # AF-02b.4 — Owned Motor contract
 
 - Date: 2026-10-27.
-- Status: interfaces approved; contract/data, priority and native actuation slices
-  implemented and accepted in software. Dedicated capture/log and final delivery
-  remain ([actuation evidence](../verification/af-02b-motor-actuation-20261027.md)).
+- Status: implemented and accepted within software scope
+  ([final evidence](../verification/af-02b-motor-20261027.md)). Hardware bench
+  qualification and the cross-adapter G1 matrix remain explicit follow-ons.
 - Scope: existing dedicated/borrowed Motor Test, permission, manual/preset/forward
   start, value updates, STOP/Release, tones, parameter/configuration, capture/log
   and native close. Full Module Host/SDK movement remains AF-07.

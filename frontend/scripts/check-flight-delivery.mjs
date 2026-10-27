@@ -12,10 +12,12 @@ const frontend = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const root = dirname(frontend)
 const missionMode = process.argv.includes('--mission')
 const shellLogsMode = process.argv.includes('--shell-logs')
-const scope = shellLogsMode ? 'af-02b-shell-logs' : missionMode ? 'af-02b-mission' : 'af-02b-flight-command'
-const evidencePath = join(root, `docs/verification/${scope}-build-20261026.json`)
-const browserPath = join(root, `docs/verification/${scope}-browser-20261026.json`)
-const logPrefix = shellLogsMode ? 'af02b-shell-logs' : missionMode ? 'af02b-mission' : 'af02b4b'
+const motorMode = process.argv.includes('--motor')
+const scope = motorMode ? 'af-02b-motor' : shellLogsMode ? 'af-02b-shell-logs' : missionMode ? 'af-02b-mission' : 'af-02b-flight-command'
+const evidenceDate = motorMode ? '20261027' : '20261026'
+const evidencePath = join(root, `docs/verification/${scope}-build-${evidenceDate}.json`)
+const browserPath = join(root, `docs/verification/${scope}-browser-${evidenceDate}.json`)
+const logPrefix = motorMode ? 'af02b-motor' : shellLogsMode ? 'af02b-shell-logs' : missionMode ? 'af02b-mission' : 'af02b4b'
 const environment = { ...process.env, PATH: `${join(homedir(), '.cargo/bin')}:${process.env.PATH ?? ''}` }
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex')
 const CHECK_TIMEOUT_MS = 600_000
@@ -97,7 +99,7 @@ async function frontendArtifact(directory) {
 const browserBytes = await readFile(browserPath)
 await mkdir('/tmp/opencode', { recursive: true })
 const browser = JSON.parse(browserBytes)
-const requiredBrowserChecks = [...(shellLogsMode ? ['shell_logs'] : []), ...(missionMode || shellLogsMode ? ['mission'] : []), 'ux', 'safety', 'preflight', 'topbar', 'teardown', 'startup', 'heartbeat']
+const requiredBrowserChecks = motorMode ? ['motor'] : [...(shellLogsMode ? ['shell_logs'] : []), ...(missionMode || shellLogsMode ? ['mission'] : []), 'ux', 'safety', 'preflight', 'topbar', 'teardown', 'startup', 'heartbeat']
 if (browser.result !== 'pass' || requiredBrowserChecks.some((name) => !browser.checks.some((check) => check.name === name && check.exit_code === 0))) {
   throw new Error('Run the complete check:flight-acceptance suite before recording final delivery')
 }
@@ -141,8 +143,8 @@ const record = {
   record_date: '2026-10-26', generated_at: new Date().toISOString(),
   source_base: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
   source_includes_uncommitted_implementation: true,
-  scope: shellLogsMode ? 'AF-02b.4 Shell/Logs final workspace/protocol/static/production/release gates' : missionMode ? 'AF-02b.4 Mission final workspace/protocol/static/production/release gates' : 'AF-02b.4b final workspace/protocol/static/production/release gates',
-  reproduction: ['npm', '--prefix', 'frontend', 'run', shellLogsMode ? 'check:shell-logs-delivery' : missionMode ? 'check:mission-delivery' : 'check:flight-delivery'],
+  scope: motorMode ? 'AF-02b.4 Motor final workspace/protocol/static/production/release gates' : shellLogsMode ? 'AF-02b.4 Shell/Logs final workspace/protocol/static/production/release gates' : missionMode ? 'AF-02b.4 Mission final workspace/protocol/static/production/release gates' : 'AF-02b.4b final workspace/protocol/static/production/release gates',
+  reproduction: ['npm', '--prefix', 'frontend', 'run', motorMode ? 'check:motor-delivery' : shellLogsMode ? 'check:shell-logs-delivery' : missionMode ? 'check:mission-delivery' : 'check:flight-delivery'],
   source_before: sourceBefore, result: 'in_progress', checks: [],
   browser_evidence: { path: relative(root, browserPath), sha256: hash(browserBytes), checks: browser.checks.length, passed: browser.checks.reduce((sum, check) => sum + check.passed, 0), screenshots: browser.screenshots.length },
 }

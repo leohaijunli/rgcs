@@ -58,7 +58,7 @@ await page.addInitScript(() => {
   const streamRow = (request) => ({ message_id: request.message_id, requested_rate: request.rate, observed_hz: null, last_seen_age_ms: null, receive_state: 'waiting', error: null })
   const streams = { target: null, endpoint: 'isolated IPC test', transport_generation: 1, ready: true, statuses: [...initialStreams.values()].map(streamRow), error: null }
   const status = {
-    operation: null, config_revision: '1', forward_source_ref: null,
+    operation: null, capture_operation: null, config_revision: '1', forward_source_ref: null,
     motor_control: { enabled: false, permission: null },
     tones: {
       settings: { start: 'rising', stop: 'falling' }, starting: false, busy: false,
@@ -146,6 +146,11 @@ await page.addInitScript(() => {
     holdCapture: null, pendingCapture: null,
     holdMotorStart: false, pendingMotorStart: null,
     streams, holdStreamWrite: false, pendingStreamWrite: null,
+    seedCaptureOperation() {
+      if (!runtimeSession) throw new Error('Motor Runtime session is not attached')
+      status.capture_operation = { id: `capture-operation-${++operationSequence}`,
+        owner: structuredClone(runtimeSession.owner), target: structuredClone(runtimeSession.target) }
+    },
     completeStreamWrite() {
       const pending = this.pendingStreamWrite
       if (!pending) throw new Error('No pending stream request')
@@ -225,6 +230,7 @@ await page.addInitScript(() => {
         return null
       }
       if (command === 'runtime_client_detach') { runtimeSession = null; return null }
+      if (command === 'plugin:dialog|save') return test.downloadResult ? 'verified.ulg' : null
       if (command === 'actuator_use_main_target') {
         if (test.mainLinkError) throw new Error(test.mainLinkError)
         if (JSON.stringify(args.expected) !== JSON.stringify(status.main_serial_target)) throw new Error('main serial target changed')
@@ -315,20 +321,23 @@ await page.addInitScript(() => {
       }
       if (command === 'actuator_logs_status') return { entries: structuredClone(test.entries), error: null }
       if (command === 'actuator_logs_request_list') {
-        test.emit('actuator_logs', { kind: 'list', entries: structuredClone(test.entries) })
-        return structuredClone(test.entries)
+        const context = args.request
+        const operation = { id: `motor-log-${++operationSequence}`, owner: structuredClone(context.session.owner), target: structuredClone(context.session.target) }
+        test.emit('motor_logs_operation', { operation, request_id: context.request_id, resources: ['shell', 'log_transfer'], phase: 'running', cleanup: 'not_required', outcome: null, stop_reason: null, remaining_budget_ms: 10000 })
+        return { operation, result: { kind: 'listed', entries: structuredClone(test.entries) } }
       }
       if (command === 'actuator_logs_download') {
-        if (test.downloadResult) {
-          test.emit('actuator_logs', { kind: 'list', entries: structuredClone(test.entries) })
-          setTimeout(() => test.emit('actuator_logs', { kind: 'downloaded', id: args.id, path: 'verified.ulg' }), 50)
-        }
-        return test.downloadResult
+        const context = args.request.context
+        const operation = { id: `motor-log-${++operationSequence}`, owner: structuredClone(context.session.owner), target: structuredClone(context.session.target) }
+        test.emit('motor_logs_operation', { operation, request_id: context.request_id, resources: ['log_transfer'], phase: 'running', cleanup: 'not_required', outcome: null, stop_reason: null, remaining_budget_ms: 10000 })
+        test.emit('motor_logs_progress', { operation, request_id: context.request_id, entry: args.request.entry, fetched: args.request.entry.size / 2, total: args.request.entry.size })
+        return { operation, result: { kind: 'downloaded', entry: args.request.entry, path: args.request.save_path } }
       }
       if (command === 'actuator_logs_delete' || command === 'actuator_logs_erase_all') {
+        const context = args.request.context
+        const operation = { id: `motor-log-${++operationSequence}`, owner: structuredClone(context.session.owner), target: structuredClone(context.session.target) }
         test.entries = []
-        test.emit('actuator_logs', { kind: 'list', entries: [] })
-        return []
+        return { operation, result: command === 'actuator_logs_delete' ? { kind: 'deleted', entries: [] } : { kind: 'erased' } }
       }
       if (command.startsWith('actuator_start_')) {
         if (!status.motor_control.enabled) throw new Error('Motor control is OFF')
@@ -386,12 +395,22 @@ await page.addInitScript(() => {
         const wasRecording = capture.phase === 'recording'
         const complete = () => {
           if (command === 'actuator_capture_start') {
+            const context = args.request.context
+            status.capture_operation = { id: `capture-operation-${++operationSequence}`, owner: structuredClone(context.session.owner), target: structuredClone(context.session.target) }
             capture.phase = 'recording'
+            capture.test_id = args.request.test_id
             capture.remote_path = '/fs/microsd/log/2026-10-22/test.ulg'
           } else if (command === 'actuator_capture_stop') {
             capture.phase = 'complete'
+            status.capture_operation = null
           } else {
             capture.phase = wasRecording ? 'recording' : 'ready'
+          }
+          if (command === 'actuator_capture_start') {
+            return { operation: structuredClone(status.capture_operation), status: structuredClone(capture) }
+          }
+          if (command === 'actuator_capture_stop') {
+            return { operation: structuredClone(args.request.operation), status: structuredClone(capture) }
           }
           return structuredClone(capture)
         }
@@ -874,9 +893,14 @@ try {
   await page.getByRole('button', { name: 'Start capture', exact: true }).click()
   await page.waitForTimeout(100)
   assert.equal(await calls('actuator_capture_start'), 1, 'capture can start while the motor test runs')
+  const ownedCaptureStart = await page.evaluate(() => window.__bench.calls.find((call) => call.command === 'actuator_capture_start'))
+  assert.equal(ownedCaptureStart.args.request.context.session.module_id, 'motor-test', 'capture carries the native Motor session')
+  assert.match(ownedCaptureStart.args.request.test_id, /^test-/, 'capture owns its test/file identity')
   await page.getByRole('button', { name: 'Stop capture', exact: true }).click()
   await page.waitForTimeout(100)
   assert.equal(await calls('actuator_capture_stop'), 1, 'capture can stop while the motor test runs')
+  const ownedCaptureStop = await page.evaluate(() => window.__bench.calls.find((call) => call.command === 'actuator_capture_stop'))
+  assert.deepEqual(ownedCaptureStop.args.request.session.owner, ownedCaptureStop.args.request.operation.owner, 'capture stop names its exact owner/operation')
   await start().click()
   await page.waitForFunction(() => document.querySelector('button.start-btn')?.textContent === 'START')
   assert.equal(await calls('actuator_capture_stop'), 1, 'motor STOP does not stop manual capture')
@@ -901,6 +925,7 @@ try {
     for (const emergency of [false, true]) {
       await page.evaluate((command) => {
         window.__bench.status.sd_capture.phase = command === 'actuator_capture_stop' ? 'recording' : 'idle'
+        if (command === 'actuator_capture_stop') window.__bench.seedCaptureOperation()
       }, operation.command)
       const captureButton = page.getByRole('button', { name: operation.button, exact: true })
       await page.waitForFunction((label) => [...document.querySelectorAll('button')]
@@ -953,16 +978,25 @@ try {
 
   await page.getByRole('button', { name: 'Log retrieval', exact: true }).click()
   await page.getByRole('button', { name: 'Refresh list', exact: true }).click()
+  const ownedList = await page.evaluate(() => window.__bench.calls.findLast((call) => call.command === 'actuator_logs_request_list'))
+  assert.equal(ownedList.args.request.session.module_id, 'motor-test', 'log list carries the Motor Runtime session')
+  const downloadsBeforePicker = await calls('actuator_logs_download')
   await page.getByRole('button', { name: 'Download', exact: true }).click()
   await page.waitForTimeout(100)
   assert.equal(await page.getByRole('button', { name: 'Refresh list', exact: true }).isEnabled(), true, 'canceling save restores controls')
+  assert.equal(await calls('actuator_logs_download'), downloadsBeforePicker, 'canceling save creates no log operation')
   await page.evaluate(() => { window.__bench.downloadResult = true })
   await page.getByRole('button', { name: 'Download', exact: true }).click()
   await page.getByText('saved', { exact: true }).waitFor()
+  const ownedDownload = await page.evaluate(() => window.__bench.calls.findLast((call) => call.command === 'actuator_logs_download'))
+  assert.equal(ownedDownload.args.request.entry.time_utc, 1700000000, 'download carries full listed identity')
+  assert.equal(ownedDownload.args.request.save_path, 'verified.ulg', 'destination is captured before native admission')
   assert.equal(await page.getByRole('button', { name: 'Delete', exact: true }).isEnabled(), true, 'downloaded logs can be deleted')
   await page.getByRole('button', { name: 'Delete', exact: true }).click()
   await page.getByText('No SD logs on the target.', { exact: true }).waitFor()
   assert.equal(dialogs.length, 2, 'per-log delete requires both confirmations')
+  const ownedDelete = await page.evaluate(() => window.__bench.calls.findLast((call) => call.command === 'actuator_logs_delete'))
+  assert.equal(ownedDelete.args.request.confirmation, 'DELETE LOG 0', 'delete carries the identity-bound native keyword')
   assert.equal(await page.locator('.log-list li').count(), 1, 'deleted entry disappears')
   await page.evaluate(() => { window.__bench.entries = [{ id: 0, size: 1024, time_utc: 1700000000 }] })
   await page.getByRole('button', { name: 'Refresh list', exact: true }).click()

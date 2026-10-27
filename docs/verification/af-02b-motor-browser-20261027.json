@@ -1,0 +1,147 @@
+{
+  "record_date": "2026-10-27",
+  "generated_at": "2026-10-27T14:28:31.199Z",
+  "source_base": "8ce5ea730a608357e21c4506d76b9f3452ae48bb",
+  "source_includes_uncommitted_implementation": true,
+  "scope": "AF-02b.4 owned Motor browser acceptance",
+  "result": "pass",
+  "checks": [
+    {
+      "name": "motor",
+      "command": [
+        "node",
+        "scripts/check-motor-controls.mjs",
+        "http://127.0.0.1:4182/actuator.html",
+        "screenshots/motor-test-owned"
+      ],
+      "exit_code": 0,
+      "passed": 12,
+      "failed": 0,
+      "elapsed_ms": 100734,
+      "log": "/tmp/opencode/af02b-motor-browser-motor.log",
+      "log_sha256": "4ac7845dda70de0ffa1d953bb75f935ec6383a0a9384a97d2b209e24a05a8636"
+    }
+  ],
+  "screenshots": [
+    {
+      "path": "frontend/screenshots/motor-test-owned/motor-controls-1024x640.png",
+      "bytes": 89017,
+      "sha256": "a145e8e31ecf006d05a490383373810aab8f07d676df80b093302dd84ebba123"
+    },
+    {
+      "path": "frontend/screenshots/motor-test-owned/motor-controls-1366x768.png",
+      "bytes": 171424,
+      "sha256": "1d54ba0cf666cc4b0a678d2c6f790ca547f7f7ecfb15c4c88cc148973d9803de"
+    },
+    {
+      "path": "frontend/screenshots/motor-test-owned/motor-controls-1920x1080.png",
+      "bytes": 216663,
+      "sha256": "a58455195d09a8d13e78a4e851de7737b21b1488ee48a7792d212cbc83e64138"
+    },
+    {
+      "path": "frontend/screenshots/motor-test-owned/motor-controls-am32-starting-1366x768.png",
+      "bytes": 160573,
+      "sha256": "2536681286675b57579727ce58cc93572c0066d65e9d3e4cb7761242d52614a9"
+    },
+    {
+      "path": "frontend/screenshots/motor-test-owned/motor-controls-am32-tones-1366x768.png",
+      "bytes": 159844,
+      "sha256": "a1ca06be0cd39dda84f730e001db48526810aa5440d890e7933a06ff52651326"
+    },
+    {
+      "path": "frontend/screenshots/motor-test-owned/motor-controls-capture-pending-estop-1366x768.png",
+      "bytes": 146483,
+      "sha256": "6a728c2178e83d20a34107b4a3b6dfe16a9bbab0b03d29c6cbc08fdbe7e011ad"
+    },
+    {
+      "path": "frontend/screenshots/motor-test-owned/motor-controls-capture-pending-stop-1366x768.png",
+      "bytes": 146159,
+      "sha256": "bf761a654785b204589063d3d84c741ead6b79274f624336ac8b6a41644ccf05"
+    },
+    {
+      "path": "frontend/screenshots/motor-test-owned/motor-controls-control-off-1366x768.png",
+      "bytes": 155428,
+      "sha256": "f2dc26844edade132d69c465cdd537bcd7ef0fb053c1260397b8cd985f4df5b0"
+    },
+    {
+      "path": "frontend/screenshots/motor-test-owned/motor-controls-dshot-rpm-1366x768.png",
+      "bytes": 159613,
+      "sha256": "79289b18ee5a481f5de4983bfdad430cfb9370c936e1e2813d7aa78fc334bc87"
+    },
+    {
+      "path": "frontend/screenshots/motor-test-owned/motor-controls-esc-banks-1366x768.png",
+      "bytes": 169537,
+      "sha256": "be9b8e090d23a89b0d16304ab408d22da2486e6b53aba39d3e6f26c854da60a6"
+    },
+    {
+      "path": "frontend/screenshots/motor-test-owned/motor-controls-field-light.png",
+      "bytes": 150590,
+      "sha256": "001bdb2f935c48096de11968499ae12cefa058f17ab8a72242a93d8e8011b55d"
+    },
+    {
+      "path": "frontend/screenshots/motor-test-owned/motor-controls-independent-plots-1366x768.png",
+      "bytes": 171363,
+      "sha256": "f61dcac5354184e37eaf28682fab23c9dfefe5efc3ba79cd8309977ef9246056"
+    },
+    {
+      "path": "frontend/screenshots/motor-test-owned/motor-controls-logging-drawer-1366x768.png",
+      "bytes": 144132,
+      "sha256": "bc56ca2cc5d7d4ec0f8a6947e59fe0c990ff68e8241a5515406d062a2cd4a983"
+    },
+    {
+      "path": "frontend/screenshots/motor-test-owned/motor-controls-mixed-output-units-1366x768.png",
+      "bytes": 185580,
+      "sha256": "40296f5105d29393ab904f7b906cea8b331820e2b5dbe2f5e9ed0f2ca51e33a7"
+    },
+    {
+      "path": "frontend/screenshots/motor-test-owned/motor-controls-oneshot-1366x768.png",
+      "bytes": 181531,
+      "sha256": "4364d392e3a79c9bac34397caa2c7a02e3069e6390e21467ef997a60669d2bfc"
+    },
+    {
+      "path": "frontend/screenshots/motor-test-owned/motor-controls-scope-gaps-1366x768.png",
+      "bytes": 170457,
+      "sha256": "32593907678d5a9dea1d1a4e5efc2f5ff2cc7b8b4eff9a62736bc057fc47313f"
+    },
+    {
+      "path": "frontend/screenshots/motor-test-owned/motor-main-serial-attached-1366x768.png",
+      "bytes": 157739,
+      "sha256": "a3584d15a0891b70540209671afea05082333b444983f23e26bd29edc71fb051"
+    },
+    {
+      "path": "frontend/screenshots/motor-test-owned/motor-main-serial-offer-1366x768.png",
+      "bytes": 171989,
+      "sha256": "60400fa7a3cae9d0fecf920e8c028d61f098f051275037e236c5619467d49f71"
+    },
+    {
+      "path": "frontend/screenshots/motor-test-owned/motor-stream-manager-1024x640.png",
+      "bytes": 71938,
+      "sha256": "cfcd5652bf5e2e7a4becbe08fc551a07773340dafd3e71a1325f28bc7eb8802e"
+    },
+    {
+      "path": "frontend/screenshots/motor-test-owned/motor-stream-manager-1366x768.png",
+      "bytes": 154320,
+      "sha256": "eaab98faf05635b45b1cc31f873b5b61c6dd1e8a77947d324fa434fe76e8439e"
+    },
+    {
+      "path": "frontend/screenshots/motor-test-owned/motor-stream-manager-field-1366x768.png",
+      "bytes": 147176,
+      "sha256": "d954f419914f3984eb5fbb207fed99092e999482051150cc73afcb79805a03d2"
+    },
+    {
+      "path": "frontend/screenshots/motor-test-owned/motor-stream-manager-live-1366x768.png",
+      "bytes": 153950,
+      "sha256": "33a6f38304149e50c7ed402e5bbdfd8eca7beb7f0db2d09b37cc512e0aff8c9b"
+    },
+    {
+      "path": "frontend/screenshots/motor-test-owned/motor-stream-uorb-ambiguous-1366x768.png",
+      "bytes": 151895,
+      "sha256": "ef05bedb53d2711429c77dd4b09595eee0418b54f5796dc8bb79d90355d126a9"
+    },
+    {
+      "path": "frontend/screenshots/motor-test-owned/motor-stream-uorb-mapping-1366x768.png",
+      "bytes": 155431,
+      "sha256": "782b747d4395abef4402d0812cf86d75b36cba2db4bb393ed2ef356e8ff28fc2"
+    }
+  ]
+}

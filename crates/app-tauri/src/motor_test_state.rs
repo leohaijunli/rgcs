@@ -470,9 +470,11 @@ pub struct MotorTestState {
     /// SD-log list/download state for the serial target PX4 (feature 2); the
     /// protocol runtime is link-scoped and rebuilt with the target.
     pub logs: PLMutex<ActuatorLogs>,
+    pub log_operations: crate::motor_log_operations::MotorLogOperations,
     /// Target-shell SD-file capture (Task 6). Link-scoped like the log
     /// download runtime; stopped before its target connection is closed.
     pub capture: PLMutex<ActuatorCapture>,
+    pub capture_operations: crate::motor_capture_operations::MotorCaptureOperations,
     /// Per-test run coordinator + recovery manifest (Task 8).
     pub run: PLMutex<crate::run_service::ActuatorRun>,
     pub tones: std::sync::Arc<crate::motor_tone_service::MotorToneState>,
@@ -566,18 +568,20 @@ impl Default for ActuatorLogs {
 
 /// A running SD-log protocol on the serial target link.
 pub struct ActuatorLogsRuntime {
-    pub(crate) commands: Option<tokio::sync::mpsc::Sender<ActuatorLogCommand>>,
+    pub(crate) service: Option<maggcs_core::logs::LogService>,
     pub(crate) task: Option<tauri::async_runtime::JoinHandle<()>>,
 }
 
 impl ActuatorLogsRuntime {
-    pub(crate) fn sender(&self) -> Option<tokio::sync::mpsc::Sender<ActuatorLogCommand>> {
-        self.commands.clone()
+    pub(crate) fn service(&self) -> Option<maggcs_core::logs::LogService> {
+        self.service.clone()
     }
 
     /// Close the command channel and wait for the protocol task to exit.
     pub async fn stop(mut self, deadline: std::time::Duration) {
-        self.commands.take();
+        if let Some(service) = self.service.take() {
+            service.shutdown();
+        }
         if let Some(mut task) = self.task.take() {
             let _ = tokio::time::timeout(deadline, &mut task).await;
         }
@@ -586,22 +590,13 @@ impl ActuatorLogsRuntime {
 
 impl Drop for ActuatorLogsRuntime {
     fn drop(&mut self) {
+        if let Some(service) = self.service.take() {
+            service.shutdown();
+        }
         if let Some(task) = &self.task {
             task.abort();
         }
     }
-}
-
-pub(crate) enum ActuatorLogCommand {
-    List {
-        reply: tokio::sync::oneshot::Sender<Result<Vec<maggcs_core::logs::LogEntryInfo>, String>>,
-    },
-    Download {
-        id: u16,
-        size: u32,
-        save_path: String,
-    },
-    Cancel,
 }
 
 impl MotorTestState {

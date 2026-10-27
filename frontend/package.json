@@ -16,6 +16,8 @@
     "check:mission-delivery": "node scripts/check-flight-delivery.mjs --mission",
     "check:shell-logs-acceptance": "node scripts/check-flight-acceptance.mjs --shell-logs",
     "check:shell-logs-delivery": "node scripts/check-flight-delivery.mjs --shell-logs",
+    "check:motor-acceptance": "node scripts/check-motor-acceptance.mjs",
+    "check:motor-delivery": "node scripts/check-flight-delivery.mjs --motor",
     "check:rtk": "node scripts/check-rtk.mjs",
     "check:serial-auto": "node scripts/check-serial-auto.mjs",
     "check:motor-scope": "node scripts/check-motor-scope.mjs",

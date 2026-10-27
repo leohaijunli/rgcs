@@ -22,6 +22,7 @@ const MAX_OUTPUT: usize = 16 * 1024;
 
 /// What the capture controller is doing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub enum CapturePhase {
     Idle,
@@ -39,6 +40,7 @@ pub enum CapturePhase {
 
 /// Logger backend reported by `logger status`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub enum LoggerBackend {
     File,
@@ -50,6 +52,7 @@ pub enum LoggerBackend {
 
 /// One `logger status` observation.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, TS)]
+#[ts(export)]
 pub struct LoggerStatus {
     pub running: bool,
     pub backend: LoggerBackend,
@@ -62,6 +65,7 @@ pub struct LoggerStatus {
 /// Serializable capture state for the window. `last_error` is cleared on the
 /// next verify/start attempt.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, TS)]
+#[ts(export)]
 pub struct SdCaptureStatus {
     pub phase: CapturePhase,
     pub test_id: Option<String>,
@@ -88,6 +92,7 @@ impl Default for SdCaptureStatus {
 
 /// Explicit failures; none of these are retried silently.
 #[derive(Debug, Clone, PartialEq, Eq, Error, serde::Serialize, serde::Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum SdCaptureError {
     #[error("no target shell connection")]

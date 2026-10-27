@@ -48,6 +48,13 @@
   315 generated mirrors, 12 browser groups and 24 screenshots
   ([record](../verification/af-02b-motor-actuation-20261027.md)). Dedicated capture/
   log ownership and final Motor/G1 matrices remain.
+  Motor software scope is now complete: exact capture test/path and owner-close
+  finalization, one dedicated/borrowed LogService, exact cancel, durable files and
+  delete read-back all pass. [Final evidence](../verification/af-02b-motor-20261027.md):
+  149 core Motor checks, 270 app checks, 1511 workspace tests (12 opt-in ignores),
+  323 generated contracts, 12 browser groups/24 screenshots and 26 delivery gates.
+  Physical bench qualification stays separate; G1 now waits only for the final
+  cross-adapter matrix.
 - **优先级决定：** 先做架构、按需加载、现有工具、执行与监控；**Flight Plan 和 Drape 放到最后的功能阶段。**
 - **近期范围：** 单个作业飞行器，保留既有专用台架、SITL 来源和独立基站角色。未来多机兼容仅作为接口设计考虑，不列入近期功能开发包。
 - **顺序依据：** 本文替代此前 Survey／工具方案中的实施排序；原功能设计和 BL／SW／TM 编号继续作为参考。

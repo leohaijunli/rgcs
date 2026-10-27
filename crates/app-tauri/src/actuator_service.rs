@@ -76,6 +76,7 @@ use crate::state::AppState;
 #[derive(Debug, Clone, Serialize)]
 pub struct ActuatorStatus {
     pub operation: Option<maggcs_core::runtime::operations::OperationRef>,
+    pub capture_operation: Option<maggcs_core::runtime::operations::OperationRef>,
     pub config_revision: Option<Revision>,
     pub forward_source_ref: Option<MotorForwardSourceRef>,
     pub motor_control: crate::motor_control_service::MotorControlStatus,
@@ -213,6 +214,19 @@ pub async fn actuator_open(app: AppHandle) -> Result<(), String> {
         tauri::async_runtime::spawn(async move {
             if let Err(error) =
                 crate::motor_operations::stop_all(&cleanup_app, MOTOR_TEST_STOP_TIMEOUT).await
+            {
+                let _ = cleanup_app.emit("actuator_stop_warning", error);
+                return;
+            }
+            if let Err(error) =
+                crate::motor_capture_operations::stop_all(&cleanup_app, Duration::from_secs(15))
+                    .await
+            {
+                let _ = cleanup_app.emit("actuator_stop_warning", error);
+                return;
+            }
+            if let Err(error) =
+                crate::motor_log_operations::stop_all(&cleanup_app, Duration::from_secs(2)).await
             {
                 let _ = cleanup_app.emit("actuator_stop_warning", error);
                 return;
@@ -1418,6 +1432,9 @@ pub async fn actuator_disconnect_target<R: tauri::Runtime>(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     crate::motor_control_service::revoke(&state);
+    crate::motor_operations::stop_all(&app, MOTOR_TEST_STOP_TIMEOUT).await?;
+    crate::motor_capture_operations::stop_all(&app, Duration::from_secs(15)).await?;
+    crate::motor_log_operations::stop_all(&app, Duration::from_secs(2)).await?;
     let _ops = state.ops().lock().await;
     stop_before_auxiliary_close(
         async {
@@ -1664,7 +1681,8 @@ pub async fn actuator_param_set(
 
 /// Rebuild the SD-log runtime for the current serial target PX4. Idempotent:
 /// a previous runtime is stopped and its last list/error kept for the UI.
-fn respawn_actuator_logs<R: tauri::Runtime>(app: AppHandle<R>, state: &AppState) {
+#[cfg(any())]
+fn respawn_actuator_logs_legacy<R: tauri::Runtime>(app: AppHandle<R>, state: &AppState) {
     let Some(target) = state.motor_test.target.lock().as_ref().map(|runtime| {
         (
             runtime.target.handle.clone(),
@@ -1827,6 +1845,38 @@ fn respawn_actuator_logs<R: tauri::Runtime>(app: AppHandle<R>, state: &AppState)
     });
 }
 
+fn respawn_actuator_logs<R: tauri::Runtime>(app: AppHandle<R>, state: &AppState) {
+    let target = state.motor_test.target.lock().as_ref().map(|runtime| {
+        (
+            runtime.origin(),
+            runtime.target.handle.clone(),
+            runtime.target.target_system_id,
+        )
+    });
+    let Some((origin, handle, target_system)) = target else {
+        return;
+    };
+    let mut logs = state.motor_test.logs.lock();
+    if let Some(old) = logs.runtime.take() {
+        drop(old);
+    }
+    if origin == crate::motor_test_state::TargetLinkOrigin::MainSerial {
+        return; // Borrow the primary link's existing LogService through RuntimeFacade.
+    }
+    let (service, mut events) =
+        maggcs_core::logs::LogService::spawn(handle, target_system, TARGET_COMPONENT_ID);
+    let forward_app = app.clone();
+    let task = tauri::async_runtime::spawn(async move {
+        while let Some(event) = events.recv().await {
+            crate::motor_log_operations::forward_event(&forward_app, event);
+        }
+    });
+    logs.runtime = Some(crate::motor_test_state::ActuatorLogsRuntime {
+        service: Some(service),
+        task: Some(task),
+    });
+}
+
 /// Stop the SD-log runtime for the serial target (link teardown / window
 /// close). Keeps the last list/error for a re-open.
 pub(crate) async fn stop_actuator_logs(state: &AppState) {
@@ -1844,18 +1894,14 @@ enum ActuatorLogsEvent {
     List {
         entries: Vec<maggcs_core::logs::LogEntryInfo>,
     },
-    #[serde(rename_all = "snake_case")]
-    Progress { id: u16, fetched: u32, total: u32 },
-    #[serde(rename_all = "snake_case")]
-    Downloaded { id: u16, path: String },
-    #[serde(rename_all = "snake_case")]
-    Failed { message: String },
 }
 
+#[cfg(any())]
 fn actuator_logs_payload_failed(message: String) -> ActuatorLogsEvent {
     ActuatorLogsEvent::Failed { message }
 }
 
+#[cfg(any())]
 fn actuator_logs_sender(
     state: &AppState,
 ) -> Option<tokio::sync::mpsc::Sender<crate::motor_test_state::ActuatorLogCommand>> {
@@ -1868,7 +1914,7 @@ fn actuator_logs_sender(
         .and_then(crate::motor_test_state::ActuatorLogsRuntime::sender)
 }
 
-fn publish_actuator_log_list<R: tauri::Runtime>(
+pub(crate) fn publish_actuator_log_list<R: tauri::Runtime>(
     app: &AppHandle<R>,
     state: &AppState,
     entries: Vec<maggcs_core::logs::LogEntryInfo>,
@@ -1879,7 +1925,7 @@ fn publish_actuator_log_list<R: tauri::Runtime>(
     let _ = app.emit("actuator_logs", ActuatorLogsEvent::List { entries });
 }
 
-fn invalidate_actuator_log_list(state: &AppState) {
+pub(crate) fn invalidate_actuator_log_list(state: &AppState) {
     let logs = state.motor_test.logs.lock();
     *logs.last_list.lock().expect("logs list lock") = None;
     *logs.last_error.lock().expect("logs err lock") = None;
@@ -1887,6 +1933,7 @@ fn invalidate_actuator_log_list(state: &AppState) {
 
 /// Caller holds ops, so no target/capture/deletion mutation can change the
 /// index between its request and the verified result.
+#[cfg(any())]
 async fn refresh_actuator_log_list<R: tauri::Runtime>(
     app: &AppHandle<R>,
     state: &AppState,
@@ -1919,7 +1966,7 @@ async fn refresh_actuator_log_list<R: tauri::Runtime>(
     }
 }
 
-fn same_log_entry(
+pub(crate) fn same_log_entry(
     expected: &maggcs_core::logs::LogEntryInfo,
     entries: &[maggcs_core::logs::LogEntryInfo],
 ) -> Result<maggcs_core::logs::LogEntryInfo, String> {
@@ -1939,6 +1986,7 @@ fn same_log_entry(
 /// Request the serial target PX4's SD log list (feature 2). The runtime is
 /// (re)spawned on the current target handle if it is not running.
 #[tauri::command]
+#[cfg(any())]
 pub async fn actuator_logs_request_list(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -1950,6 +1998,7 @@ pub async fn actuator_logs_request_list(
 /// Download one SD log from the serial target PX4 into a save-dialog path
 /// (feature 2). A cancelled save dialog returns Ok without starting.
 #[tauri::command]
+#[cfg(any())]
 pub async fn actuator_logs_download(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -1990,6 +2039,7 @@ pub async fn actuator_logs_download(
 /// confirmations; this command additionally requires a fresh observation that
 /// the logger is not recording.
 #[tauri::command]
+#[cfg(any())]
 pub async fn actuator_logs_erase_all(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -2039,6 +2089,7 @@ pub async fn actuator_logs_erase_all(
 /// Permanently delete one SD log by id. The id must be from the current list;
 /// PX4 assigns it from `logdata.txt` order, which this command reads directly.
 #[tauri::command]
+#[cfg(any())]
 pub async fn actuator_logs_delete(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -2063,6 +2114,7 @@ pub async fn actuator_logs_delete(
 
 /// Cancel any running SD-log list/download on the serial target.
 #[tauri::command]
+#[cfg(any())]
 pub async fn actuator_logs_cancel(state: State<'_, AppState>) -> Result<(), String> {
     let tx = actuator_logs_sender(&state).ok_or_else(|| "no serial PX4 target".to_string())?;
     tx.send(crate::motor_test_state::ActuatorLogCommand::Cancel)
@@ -2104,6 +2156,16 @@ async fn send_session(state: &AppState, cmd: MotorTestCommand) -> Result<(), Str
 /// cancelled/joined before their connection workers are shut down.
 pub(crate) async fn stop_auxiliary_links(app: &AppHandle, state: &AppState) {
     crate::motor_control_service::revoke(state);
+    for result in [
+        crate::motor_operations::stop_all(app, MOTOR_TEST_STOP_TIMEOUT).await,
+        crate::motor_capture_operations::stop_all(app, Duration::from_secs(15)).await,
+        crate::motor_log_operations::stop_all(app, Duration::from_secs(2)).await,
+    ] {
+        if let Err(error) = result {
+            let _ = app.emit("actuator_stop_warning", error);
+            return;
+        }
+    }
     crate::stream_service::stop(state);
     detach_motor_telemetry(state).await;
     crate::run_service::interrupt_active(app, state, "auxiliary links closed");
@@ -2478,6 +2540,7 @@ impl AppState {
                 .as_ref()
                 .and_then(|running| running.operation.clone())
         };
+        let capture_operation = self.motor_test.capture_operations.current();
         let config_revision = {
             self.motor_test.target.lock().as_ref().and_then(|runtime| {
                 runtime
@@ -2498,6 +2561,7 @@ impl AppState {
         let motor_control = crate::motor_control_service::status(self);
         ActuatorStatus {
             operation,
+            capture_operation,
             config_revision,
             forward_source_ref,
             motor_control,

@@ -103,8 +103,40 @@ impl<R: Runtime> ManagedService for MotorTestStage<R> {
         deadline: Duration,
     ) -> Pin<Box<dyn Future<Output = StopOutcome> + Send + 'a>> {
         Box::pin(async move {
+            let started = Instant::now();
             let state = self.app.state::<AppState>();
-            stop_running_motor_test(&self.app, &state, deadline).await
+            let had_aux = state.motor_test.capture_operations.is_active()
+                || state.motor_test.log_operations.is_active();
+            let motor = stop_running_motor_test(&self.app, &state, deadline).await;
+            if matches!(
+                motor,
+                StopOutcome::Failed { .. } | StopOutcome::TimedOut { .. }
+            ) {
+                return motor;
+            }
+            if let Err(message) = crate::motor_capture_operations::stop_all(
+                &self.app,
+                deadline.saturating_sub(started.elapsed()),
+            )
+            .await
+            {
+                return StopOutcome::Failed { message };
+            }
+            if let Err(message) = crate::motor_log_operations::stop_all(
+                &self.app,
+                deadline.saturating_sub(started.elapsed()),
+            )
+            .await
+            {
+                return StopOutcome::Failed { message };
+            }
+            if matches!(motor, StopOutcome::NotRunning) && !had_aux {
+                StopOutcome::NotRunning
+            } else {
+                StopOutcome::Stopped {
+                    elapsed_ms: elapsed_ms(started),
+                }
+            }
         })
     }
 }

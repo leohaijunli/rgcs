@@ -144,6 +144,9 @@ pub(crate) fn parameter_error(error: MotorOperationError) -> ParameterCommandErr
         .into(),
     }
 }
+pub(crate) fn capture_error(message: String) -> MotorOperationError {
+    maggcs_core::logs::capture::SdCaptureError::UnexpectedResponse { output: message }.into()
+}
 pub(crate) fn invalid_source() -> MotorOperationError {
     plain("motor start source does not match the native entry point".into())
 }

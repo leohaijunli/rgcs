@@ -15,10 +15,16 @@ import { invoke } from '@tauri-apps/api/core'
 import { serialPortForEndpoint } from '../stores/devices'
 import { useSerialSelection } from '../hooks/useSerialSelection'
 import { listen } from '@tauri-apps/api/event'
-import { open as openDialog } from '@tauri-apps/plugin-dialog'
+import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { readTextFile } from '@tauri-apps/plugin-fs'
 import type { LogEntryInfo } from '../generated-types/LogEntryInfo'
+import type { LogReply } from '../generated-types/LogReply'
+import type { LogProgressEnvelope } from '../generated-types/LogProgressEnvelope'
+import type { OperationRef } from '../generated-types/OperationRef'
+import type { RuntimeClientSession } from '../generated-types/RuntimeClientSession'
 import type { MotorPermissionStatus } from '../generated-types/MotorPermissionStatus'
+import type { MotorCaptureReply } from '../generated-types/MotorCaptureReply'
+import type { MotorCaptureStopRequest } from '../generated-types/MotorCaptureStopRequest'
 import type { MotorStartReply } from '../generated-types/MotorStartReply'
 import type { MotorStartRequest } from '../generated-types/MotorStartRequest'
 import type { MotorStopRequest } from '../generated-types/MotorStopRequest'
@@ -406,6 +412,7 @@ export function ActuatorApp() {
   const [logDownloads, setLogDownloads] = useState<Map<number, { fetched: number; total: number; path?: string }>>(new Map())
   const [logsBusy, setLogsBusy] = useState(false)
   const [logsError, setLogsError] = useState<string | null>(null)
+  const logOwner = useRef<{ session: RuntimeClientSession; requestId: string; operation: OperationRef | null } | null>(null)
   // Presentation-only disclosure state: startup controls and recording actions
   // stay visible while optional input and retrieval details can be expanded.
   const [sitlExpanded, setSitlExpanded] = useState(false)
@@ -446,6 +453,30 @@ export function ActuatorApp() {
     void invoke('actuator_estop', { request }).catch((error: unknown) => {
       setFailure({ operation: 'emergency_stop', message: String(error) })
     })
+  }, [tauri])
+
+  useEffect(() => {
+    if (!tauri) return
+    let disposed = false
+    const unlisteners: Array<() => void> = []
+    void listen<OperationStatus>('motor_logs_operation', ({ payload }) => {
+      const owner = logOwner.current
+      if (disposed || !owner || payload.request_id !== owner.requestId
+        || !operationMatchesSession(payload.operation, owner.session)) return
+      owner.operation = payload.operation
+    }).then((unlisten) => unlisteners.push(unlisten)).catch(() => {})
+    void listen<LogProgressEnvelope>('motor_logs_progress', ({ payload }) => {
+      const owner = logOwner.current
+      if (disposed || !owner || payload.request_id !== owner.requestId
+        || !operationMatchesSession(payload.operation, owner.session)) return
+      owner.operation = payload.operation
+      setLogDownloads((previous) => {
+        const next = new Map(previous)
+        next.set(payload.entry.id, { fetched: payload.fetched, total: payload.total })
+        return next
+      })
+    }).then((unlisten) => unlisteners.push(unlisten)).catch(() => {})
+    return () => { disposed = true; unlisteners.forEach((unlisten) => unlisten()) }
   }, [tauri])
 
   useEffect(() => {
@@ -761,15 +792,23 @@ export function ActuatorApp() {
     setCaptureError(null)
     setCaptureErrorDismissed(false)
     try {
-      const status = await invoke<SdCaptureStatus>(
-        command === 'check'
-          ? 'actuator_capture_verify'
-          : command === 'start'
-            ? 'actuator_capture_start'
-            : 'actuator_capture_stop',
-        command === 'start' ? { testId } : undefined,
-      )
-      setStatus((s) => ({ ...s, sd_capture: status }))
+      const context = await motorContext()
+      if (command === 'check') {
+        const capture = await invoke<SdCaptureStatus>('actuator_capture_verify', { request: context })
+        setStatus((s) => ({ ...s, sd_capture: capture }))
+      } else if (command === 'start') {
+        const reply = await invoke<MotorCaptureReply>('actuator_capture_start', {
+          request: { context, test_id: testId ?? '' },
+        })
+        setStatus((s) => ({ ...s, capture_operation: reply.operation, sd_capture: reply.status }))
+      } else {
+        const operation = statusRef.current.capture_operation
+        const session = currentMotorSession()
+        if (!operation || !session) throw new Error('No owned SD capture to stop')
+        const request: MotorCaptureStopRequest = { session, operation, request_id: crypto.randomUUID() }
+        const reply = await invoke<MotorCaptureReply>('actuator_capture_stop', { request })
+        setStatus((s) => ({ ...s, capture_operation: null, sd_capture: reply.status }))
+      }
     } catch (e) {
       setCaptureError(String(e))
     } finally {
@@ -791,34 +830,49 @@ export function ActuatorApp() {
     setLogDownloads(new Map())
     setLogsListed(false)
     try {
-      const entries = await invoke<LogEntryInfo[]>('actuator_logs_request_list')
-      setLogEntries(entries)
+      const context = await motorContext()
+      logOwner.current = { session: context.session, requestId: context.request_id, operation: null }
+      const reply = await invoke<LogReply>('actuator_logs_request_list', { request: context })
+      if (reply.result.kind !== 'listed') throw new Error('Unexpected Motor log list reply')
+      setLogEntries(reply.result.entries)
       setLogsListed(true)
     } catch (e) {
       setLogsError(String(e))
     } finally {
+      logOwner.current = null
       setLogsBusy(false)
     }
   }
 
   const downloadLog = async (entry: LogEntryInfo) => {
     if (!tauri) return
-    setLogsBusy(true)
     setLogsError(null)
     try {
-      const started = await invoke<boolean>('actuator_logs_download', {
-        id: entry.id, size: entry.size, timeUtc: entry.time_utc,
+      const path = await saveDialog({ defaultPath: `log${entry.id}.ulg`, filters: [{ name: 'ULog', extensions: ['ulg'] }] })
+      if (path === null) return
+      setLogsBusy(true)
+      const context = await motorContext()
+      logOwner.current = { session: context.session, requestId: context.request_id, operation: null }
+      const reply = await invoke<LogReply>('actuator_logs_download', {
+        request: { context, entry, save_path: path },
       })
-      if (!started) setLogsBusy(false)
+      if (reply.result.kind !== 'downloaded') throw new Error('Unexpected Motor log download reply')
+      setLogDownloads((previous) => {
+        const next = new Map(previous)
+        next.set(entry.id, { fetched: entry.size, total: entry.size, path: reply.result.kind === 'downloaded' ? reply.result.path : undefined })
+        return next
+      })
     } catch (e) {
-      setLogsBusy(false)
       setLogsError(String(e))
+    } finally {
+      logOwner.current = null
+      setLogsBusy(false)
     }
   }
 
   const deleteLog = async (entry: LogEntryInfo) => {
     if (!tauri) return
-    const { id, size, time_utc: timeUtc } = entry
+    const { id, size } = entry
     const mb = (size / 1024 / 1024).toFixed(1)
     if (
       !window.confirm(
@@ -831,13 +885,19 @@ export function ActuatorApp() {
     setLogsBusy(true)
     setLogsError(null)
     try {
-      const entries = await invoke<LogEntryInfo[]>('actuator_logs_delete', { id, size, timeUtc })
-      setLogEntries(entries)
+      const context = await motorContext()
+      logOwner.current = { session: context.session, requestId: context.request_id, operation: null }
+      const reply = await invoke<LogReply>('actuator_logs_delete', {
+        request: { context, entry, confirmation: `DELETE LOG ${id}` },
+      })
+      if (reply.result.kind !== 'deleted') throw new Error('Unexpected Motor log delete reply')
+      setLogEntries(reply.result.entries)
       setLogDownloads(new Map())
       setLogsListed(true)
     } catch (e) {
       setLogsError(String(e))
     } finally {
+      logOwner.current = null
       setLogsBusy(false)
     }
   }
@@ -855,8 +915,13 @@ export function ActuatorApp() {
     setLogsBusy(true)
     setLogsError(null)
     try {
-      const entries = await invoke<LogEntryInfo[]>('actuator_logs_erase_all')
-      setLogEntries(entries)
+      const context = await motorContext()
+      logOwner.current = { session: context.session, requestId: context.request_id, operation: null }
+      const reply = await invoke<LogReply>('actuator_logs_erase_all', {
+        request: { context, confirmation: 'DELETE ALL LOGS' },
+      })
+      if (reply.result.kind !== 'erased') throw new Error('Unexpected Motor erase reply')
+      setLogEntries([])
       setLogDownloads(new Map())
       setLogsListed(true)
     } catch (e) {
@@ -865,14 +930,17 @@ export function ActuatorApp() {
       setLogsListed(false)
       setLogsError(String(e))
     } finally {
+      logOwner.current = null
       setLogsBusy(false)
     }
   }
 
   const cancelLogs = async () => {
     if (!tauri) return
+    const owner = logOwner.current
+    if (!owner?.operation) return
     try {
-      await invoke('actuator_logs_cancel')
+      await invoke('actuator_logs_cancel', { session: owner.session, operation: owner.operation })
     } catch {
       /* not connected */
     }

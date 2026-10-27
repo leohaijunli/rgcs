@@ -23,7 +23,9 @@ mod main_link_service;
 mod map_service;
 mod mission_operations;
 mod mission_service;
+mod motor_capture_operations;
 mod motor_control_service;
+mod motor_log_operations;
 mod motor_operations;
 mod motor_test_state;
 mod motor_tone_service;
@@ -195,11 +197,12 @@ pub fn run() {
             run_service::actuator_run_abort,
             actuator_service::actuator_param_read,
             actuator_service::actuator_param_set,
-            actuator_service::actuator_logs_request_list,
-            actuator_service::actuator_logs_download,
-            actuator_service::actuator_logs_delete,
-            actuator_service::actuator_logs_erase_all,
-            actuator_service::actuator_logs_cancel,
+            motor_log_operations::actuator_logs_request_list,
+            motor_log_operations::actuator_logs_download,
+            motor_log_operations::actuator_logs_delete,
+            motor_log_operations::actuator_logs_erase_all,
+            motor_log_operations::actuator_logs_cancel,
+            motor_log_operations::actuator_logs_operation_status,
             actuator_service::actuator_logs_status,
             params_service::params_open,
             params_service::params_pull,

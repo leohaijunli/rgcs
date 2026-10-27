@@ -133,7 +133,10 @@ impl LogPeer {
                             text.push_str("/fs/microsd/log:\n");
                             if !self.entries.lock().is_empty() { text.push_str("log000.ulg\n"); }
                         }
-                        command if command.starts_with("echo __MAGDEL_") => { text.push_str(&command[5..]); text.push('\n'); }
+                        command if command.starts_with("echo __MAGDEL_")
+                            || command.starts_with("echo __MAGCAP_") => {
+                            text.push_str(&command[5..]); text.push('\n');
+                        }
                         _ => text.push_str("shell-output\n"),
                     }
                 }

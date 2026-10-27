@@ -185,22 +185,6 @@ fn elapsed_ms(started: Instant) -> u64 {
     started.elapsed().as_millis().min(u64::MAX as u128) as u64
 }
 
-// Shared with the dedicated Motor log adapter until its owned migration.
-pub(crate) enum RouteStep {
-    Message(Box<maggcs_core::mavlink::MessageEnvelope>),
-    Skip,
-    Closed,
-}
-pub(crate) fn classify_route(
-    event: Result<maggcs_core::mavlink::ConnectionEvent, tokio::sync::broadcast::error::RecvError>,
-) -> RouteStep {
-    match event {
-        Ok(maggcs_core::mavlink::ConnectionEvent::Message(message)) => RouteStep::Message(message),
-        Err(tokio::sync::broadcast::error::RecvError::Closed) => RouteStep::Closed,
-        _ => RouteStep::Skip,
-    }
-}
-
 struct Registration<R: Runtime> {
     app: AppHandle<R>,
     id: OperationId,

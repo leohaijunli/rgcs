@@ -2,5 +2,6 @@
 import type { MotorProtocolError } from "./MotorProtocolError";
 import type { OperationError } from "./OperationError";
 import type { OperationRef } from "./OperationRef";
+import type { SdCaptureError } from "./SdCaptureError";
 
-export type MotorOperationError = { "code": "operation", error: OperationError, } | { "code": "protocol", error: MotorProtocolError, } | { "code": "reconciliation_required", operation: OperationRef, reason: string, };
+export type MotorOperationError = { "code": "operation", error: OperationError, } | { "code": "protocol", error: MotorProtocolError, } | { "code": "capture", error: SdCaptureError, } | { "code": "reconciliation_required", operation: OperationRef, reason: string, };
