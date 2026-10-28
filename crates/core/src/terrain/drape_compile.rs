@@ -33,8 +33,9 @@ use crate::height::Height;
 use crate::plan::PlannedWaypoint;
 use crate::survey::pattern::{LineKind, MAX_PATTERN_ITEMS};
 
-/// `MAV_CMD_DO_CHANGE_SPEED`: param 1 = speed (m/s), the rest *verify*.
-pub const DO_CHANGE_SPEED: u16 = 178;
+/// `MAV_CMD_DO_CHANGE_SPEED` (PX4 reads the speed from `param2`; the payload
+/// comes from [`crate::mission::types::do_change_speed_params`]).
+pub use crate::mission::types::DO_CHANGE_SPEED;
 
 /// One compiled waypoint with the metadata the monitor and the archive need.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -167,7 +168,7 @@ fn compile_at(
                 position: crate::plan::GeoPoint::new(0.0, 0.0),
                 altitude: Height::new(datum, first.z_plan),
                 command: DO_CHANGE_SPEED,
-                params: [spec.ground_speed_mps as f32, 0.0, 0.0, 0.0],
+                params: crate::mission::types::do_change_speed_params(spec.ground_speed_mps as f32),
                 autocontinue: true,
                 locked: false,
             },
@@ -464,7 +465,12 @@ mod tests {
                 .iter()
                 .find(|c| c.line_id == line_id && c.waypoint.command == DO_CHANGE_SPEED)
                 .expect("speed item");
-            assert!((f64::from(speed.waypoint.params[0]) - 5.0).abs() < 1e-6);
+            assert!(
+                (f64::from(speed.waypoint.params[1]) - 5.0).abs() < 1e-6,
+                "PX4 reads the speed from param2"
+            );
+            assert_eq!(speed.waypoint.params[0], 1.0, "groundspeed");
+            assert_eq!(speed.waypoint.params[2], -1.0, "no throttle change");
         }
         for c in compiled.iter().filter(|c| c.waypoint.command == 16) {
             assert!(!c.line_id.is_empty());

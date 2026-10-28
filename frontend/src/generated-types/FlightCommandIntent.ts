@@ -4,4 +4,13 @@ import type { ForceArmRequest } from "./ForceArmRequest";
 import type { Height } from "./Height";
 import type { PlanState } from "./PlanState";
 
-export type FlightCommandIntent = { "kind": "takeoff", plan_state: PlanState | null, acknowledged_warnings: Array<ChecklistItemId>, } | { "kind": "land", ground_amsl: Height | null, } | { "kind": "return_to_launch" } | { "kind": "set_mode", main_mode: number, sub_mode: number, } | { "kind": "arm", force: ForceArmRequest | null, plan_state: PlanState | null, acknowledged_warnings: Array<ChecklistItemId>, } | { "kind": "disarm" } | { "kind": "goto", latitude_deg: number, longitude_deg: number, } | { "kind": "set_home", latitude_deg: number, longitude_deg: number, altitude: Height | null, };
+export type FlightCommandIntent = { "kind": "takeoff", plan_state: PlanState | null, acknowledged_warnings: Array<ChecklistItemId>, } | { "kind": "land", ground_amsl: Height | null, } | { "kind": "return_to_launch" } | { "kind": "set_mode", main_mode: number, sub_mode: number, } | { "kind": "arm", force: ForceArmRequest | null, plan_state: PlanState | null, acknowledged_warnings: Array<ChecklistItemId>, } | { "kind": "disarm" } | { "kind": "goto", latitude_deg: number, longitude_deg: number, } | { "kind": "change_altitude", 
+/**
+ * Target height above the DTM at the vehicle's current position.
+ */
+agl_m: number, } | { "kind": "change_speed", 
+/**
+ * Target groundspeed for subsequent setpoints, m/s. PX4's navigator
+ * keeps it as the cruising speed until a mode change resets it.
+ */
+speed_m_s: number, } | { "kind": "set_home", latitude_deg: number, longitude_deg: number, altitude: Height | null, };

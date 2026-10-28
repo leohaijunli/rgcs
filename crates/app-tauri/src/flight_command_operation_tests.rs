@@ -840,3 +840,119 @@ async fn transport_reopen_retires_dispatched_work_and_never_retries_on_new_gener
     );
     h.shutdown().await;
 }
+
+/// `DO_CHANGE_ALTITUDE` / `DO_CHANGE_SPEED` are the only intents that depend on
+/// the armed state and on a loaded DTM; every refusal must happen before a
+/// `COMMAND_LONG` leaves the app.
+#[tokio::test(flavor = "multi_thread")]
+async fn speed_and_altitude_changes_guard_the_envelope_arm_state_and_dtm() {
+    let h = Harness::commands().await;
+    wait_ready(&h).await;
+    let session = attach(&h, "main");
+
+    // Disarmed: prepared, then refused by the re-check before any write.
+    for intent in [
+        FlightCommandIntent::ChangeSpeed { speed_m_s: 6.0 },
+        FlightCommandIntent::ChangeAltitude { agl_m: 20.0 },
+    ] {
+        let error = begin(h.app.handle(), "main", request(&session, intent))
+            .expect("prepared")
+            .run()
+            .await
+            .expect_err("disarmed");
+        assert!(format!("{error}").contains("must be armed"), "got {error}");
+    }
+    assert!(commands(&h).is_empty());
+
+    // Outside the envelope the request never reaches the FC at all.
+    for speed_m_s in [0.0, 0.5, 15.5, 200.0, f64::NAN] {
+        assert!(begin(
+            h.app.handle(),
+            "main",
+            request(&session, FlightCommandIntent::ChangeSpeed { speed_m_s })
+        )
+        .is_err());
+    }
+    for agl_m in [0.0, 0.5, 121.0, f64::INFINITY] {
+        assert!(begin(
+            h.app.handle(),
+            "main",
+            request(&session, FlightCommandIntent::ChangeAltitude { agl_m })
+        )
+        .is_err());
+    }
+    assert!(commands(&h).is_empty());
+
+    // Armed: the cruising speed reaches the FC in PX4's `param2` slot.
+    h.command_peer
+        .as_ref()
+        .expect("peer")
+        .armed
+        .store(true, Ordering::Release);
+    wait_until(|| {
+        h.state().hub().is_some_and(|hub| {
+            hub.snapshot()
+                .heartbeat
+                .as_ref()
+                .is_some_and(|heartbeat| heartbeat.base_mode.safety_armed)
+        })
+    })
+    .await;
+    let reply = execute(
+        &h,
+        &session,
+        FlightCommandIntent::ChangeSpeed { speed_m_s: 6.5 },
+    )
+    .await;
+    assert_eq!(reply.command, FlightCommandKind::ChangeSpeed);
+    assert_eq!(reply.steps[0].result, CommandResult::Accepted);
+    let sent = commands(&h);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].command, MavCmd::MAV_CMD_DO_CHANGE_SPEED);
+    assert_eq!(
+        (sent[0].param1, sent[0].param2, sent[0].param3),
+        (1.0, 6.5, -1.0),
+        "groundspeed in param2, no throttle change"
+    );
+
+    // Armed altitude still refuses without a DTM: no AMSL guess is ever sent.
+    let error = begin(
+        h.app.handle(),
+        "main",
+        request(&session, FlightCommandIntent::ChangeAltitude { agl_m: 20.0 }),
+    )
+    .expect("prepared")
+    .run()
+    .await
+    .expect_err("no DTM");
+    assert!(format!("{error}").contains("no DTM is loaded"), "got {error}");
+    assert_eq!(commands(&h).len(), 1, "the refused altitude wrote nothing");
+    h.shutdown().await;
+}
+
+/// The AGL→AMSL conversion is the only place this app decides what PX4's
+/// `DO_CHANGE_ALTITUDE` `param1` means; it must follow the project's datum
+/// chain (`H + N(CGG2013) = h`, `h - N(EGM96) = AMSL`) and stay fail-closed.
+#[test]
+fn dtm_heights_convert_to_px4_amsl() {
+    use maggcs_core::height::GeoidModel;
+
+    let (lat, lon) = (49.2, -123.1);
+    let amsl = dtm_height_to_amsl(Height::new(HeightDatum::AmslEgm96, 42.0), lat, lon)
+        .expect("AMSL is already the target datum");
+    assert_eq!(amsl.datum(), HeightDatum::AmslEgm96);
+    assert!((amsl.meters() - 42.0).abs() < 1e-9);
+
+    let offset = crate::terrain_service::vertical_chain_offset(lat, lon).expect("geoid chain");
+    let cgvd = dtm_height_to_amsl(Height::new(HeightDatum::OrthometricCgvd2013, 42.0), lat, lon)
+        .expect("chain");
+    assert_eq!(cgvd.datum(), HeightDatum::AmslEgm96);
+    assert!((cgvd.meters() - (42.0 - offset)).abs() < 1e-9, "H - offset");
+
+    let n_egm96 = maggcs_core::height::egm96_model()
+        .undulation_m(lat, lon, HeightDatum::AmslEgm96)
+        .expect("EGM96 grid");
+    let ellipsoid = dtm_height_to_amsl(Height::new(HeightDatum::EllipsoidWgs84, 60.0), lat, lon)
+        .expect("ellipsoid");
+    assert!((ellipsoid.meters() - (60.0 - n_egm96)).abs() < 1e-9, "h - N");
+}

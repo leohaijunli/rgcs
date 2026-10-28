@@ -81,6 +81,11 @@ pub enum FlightCommandIntent {
         /// Target height above the DTM at the vehicle's current position.
         agl_m: f64,
     },
+    ChangeSpeed {
+        /// Target groundspeed for subsequent setpoints, m/s. PX4's navigator
+        /// keeps it as the cruising speed until a mode change resets it.
+        speed_m_s: f64,
+    },
     SetHome {
         latitude_deg: f64,
         longitude_deg: f64,
@@ -107,6 +112,7 @@ pub enum FlightCommandKind {
     Disarm,
     Goto,
     ChangeAltitude,
+    ChangeSpeed,
     SetHome,
 }
 
@@ -122,6 +128,7 @@ pub enum FlightCommandStep {
     Disarm,
     Goto,
     ChangeAltitude,
+    ChangeSpeed,
     SetHome,
 }
 

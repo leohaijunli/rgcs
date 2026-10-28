@@ -902,6 +902,17 @@ pub(crate) fn change_altitude_params(amsl_m: f64) -> [f32; 7] {
     params
 }
 
+/// `MAV_CMD_DO_CHANGE_SPEED` parameters: `[speed type, speed m/s, throttle,
+/// 0, ...]`, shared with the mission encoder so a live command and an uploaded
+/// item agree. PX4 v1.17 reads the speed from `param2`.
+pub(crate) fn change_speed_params(ground_speed_mps: f64) -> [f32; 7] {
+    let mut params = [0.0f32; 7];
+    params[..4].copy_from_slice(&maggcs_core::mission::types::do_change_speed_params(
+        ground_speed_mps as f32,
+    ));
+    params
+}
+
 /// `MAV_CMD_DO_SET_HOME` parameters: `param1` = 0 selects the specified
 /// location (`param5/6/7`); 1 would mean "use the vehicle's current position",
 /// which PX4's commander reads as `cmd.param1 > 0.5f` and would ignore the
@@ -1258,6 +1269,15 @@ mod tests {
         assert_eq!(p[0], 95.25);
         assert_eq!(p[1], 0.0, "MAV_FRAME_GLOBAL");
         assert_eq!(&p[2..], &[0.0; 5]);
+    }
+
+    #[test]
+    fn change_speed_params_use_the_px4_param2_slot() {
+        let p = change_speed_params(6.5);
+        assert_eq!(p[0], 1.0, "groundspeed");
+        assert_eq!(p[1], 6.5, "PX4 navigator reads the speed from param2");
+        assert_eq!(p[2], -1.0, "no throttle change");
+        assert_eq!(&p[3..], &[0.0; 4]);
     }
 
     #[test]

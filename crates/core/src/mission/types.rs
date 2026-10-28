@@ -131,6 +131,22 @@ pub fn command_uses_coordinate(command: u16) -> bool {
     COORDINATE_COMMANDS.contains(&command)
 }
 
+/// `MAV_CMD_DO_CHANGE_SPEED`.
+pub const DO_CHANGE_SPEED: u16 = 178;
+
+/// `MAV_CMD_DO_CHANGE_SPEED` params for PX4 v1.17.
+///
+/// PX4's `navigator_main.cpp` (`VEHICLE_CMD_DO_CHANGE_SPEED`) reads the speed
+/// from `param2` and only applies `param3` as a throttle when it is `> 0`, so
+/// the payload is `[speed type, speed m/s, throttle %, reserved]` with
+/// `param1 = 1` (groundspeed; PX4 does not differentiate yet) and
+/// `param3 = -1` (leave the throttle alone). Mission items and live commands
+/// share this encoder so an uploaded speed change and a commanded one mean the
+/// same thing.
+pub fn do_change_speed_params(ground_speed_mps: f32) -> [f32; 4] {
+    [1.0, ground_speed_mps, -1.0, 0.0]
+}
+
 impl MissionFrame {
     /// Map from the MAVLink frame enum.
     ///
@@ -266,6 +282,15 @@ mod tests {
         assert!(!command_uses_coordinate(178)); // DO_CHANGE_SPEED
         assert!(!command_uses_coordinate(93)); // NAV_DELAY
         assert!(!command_uses_coordinate(20)); // NAV_RETURN_TO_LAUNCH
+    }
+
+    /// PX4 v1.17 reads the speed from `param2`, not `param1`: an item written
+    /// with the speed in `param1` only changes the speed type and is a no-op
+    /// (issues.md #34 neighbours, AF-17a).
+    #[test]
+    fn speed_change_params_put_the_speed_in_param2() {
+        assert_eq!(do_change_speed_params(7.5), [1.0, 7.5, -1.0, 0.0]);
+        assert_eq!(DO_CHANGE_SPEED, 178);
     }
 
     #[test]

@@ -28,6 +28,11 @@ const TAKEOFF_BUDGET: Duration = Duration::from_secs(20);
 const TARGET_POLL: Duration = Duration::from_millis(100);
 const MIN_ALTITUDE_AGL_M: f64 = 1.0;
 const MAX_ALTITUDE_AGL_M: f64 = 120.0;
+/// PX4's multirotor velocity envelope: `MPC_XY_CRUISE` defaults to 5 m/s and
+/// `MPC_XY_VEL_MAX` to 12 m/s, so a cruising-speed command outside this band
+/// can only be a mistyped value.
+const MIN_SPEED_M_S: f64 = 1.0;
+const MAX_SPEED_M_S: f64 = 15.0;
 
 #[derive(Clone, Copy)]
 struct CommandSpec {
@@ -73,6 +78,7 @@ fn intent_kind(intent: &FlightCommandIntent) -> FlightCommandKind {
         FlightCommandIntent::Disarm => FlightCommandKind::Disarm,
         FlightCommandIntent::Goto { .. } => FlightCommandKind::Goto,
         FlightCommandIntent::ChangeAltitude { .. } => FlightCommandKind::ChangeAltitude,
+        FlightCommandIntent::ChangeSpeed { .. } => FlightCommandKind::ChangeSpeed,
         FlightCommandIntent::SetHome { .. } => FlightCommandKind::SetHome,
     }
 }
@@ -116,6 +122,15 @@ fn validate_altitude_agl(agl_m: f64) -> Result<(), FlightCommandError> {
     Ok(())
 }
 
+fn validate_speed(speed_m_s: f64) -> Result<(), FlightCommandError> {
+    if !speed_m_s.is_finite() || !(MIN_SPEED_M_S..=MAX_SPEED_M_S).contains(&speed_m_s) {
+        return Err(invalid(format!(
+            "target speed must be between {MIN_SPEED_M_S:.0} and {MAX_SPEED_M_S:.0} m/s"
+        )));
+    }
+    Ok(())
+}
+
 fn ensure_altitude_change_allowed(
     snapshot: &maggcs_core::telemetry::TelemetrySnapshot,
 ) -> Result<(), FlightCommandError> {
@@ -138,25 +153,33 @@ fn ensure_altitude_change_allowed(
     Ok(())
 }
 
-fn ground_amsl_at(
-    state: &AppState,
+/// PX4's `DO_CHANGE_SPEED` handler only stores a cruising speed for the next
+/// setpoint, so it needs the same armed guard as the altitude command: an
+/// unarmed vehicle resets the value on takeoff/loiter activation anyway.
+fn ensure_speed_change_allowed(
+    snapshot: &maggcs_core::telemetry::TelemetrySnapshot,
+) -> Result<(), FlightCommandError> {
+    let heartbeat = snapshot
+        .heartbeat
+        .as_ref()
+        .ok_or_else(|| invalid("no heartbeat yet - cannot change speed"))?;
+    if !heartbeat.base_mode.safety_armed {
+        return Err(invalid("the vehicle must be armed to change speed"));
+    }
+    Ok(())
+}
+
+/// Convert a DTM height under the vehicle to PX4's AMSL datum.
+///
+/// PX4's `MAV_CMD_DO_CHANGE_ALTITUDE` only accepts absolute AMSL, while the
+/// loaded DTM may be tagged with any of the three project datums. The CGVD2013
+/// chain is fail-closed: without a verified geoid offset under the vehicle the
+/// command is refused rather than sent with a guessed height.
+fn dtm_height_to_amsl(
+    dtm: Height,
     latitude_deg: f64,
     longitude_deg: f64,
 ) -> Result<Height, FlightCommandError> {
-    use maggcs_core::terrain::ElevationSource;
-
-    let dem = state
-        .dem
-        .lock()
-        .as_ref()
-        .map(|(_, dem)| dem.clone())
-        .ok_or_else(|| invalid("no DTM is loaded - cannot convert AGL to AMSL"))?;
-    let (dtm, _) = dem
-        .sample_pair(maggcs_core::plan::GeoPoint::new(
-            latitude_deg,
-            longitude_deg,
-        ))
-        .map_err(|error| invalid(format!("DTM is unavailable under the vehicle: {error}")))?;
     let meters = match dtm.datum() {
         HeightDatum::AmslEgm96 => dtm.meters(),
         HeightDatum::OrthometricCgvd2013 => {
@@ -181,6 +204,28 @@ fn ground_amsl_at(
     Ok(Height::new(HeightDatum::AmslEgm96, meters))
 }
 
+fn ground_amsl_at(
+    state: &AppState,
+    latitude_deg: f64,
+    longitude_deg: f64,
+) -> Result<Height, FlightCommandError> {
+    use maggcs_core::terrain::ElevationSource;
+
+    let dem = state
+        .dem
+        .lock()
+        .as_ref()
+        .map(|(_, dem)| dem.clone())
+        .ok_or_else(|| invalid("no DTM is loaded - cannot convert AGL to AMSL"))?;
+    let (dtm, _) = dem
+        .sample_pair(maggcs_core::plan::GeoPoint::new(
+            latitude_deg,
+            longitude_deg,
+        ))
+        .map_err(|error| invalid(format!("DTM is unavailable under the vehicle: {error}")))?;
+    dtm_height_to_amsl(dtm, latitude_deg, longitude_deg)
+}
+
 fn validate_intent(intent: &FlightCommandIntent) -> Result<(), FlightCommandError> {
     match intent {
         FlightCommandIntent::Land {
@@ -189,6 +234,7 @@ fn validate_intent(intent: &FlightCommandIntent) -> Result<(), FlightCommandErro
             validate_height(*height)?;
         }
         FlightCommandIntent::ChangeAltitude { agl_m } => validate_altitude_agl(*agl_m)?,
+        FlightCommandIntent::ChangeSpeed { speed_m_s } => validate_speed(*speed_m_s)?,
         FlightCommandIntent::Goto {
             latitude_deg,
             longitude_deg,
@@ -444,6 +490,17 @@ impl<R: Runtime> FlightCommandWork<R> {
         }
     }
 
+    fn recheck_speed_change(&self) -> Result<(), FlightCommandError> {
+        match &self.intent {
+            FlightCommandIntent::ChangeSpeed { .. } => {
+                ensure_speed_change_allowed(&self.telemetry()?)
+            }
+            _ => Err(invalid(
+                "the speed-change step does not belong to this flight intent",
+            )),
+        }
+    }
+
     async fn primary_spec(&self) -> Result<(CommandSpec, bool), FlightCommandError> {
         let state = self.app.state::<AppState>();
         match &self.intent {
@@ -688,6 +745,17 @@ impl<R: Runtime> FlightCommandWork<R> {
                     false,
                 ))
             }
+            FlightCommandIntent::ChangeSpeed { speed_m_s } => {
+                ensure_speed_change_allowed(&self.telemetry()?)?;
+                Ok((
+                    CommandSpec {
+                        step: FlightCommandStep::ChangeSpeed,
+                        command: MavCmd::MAV_CMD_DO_CHANGE_SPEED,
+                        params: crate::commands::change_speed_params(*speed_m_s),
+                    },
+                    false,
+                ))
+            }
             FlightCommandIntent::SetHome {
                 latitude_deg,
                 longitude_deg,
@@ -743,6 +811,10 @@ impl<R: Runtime> FlightCommandWork<R> {
         }
         if spec.step == FlightCommandStep::ChangeAltitude {
             self.recheck_altitude_change()
+                .map_err(StepFailure::BeforeDispatch)?;
+        }
+        if spec.step == FlightCommandStep::ChangeSpeed {
+            self.recheck_speed_change()
                 .map_err(StepFailure::BeforeDispatch)?;
         }
         let transaction = self

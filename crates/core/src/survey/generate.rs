@@ -156,7 +156,7 @@ fn finish(
         // the survey height (issues.md #34).
         let mut item = PlannedWaypoint::waypoint(reference.position, 0.0);
         item.command = CMD_DO_CHANGE_SPEED;
-        item.params = [1.0, speed, -1.0, 0.0]; // groundspeed, m/s, no throttle
+        item.params = crate::mission::types::do_change_speed_params(speed);
         waypoints.insert(0, item);
         for line in lines.iter_mut() {
             line.start_seq += 1;
