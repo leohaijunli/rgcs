@@ -899,7 +899,26 @@ export default {
     gotoTarget: 'Target',
     gotoHere: 'Move to here',
     setHomeHere: 'Set to home',
+    changeAltitude: 'Change altitude…',
+    changeSpeed: 'Change speed…',
     needLink: 'Connect to the FC first',
+  },
+  flightTarget: {
+    altitudeTitle: 'Change altitude',
+    altitudeBody:
+      'Target height above the terrain under the vehicle. PX4 converts it to an absolute altitude and switches to Hold.',
+    speedTitle: 'Change speed',
+    speedBody:
+      'Cruising groundspeed for subsequent navigation setpoints. A mode change may reset this request.',
+    currentAgl: 'Current AGL',
+    currentSpeed: 'Current speed',
+    targetAgl: 'Target AGL (m)',
+    targetSpeed: 'Target speed (m/s)',
+    holdNotice: 'PX4 switches to Hold for this command; the horizontal position is kept.',
+    mustBeArmed: 'Arm the vehicle first',
+    invalid: 'Enter {{min}}–{{max}} {{unit}}',
+    send: 'Hold to send',
+    cancel: 'Cancel',
   },
   settings: {
     menu: 'Settings',

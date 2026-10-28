@@ -1,11 +1,9 @@
 import { useTranslation } from 'react-i18next'
 import { ChevronDown, ChevronUp } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
 import { useTelemetryStore } from '../stores/telemetry'
-import { useTerrainStore } from '../stores/terrain'
 import { useUiStore } from '../stores/ui'
-import { heightAboveGroundM, vehicleAmslAnchoredM } from '../cesium/heights'
 import { FIELD_STALE_MS, useDataAge, useFieldAge } from '../hooks/useDataAge'
+import { useVehicleAgl } from '../hooks/useVehicleAgl'
 import AttitudeIndicator from './instruments/AttitudeIndicator'
 
 const STALE_MS = 3000
@@ -23,37 +21,9 @@ export default function Hud() {
   const gpsAge = useFieldAge(snapshot?.field_ages.gps_at_ms)
   const att = snapshot?.attitude ?? null
   const pos = snapshot?.global_position ?? null
-  const samplePointAmsl = useTerrainStore((st) => st.samplePointAmsl)
-  const vehicleGround = useTerrainStore((st) => st.vehicleGroundAmslM)
-  const [sampledGround, setSampledGround] = useState<number | null>(null)
-  // The map's ground effect maintains `vehicleGroundAmslM` continuously; the
-  // HUD's own sampler only runs when that is missing (?nomap harness).
-  const groundAmsl = vehicleGround ?? sampledGround
-  // AGL relative to the DTM under the vehicle (DR6): the anchored AMSL minus
-  // the sampled ground — the same frame the plan was draped in, unlike REL
-  // which is home-relative. Debounced like the ConfirmContextBar readout.
-  const aglM = useMemo(() => {
-    if (pos == null || groundAmsl == null) return null
-    const anchored = vehicleAmslAnchoredM({
-      anchorOffsetM: useTerrainStore.getState().amslAnchorOffsetM,
-      demGroundAtHomeM: useTerrainStore.getState().homeGroundAmsl,
-      reportedAmslM: pos.altitude.meters,
-      relativeAltM: pos.relative_alt_m,
-    })
-    return heightAboveGroundM({
-      demGroundAmslM: groundAmsl,
-      planHomeAmslM: 0,
-      reportedAmslM: anchored,
-      relativeAltM: pos.relative_alt_m,
-    })
-  }, [pos, groundAmsl])
-  useEffect(() => {
-    if (pos == null || vehicleGround != null) return
-    const id = setTimeout(() => {
-      void samplePointAmsl(pos.latitude_deg, pos.longitude_deg).then((g) => setSampledGround(g))
-    }, 500)
-    return () => clearTimeout(id)
-  }, [pos?.latitude_deg, pos?.longitude_deg, samplePointAmsl, vehicleGround])
+  // AGL relative to the DTM under the vehicle (DR6), shared with the
+  // "change altitude" dialog so both read the same reference.
+  const aglM = useVehicleAgl()
 
   if (!snapshot) return null
   const speedMs = pos ? Math.hypot(pos.velocity.x_m_s, pos.velocity.y_m_s) : 0

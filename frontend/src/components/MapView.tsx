@@ -15,6 +15,7 @@ import { useUiStore } from '../stores/ui'
 import { useTerrainStore } from '../stores/terrain'
 import MapToolbar from './MapToolbar'
 
+
 /** Live vehicle ground sampling: at most one sample per this interval, or
  * sooner once the vehicle has moved this far (metres). Keeps a 5–20 Hz fix
  * stream from hammering the terrain sampler while still tracking terrain. */
@@ -46,6 +47,7 @@ export default function MapView() {
     x: number
     y: number
   } | null>(null)
+  const openFlightTarget = useUiStore((s) => s.openFlightTarget)
   const { initError, setSnapshot, setMeshOffset, setVehicleGround, setMission, setTerrainOverlay, setTerrain3d, setSurveyCoverage, sampleMeshGround, setLayers, setImageryStyle, focusWaypoint, fitMission, goHome, lookNorth } =
     useCesiumViewer(containerRef, {
       onContextMenu: (ground, screen) =>
@@ -557,14 +559,17 @@ export default function MapView() {
       <CoordinateReadout />
       {ctxMenu && (
         <div
-          className="absolute z-20 w-44 rounded border border-line bg-panel p-1 shadow-xl"
+          data-testid="map-context-menu"
+          className="absolute z-20 w-48 rounded border border-line bg-panel p-1 shadow-xl"
           // The window-level pointerdown handler above closes the menu on any
           // press. Without this, pressing a menu button unmounts the menu
           // before the click lands, so the buttons never fire.
           onPointerDown={(e) => e.stopPropagation()}
           style={{
-            left: Math.min(ctxMenu.x, window.innerWidth - 190),
-            top: Math.min(ctxMenu.y, window.innerHeight - 96),
+            left: Math.max(4, Math.min(ctxMenu.x, window.innerWidth - 204)),
+            // Four actions plus the coordinate line are taller than the old
+            // move/home-only menu. Keep the complete menu in the viewport.
+            top: Math.max(4, Math.min(ctxMenu.y, window.innerHeight - 196)),
           }}
         >
           <div className="mono truncate px-1.5 py-0.5 text-[10px] text-muted">
@@ -591,6 +596,34 @@ export default function MapView() {
             className="w-full rounded px-2 py-1.5 text-left text-sm text-ink hover:bg-canvas disabled:opacity-40"
           >
             {t('map.setHomeHere')}
+          </button>
+          <div className="my-1 h-px bg-line" />
+          {/* Vehicle-level targets, not point commands: PX4 changes the
+              alt/speed at the vehicle's own position, so these ignore the
+              clicked coordinate. */}
+          <button
+            data-testid="map-change-altitude"
+            disabled={!connected}
+            title={connected ? undefined : t('map.needLink')}
+            onClick={() => {
+              openFlightTarget('altitude')
+              setCtxMenu(null)
+            }}
+            className="w-full rounded px-2 py-1.5 text-left text-sm text-ink hover:bg-canvas disabled:opacity-40"
+          >
+            {t('map.changeAltitude')}
+          </button>
+          <button
+            data-testid="map-change-speed"
+            disabled={!connected}
+            title={connected ? undefined : t('map.needLink')}
+            onClick={() => {
+              openFlightTarget('speed')
+              setCtxMenu(null)
+            }}
+            className="w-full rounded px-2 py-1.5 text-left text-sm text-ink hover:bg-canvas disabled:opacity-40"
+          >
+            {t('map.changeSpeed')}
           </button>
         </div>
       )}

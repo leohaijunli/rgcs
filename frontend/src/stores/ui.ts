@@ -10,6 +10,8 @@ export type Theme = ThemePref
 export type DockTab = 'profile' | 'qc' | 'log'
 /** Fly-stage right column: the FC logs/console or the drape monitor. */
 export type FlyRightTab = 'logs' | 'drape'
+/** Live flight-target dialog: height above the DTM, or cruising groundspeed. */
+export type FlightTargetMode = 'altitude' | 'speed'
 /** One planning step expanded at a time (P2 §4.2). */
 export type PlanStep = 'area' | 'pattern' | 'waypoints' | 'sync'
 /** Active map tool. `add` places a new waypoint on click; `polygon` draws a
@@ -46,6 +48,8 @@ interface UiState {
   rightWidth: number
   /** Which Fly-stage tab is showing in the right column. */
   flyRightTab: FlyRightTab
+  /** The flight-target dialog the map menu opened, or `null` when closed. */
+  flightTarget: FlightTargetMode | null
   dockOpen: boolean
   dockHeight: number
   follow: boolean
@@ -99,6 +103,8 @@ interface UiState {
   focusPlanField: (step: PlanStep, field: string) => void
   clearPlanFocus: () => void
   toggleRight: () => void
+  openFlightTarget: (mode: FlightTargetMode) => void
+  closeFlightTarget: () => void
   setRightWidth: (width: number) => void
   setFlyRightTab: (tab: FlyRightTab) => void
   /** Tools ▸ Logs: open the Fly-stage right dock on its Logs tab. */
@@ -237,6 +243,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   rightOpen: !narrowScreen(),
   rightWidth: readRightWidth(),
   flyRightTab: 'logs',
+  flightTarget: null,
   dockOpen: true,
   dockHeight: narrowScreen() ? 160 : DOCK_DEFAULT,
   follow: true,
@@ -278,6 +285,8 @@ export const useUiStore = create<UiState>((set, get) => ({
     set((s) => ({ planStep, planFocus: { field, nonce: (s.planFocus?.nonce ?? 0) + 1 } })),
   clearPlanFocus: () => set({ planFocus: null }),
   toggleRight: () => set((s) => ({ rightOpen: !s.rightOpen })),
+  openFlightTarget: (flightTarget) => set({ flightTarget }),
+  closeFlightTarget: () => set({ flightTarget: null }),
   setRightWidth: (width) => {
     const rightWidth = clampRightWidth(width)
     try {

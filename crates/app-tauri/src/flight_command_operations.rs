@@ -169,41 +169,6 @@ fn ensure_speed_change_allowed(
     Ok(())
 }
 
-/// Convert a DTM height under the vehicle to PX4's AMSL datum.
-///
-/// PX4's `MAV_CMD_DO_CHANGE_ALTITUDE` only accepts absolute AMSL, while the
-/// loaded DTM may be tagged with any of the three project datums. The CGVD2013
-/// chain is fail-closed: without a verified geoid offset under the vehicle the
-/// command is refused rather than sent with a guessed height.
-fn dtm_height_to_amsl(
-    dtm: Height,
-    latitude_deg: f64,
-    longitude_deg: f64,
-) -> Result<Height, FlightCommandError> {
-    let meters = match dtm.datum() {
-        HeightDatum::AmslEgm96 => dtm.meters(),
-        HeightDatum::OrthometricCgvd2013 => {
-            let offset = crate::terrain_service::vertical_chain_offset(latitude_deg, longitude_deg)
-                .ok_or_else(|| {
-                    invalid(
-                        "vertical datum is unverified under the vehicle - cannot command altitude",
-                    )
-                })?;
-            dtm.meters() - offset
-        }
-        HeightDatum::EllipsoidWgs84 => dtm
-            .convert(
-                HeightDatum::AmslEgm96,
-                latitude_deg,
-                longitude_deg,
-                maggcs_core::height::egm96_model(),
-            )
-            .map_err(|error| invalid(format!("cannot convert DTM height to AMSL: {error}")))?
-            .meters(),
-    };
-    Ok(Height::new(HeightDatum::AmslEgm96, meters))
-}
-
 fn ground_amsl_at(
     state: &AppState,
     latitude_deg: f64,
@@ -223,7 +188,8 @@ fn ground_amsl_at(
             longitude_deg,
         ))
         .map_err(|error| invalid(format!("DTM is unavailable under the vehicle: {error}")))?;
-    dtm_height_to_amsl(dtm, latitude_deg, longitude_deg)
+    maggcs_core::height::to_px4_amsl(dtm, latitude_deg, longitude_deg)
+        .map_err(|error| invalid(format!("cannot convert DTM height to AMSL: {error}")))
 }
 
 fn validate_intent(intent: &FlightCommandIntent) -> Result<(), FlightCommandError> {

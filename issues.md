@@ -235,6 +235,15 @@ pointercancel 一律不发送；**按下超过 1 s 才松开也算完成**——
 发送且只发一条、状态条三个阶段与耗时、**RTL 从飞行视图 2 次交互发出**、
 键盘按住 Enter 同样可发（且自动重复不会发第二条）、模式弹层里 Hold 单击即
 切 / Return 单击无效而按住才切。排查途中定位到一个通用陷阱见 N8。
+**U4 实时高度／速度目标的软件路径已完成（2026-10-27）：** Fly 地图右键菜单
+新增 `Change altitude…` 与 `Change speed…`；两者均按 medium 风险使用长按发送。
+高度输入为 DTM AGL（1–120 m），core `height::to_px4_amsl` 通过
+`H + N(CGG2013) = h`、`h − N(EGM96) = AMSL` 转成 PX4 绝对 AMSL，缺 DEM／
+基准覆盖或未解锁时 fail-closed；速度范围 1–15 m/s，实时命令、survey 与 drape
+共用 PX4 v1.17 的 `DO_CHANGE_SPEED` 编码（速度在 `param2`）。浏览器验收覆盖真实
+Cesium 右键、两个弹框、单击零发送、长按各一条 intent、遥测不覆盖正在编辑的值
+及未解锁零写入。**尚未完成：** PX4 SITL／实机飞行验证；不得据此关闭 SW-01
+真实航段速度接入或完整 Drape 正确性工作。
 **L2 常驻 RTL/Hold 已完成**（commit `891bda3`，本轮补记）：`SafetyCommands.tsx`
 把 RTL（medium，`HoldButton`）与 Hold（low，单击）作为常驻按钮放在 TopBar，
 位于 L3 置灰分组**之外**——链路可疑时正是要用 RTL，所以它不随遥测置灰；两者
@@ -302,6 +311,22 @@ React 把原来那两个 `<span>` 摘了下来，`e.target` 于是成了**已脱
 `cargo test --all-targets` 并行跑全部 target 时该用例 3 s 收不到 GCS
 heartbeat 而 panic；单独跑（或重跑）稳定通过。属既有计时/负载敏感用例，
 非本次改动引入。
+
+### N9 [P1][motor-test/signals] `SCALED_IMU{,2,3}` 磁场曲线疑似未隔离
+Motor Test 新增三个 scaled-IMU stream 后，在 IMU3 地磁数据施加 offset，IMU1／2
+曲线也呈现近似变化。排查 MAVLink message ID、动态 signal key、校准／offset
+应用位置以及 ring-buffer／series 引用；增加回归测试，证明只改变 IMU3 输入不会
+改变 IMU1／2 样本。
+
+### N10 [P1][inspector] ULog 选择信号后仍固定为 30 s，且缺少双轴缩放
+载入 ULog 并选择信号后，应立即绘制该信号的完整记录范围，而不是沿用 live
+模式的 30 s 滚动窗；增加明确的横向时间缩放与纵向数值缩放，并保留恢复全图
+操作及可测的轴范围。
+
+### N11 [P1][runtime/frontend] Reload 必须是窗口局部操作
+在一个窗口右键 Reload 只应重载该 webview、释放该窗口自己的订阅；不得重置
+另一个 Signal Inspector 的已载入 ULog、选择、缩放或 Runtime 会话。增加双窗口
+隔离回归，覆盖 Inspector 活跃时重载主窗口及另一个工具窗口。
 
 ## Deferred（操作员指示暂缓）
 

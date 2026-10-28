@@ -58,6 +58,10 @@ function commandName(t: Translate, command: string, armed: boolean): string {
       return t('plan.cmd.arm')
     case 'disarm':
       return t('plan.cmd.disarm')
+    case 'change_altitude':
+      return t('flightTarget.altitudeTitle')
+    case 'change_speed':
+      return t('flightTarget.speedTitle')
     default:
       return command
   }

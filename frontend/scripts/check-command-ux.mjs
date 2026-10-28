@@ -15,8 +15,9 @@ import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 
 const [url, shotsDir] = [process.argv[2], process.argv[3]]
+const mapMode = process.argv.includes('--map')
 if (!url || !shotsDir) {
-  console.error('usage: node check-command-ux.mjs <viteUrl> <shotsDir>')
+  console.error('usage: node check-command-ux.mjs <viteUrl> <shotsDir> [--map]')
   process.exit(1)
 }
 
@@ -271,7 +272,10 @@ await page.addInitScript(() => {
   window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} }
 })
 
-await page.goto(`${url}` + (url.includes('?') ? '&' : '?') + 'nomap', { waitUntil: 'networkidle', timeout: 60000 })
+await page.goto(
+  mapMode ? url : `${url}` + (url.includes('?') ? '&' : '?') + 'nomap',
+  { waitUntil: 'networkidle', timeout: 60000 },
+)
 await page.evaluate(() => {
   // The forced start page (PJ3) gates the shell behind Tauri; the mock opens
   // a throwaway project so the surfaces under test render.
@@ -291,6 +295,37 @@ await page.waitForSelector('[data-testid="target-change-dialog"]', { state: 'det
 
 await mkdir(shotsDir, { recursive: true })
 await waitUntil(async () => (await page.locator('[data-testid="flight-menu"]').count()) === 1, 20000)
+
+// Optional real-map acceptance: use Cesium's actual RIGHT_CLICK handler to
+// open the production context menu. Default CI remains `?nomap` because some
+// headless SwiftShader runners cannot keep a Cesium scene alive (A8).
+if (mapMode) {
+  const canvas = page.locator('.cesium-widget canvas').first()
+  await canvas.waitFor({ state: 'visible', timeout: 30000 })
+  const box = await canvas.boundingBox()
+  if (box === null) throw new Error('Cesium canvas has no layout box')
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { button: 'right' })
+  const mapMenu = page.locator('[data-testid="map-context-menu"]')
+  check(await waitUntil(async () => (await mapMenu.count()) === 1, 10000),
+    'a real Cesium right-click opens the map context menu')
+  check(await page.locator('[data-testid="map-change-altitude"]').isVisible(),
+    'the right-click menu exposes Change altitude')
+  check(await page.locator('[data-testid="map-change-speed"]').isVisible(),
+    'the right-click menu exposes Change speed')
+  await page.screenshot({ path: join(shotsDir, 'flight-target-map-context-menu.png') })
+  await page.locator('[data-testid="map-change-speed"]').click()
+  check(await page.locator('[data-testid="flight-target-dialog"]').isVisible(),
+    'Change speed opens the flight-target dialog from the right-click menu')
+  await page.screenshot({ path: join(shotsDir, 'flight-target-speed-dialog.png') })
+  await page.locator('[data-testid="flight-target-cancel"]').click()
+
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { button: 'right' })
+  await page.locator('[data-testid="map-change-altitude"]').click()
+  check(await page.locator('[data-testid="flight-target-dialog"]').isVisible(),
+    'Change altitude opens the flight-target dialog from the right-click menu')
+  await page.screenshot({ path: join(shotsDir, 'flight-target-altitude-dialog.png') })
+  await page.locator('[data-testid="flight-target-cancel"]').click()
+}
 
 /** Every command the UI handed to the backend (boot-time invokes excluded). */
 const commands = () =>
@@ -518,8 +553,10 @@ await page.keyboard.press('Escape')
 await page.evaluate(async () => {
   const { useCommandStore } = await import('/src/stores/command.ts')
   const { useTerrainStore } = await import('/src/stores/terrain.ts')
+  const { useUiStore } = await import('/src/stores/ui.ts')
   window.__flightStore = useCommandStore
   window.__terrainStore = useTerrainStore
+  window.__uiStore = useUiStore
   window.__originalTerrainSample = useTerrainStore.getState().samplePointAmsl
 })
 async function readyTarget(revision) {
@@ -658,11 +695,92 @@ await page.evaluate(() => { void window.__flightStore.getState().sendSetMode(4, 
 check(await waitUntil(async () => (await commands()).length === beforeDiscovery + 2, 5000), 'a fresh command binds the new target without replaying old intent')
 await page.evaluate(() => window.__mockFlightReply('set_mode'))
 check(await waitUntil(async () => (await status.innerText()).includes('Accepted'), 5000), 'the new target command accepts only its own operation reply')
+check(
+  await waitUntil(
+    async () => page.evaluate(() => window.__flightStore.getState().pending === null),
+    5000,
+  ),
+  'the final mode reply releases the command slot before flight-target editing',
+)
 
 const allScoped = await commands()
 check(new Set(allScoped.map((entry) => entry.request.context.request_id)).size === allScoped.length,
   'all stale/racing/new-target executes retain distinct request identities')
 check(allScoped.at(-1).request.context.session.target.generation === '6', 'the final fresh request names the replacement generation explicitly')
+
+// --- 13. flight-target dialog: altitude / speed from the map menu -----------
+// The map's right-click menu opens this dialog through `useUiStore`; the
+// headless harness has no map, so the store is the entry point here.
+const targetDialog = page.locator('[data-testid="flight-target-dialog"]')
+const targetInput = page.locator('[data-testid="flight-target-input"]')
+const targetSend = page.locator('[data-testid="flight-target-send"]')
+const targetReason = page.locator('[data-testid="flight-target-reason"]')
+const openTarget = (mode) => page.evaluate((m) => window.__uiStore.getState().openFlightTarget(m), mode)
+const closeTarget = () => page.evaluate(() => window.__uiStore.getState().closeFlightTarget())
+
+const beforeTarget = (await commands()).length
+await page.evaluate(() => window.__mockArm(true))
+await openTarget('speed')
+await targetDialog.waitFor({ state: 'visible', timeout: 5000 })
+check((await page.locator('[data-testid="flight-target-current"]').innerText()).includes('m/s'),
+  'the speed dialog shows the live groundspeed')
+await targetInput.fill('40')
+check(await waitUntil(async () => (await targetReason.innerText()).includes('1–15'), 5000),
+  'an out-of-envelope speed is refused before the wire')
+check(await targetSend.isDisabled(), 'the send stays disabled outside the envelope')
+await targetInput.fill('3.5')
+check(
+  await waitUntil(async () => !(await targetSend.isDisabled()), 5000),
+  'an armed in-envelope speed enables hold-to-send',
+)
+await page.waitForTimeout(600)
+check(await targetInput.inputValue() === '3.5',
+  'live telemetry cannot overwrite an in-progress target edit')
+await targetSend.click()
+await page.waitForTimeout(300)
+check((await commands()).length === beforeTarget, 'a single click cannot send a medium-risk flight-target command')
+await hold(targetSend, HOLD_AT_MS)
+check(await waitUntil(async () => (await commands()).length === beforeTarget + 1, 5000),
+  'a held send issues the speed command')
+const speedIntent = (await commands()).at(-1).request.intent
+check(speedIntent.kind === 'change_speed' && speedIntent.speed_m_s === 3.5,
+  'the speed intent carries the typed groundspeed')
+check((await targetDialog.count()) === 0, 'the dialog closes once the command is sent')
+await page.evaluate(() => window.__mockFlightReply('change_speed'))
+check(await waitUntil(async () => (await status.innerText()).includes('Accepted'), 5000),
+  'the accepted speed change settles in the status strip')
+
+const beforeAltitude = (await commands()).length
+await openTarget('altitude')
+await targetDialog.waitFor({ state: 'visible', timeout: 5000 })
+await targetInput.fill('30')
+check(
+  await waitUntil(async () => !(await targetSend.isDisabled()), 5000),
+  'an armed in-envelope AGL target enables hold-to-send',
+)
+await hold(targetSend, HOLD_AT_MS)
+check(await waitUntil(async () => (await commands()).length === beforeAltitude + 1, 5000),
+  'a held send issues the altitude command')
+const altitudeIntent = (await commands()).at(-1).request.intent
+check(altitudeIntent.kind === 'change_altitude' && altitudeIntent.agl_m === 30,
+  'the altitude intent carries the typed AGL target')
+await page.evaluate(() => window.__mockFlightReply('change_altitude'))
+check(await waitUntil(async () => (await status.innerText()).includes('Accepted'), 5000),
+  'the accepted altitude change settles in the status strip')
+
+// Unarmed: the dialog names the gate and refuses before any write.
+const beforeUnarmed = (await commands()).length
+await page.evaluate(() => window.__mockArm(false))
+await openTarget('altitude')
+await targetDialog.waitFor({ state: 'visible', timeout: 5000 })
+check((await targetReason.innerText()).includes('Arm'), 'the altitude dialog names the armed gate')
+check(await targetSend.isDisabled(), 'an unarmed altitude change cannot be sent')
+await page.screenshot({ path: join(shotsDir, 'flight-target-altitude-unarmed.png') })
+await targetSend.click({ force: true })
+await page.waitForTimeout(300)
+check((await commands()).length === beforeUnarmed, 'the refused altitude change writes nothing')
+await page.evaluate(() => window.__mockArm(true))
+await closeTarget()
 
 const unhandled = await page.evaluate(() => window.__mockUnhandled)
 if (unhandled.length > 0) {

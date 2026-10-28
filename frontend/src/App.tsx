@@ -18,6 +18,7 @@ import AlertLayer from './components/AlertLayer'
 import HeartbeatBanner from './components/HeartbeatBanner'
 import { isTextEntry } from './util/keys'
 import ShortcutsDialog, { useShortcutsSheet } from './components/dialogs/ShortcutsDialog'
+import FlightTargetDialog from './components/dialogs/FlightTargetDialog'
 import AutoConnectDialog from './components/dialogs/AutoConnectDialog'
 import TargetChangeDialog from './components/dialogs/TargetChangeDialog'
 import TeardownDialog from './components/dialogs/TeardownDialog'
@@ -133,6 +134,9 @@ export default function App() {
             <MockBanner />
             <Hud />
             <LifecycleOverlays />
+            {/* Mounted at the shell, not the map: the map context menu opens
+                it, and the headless (`?nomap`) harness has no map at all. */}
+            <FlightTargetDialog />
             <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
           </div>
           <ProfileDrawer defaultOpen={detachedMap.detached} />

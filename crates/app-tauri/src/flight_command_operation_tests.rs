@@ -919,40 +919,19 @@ async fn speed_and_altitude_changes_guard_the_envelope_arm_state_and_dtm() {
     let error = begin(
         h.app.handle(),
         "main",
-        request(&session, FlightCommandIntent::ChangeAltitude { agl_m: 20.0 }),
+        request(
+            &session,
+            FlightCommandIntent::ChangeAltitude { agl_m: 20.0 },
+        ),
     )
     .expect("prepared")
     .run()
     .await
     .expect_err("no DTM");
-    assert!(format!("{error}").contains("no DTM is loaded"), "got {error}");
+    assert!(
+        format!("{error}").contains("no DTM is loaded"),
+        "got {error}"
+    );
     assert_eq!(commands(&h).len(), 1, "the refused altitude wrote nothing");
     h.shutdown().await;
-}
-
-/// The AGL→AMSL conversion is the only place this app decides what PX4's
-/// `DO_CHANGE_ALTITUDE` `param1` means; it must follow the project's datum
-/// chain (`H + N(CGG2013) = h`, `h - N(EGM96) = AMSL`) and stay fail-closed.
-#[test]
-fn dtm_heights_convert_to_px4_amsl() {
-    use maggcs_core::height::GeoidModel;
-
-    let (lat, lon) = (49.2, -123.1);
-    let amsl = dtm_height_to_amsl(Height::new(HeightDatum::AmslEgm96, 42.0), lat, lon)
-        .expect("AMSL is already the target datum");
-    assert_eq!(amsl.datum(), HeightDatum::AmslEgm96);
-    assert!((amsl.meters() - 42.0).abs() < 1e-9);
-
-    let offset = crate::terrain_service::vertical_chain_offset(lat, lon).expect("geoid chain");
-    let cgvd = dtm_height_to_amsl(Height::new(HeightDatum::OrthometricCgvd2013, 42.0), lat, lon)
-        .expect("chain");
-    assert_eq!(cgvd.datum(), HeightDatum::AmslEgm96);
-    assert!((cgvd.meters() - (42.0 - offset)).abs() < 1e-9, "H - offset");
-
-    let n_egm96 = maggcs_core::height::egm96_model()
-        .undulation_m(lat, lon, HeightDatum::AmslEgm96)
-        .expect("EGM96 grid");
-    let ellipsoid = dtm_height_to_amsl(Height::new(HeightDatum::EllipsoidWgs84, 60.0), lat, lon)
-        .expect("ellipsoid");
-    assert!((ellipsoid.meters() - (60.0 - n_egm96)).abs() < 1e-9, "h - N");
 }

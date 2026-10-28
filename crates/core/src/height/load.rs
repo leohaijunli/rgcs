@@ -18,7 +18,7 @@
 use std::path::Path;
 
 use super::grid::{GeoidGrid, GeoidGridModel, GeoidGridSpec};
-use super::{HeightDatum, HeightError};
+use super::{Height, HeightDatum, HeightError};
 
 /// Load one `.mggeoid` file and register it under its datum in `model`.
 ///
@@ -93,6 +93,39 @@ pub fn vertical_datum_chain_available(latitude_deg: f64, longitude_deg: f64) -> 
     );
     let egm = egm96_model().undulation_m(latitude_deg, longitude_deg, HeightDatum::AmslEgm96);
     cgg.is_ok() && egm.is_ok()
+}
+
+/// Convert an absolute height to the AMSL datum accepted by PX4 global
+/// commands, using the embedded project geoid grids.
+///
+/// The conversion is deliberately centralized here: `CGVD2013 H` follows
+/// `H + N(CGG2013) = h`, then `h - N(EGM96) = AMSL`; ellipsoid heights use
+/// only the second step. A missing grid sample is an error, so callers cannot
+/// silently command a guessed absolute altitude.
+pub fn to_px4_amsl(
+    height: Height,
+    latitude_deg: f64,
+    longitude_deg: f64,
+) -> Result<Height, HeightError> {
+    if height.datum() == HeightDatum::AmslEgm96 {
+        return Ok(height);
+    }
+    let ellipsoid = height.convert(
+        HeightDatum::EllipsoidWgs84,
+        latitude_deg,
+        longitude_deg,
+        if height.datum() == HeightDatum::OrthometricCgvd2013 {
+            cgg2013_model()
+        } else {
+            egm96_model()
+        },
+    )?;
+    ellipsoid.convert(
+        HeightDatum::AmslEgm96,
+        latitude_deg,
+        longitude_deg,
+        egm96_model(),
+    )
 }
 
 /// The committed EGM96 BC-SW extraction, embedded at compile time and parsed
@@ -331,6 +364,39 @@ mod tests {
             "round trip drift {}",
             back.meters()
         );
+    }
+
+    #[test]
+    fn px4_amsl_helper_handles_all_absolute_datums_and_fails_closed() {
+        let (lat, lon) = (48.556_06, -123.381_36);
+        let amsl = to_px4_amsl(Height::new(HeightDatum::AmslEgm96, 42.0), lat, lon)
+            .expect("AMSL identity");
+        assert_eq!(amsl, Height::new(HeightDatum::AmslEgm96, 42.0));
+
+        let n_cgg = cgg2013_model()
+            .undulation_m(lat, lon, HeightDatum::OrthometricCgvd2013)
+            .expect("CGG2013 grid");
+        let n_egm = egm96_model()
+            .undulation_m(lat, lon, HeightDatum::AmslEgm96)
+            .expect("EGM96 grid");
+        let cgvd = to_px4_amsl(
+            Height::new(HeightDatum::OrthometricCgvd2013, 42.0),
+            lat,
+            lon,
+        )
+        .expect("full chain");
+        assert!((cgvd.meters() - (42.0 + n_cgg - n_egm)).abs() < 1e-9);
+
+        let ellipsoid = to_px4_amsl(Height::new(HeightDatum::EllipsoidWgs84, 60.0), lat, lon)
+            .expect("ellipsoid to AMSL");
+        assert!((ellipsoid.meters() - (60.0 - n_egm)).abs() < 1e-9);
+
+        assert!(to_px4_amsl(
+            Height::new(HeightDatum::OrthometricCgvd2013, 42.0),
+            51.05,
+            -114.07,
+        )
+        .is_err());
     }
 
     /// H7 rationale made measurable: the pre-H7 "H ≈ AMSL" shortcut is off

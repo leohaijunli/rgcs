@@ -59,6 +59,8 @@ export type CommandName =
   | 'arm'
   | 'disarm'
   | 'goto'
+  | 'change_altitude'
+  | 'change_speed'
   | 'set_home'
 
 /** Terminal vocabulary retained by the existing command-status components. */
@@ -97,6 +99,13 @@ interface CommandState {
   sendGoto: (latDeg: number, lonDeg: number) => Promise<void>
   /** Set the vehicle's home to a map point (`MAV_CMD_DO_SET_HOME`). */
   sendSetHome: (latDeg: number, lonDeg: number) => Promise<void>
+  /** Fly the target height above the DTM under the vehicle
+   * (`MAV_CMD_DO_CHANGE_ALTITUDE`). PX4 converts it to its AMSL setpoint and
+   * switches to Hold, so the horizontal setpoint is kept. */
+  sendChangeAltitude: (aglM: number) => Promise<void>
+  /** Set the cruising groundspeed for subsequent setpoints
+   * (`MAV_CMD_DO_CHANGE_SPEED`). */
+  sendChangeSpeed: (speedMs: number) => Promise<void>
   /** Map point of the last "Move to here" click, shown as a marker until the
    * vehicle arrives or the command fails. */
   gotoTarget: [number, number] | null
@@ -284,6 +293,26 @@ export const useCommandStore = create<CommandState>((set) => ({
         },
       },
     )
+  },
+
+  /** Change the target height above the DTM under the vehicle. */
+  sendChangeAltitude: async (aglM) => {
+    const scope = await beginFlightRequest('change_altitude')
+    if (!scope) return
+    await executeFlightIntent(scope, 'change_altitude', {
+      kind: 'change_altitude',
+      agl_m: aglM,
+    })
+  },
+
+  /** Set the cruising groundspeed PX4 uses for the next setpoints. */
+  sendChangeSpeed: async (speedMs) => {
+    const scope = await beginFlightRequest('change_speed')
+    if (!scope) return
+    await executeFlightIntent(scope, 'change_speed', {
+      kind: 'change_speed',
+      speed_m_s: speedMs,
+    })
   },
 
   // The executor emits a local `sent` phase and applies one scoped terminal
@@ -520,6 +549,8 @@ function commandFromKind(kind: FlightCommandKind): CommandName | null {
     arm: 'arm',
     disarm: 'disarm',
     goto: 'goto',
+    change_altitude: 'change_altitude',
+    change_speed: 'change_speed',
     set_home: 'set_home',
   }
   return names[kind] ?? null

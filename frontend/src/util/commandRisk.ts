@@ -30,6 +30,8 @@ export const COMMAND_RISK: Record<CommandName, CommandRisk> = {
   disarm: 'medium',
   set_mode: 'low',
   goto: 'medium',
+  change_altitude: 'medium',
+  change_speed: 'medium',
   set_home: 'medium',
 }
 

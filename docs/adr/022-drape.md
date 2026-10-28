@@ -56,7 +56,10 @@
    the check repeats, so simplification can reduce the item count but never
    the clearance. Over the mission-item limit the compile **refuses** with a
    `wp_tol` suggestion that was verified to fit — never a silent relaxation.
-   One `DO_CHANGE_SPEED` per line (param semantics *verify*, plan issue 13);
+    One `DO_CHANGE_SPEED` per line, encoded as PX4 v1.17 reads it
+    (`param1 = 1` groundspeed, speed in `param2`, `param3 = -1` no throttle
+    change; verified against `navigator_main.cpp` and shared with live speed
+    commands);
    every compiled waypoint carries `s` / line id / kind for DR5 matching and
    DR7 aggregation; the worst vertical deviation is stored in
    `DrapeStats.compile_deviation_max_m`. Compiled heights carry the DEM's

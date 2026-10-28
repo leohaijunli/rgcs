@@ -522,7 +522,7 @@ measurements. Fix them as small, separately verified changes.
 
 | ID | Observed code fact | Consequence / required verification |
 | --- | --- | --- |
-| F01 Speed encoding | `terrain/drape_compile.rs:170` emits `[speed, 0, 0, 0]`; `survey/generate.rs:159` emits `[1, speed, -1, 0]`. PX4 v1.17 `navigator_main.cpp:690` reads speed from `param2` and resets it when zero. | Drape's speed command does not request its modeled speed. Also remove the fixed `ground_speed_mps: 5` in `stores/mission.ts:993` in favor of the actual recipe/leg speed. |
+| F01 Speed encoding | **Encoding fixed 2026-10-27:** drape, survey and live `DO_CHANGE_SPEED` now share `[1, speed, -1, 0]`; tests pin PX4 v1.17's `param2` behavior. `stores/mission.ts` still supplies a fixed `ground_speed_mps: 5`. | Remaining: connect the actual recipe/leg speed to the solver/compiler and validate the command against target PX4; do not treat the encoder unit tests as SITL or hardware evidence. |
 | F02 Datum boundary | `terrain_service.rs` returns converted AMSL `preview.waypoints` and retains DEM-datum `result.compiled`. `stores/mission.ts:1029` merges `preview.result.compiled`. | The stored-AMSL contract can receive DEM-datum heights. Review conversion together with the existing anchor compensation; quantify behavior with nonzero datum offsets and with/without an anchor. |
 | F03 Line identity | `drapeApply.ts` returns line ranges identified only by kind; `stores/mission.ts:1041` maps them by kind. Multiple survey lines therefore select the same last range. The next input builder also includes every item in the range, including coordinate-less speed items. | Preserve line IDs and filter command items out of sampled geometry; repeat drape over several same-kind lines and verify identity and geometry. |
 | F04 Calculation lifecycle | The pre-run key at `stores/mission.ts:1098` includes offset/clearance, while the success key at `:1119` omits them. The stale-result guard uses waypoint geometry rather than the complete parameter/resource revision. | Require idempotent recalculation and rejection of results from older parameter/DEM inputs; settle without a recurring solve loop. |
@@ -556,6 +556,11 @@ path; update those during the relevant correctness work.
 | SW-12 | P3 / gated | Persistent execution and battery-resume workflow. | Interrupt/reconnect/restart tests retain honest line progress; all baseline resume choices work with validated re-entry; old events cannot advance a new sortie. | SW-03–07, SW-11; M1/M4/U6 dependencies |
 | SW-13 | P3 / gated | Line QC, reflight selection, and reproducible survey review/manifest. | Injected deviations and incomplete lines produce the expected line reports; replay reproduces the flown revision and reflight mapping. | SW-12; existing M3/M4/M6/M8 dependencies |
 | SW-14 | P1 | Top workflow/task bar and application/task/segment menus; navigation-independent monitoring. | Stage switching is one click when expanded and preserves draft/monitor state; battery and Hold/RTL remain visible at 1366/1024; resource entry is available within two actions; navigation emits no flight command. | SW-04, SW-06; reuse DR monitor/command lifecycle |
+
+**SW-01 partial delivery (2026-10-27):** the shared PX4-compatible encoder,
+finite/range validation, and map-menu live speed command are complete. Actual
+segment-speed wiring and target-PX4 SITL/hardware evidence remain open, so SW-01
+is not marked complete.
 
 Each package is a sequence of small changes: contract/signature review, a tested
 core slice, adapter wiring, and UI verification. Present the affected types,
