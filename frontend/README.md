@@ -3,6 +3,34 @@
 React/TypeScript, Cesium, Radix UI, shared design tokens, and English i18n.
 See [ADR-010](../docs/adr/010-frontend-stack.md).
 
+## Live altitude targets
+
+Fly → right-click → **Change altitude…** uses DTM AGL when a ready DEM samples
+under the UAV. Otherwise it uses **AMSL**, seeded from the FC-reported absolute
+altitude. The label, current readout and typed command share that reference.
+The reference is fixed for the edit, so a later DEM load cannot reinterpret an
+entered value. AGL accepts 1–120 m; AMSL accepts finite absolute heights,
+including heights above 120 m and below sea level.
+
+```bash
+node scripts/check-command-ux.mjs http://localhost:1420/ /tmp/opencode/command-ux
+```
+
+Set `PLAYWRIGHT_MODULE` when Playwright is installed outside the frontend and
+`FLIGHT_TARGET_SHOTS_DIR` to retain altitude screenshots separately. The check
+covers missing/loading/nodata/mesh-only DEM, datum-tagged AMSL payloads, a ready
+AGL sample, stable edits and the armed/hold-to-send guards. See
+[verification and manual steps](../docs/verification/flight-altitude-fallback-20261028.md).
+
+## Signal Inspector ULog history
+
+Loading a `.ulg` opens **Full log** across the recording's entire time range.
+Selected signals, including signals added afterward, load their history
+independently of playback. Zooming, seeking and trace edits preserve the viewed
+range; Follow restores the full extent. See the
+[Inspector module guide](src/inspector/README.md) for regression commands,
+screenshots and manual verification.
+
 ## RTK drawer
 
 `components/RtkDrawer.tsx` offers **F9P Survey-In** and **Preconfigured RTCM

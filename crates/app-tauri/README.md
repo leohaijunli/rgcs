@@ -10,9 +10,17 @@ provides continuity for installed settings. The Rust package/binary is
 ## Owned flight commands and native client cleanup
 
 `flight_command_operations::flight_command_execute` accepts the Rust-derived
-`FlightCommandRequest` for Takeoff, Land, RTL, Set mode, Arm/Disarm, Go to and
-Set home. It authorizes the actual native window/session and captures the existing
-primary command worker/transport. Supplied heights are datum-tagged AMSL.
+`FlightCommandRequest` for Takeoff, Land, RTL, Set mode, Arm/Disarm, Go to,
+Change altitude/speed and Set home. It authorizes the actual native window/session
+and captures the existing primary command worker/transport. Supplied heights are
+datum-tagged AMSL.
+
+`ChangeAltitude { target }` explicitly distinguishes DTM-relative
+`FlightAltitudeTarget::Agl { agl_m }` from `Amsl { altitude: Height }`. AGL is
+validated in the 1–120 m envelope and converted through `core::height`; an AMSL
+target is sent directly in `MAV_FRAME_GLOBAL` without requiring a DEM. Both
+require an armed vehicle and an allowed flight mode. Absolute targets must be
+finite `AMSL_EGM96` and representable in MAVLink's numeric field.
 
 Takeoff and its optional arm share one owner-bound operation. Preflight is
 rechecked after the takeoff ACK; forced-arm audit persistence is target-bound and
@@ -31,11 +39,30 @@ that client's work; primary I/O and other clients' caches/operations remain aliv
 cargo test -p maggcs-app --lib flight_command_operations
 ```
 
-Sixteen Unix PTY fixtures exercise actual production command/transport services,
+Seventeen Unix PTY fixtures exercise actual production command/transport services,
 zero-write admission failures, preflight rechecks, partial takeoff, emergency
 supersession, owner-only cancellation, native-close/reopen isolation and uncertain
 ACK outcomes. See the [reviewed contract](../../docs/architecture/af-02b4b-flight-command-ownership.md)
 and [delivery evidence](../../docs/verification/af-02b-flight-commands-20261026.md).
+
+## Signal Inspector full-log history
+
+`inspector_ulog_history(traces, max_points)` returns columnar, peak-preserving
+history over the entire active `.ulg`. An independent ULog reader and core DSP
+session keep history loading separate from playback position and filter state.
+A semaphore permits one blocking scan at a time; source/request epochs cancel
+obsolete scans. Per-trace and aggregate point budgets bound the snapshot.
+
+```bash
+cargo test -p maggcs-app --lib inspector
+cargo test -p maggcs-core --lib ulog::
+```
+
+The dense 180 s fixture exceeds the live ring's capacity and still retains both
+ends and early/late peaks within 256 output points. Short-log/filter and
+cancellation/error fixtures also pass. See
+[ADR-016](../../docs/adr/016-inspector-window-and-channel.md) and the
+[frontend module guide](../../frontend/src/inspector/README.md).
 
 ## Owned Mission exchanges
 

@@ -1,9 +1,9 @@
-// Live flight-target dialog (map context menu): change the height above the
-// DTM under the vehicle (`MAV_CMD_DO_CHANGE_ALTITUDE`) or the cruising
-// groundspeed for subsequent setpoints (`MAV_CMD_DO_CHANGE_SPEED`).
+// Live flight-target dialog (map context menu): change the DTM-relative AGL
+// height, or absolute AMSL without a ready DEM (`MAV_CMD_DO_CHANGE_ALTITUDE`),
+// or the cruising groundspeed (`MAV_CMD_DO_CHANGE_SPEED`).
 //
 // Both are medium-risk (plan §7 U4): the send is a press-and-hold, and the
-// dialog carries the state the command runs against — the current AGL/speed,
+// dialog carries the state the command runs against — the current height/speed,
 // the armed state and, for altitude, the fact that PX4 switches to Hold.
 //
 // The envelope mirrors the backend (`flight_command_operations.rs`,
@@ -14,9 +14,11 @@ import { useEffect, useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { useTranslation } from 'react-i18next'
 import { HoldButton } from '../../design-system/components'
+import type { FlightAltitudeTarget } from '../../generated-types/FlightAltitudeTarget'
 import { useVehicleAgl } from '../../hooks/useVehicleAgl'
 import { useCommandStore } from '../../stores/command'
 import { useTelemetryStore } from '../../stores/telemetry'
+import { useTerrainStore } from '../../stores/terrain'
 import { useUiStore, type FlightTargetMode } from '../../stores/ui'
 
 /** Envelope of `MAV_CMD_DO_CHANGE_ALTITUDE`, metres above the DTM. */
@@ -45,36 +47,71 @@ export default function FlightTargetDialog() {
   const pending = useCommandStore((s) => s.pending)
   const armed = snapshot?.heartbeat?.base_mode.safety_armed === true
   const speedMs = currentSpeedMs(snapshot)
+  const reportedAmsl = snapshot?.global_position?.altitude
+  const amslM = reportedAmsl?.datum === 'AMSL_EGM96' && Number.isFinite(reportedAmsl.meters)
+    ? reportedAmsl.meters
+    : null
+  const [altitudeKind, setAltitudeKind] = useState<FlightAltitudeTarget['kind']>('amsl')
+  const [checkingTerrain, setCheckingTerrain] = useState(false)
   const [value, setValue] = useState('')
 
-  // Seed only when the command kind opens/changes. Telemetry keeps updating
-  // the readout above, but must never overwrite an operator's in-progress
-  // edit.
+  // Resolve and latch the altitude reference when the dialog opens. A loaded
+  // tile must actually sample under the vehicle; a mesh-only/stale AGL readout
+  // is not proof that the backend's DTM is ready. Telemetry and a later DEM
+  // load must never reinterpret an operator's in-progress edit.
   useEffect(() => {
+    setCheckingTerrain(false)
     if (mode === null) return
-    const seed = mode === 'altitude' ? aglM : speedMs
+    const seed = mode === 'altitude' ? amslM : speedMs
+    setAltitudeKind('amsl')
     setValue(seed != null ? seed.toFixed(1) : '')
-    // `aglM` / `speedMs` are intentionally snapshots at the mode transition.
+    if (mode !== 'altitude' || aglM == null || !Number.isFinite(aglM)) return
+    const terrain = useTerrainStore.getState()
+    const pos = snapshot?.global_position
+    if (!terrain.tile || terrain.loading || !pos) return
+    let cancelled = false
+    setCheckingTerrain(true)
+    void terrain.sampleDem([[pos.latitude_deg, pos.longitude_deg]])
+      .then(([ground]) => {
+        if (cancelled) return
+        if (ground != null && Number.isFinite(ground)) {
+          setAltitudeKind('agl')
+          setValue(aglM.toFixed(1))
+        }
+      })
+      .catch(() => { /* unavailable DEM: keep the AMSL reference */ })
+      .finally(() => { if (!cancelled) setCheckingTerrain(false) })
+    return () => { cancelled = true }
+    // Altitude/speed and terrain are snapshots at the mode transition.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode])
 
   if (mode === null) return null
 
   const isAltitude = mode === 'altitude'
-  const min = isAltitude ? ALTITUDE_AGL_MIN_M : SPEED_MIN_M_S
-  const max = isAltitude ? ALTITUDE_AGL_MAX_M : SPEED_MAX_M_S
+  const isAgl = isAltitude && altitudeKind === 'agl'
+  const min = isAgl ? ALTITUDE_AGL_MIN_M : isAltitude ? undefined : SPEED_MIN_M_S
+  const max = isAgl ? ALTITUDE_AGL_MAX_M : isAltitude ? undefined : SPEED_MAX_M_S
   const parsed = Number(value)
-  const valid = value.trim() !== '' && Number.isFinite(parsed) && parsed >= min && parsed <= max
+  const valid = value.trim() !== '' && Number.isFinite(parsed)
+    && (min === undefined || parsed >= min) && (max === undefined || parsed <= max)
+  const altitudeM = isAgl ? aglM : amslM
   const busy = pending !== null
   const reason = !armed
     ? t('flightTarget.mustBeArmed')
-    : !valid
-      ? t('flightTarget.invalid', { min, max, unit: isAltitude ? 'm' : 'm/s' })
-      : null
+    : checkingTerrain
+      ? t('flightTarget.checkingTerrain')
+      : !valid
+        ? isAltitude && !isAgl
+          ? t('flightTarget.invalidAmsl')
+          : t('flightTarget.invalid', { min, max, unit: isAltitude ? 'm' : 'm/s' })
+        : null
 
   const submit = () => {
     if (reason !== null) return
-    if (isAltitude) void sendChangeAltitude(parsed)
+    if (isAltitude) void sendChangeAltitude(isAgl
+      ? { kind: 'agl', agl_m: parsed }
+      : { kind: 'amsl', altitude: { datum: 'AMSL_EGM96', meters: parsed } })
     else void sendChangeSpeed(parsed)
     onClose()
   }
@@ -91,20 +128,20 @@ export default function FlightTargetDialog() {
             {t(isAltitude ? 'flightTarget.altitudeTitle' : 'flightTarget.speedTitle')}
           </Dialog.Title>
           <Dialog.Description className="mt-1 text-xs text-muted">
-            {t(isAltitude ? 'flightTarget.altitudeBody' : 'flightTarget.speedBody')}
+            {t(isAgl ? 'flightTarget.altitudeBody' : isAltitude ? 'flightTarget.altitudeAmslBody' : 'flightTarget.speedBody')}
           </Dialog.Description>
 
           <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-            <dt className="text-muted">{t(isAltitude ? 'flightTarget.currentAgl' : 'flightTarget.currentSpeed')}</dt>
+            <dt className="text-muted">{t(isAgl ? 'flightTarget.currentAgl' : isAltitude ? 'flightTarget.currentAmsl' : 'flightTarget.currentSpeed')}</dt>
             <dd className="mono text-right text-ink" data-testid="flight-target-current">
               {isAltitude
-                ? aglM != null ? `${aglM.toFixed(1)} m` : '—'
+                ? altitudeM != null ? `${altitudeM.toFixed(1)} m` : '—'
                 : speedMs != null ? `${speedMs.toFixed(1)} m/s` : '—'}
             </dd>
           </dl>
 
           <label className="mt-3 block text-xs text-muted" htmlFor="flight-target-value">
-            {t(isAltitude ? 'flightTarget.targetAgl' : 'flightTarget.targetSpeed')}
+            {t(isAgl ? 'flightTarget.targetAgl' : isAltitude ? 'flightTarget.targetAmsl' : 'flightTarget.targetSpeed')}
           </label>
           <input
             id="flight-target-value"
@@ -115,6 +152,7 @@ export default function FlightTargetDialog() {
             max={max}
             step={0.5}
             value={value}
+            disabled={checkingTerrain}
             onChange={(event) => setValue(event.target.value)}
             className="mono mt-1 h-9 w-full rounded border border-line bg-canvas px-2 text-sm text-ink"
           />

@@ -88,6 +88,19 @@ interface UlogInfo {
   topics: { name: string; signals: number }[]
 }
 
+/** Bounded full-recording snapshot from `inspector_ulog_history`. */
+interface UlogHistory {
+  name: string
+  duration_ms: number
+  traces: TraceFrame[]
+}
+
+type InspectorTimeWindow = number | 'full'
+const LIVE_WINDOW_SEC = 30
+/** Native time-bucket extrema keep full-log history below the live ring cap. */
+const HISTORY_POINTS_PER_TRACE = 16_384
+const MIN_LOG_SPAN_SEC = 0.001
+
 /** Replay speed presets (matches the Rust `ReplayControl` clamp). */
 const REPLAY_SPEEDS = [0.25, 0.5, 1, 2, 4, 8]
 
@@ -113,7 +126,7 @@ const CATALOG_POLL_MS = 1000
 
 interface Workspace {
   version: 2
-  windowSec: number
+  windowSec: InspectorTimeWindow
   plots: Plot[]
   colors: Record<string, string>
   axisLink: boolean
@@ -473,7 +486,7 @@ export function InspectorApp() {
   const [plots, setPlots] = useState<Plot[]>([])
   const [colors, setColors] = useState<Record<string, string>>({})
   const [paused, setPaused] = useState(false)
-  const [windowSec, setWindowSec] = useState(30)
+  const [windowSec, setWindowSec] = useState<InspectorTimeWindow>(LIVE_WINDOW_SEC)
   const [selected, setSelected] = useState<string | null>(null)
   const [axisLink, setAxisLink] = useState(false)
   /** Plot-grid column count (P7 layout presets): 1×1 / 2×1 / 3×1. */
@@ -525,6 +538,11 @@ export function InspectorApp() {
   }, [calLoaded])
   /** ULog playback state (`null` = the live link is the source). */
   const [replay, setReplay] = useState<ReplayStatus | null>(null)
+  const replayRef = useRef(replay)
+  replayRef.current = replay
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const historyEpoch = useRef(0)
+  const historyRevision = useRef(0)
   /** Seek slider position while dragging; committed to the backend on release. */
   const [seekPreview, setSeekPreview] = useState<number | null>(null)
   /** Mirrors the drag position for the pointer-up handler (avoid reading it
@@ -544,7 +562,11 @@ export function InspectorApp() {
   // (same pattern as `window.__mgParams` in params/store.ts).
   useEffect(() => {
     if (import.meta.env?.DEV) {
-      ;(window as unknown as { __mgInspector?: unknown }).__mgInspector = { showNotice }
+      ;(window as unknown as { __mgInspector?: unknown }).__mgInspector = {
+        showNotice,
+        charts: charts.current,
+        historyBuffers: () => historyBuffers.current,
+      }
     }
     return () => {
       if (import.meta.env?.DEV) delete (window as unknown as { __mgInspector?: unknown }).__mgInspector
@@ -572,11 +594,23 @@ export function InspectorApp() {
       // previously drag-zoomed/paused view would otherwise freeze until the
       // user seeks once).
       buffers.current.clear()
+      historyBuffers.current.clear()
+      historyEpoch.current += 1
+      lastDataKey.current.clear()
       spectra.current.clear()
+      settlingUntilRef.current = 0
+      setSettling(false)
+      setWindowSec('full')
       setFollow(true)
       setPaused(false)
       setSeekPreview(null)
       seekPreviewRef.current = null
+      for (const chart of charts.current.values()) {
+        chart.setData(chart.series.map(() => []) as unknown as uPlot.AlignedData, false)
+        const range = { min: 0, max: Math.max(MIN_LOG_SPAN_SEC, info.duration_ms / 1000) }
+        expectedX.current.set(chart, range)
+        chart.setScale('x', range)
+      }
       markDirty()
       setReplay({
         active: true,
@@ -587,7 +621,7 @@ export function InspectorApp() {
         speed: 1,
       })
       showNotice(
-        `Replaying ${info.name} · ${(info.duration_ms / 1000).toFixed(1)} s · ${info.topics.length} topics`,
+        `Loaded ${info.name} · ${(info.duration_ms / 1000).toFixed(1)} s · ${info.topics.length} topics · full history`,
         'success',
       )
     } catch (e) {
@@ -618,25 +652,43 @@ export function InspectorApp() {
 
   /** Stop replaying and hand the source back to the live link. */
   const useLive = useCallback(async () => {
+    historyEpoch.current += 1
     try {
       await invoke('inspector_use_live')
     } catch (e) {
       showNotice(String(e), 'error')
+      return
     }
+    buffers.current.clear()
+    historyBuffers.current.clear()
+    spectra.current.clear()
+    lastDataKey.current.clear()
+    for (const chart of charts.current.values()) {
+      chart.setData(chart.series.map(() => []) as unknown as uPlot.AlignedData, false)
+    }
+    setWindowSec(LIVE_WINDOW_SEC)
+    setFollow(true)
+    setPaused(false)
     setReplay(null)
     setSeekPreview(null)
-  }, [showNotice])
+    seekPreviewRef.current = null
+    markDirty()
+  }, [showNotice, markDirty])
 
   const pausedRef = useRef(paused)
   pausedRef.current = paused
   const windowRef = useRef(windowSec)
   windowRef.current = windowSec
+  const fullLogRef = useRef(false)
+  fullLogRef.current = replay?.active === true && windowSec === 'full'
   const plotsRef = useRef(plots)
   plotsRef.current = plots
   const activePlotRef = useRef(activePlot)
   activePlotRef.current = activePlot
 
   const buffers = useRef<Map<string, Ring>>(new Map())
+  /** Static full-log snapshots are independent of the rolling playback rings. */
+  const historyBuffers = useRef<Map<string, Ring>>(new Map())
   /** Latest Rust-computed spectrum per trace (S3). */
   const spectra = useRef<Map<string, SpectrumFrame>>(new Map())
   const charts = useRef<Map<string, uPlot>>(new Map())
@@ -831,7 +883,11 @@ export function InspectorApp() {
       if (!raw) return
       try {
         const ws = JSON.parse(raw) as Workspace
-        if (typeof ws.windowSec === 'number') setWindowSec(ws.windowSec)
+        if (typeof ws.windowSec === 'number' && Number.isFinite(ws.windowSec) && ws.windowSec > 0) {
+          setWindowSec(ws.windowSec)
+        } else if (ws.windowSec === 'full') {
+          setWindowSec(replayRef.current?.active ? 'full' : LIVE_WINDOW_SEC)
+        }
         if (Array.isArray(ws.plots)) {
           // Browser mock has no DSP runtime: drop any saved pipelines and
           // analyzers so no phantom "filtered" series or FFT views appear.
@@ -950,6 +1006,48 @@ export function InspectorApp() {
     void invoke('inspector_set_traces', { traces }).catch((e) => showNotice(String(e), 'error'))
   }, [plots, tauri])
 
+  // Opening a log and adding/changing a trace reads its entire history, even
+  // when playback has not reached that data. Only the current request may
+  // replace the view; rolling telemetry never appends to the static snapshot.
+  useEffect(() => {
+    const epoch = ++historyEpoch.current
+    if (!tauri || !replay?.active || windowSec !== 'full') {
+      setHistoryLoading(false)
+      return
+    }
+    const traces = plots.flatMap((p) => p.traces)
+    if (traces.length === 0) {
+      historyBuffers.current.clear()
+      setHistoryLoading(false)
+      return
+    }
+    let disposed = false
+    setHistoryLoading(true)
+    void invoke<UlogHistory>('inspector_ulog_history', { traces, maxPoints: HISTORY_POINTS_PER_TRACE })
+      .then((history) => {
+        if (disposed || historyEpoch.current !== epoch || history.name !== replayRef.current?.name) return
+        const next = new Map<string, Ring>()
+        for (const trace of history.traces) {
+          const ring = new Ring(Math.max(2, trace.t.length))
+          for (let i = 0; i < trace.t.length; i++) {
+            ring.push(trace.t[i], trace.raw[i] ?? NaN, trace.filtered[i] ?? NaN)
+          }
+          next.set(trace.trace_id, ring)
+        }
+        historyBuffers.current = next
+        historyRevision.current += 1
+        markDirty()
+      })
+      .catch((e) => { if (!disposed && historyEpoch.current === epoch) showNotice(String(e), 'error') })
+      .finally(() => { if (!disposed && historyEpoch.current === epoch) setHistoryLoading(false) })
+    return () => { disposed = true }
+  }, [tauri, replay?.active, replay?.name, replay?.duration_ms, plots, windowSec, calLoaded, markDirty, showNotice])
+
+  // A native source switch can happen independently of the toolbar.
+  useEffect(() => {
+    if (!replay?.active && windowSec === 'full') setWindowSec(LIVE_WINDOW_SEC)
+  }, [replay?.active, windowSec])
+
   // Drop buffers/spectra for traces that no longer exist.
   useEffect(() => {
     const live = new Set(plots.flatMap((p) => p.traces.map((t) => t.id)))
@@ -959,6 +1057,7 @@ export function InspectorApp() {
       }
     }
     for (const id of [...buffers.current.keys()]) if (!live.has(id)) buffers.current.delete(id)
+    for (const id of [...historyBuffers.current.keys()]) if (!live.has(id)) historyBuffers.current.delete(id)
     for (const id of [...spectra.current.keys()]) if (!live.has(id)) spectra.current.delete(id)
   }, [plots])
 
@@ -1020,9 +1119,10 @@ export function InspectorApp() {
   // memory while paused. (Rust keeps its own analyzer windows decoupled from
   // this view buffer, so no FFT window reservation is needed here.)
   const trimRings = useCallback(() => {
-    const keep = Math.max(2, Math.ceil((windowRef.current * 1000) / 10))
+    const seconds = typeof windowRef.current === 'number' ? windowRef.current : LIVE_WINDOW_SEC
+    const keep = Math.max(2, Math.ceil((seconds * 1000) / 10))
     for (const ring of buffers.current.values()) {
-      ring.trimBefore(ring.newestTime() - windowRef.current * 1000, keep)
+      ring.trimBefore(ring.newestTime() - seconds * 1000, keep)
     }
   }, [])
 
@@ -1039,7 +1139,7 @@ export function InspectorApp() {
     let min = Infinity
     let max = -Infinity
     for (const t of p.traces) {
-      const r = buffers.current.get(t.id)
+      const r = (fullLogRef.current ? historyBuffers.current : buffers.current).get(t.id)
       if (!r || r.length === 0) continue
       min = Math.min(min, r.timeAt(0) / 1000)
       max = Math.max(max, r.newestTime() / 1000)
@@ -1067,7 +1167,10 @@ export function InspectorApp() {
         )
         .join(',')}|cal:${calLoaded ? 1 : 0}`
       if (charts.current.has(p.id) && chartSigs.current.get(p.id) === sig) continue
-      charts.current.get(p.id)?.destroy()
+      const previousChart = charts.current.get(p.id)
+      const previousMin = previousChart?.scales.x.min
+      const previousMax = previousChart?.scales.x.max
+      previousChart?.destroy()
       chartResizers.current.get(p.id)?.disconnect()
       const cursor = axisLink ? { show: true, sync: { key: SYNC_KEY } } : { show: true }
       const mags = magComponentGroups(p.traces)
@@ -1163,6 +1266,10 @@ export function InspectorApp() {
         host,
       )
       charts.current.set(p.id, chart)
+      lastDataKey.current.delete(p.id)
+      if (fullLogRef.current && !followRef.current && previousMin != null && previousMax != null) {
+        chart.setScale('x', { min: previousMin, max: previousMax })
+      }
       chartSigs.current.set(p.id, sig)
       const ro = new ResizeObserver(() => {
         const w = host.clientWidth
@@ -1195,21 +1302,28 @@ export function InspectorApp() {
       if (!chart) continue
       const host = chartHosts.current.get(p.id)
       const maxPoints = Math.max(256, (host?.clientWidth ?? 800) * 2)
-      const merged = mergedData(p, buffers.current, maxPoints, calRef.current)
+      const full = fullLogRef.current
+      const fullKey = `full|${historyRevision.current}|${followRef.current}|${maxPoints}`
+      // Playback frames cannot change a static history snapshot. Avoid the
+      // expensive full-log merge as well as redundant canvas redraws.
+      if (full && lastDataKey.current.get(p.id) === fullKey) continue
+      const merged = mergedData(p, full ? historyBuffers.current : buffers.current, maxPoints, calRef.current)
       if (!merged) continue
       // Skip redundant setData: re-assigning identical data makes uPlot
       // redraw the curves every frame and the drawn points visibly shimmer
       // (operator report 2026-10-11). The last column count + last t act as
       // a cheap change key; a real change always shifts tEnd or the columns.
       const last = lastDataKey.current.get(p.id)
-      const key = `${merged.tEnd}|${(merged.data[0] as ArrayLike<number>).length}|${merged.data.length}`
+      const key = full ? fullKey : `live|${windowRef.current}|${followRef.current}|${merged.tEnd}|${(merged.data[0] as ArrayLike<number>).length}|${merged.data.length}`
       if (last === key) continue
       lastDataKey.current.set(p.id, key)
       chart.setData(merged.data)
-      if (followRef.current && merged.tEnd > 0) {
-        const min = merged.tEnd - windowRef.current
-        expectedX.current.set(chart, { min, max: merged.tEnd })
-        chart.setScale('x', { min, max: merged.tEnd })
+      if (followRef.current && (full || merged.tEnd > 0)) {
+        const seconds = typeof windowRef.current === 'number' ? windowRef.current : LIVE_WINDOW_SEC
+        const min = full ? 0 : merged.tEnd - seconds
+        const max = full ? Math.max(MIN_LOG_SPAN_SEC, (replayRef.current?.duration_ms ?? 0) / 1000) : merged.tEnd
+        expectedX.current.set(chart, { min, max })
+        chart.setScale('x', { min, max })
       }
     }
   }, [trimRings])
@@ -1225,7 +1339,7 @@ export function InspectorApp() {
       // min/max decimation over the sliding buffer, so the drawn vertices
       // shift a little every frame — the fitted curve visibly trembled.
       // New samples land outside a fixed window anyway; Follow re-enables.
-      if (pausedRef.current || !followRef.current) return
+      if (pausedRef.current || (!followRef.current && !fullLogRef.current)) return
       renderAll()
     }
     raf = requestAnimationFrame(tick)
@@ -1254,20 +1368,18 @@ export function InspectorApp() {
     setActivePlot(plots[0]?.id ?? null)
   }, [plots, activePlot])
 
-  useEffect(() => {
-    for (const chart of charts.current.values()) chart.redraw()
-  }, [windowSec])
-
   const clearAll = () => {
     for (const ring of buffers.current.values()) ring.clear()
-    for (const chart of charts.current.values()) chart.setData(chart.series.map(() => []) as unknown as uPlot.AlignedData)
+    for (const ring of historyBuffers.current.values()) ring.clear()
+    lastDataKey.current.clear()
+    for (const chart of charts.current.values()) chart.setData(chart.series.map(() => []) as unknown as uPlot.AlignedData, false)
   }
 
   const exportCsv = () => {
     const rows: string[] = ['t_ms,trace,raw,filtered']
     for (const p of plots) {
       for (const t of p.traces) {
-        const ring = buffers.current.get(t.id)
+        const ring = (fullLogRef.current ? historyBuffers.current : buffers.current).get(t.id)
         if (!ring) continue
         for (let i = 0; i < ring.length; i++) {
           rows.push(`${ring.timeAt(i).toFixed(1)},${signalKey(t.signal)},${ring.rawAt(i)},${ring.filtAt(i)}`)
@@ -1371,12 +1483,19 @@ export function InspectorApp() {
     seekPreviewRef.current = null
     setSeekPreview(null)
     if (target == null) return
+    // The whole history is already visible; seeking only moves playback's
+    // playhead, and must not discard the recording or the user's plot zoom.
+    if (fullLogRef.current) {
+      setReplay((r) => (r ? { ...r, position_ms: target } : r))
+      void replayControl({ seek_ms: target, span_ms: 0 })
+      return
+    }
     buffers.current.clear()
     spectra.current.clear()
     setFollow(true)
     setPaused(false)
     markDirty()
-    const windowMs = windowRef.current * 1000
+    const windowMs = (typeof windowRef.current === 'number' ? windowRef.current : LIVE_WINDOW_SEC) * 1000
     // Optimistic playhead: show the dragged position now instead of the stale
     // pre-seek value the backend still reports until it processes the request.
     setReplay((r) => (r ? { ...r, position_ms: target } : r))
@@ -1447,7 +1566,13 @@ export function InspectorApp() {
 
         <div className="tool-group" role="group" aria-label="Source">
           <span className="group-label">Source</span>
-          <select value={windowSec} title="Time window" onChange={(e) => setWindowSec(Number(e.target.value))}>
+          <select value={windowSec} title="Time window" onChange={(e) => {
+            setWindowSec(e.target.value === 'full' ? 'full' : Number(e.target.value))
+            setFollow(true)
+            setPaused(false)
+            markDirty()
+          }}>
+            {replay?.active && <option value="full">Full log</option>}
             <option value={10}>10 s</option>
             <option value={30}>30 s</option>
             <option value={60}>60 s</option>
@@ -1574,6 +1699,11 @@ export function InspectorApp() {
           <span className="replay-name" title={replay.name ?? ''}>
             {replay.name}
           </span>
+          {windowSec === 'full' && (
+            <span className="replay-tag" data-testid="inspector-history-status" aria-live="polite">
+              {historyLoading ? 'Loading history…' : 'Full log'}
+            </span>
+          )}
           <input
             className="replay-seek"
             type="range"
@@ -2093,7 +2223,7 @@ function mergedData(
     outRaw = d.raw
     outFilt = d.filt
   }
-  if (outX.length < 2) return null
+  if (outX.length === 0) return null
 
   const x = Float64Array.from(outX, (v) => v / 1000)
   // uPlot expresses gaps with `null`/`undefined`, never `NaN`: its y-range scan

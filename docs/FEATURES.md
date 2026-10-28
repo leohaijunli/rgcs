@@ -174,6 +174,12 @@ motor test → RTK → FC logs → parameters → mission/command → (recorder)
 
 ## Map
 
+- **Live altitude target**: Fly-map right-click → **Change altitude…** defaults
+  to DTM AGL when DEM data samples under the UAV, otherwise to absolute **AMSL**
+  seeded from its reported altitude. The chosen reference stays fixed during an
+  edit. AGL accepts 1–120 m; absolute AMSL is not capped by that AGL envelope.
+  Hold to send; PX4 enters Hold and retains the horizontal setpoint.
+
 - Imagery style selectable in Layers ▸: OSM streets, Esri satellite,
   Google satellite (WGS84-aligned), OpenTopoMap — always over the offline
   graticule (no grid-only mode).
@@ -614,6 +620,14 @@ Separate window; raw signal tap over MAVLink or a ULog replay
 average, detrend) and FFT — all executed in Rust. Angles are displayed in
 degrees; the trace palette is token-based and theme-aware. Workspaces
 (plots/traces/colors) persist locally.
+
+Opening a `.ulg` selects **Full log**: the plots load history over the complete
+recording immediately, including signals added after opening. Bounded
+time-bucket extrema retain the first/last samples and peaks without a rolling
+tail overwriting old history. Playback and seeking are independent of the
+static history view; zoom and trace edits preserve the viewed range, and Follow
+restores the full extent. The selector also offers explicit 10/30/60 s rolling
+views. See [full-history verification](verification/inspector-full-history-20261028.md).
 
 The header's **Live link** status requires a live primary FC heartbeat.
 After FC loss it shows **FC disconnected** and zero live message rate even

@@ -126,7 +126,7 @@ impl UlogSource {
                         data_start = Some(rec_start);
                         start_us = t_us;
                     }
-                    end_us = t_us;
+                    end_us = end_us.max(t_us);
                 }
                 Some(UlogRecord::Skipped(_)) => {}
             }
@@ -648,6 +648,19 @@ mod tests {
         assert_eq!(topics.len(), 1);
         assert_eq!(topics[0].name, "sensor");
         assert_eq!(topics[0].signals, 2);
+    }
+
+    #[test]
+    fn duration_includes_the_latest_timestamp_even_when_the_last_topic_lags() {
+        let mut bytes = replay_log(0);
+        let mut body = 4000u64.to_le_bytes().to_vec();
+        body.extend_from_slice(&1.0f32.to_le_bytes());
+        bytes.extend(crate::ulog::tests::data_record(7, &body));
+        assert_eq!(
+            source(bytes).duration_ms(),
+            8.0,
+            "the final 4 ms record must not clip the 8 ms history"
+        );
     }
 
     #[test]

@@ -12,6 +12,7 @@ import type { FlightCommandKind } from '../generated-types/FlightCommandKind'
 import type { FlightCommandReply } from '../generated-types/FlightCommandReply'
 import type { FlightCommandRequest } from '../generated-types/FlightCommandRequest'
 import type { ForceArmRequest } from '../generated-types/ForceArmRequest'
+import type { FlightAltitudeTarget } from '../generated-types/FlightAltitudeTarget'
 import type { Height } from '../generated-types/Height'
 import type { PreflightRefusal } from '../generated-types/PreflightRefusal'
 import type { RuntimeClientSession } from '../generated-types/RuntimeClientSession'
@@ -99,10 +100,10 @@ interface CommandState {
   sendGoto: (latDeg: number, lonDeg: number) => Promise<void>
   /** Set the vehicle's home to a map point (`MAV_CMD_DO_SET_HOME`). */
   sendSetHome: (latDeg: number, lonDeg: number) => Promise<void>
-  /** Fly the target height above the DTM under the vehicle
+  /** Fly an explicit DTM-relative AGL or absolute AMSL target
    * (`MAV_CMD_DO_CHANGE_ALTITUDE`). PX4 converts it to its AMSL setpoint and
    * switches to Hold, so the horizontal setpoint is kept. */
-  sendChangeAltitude: (aglM: number) => Promise<void>
+  sendChangeAltitude: (target: FlightAltitudeTarget) => Promise<void>
   /** Set the cruising groundspeed for subsequent setpoints
    * (`MAV_CMD_DO_CHANGE_SPEED`). */
   sendChangeSpeed: (speedMs: number) => Promise<void>
@@ -295,13 +296,13 @@ export const useCommandStore = create<CommandState>((set) => ({
     )
   },
 
-  /** Change the target height above the DTM under the vehicle. */
-  sendChangeAltitude: async (aglM) => {
+  /** Change the target height in the reference the operator edited. */
+  sendChangeAltitude: async (target) => {
     const scope = await beginFlightRequest('change_altitude')
     if (!scope) return
     await executeFlightIntent(scope, 'change_altitude', {
       kind: 'change_altitude',
-      agl_m: aglM,
+      target,
     })
   },
 

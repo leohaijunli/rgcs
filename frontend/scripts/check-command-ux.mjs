@@ -10,11 +10,15 @@
 //
 // High risk (force-arm L5, quit/disconnect L4) is the keyword tier and lives in
 // `check-teardown.mjs`; this file covers the click and hold tiers.
-import { chromium } from 'playwright'
+import { createRequire } from 'node:module'
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 
+const require = createRequire(import.meta.url)
+const { chromium } = require(process.env.PLAYWRIGHT_MODULE ?? 'playwright')
+
 const [url, shotsDir] = [process.argv[2], process.argv[3]]
+const flightShotsDir = process.env.FLIGHT_TARGET_SHOTS_DIR ?? shotsDir
 const mapMode = process.argv.includes('--map')
 if (!url || !shotsDir) {
   console.error('usage: node check-command-ux.mjs <viteUrl> <shotsDir> [--map]')
@@ -294,6 +298,7 @@ if ((await targetConfirm.count()) > 0) await targetConfirm.click()
 await page.waitForSelector('[data-testid="target-change-dialog"]', { state: 'detached', timeout: 5000 }).catch(() => {})
 
 await mkdir(shotsDir, { recursive: true })
+await mkdir(flightShotsDir, { recursive: true })
 await waitUntil(async () => (await page.locator('[data-testid="flight-menu"]').count()) === 1, 20000)
 
 // Optional real-map acceptance: use Cesium's actual RIGHT_CLICK handler to
@@ -753,20 +758,84 @@ check(await waitUntil(async () => (await status.innerText()).includes('Accepted'
 const beforeAltitude = (await commands()).length
 await openTarget('altitude')
 await targetDialog.waitFor({ state: 'visible', timeout: 5000 })
+check((await page.locator('label[for="flight-target-value"]').innerText()).includes('AMSL'),
+  'without DEM data the altitude input explicitly uses AMSL')
+check(await targetInput.inputValue() === '48.5',
+  'the AMSL fallback starts at the FC-reported absolute altitude')
+check((await page.locator('[data-testid="flight-target-current"]').innerText()) === '48.5 m',
+  'the current fallback readout shows reported AMSL, not HOME-relative altitude')
+await targetInput.fill('1250')
+
+// A DEM arriving during an edit must not change the units of that edit.
+await page.evaluate(() => {
+  window.__terrainStore.setState({
+    tile: {
+      path: '/mock/dem', folder: '/mock/dem', version: 'mock', has_dsm: false,
+      bounds: { north: 50, south: 49, east: -123, west: -124 },
+      source: 'hrdem', resolution_m: 1, acquisition: null, vertical_datum: 'amsl_egm96',
+    },
+    loading: false,
+    vehicleGroundAmslM: 8.5,
+    samplePointAmsl: async () => 8.5,
+    sampleDem: async (points) => points.map(() => 8.5),
+  })
+})
+await page.waitForTimeout(600)
+check(await targetInput.inputValue() === '1250'
+  && (await page.locator('label[for="flight-target-value"]').innerText()).includes('AMSL'),
+  'a later DEM load and live telemetry preserve the edited AMSL value/reference')
+check(!(await targetSend.isDisabled()), 'AMSL values above 120 m are not capped by the AGL envelope')
+await targetDialog.screenshot({ path: join(flightShotsDir, 'flight-target-altitude-amsl.png') })
+await hold(targetSend, HOLD_AT_MS)
+check(await waitUntil(async () => (await commands()).length === beforeAltitude + 1, 5000),
+  'a held send issues the fallback altitude command')
+const amslIntent = (await commands()).at(-1).request.intent
+check(amslIntent.kind === 'change_altitude' && amslIntent.target.kind === 'amsl'
+  && amslIntent.target.altitude.datum === 'AMSL_EGM96' && amslIntent.target.altitude.meters === 1250,
+  'the fallback intent carries a datum-tagged absolute target without a ground offset')
+await page.evaluate(() => window.__mockFlightReply('change_altitude'))
+check(await waitUntil(async () => (await status.innerText()).includes('Accepted'), 5000),
+  'the accepted fallback change settles in the status strip')
+
+const beforeAgl = (await commands()).length
+await openTarget('altitude')
+await targetDialog.waitFor({ state: 'visible', timeout: 5000 })
+check(await waitUntil(async () => (await page.locator('label[for="flight-target-value"]').innerText()).includes('AGL'), 5000),
+  'a ready DEM sample selects AGL on the next altitude edit')
+await targetInput.fill('1250')
+check(await targetSend.isDisabled(), 'the 1–120 m envelope still applies to an AGL target')
 await targetInput.fill('30')
 check(
   await waitUntil(async () => !(await targetSend.isDisabled()), 5000),
   'an armed in-envelope AGL target enables hold-to-send',
 )
+await targetDialog.screenshot({ path: join(flightShotsDir, 'flight-target-altitude-agl.png') })
 await hold(targetSend, HOLD_AT_MS)
-check(await waitUntil(async () => (await commands()).length === beforeAltitude + 1, 5000),
+check(await waitUntil(async () => (await commands()).length === beforeAgl + 1, 5000),
   'a held send issues the altitude command')
 const altitudeIntent = (await commands()).at(-1).request.intent
-check(altitudeIntent.kind === 'change_altitude' && altitudeIntent.agl_m === 30,
+check(altitudeIntent.kind === 'change_altitude' && altitudeIntent.target.kind === 'agl' && altitudeIntent.target.agl_m === 30,
   'the altitude intent carries the typed AGL target')
 await page.evaluate(() => window.__mockFlightReply('change_altitude'))
 check(await waitUntil(async () => (await status.innerText()).includes('Accepted'), 5000),
   'the accepted altitude change settles in the status strip')
+
+// Loading, uncovered/nodata, and mesh-only ground are all AMSL fallbacks.
+for (const scenario of ['loading', 'nodata', 'mesh-only']) {
+  await page.evaluate((scenario) => {
+    window.__terrainStore.setState({
+      loading: scenario === 'loading',
+      ...(scenario === 'mesh-only' ? { tile: null } : {}),
+      sampleDem: async (points) => points.map(() => null),
+    })
+  }, scenario)
+  await openTarget('altitude')
+  await targetDialog.waitFor({ state: 'visible', timeout: 5000 })
+  check(await waitUntil(async () => !(await targetInput.isDisabled()), 5000), `${scenario}: DEM resolution finishes`)
+  check((await page.locator('label[for="flight-target-value"]').innerText()).includes('AMSL'),
+    `${scenario}: stale mesh/AGL data cannot stand in for a ready DTM`)
+  await closeTarget()
+}
 
 // Unarmed: the dialog names the gate and refuses before any write.
 const beforeUnarmed = (await commands()).length
@@ -775,7 +844,7 @@ await openTarget('altitude')
 await targetDialog.waitFor({ state: 'visible', timeout: 5000 })
 check((await targetReason.innerText()).includes('Arm'), 'the altitude dialog names the armed gate')
 check(await targetSend.isDisabled(), 'an unarmed altitude change cannot be sent')
-await page.screenshot({ path: join(shotsDir, 'flight-target-altitude-unarmed.png') })
+await targetDialog.screenshot({ path: join(flightShotsDir, 'flight-target-altitude-unarmed.png') })
 await targetSend.click({ force: true })
 await page.waitForTimeout(300)
 check((await commands()).length === beforeUnarmed, 'the refused altitude change writes nothing')

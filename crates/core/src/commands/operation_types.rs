@@ -51,6 +51,17 @@ impl From<CommandError> for CommandOperationError {
     }
 }
 
+/// An explicit live-altitude reference: terrain-relative AGL or PX4 AMSL.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FlightAltitudeTarget {
+    /// Height above the DTM at the vehicle's current position.
+    Agl { agl_m: f64 },
+    /// Absolute height in the flight controller's AMSL datum.
+    Amsl { altitude: Height },
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -78,8 +89,7 @@ pub enum FlightCommandIntent {
         longitude_deg: f64,
     },
     ChangeAltitude {
-        /// Target height above the DTM at the vehicle's current position.
-        agl_m: f64,
+        target: FlightAltitudeTarget,
     },
     ChangeSpeed {
         /// Target groundspeed for subsequent setpoints, m/s. PX4's navigator

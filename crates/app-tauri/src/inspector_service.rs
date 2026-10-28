@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use maggcs_core::dsp::SpectrumFrame;
 use maggcs_core::inspector::{Session, Trace};
@@ -27,6 +27,7 @@ use tauri::WindowEvent;
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tokio::sync::{mpsc, oneshot};
 
+use crate::inspector_history::UlogHistory;
 use crate::state::AppState;
 
 /// Batch window between channel frames (~30 Hz).
@@ -36,6 +37,9 @@ const FRAME_INTERVAL_MS: u64 = 33;
 const DEFAULT_SEEK_SPAN_MS: f64 = 30_000.0;
 
 static FRAME_SEQ: AtomicU64 = AtomicU64::new(0);
+/// Only one expensive full-log scan runs at a time; newer requests cancel old
+/// scans between records rather than queueing unbounded blocking workers.
+static HISTORY_WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
 
 /// One trace's samples within a frame, columnar so the `SignalId` is not
 /// repeated on every sample (plan §S2: `{ trace_id, t[], raw[], filtered[] }`).
@@ -82,12 +86,14 @@ pub struct InspectorState {
     /// The running ULog replay, if any. Opening a log stops the live tap so
     /// only one source feeds the session (plan decision B).
     replay: Arc<PMutex<Option<ReplayHandle>>>,
+    history_epoch: Arc<AtomicU64>,
 }
 
 /// A running ULog replay: its identity plus the stop signal and playback
 /// control shared with [`run_replay`].
 struct ReplayHandle {
     name: String,
+    path: PathBuf,
     duration_ms: f64,
     control: Arc<ReplayControl>,
     stop: oneshot::Sender<()>,
@@ -178,6 +184,7 @@ impl AppState {
     /// those down use [`inspector_disconnect`](Self::inspector_disconnect)).
     pub fn inspector_reset_source(&self) {
         let inspector = self.inspector();
+        inspector.history_epoch.fetch_add(1, Ordering::AcqRel);
         if let Some(stop) = inspector.tap.lock().take() {
             let _ = stop.send(());
         }
@@ -215,6 +222,7 @@ impl AppState {
     /// handler may both call it).
     pub fn inspector_disconnect(&self) {
         let inspector = self.inspector();
+        inspector.history_epoch.fetch_add(1, Ordering::AcqRel);
         if inspector.frame.lock().is_none() {
             return;
         }
@@ -288,6 +296,7 @@ impl AppState {
             .collect();
 
         let inspector = self.inspector();
+        inspector.history_epoch.fetch_add(1, Ordering::AcqRel);
         if let Some(old) = inspector.replay.lock().take() {
             let _ = old.stop.send(());
         }
@@ -317,6 +326,7 @@ impl AppState {
         let control = Arc::new(ReplayControl::default());
         *inspector.replay.lock() = Some(ReplayHandle {
             name: name.clone(),
+            path: PathBuf::from(path),
             duration_ms,
             control: control.clone(),
             stop: stop_tx,
@@ -366,6 +376,7 @@ impl AppState {
     /// present). Idempotent.
     pub fn inspector_use_live(&self) {
         let inspector = self.inspector();
+        inspector.history_epoch.fetch_add(1, Ordering::AcqRel);
         if let Some(replay) = inspector.replay.lock().take() {
             let _ = replay.stop.send(());
             inspector.session.lock().reset();
@@ -388,6 +399,52 @@ impl AppState {
     /// The replay toolbar state (position, speed, playing).
     pub fn inspector_replay_status(&self) -> ReplayStatus {
         replay_status(self.inspector().replay.lock().as_ref())
+    }
+
+    /// Read the selected traces over the whole active recording independently
+    /// of playback. A replaced recording/request cannot publish old history.
+    pub async fn inspector_ulog_history(
+        &self,
+        traces: Vec<Trace>,
+        max_points: usize,
+    ) -> Result<UlogHistory, String> {
+        let (path, name, control) = {
+            let guard = self.inspector().replay.lock();
+            let replay = guard.as_ref().ok_or("no ULog is open")?;
+            (
+                replay.path.clone(),
+                replay.name.clone(),
+                replay.control.clone(),
+            )
+        };
+        let epoch = self.inspector().history_epoch.clone();
+        let request_epoch = epoch.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+        let worker_epoch = epoch.clone();
+        let calibration = self.calibration.get();
+        let permit = HISTORY_WORKERS.acquire().await.map_err(|e| e.to_string())?;
+        let history = tauri::async_runtime::spawn_blocking(move || {
+            let _permit = permit;
+            if worker_epoch.load(Ordering::Acquire) != request_epoch {
+                return Err("ULog history request was replaced".into());
+            }
+            let source = UlogSource::open(&path).map_err(|e| e.to_string())?;
+            crate::inspector_history::collect(source, name, traces, calibration, max_points, || {
+                worker_epoch.load(Ordering::Acquire) == request_epoch
+            })
+        })
+        .await
+        .map_err(|e| format!("ULog history worker: {e}"))??;
+        if epoch.load(Ordering::Acquire) != request_epoch {
+            return Err("ULog history request was replaced".into());
+        }
+        let current = self.inspector().replay.lock();
+        if !current
+            .as_ref()
+            .is_some_and(|r| Arc::ptr_eq(&r.control, &control))
+        {
+            return Err("ULog source changed while reading history".into());
+        }
+        Ok(history)
     }
 }
 
@@ -615,6 +672,17 @@ pub fn inspector_list_algorithms() -> Result<Vec<maggcs_core::dsp::AlgorithmInfo
 #[tauri::command]
 pub fn inspector_open_ulog(state: State<'_, AppState>, path: String) -> Result<UlogInfo, String> {
     state.start_ulog_replay(&path)
+}
+
+/// Bounded, peak-preserving history for the whole active ULog. File scanning
+/// runs off the async/UI threads and leaves playback's source and DSP intact.
+#[tauri::command]
+pub async fn inspector_ulog_history(
+    state: State<'_, AppState>,
+    traces: Vec<Trace>,
+    max_points: usize,
+) -> Result<UlogHistory, String> {
+    state.inspector_ulog_history(traces, max_points).await
 }
 
 /// Control the ULog replay (play/pause, speed, seek) and return its state.

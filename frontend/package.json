@@ -28,6 +28,7 @@
     "check:params-ownership": "node scripts/check-params-ownership.mjs",
     "check:inspector-connection": "node scripts/check-inspector-connection.mjs",
     "check:inspector-mag": "node scripts/check-inspector-mag.mjs",
+    "check:inspector-history": "node scripts/check-inspector-history.mjs",
     "check:replay-seek": "node scripts/check-replay-seek.mjs",
     "build:model": "node scripts/build-uav-model.mjs",
     "check:colors": "bash scripts/check-colors.sh",

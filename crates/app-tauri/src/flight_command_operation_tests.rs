@@ -841,9 +841,8 @@ async fn transport_reopen_retires_dispatched_work_and_never_retries_on_new_gener
     h.shutdown().await;
 }
 
-/// `DO_CHANGE_ALTITUDE` / `DO_CHANGE_SPEED` are the only intents that depend on
-/// the armed state and on a loaded DTM; every refusal must happen before a
-/// `COMMAND_LONG` leaves the app.
+/// Altitude/speed require an armed vehicle; only an AGL altitude needs a DTM.
+/// Every refusal must happen before a `COMMAND_LONG` leaves the app.
 #[tokio::test(flavor = "multi_thread")]
 async fn speed_and_altitude_changes_guard_the_envelope_arm_state_and_dtm() {
     let h = Harness::commands().await;
@@ -853,7 +852,14 @@ async fn speed_and_altitude_changes_guard_the_envelope_arm_state_and_dtm() {
     // Disarmed: prepared, then refused by the re-check before any write.
     for intent in [
         FlightCommandIntent::ChangeSpeed { speed_m_s: 6.0 },
-        FlightCommandIntent::ChangeAltitude { agl_m: 20.0 },
+        FlightCommandIntent::ChangeAltitude {
+            target: FlightAltitudeTarget::Agl { agl_m: 20.0 },
+        },
+        FlightCommandIntent::ChangeAltitude {
+            target: FlightAltitudeTarget::Amsl {
+                altitude: Height::new(HeightDatum::AmslEgm96, 1250.0),
+            },
+        },
     ] {
         let error = begin(h.app.handle(), "main", request(&session, intent))
             .expect("prepared")
@@ -877,7 +883,12 @@ async fn speed_and_altitude_changes_guard_the_envelope_arm_state_and_dtm() {
         assert!(begin(
             h.app.handle(),
             "main",
-            request(&session, FlightCommandIntent::ChangeAltitude { agl_m })
+            request(
+                &session,
+                FlightCommandIntent::ChangeAltitude {
+                    target: FlightAltitudeTarget::Agl { agl_m },
+                }
+            )
         )
         .is_err());
     }
@@ -921,7 +932,9 @@ async fn speed_and_altitude_changes_guard_the_envelope_arm_state_and_dtm() {
         "main",
         request(
             &session,
-            FlightCommandIntent::ChangeAltitude { agl_m: 20.0 },
+            FlightCommandIntent::ChangeAltitude {
+                target: FlightAltitudeTarget::Agl { agl_m: 20.0 },
+            },
         ),
     )
     .expect("prepared")
@@ -933,5 +946,54 @@ async fn speed_and_altitude_changes_guard_the_envelope_arm_state_and_dtm() {
         "got {error}"
     );
     assert_eq!(commands(&h).len(), 1, "the refused altitude wrote nothing");
+
+    // An explicit absolute target needs no DEM and is not capped by the AGL
+    // envelope. Negative AMSL is valid below sea level.
+    for amsl_m in [1250.0, -25.0] {
+        let reply = execute(
+            &h,
+            &session,
+            FlightCommandIntent::ChangeAltitude {
+                target: FlightAltitudeTarget::Amsl {
+                    altitude: Height::new(HeightDatum::AmslEgm96, amsl_m),
+                },
+            },
+        )
+        .await;
+        assert_eq!(reply.steps[0].result, CommandResult::Accepted);
+        let sent = commands(&h);
+        let altitude = sent.last().expect("altitude command");
+        assert_eq!(altitude.command, MavCmd::MAV_CMD_DO_CHANGE_ALTITUDE);
+        assert_eq!(
+            altitude.param1, amsl_m as f32,
+            "absolute target, no ground offset"
+        );
+        assert_eq!(altitude.param2, 0.0, "MAV_FRAME_GLOBAL");
+    }
+    let writes = commands(&h).len();
+    for altitude in [
+        Height::new(HeightDatum::EllipsoidWgs84, 1250.0),
+        Height::new(HeightDatum::OrthometricCgvd2013, 1250.0),
+        Height::new(HeightDatum::AmslEgm96, f64::NAN),
+        Height::new(HeightDatum::AmslEgm96, f64::INFINITY),
+        Height::new(HeightDatum::AmslEgm96, f64::MAX),
+    ] {
+        assert!(begin(
+            h.app.handle(),
+            "main",
+            request(
+                &session,
+                FlightCommandIntent::ChangeAltitude {
+                    target: FlightAltitudeTarget::Amsl { altitude },
+                }
+            )
+        )
+        .is_err());
+    }
+    assert_eq!(
+        commands(&h).len(),
+        writes,
+        "invalid absolute heights wrote nothing"
+    );
     h.shutdown().await;
 }

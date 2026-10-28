@@ -18,6 +18,7 @@ mod flight_command_operations;
 #[cfg(all(test, unix))]
 #[path = "g1_qualification_tests.rs"]
 mod g1_qualification_tests;
+mod inspector_history;
 mod inspector_service;
 mod instruments_service;
 mod lifecycle_service;
@@ -238,6 +239,7 @@ pub fn run() {
             inspector_service::inspector_catalog,
             inspector_service::inspector_list_algorithms,
             inspector_service::inspector_open_ulog,
+            inspector_service::inspector_ulog_history,
             inspector_service::inspector_replay,
             inspector_service::inspector_replay_status,
             inspector_service::inspector_use_live,

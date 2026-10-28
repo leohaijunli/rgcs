@@ -3,8 +3,9 @@
 use std::time::Duration;
 
 use maggcs_core::commands::operation_types::{
-    CommandOperationError, FlightCommandError, FlightCommandIntent, FlightCommandKind,
-    FlightCommandReply, FlightCommandRequest, FlightCommandStep, FlightCommandStepResult,
+    CommandOperationError, FlightAltitudeTarget, FlightCommandError, FlightCommandIntent,
+    FlightCommandKind, FlightCommandReply, FlightCommandRequest, FlightCommandStep,
+    FlightCommandStepResult,
 };
 use maggcs_core::commands::{CommandError, CommandTransaction};
 use maggcs_core::height::{Height, HeightDatum};
@@ -199,7 +200,17 @@ fn validate_intent(intent: &FlightCommandIntent) -> Result<(), FlightCommandErro
         } => {
             validate_height(*height)?;
         }
-        FlightCommandIntent::ChangeAltitude { agl_m } => validate_altitude_agl(*agl_m)?,
+        FlightCommandIntent::ChangeAltitude { target } => match target {
+            FlightAltitudeTarget::Agl { agl_m } => validate_altitude_agl(*agl_m)?,
+            FlightAltitudeTarget::Amsl { altitude } => {
+                let meters = validate_height(*altitude)?;
+                if !(meters as f32).is_finite() {
+                    return Err(invalid(
+                        "target AMSL altitude exceeds the MAVLink numeric range",
+                    ));
+                }
+            }
+        },
         FlightCommandIntent::ChangeSpeed { speed_m_s } => validate_speed(*speed_m_s)?,
         FlightCommandIntent::Goto {
             latitude_deg,
@@ -694,14 +705,19 @@ impl<R: Runtime> FlightCommandWork<R> {
                     false,
                 ))
             }
-            FlightCommandIntent::ChangeAltitude { agl_m } => {
+            FlightCommandIntent::ChangeAltitude { target } => {
                 let snapshot = self.telemetry()?;
                 ensure_altitude_change_allowed(&snapshot)?;
                 let fix = snapshot.global_position.ok_or_else(|| {
                     invalid("no position fix yet - cannot compute the altitude target")
                 })?;
-                let ground = ground_amsl_at(&state, fix.latitude_deg, fix.longitude_deg)?;
-                let target = Height::new(HeightDatum::AmslEgm96, ground.meters() + *agl_m);
+                let target = match target {
+                    FlightAltitudeTarget::Agl { agl_m } => {
+                        let ground = ground_amsl_at(&state, fix.latitude_deg, fix.longitude_deg)?;
+                        Height::new(HeightDatum::AmslEgm96, ground.meters() + *agl_m)
+                    }
+                    FlightAltitudeTarget::Amsl { altitude } => *altitude,
+                };
                 Ok((
                     CommandSpec {
                         step: FlightCommandStep::ChangeAltitude,

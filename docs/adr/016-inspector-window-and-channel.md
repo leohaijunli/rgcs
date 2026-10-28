@@ -69,3 +69,23 @@
   (`InvalidEnum`/`InvalidFlag`/`UnknownMessage`, e.g. PX4 1.17's
   `CURRENT_EVENT_SEQUENCE.flags=0`) are skipped and counted in the connection
   worker (connection.rs `is_recoverable_read_error`).
+
+## Full-log history addendum (2026-10-28)
+
+- Opening a ULog defaults to **Full log**, with x bounds `0 … duration`.
+  History for selected/new traces is loaded through
+  `inspector_ulog_history(traces, max_points) -> UlogHistory { name, duration_ms,
+  traces }`; the columns reuse `TraceFrame { trace_id, t, raw, filtered }`.
+- History scans use an independent ULog reader and a fresh core DSP session.
+  Playback position, the live session and the rolling stream remain separate
+  from the static plot snapshot. Full-history seeking only moves the playhead.
+- A single blocking worker scans the whole recording into bounded time buckets,
+  retaining first/last points, raw/filtered extrema and gaps. The frontend
+  requests up to 16,384 points per trace; native per-trace/global budgets cap
+  memory. Request/source epochs cancel obsolete reads and reject stale replies.
+- Static snapshots have separate frontend buffers and a revision key, so live
+  trimming and playback frames cannot overwrite or repeatedly merge them.
+  Zoom/pan/fit remain available, trace rebuilds retain a zoomed range, and Follow
+  restores the full extent. Explicit 10/30/60 s rolling views remain selectable.
+- ULog duration uses the maximum observed timestamp, so a lagging final topic
+  cannot clip the recording's final time range.

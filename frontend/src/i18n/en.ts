@@ -907,15 +907,21 @@ export default {
     altitudeTitle: 'Change altitude',
     altitudeBody:
       'Target height above the terrain under the vehicle. PX4 converts it to an absolute altitude and switches to Hold.',
+    altitudeAmslBody:
+      'DEM data is not ready under the vehicle. Enter an absolute AMSL altitude; PX4 switches to Hold.',
     speedTitle: 'Change speed',
     speedBody:
       'Cruising groundspeed for subsequent navigation setpoints. A mode change may reset this request.',
     currentAgl: 'Current AGL',
+    currentAmsl: 'Current AMSL',
     currentSpeed: 'Current speed',
     targetAgl: 'Target AGL (m)',
+    targetAmsl: 'Target AMSL (m)',
     targetSpeed: 'Target speed (m/s)',
     holdNotice: 'PX4 switches to Hold for this command; the horizontal position is kept.',
     mustBeArmed: 'Arm the vehicle first',
+    checkingTerrain: 'Checking DEM…',
+    invalidAmsl: 'Enter a finite AMSL altitude (m)',
     invalid: 'Enter {{min}}–{{max}} {{unit}}',
     send: 'Hold to send',
     cancel: 'Cancel',

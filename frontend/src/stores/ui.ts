@@ -10,7 +10,7 @@ export type Theme = ThemePref
 export type DockTab = 'profile' | 'qc' | 'log'
 /** Fly-stage right column: the FC logs/console or the drape monitor. */
 export type FlyRightTab = 'logs' | 'drape'
-/** Live flight-target dialog: height above the DTM, or cruising groundspeed. */
+/** Live flight-target dialog: altitude (DTM AGL / AMSL fallback), or groundspeed. */
 export type FlightTargetMode = 'altitude' | 'speed'
 /** One planning step expanded at a time (P2 §4.2). */
 export type PlanStep = 'area' | 'pattern' | 'waypoints' | 'sync'

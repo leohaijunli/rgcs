@@ -61,3 +61,44 @@ Manual ULog review: open a recording with at least three `sensor_mag`
 instances, expand each one, add each `mag_total`, and verify that changing or
 hiding instance 3 does not change instances 1/2. Confirm each instance name is
 still visible in the tree, legend, and trace chip.
+
+## ULog history default — 2026-10-28
+
+Opening a `.ulg` selects **Full log** and shows selected traces across
+`0 … log duration`, including signals selected after opening. The native
+`inspector_ulog_history` command scans an independent reader through a fresh
+core DSP session, then returns bounded time-bucket extrema. The UI requests up
+to 16,384 points per trace; the native per-trace/global budgets bound memory
+for dense and long recordings. First/last samples and raw/filtered peaks are
+retained across the whole time range.
+
+Static history has its own buffers. Playback's rolling ring and the live
+settling gate do not trim it. Drag-zoom, Shift-drag pan, fit and measurement
+remain available; seeking moves the replay playhead while preserving the full
+history and zoom. Trace edits preserve a zoomed x range. **Follow** restores the
+full range. The time-window selector offers 10/30/60 s rolling views, and
+**Back to live** restores the 30 s live window.
+
+A new recording clears old curves while its history loads. Late replies from
+old trace/source requests are ignored; read/configuration failures use the
+Inspector error notice. CSV exports the retained view samples, including the
+bounded overview samples in Full log mode.
+
+### Full-history verification
+
+With Vite running:
+
+```bash
+npm run check:inspector-history -- http://localhost:1420/inspector.html screenshots/inspector/history
+npm run check:inspector-connection -- http://localhost:1420/inspector.html
+npm run check:replay-seek
+npm run check:inspector-mag
+```
+
+Set `PLAYWRIGHT_MODULE` if Playwright is installed outside the frontend.
+The native fixture scans a 180 s / 180,001-record ULog into at most 256 plot
+points while retaining both ends and early/late peaks. Browser checks cover
+full-range defaults, added signals, zoom/seek/trace edits, explicit rolling
+views, late replies, read errors, short/single-point logs and 800×480 layout.
+
+See [screenshots and manual steps](../../../docs/verification/inspector-full-history-20261028.md).

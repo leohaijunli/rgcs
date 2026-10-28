@@ -53,6 +53,18 @@
 ### O5 [P3][frontend] Data 视图移除后的遗留键
 ### N1 [P2][frontend] Drape 前的地形数据发现
 
+## Operator-requested todos — 2026-10-28
+
+- [x] Fall back to AMSL when changing UAV altitude without ready DEM data.
+  Typed AMSL/AGL targets, stable input units, native zero-offset delivery and
+  missing/loading/nodata/mesh-only browser cases are verified. See
+  [acceptance and manual steps](docs/verification/flight-altitude-fallback-20261028.md).
+- [x] Default Signal Inspector ULog plots to the whole recording's history.
+  A 180 s / 180,001-record native fixture retains both ends and peaks within
+  256 output points; browser checks verify full-range defaults, added signals,
+  zoom/seek, source changes and short logs. See
+  [acceptance and manual steps](docs/verification/inspector-full-history-20261028.md).
+
 ## Open issues（未完成）
 
 ### O2 [P3][actuator] 报警音可选自定义 wav/mp3 文件路径
