@@ -112,6 +112,7 @@ pub(crate) fn begin_reboot<R: Runtime>(
             OperationResource::MissionTransfer,
             OperationResource::Shell,
             OperationResource::LogTransfer,
+            OperationResource::Capture,
         ],
         budget_ms: REBOOT_BUDGET.as_millis() as u64,
     })?;

@@ -1987,7 +1987,7 @@ pub(crate) fn same_log_entry(
 /// (re)spawned on the current target handle if it is not running.
 #[tauri::command]
 #[cfg(any())]
-pub async fn actuator_logs_request_list(
+async fn actuator_logs_request_list_legacy(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Vec<maggcs_core::logs::LogEntryInfo>, String> {
@@ -1999,7 +1999,7 @@ pub async fn actuator_logs_request_list(
 /// (feature 2). A cancelled save dialog returns Ok without starting.
 #[tauri::command]
 #[cfg(any())]
-pub async fn actuator_logs_download(
+async fn actuator_logs_download_legacy(
     app: AppHandle,
     state: State<'_, AppState>,
     id: u16,
@@ -2040,7 +2040,7 @@ pub async fn actuator_logs_download(
 /// the logger is not recording.
 #[tauri::command]
 #[cfg(any())]
-pub async fn actuator_logs_erase_all(
+async fn actuator_logs_erase_all_legacy(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Vec<maggcs_core::logs::LogEntryInfo>, String> {
@@ -2090,7 +2090,7 @@ pub async fn actuator_logs_erase_all(
 /// PX4 assigns it from `logdata.txt` order, which this command reads directly.
 #[tauri::command]
 #[cfg(any())]
-pub async fn actuator_logs_delete(
+async fn actuator_logs_delete_legacy(
     app: AppHandle,
     state: State<'_, AppState>,
     id: u16,
@@ -2115,7 +2115,7 @@ pub async fn actuator_logs_delete(
 /// Cancel any running SD-log list/download on the serial target.
 #[tauri::command]
 #[cfg(any())]
-pub async fn actuator_logs_cancel(state: State<'_, AppState>) -> Result<(), String> {
+async fn actuator_logs_cancel_legacy(state: State<'_, AppState>) -> Result<(), String> {
     let tx = actuator_logs_sender(&state).ok_or_else(|| "no serial PX4 target".to_string())?;
     tx.send(crate::motor_test_state::ActuatorLogCommand::Cancel)
         .await

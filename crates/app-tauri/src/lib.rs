@@ -15,6 +15,9 @@ mod config_service;
 mod console_service;
 mod diagnostics_service;
 mod flight_command_operations;
+#[cfg(all(test, unix))]
+#[path = "g1_qualification_tests.rs"]
+mod g1_qualification_tests;
 mod inspector_service;
 mod instruments_service;
 mod lifecycle_service;

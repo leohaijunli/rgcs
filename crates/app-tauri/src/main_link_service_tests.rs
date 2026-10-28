@@ -137,6 +137,16 @@ impl Harness {
         .await
     }
 
+    pub(crate) async fn qualification() -> Self {
+        Self::with_all_options(
+            true,
+            Some(CommandPeer::default()),
+            Some(MissionPeer::default()),
+            Some(crate::logs_service::operation_tests::LogPeer::default()),
+        )
+        .await
+    }
+
     async fn with_all_options(
         parameter_transactions: bool,
         command_peer: Option<CommandPeer>,

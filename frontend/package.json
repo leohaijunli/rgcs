@@ -18,6 +18,8 @@
     "check:shell-logs-delivery": "node scripts/check-flight-delivery.mjs --shell-logs",
     "check:motor-acceptance": "node scripts/check-motor-acceptance.mjs",
     "check:motor-delivery": "node scripts/check-flight-delivery.mjs --motor",
+    "check:g1-acceptance": "node scripts/check-g1-acceptance.mjs",
+    "check:g1-delivery": "node scripts/check-flight-delivery.mjs --g1",
     "check:rtk": "node scripts/check-rtk.mjs",
     "check:serial-auto": "node scripts/check-serial-auto.mjs",
     "check:motor-scope": "node scripts/check-motor-scope.mjs",
