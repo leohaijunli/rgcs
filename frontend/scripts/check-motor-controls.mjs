@@ -1029,7 +1029,10 @@ try {
       samples.push(
         { id: 'fc.motor1', t, v: 1500 + 20 * Math.sin(i / 10) },
         { id: 'cmd.pwm1', t, v: 1500 + 20 * Math.sin(i / 10) },
-        { id: 'mag.raw_total', t, v: 50000 + 50 * Math.sin(i / 8) },
+        { id: 'mag.highres_imu.raw_total', t, v: 50000 + 50 * Math.sin(i / 8) },
+        { id: 'mag.scaled_imu1.raw_total', t, v: 46000 + 40 * Math.sin(i / 9) },
+        { id: 'mag.scaled_imu2.raw_total', t, v: 52000 + 45 * Math.sin(i / 10) },
+        { id: 'mag.scaled_imu3.raw_total', t, v: 64000 + 55 * Math.sin(i / 11) },
         { id: 'esc1.rpm', t, v: 4000 + 300 * Math.sin(i / 12) },
         { id: 'bat1.current', t, v: 12 + 2 * Math.sin(i / 6) },
       )
@@ -1050,6 +1053,57 @@ try {
   await commandPane.locator('.u-label', { hasText: 'Command PWM M 1' }).first().waitFor()
   assert.equal(await commandPane.locator('.u-label', { hasText: 'Command PWM M 1' }).count(), 1, 'one PWM legend entry per signal ID')
   assert.equal(await commandPane.locator('.u-label', { hasText: 'FC output M 1 (MAIN1)' }).count(), 1, 'feedback is labelled with its mapped physical output')
+  const magLabels = [
+    'HIGHRES_IMU |B| raw',
+    'SCALED_IMU (IMU1) |B| raw',
+    'SCALED_IMU2 (IMU2) |B| raw',
+    'SCALED_IMU3 (IMU3) |B| raw',
+  ]
+  for (const label of magLabels) {
+    await bottomPane.locator('.u-label', { hasText: label }).waitFor()
+    assert.equal(
+      await bottomPane.locator('.u-label', { hasText: label }).count(),
+      1,
+      `${label} reaches the mounted bottom uPlot once`,
+    )
+  }
+  await page.waitForFunction((labels) => {
+    const host = document.querySelector('.scope-pane[data-pane="bottom"] .scope-pane-plot')
+    const plot = host?.__maggcsScopePlot
+    return Boolean(plot) && labels.every((label) => {
+      const index = plot.series.findIndex((series) => series.label === label)
+      return index > 0 && [...plot.data[index]].some(Number.isFinite)
+    })
+  }, magLabels)
+  const readMagPlotValues = () => bottomPane.locator('.scope-pane-plot').evaluate((host, labels) => {
+    const plot = host.__maggcsScopePlot
+    return Object.fromEntries(labels.map((label) => {
+      const index = plot.series.findIndex((series) => series.label === label)
+      const finite = index < 1 ? [] : [...plot.data[index]].filter(Number.isFinite)
+      return [label, finite.at(-1)]
+    }))
+  }, magLabels)
+  const magBeforeImu3Offset = await readMagPlotValues()
+  await page.evaluate(() => window.__bench.emit('actuator_samples', [
+    { id: 'mag.scaled_imu3.raw_total', t: Date.now() / 1000, v: 84000 },
+  ]))
+  await page.waitForFunction((label) => {
+    const host = document.querySelector('.scope-pane[data-pane="bottom"] .scope-pane-plot')
+    const plot = host?.__maggcsScopePlot
+    const index = plot?.series.findIndex((series) => series.label === label) ?? -1
+    return index > 0 && [...plot.data[index]].filter(Number.isFinite).at(-1) === 84000
+  }, magLabels[3])
+  const magAfterImu3Offset = await readMagPlotValues()
+  assert.equal(magAfterImu3Offset[magLabels[0]], magBeforeImu3Offset[magLabels[0]], 'IMU3 offset leaves HIGHRES_IMU unchanged')
+  assert.equal(magAfterImu3Offset[magLabels[1]], magBeforeImu3Offset[magLabels[1]], 'IMU3 offset leaves IMU1 unchanged')
+  assert.equal(magAfterImu3Offset[magLabels[2]], magBeforeImu3Offset[magLabels[2]], 'IMU3 offset leaves IMU2 unchanged')
+  assert.equal(magAfterImu3Offset[magLabels[3]], 84000, 'IMU3 offset changes only the IMU3 mounted series')
+  if (shots) {
+    await page.setViewportSize({ width: 1366, height: 768 })
+    await bottomPane.scrollIntoViewIfNeeded()
+    await page.screenshot({ path: join(shots, 'motor-controls-mag-sources-1366x768.png') })
+  }
+  console.log('PASS: four magnetic sources reach independent React/uPlot series; an IMU3 offset leaves IMU1/2 unchanged')
   const colorPicker = page.getByLabel('Color for Command PWM M 1', { exact: true })
   const commandsBeforeColor = await calls('actuator_set_values')
   const canvasBeforeColor = await commandPane.locator('canvas').first().elementHandle()
@@ -1145,8 +1199,8 @@ try {
       { id: 'cmd.pwm1', t: now, v: 1510 },
       { id: 'fc.motor1', t: now - 0.1, v: 1498 },
       { id: 'fc.motor1', t: now, v: 1508 },
-      { id: 'mag.raw_total', t: now - 0.1, v: 50000 },
-      { id: 'mag.raw_total', t: now, v: 50020 },
+      { id: 'mag.highres_imu.raw_total', t: now - 0.1, v: 50000 },
+      { id: 'mag.highres_imu.raw_total', t: now, v: 50020 },
       { id: 'bat1.current', t: now - 0.1, v: 12 },
       { id: 'bat1.current', t: now, v: 13 },
     ])
@@ -1851,13 +1905,19 @@ try {
   assert.equal(await bottomPane.locator('.u-label', { hasText: 'Command PWM M 2' }).count(), 1)
   console.log('PASS: resizable list and separate plot selections survive reload, Clear and new samples')
 
-  const legacySeen = ['mag.raw_total', 'mag.cal_total', 'bat1.current', ...Array.from({ length: 4 }, (_, motor) => [
+  const legacySeen = [
+    'mag.raw_total', 'mag.cal_total',
+    'mag.scaled_imu1.raw_total', 'mag.scaled_imu1.cal_total',
+    'mag.scaled_imu2.raw_total', 'mag.scaled_imu2.cal_total',
+    'mag.scaled_imu3.raw_total', 'mag.scaled_imu3.cal_total',
+    'bat1.current', ...Array.from({ length: 4 }, (_, motor) => [
     `sitl.servo${motor + 1}`, `fwd.cmd${motor + 1}`, `fc.motor${motor + 1}`,
     `esc${motor + 1}.rpm`, `esc${motor + 1}.current`, `esc${motor + 1}.voltage`,
-  ]).flat()]
+  ]).flat(),
+  ]
   for (const fixture of [
-    { views: { activeView: 'esc' }, top: ['esc1.rpm'], bottom: ['cmd.pwm1', 'mag.raw_total', 'bat1.current'] },
-    { views: { views: ['cmd', 'cmd'] }, top: ['cmd.pwm1'], bottom: ['cmd.pwm1', 'mag.raw_total', 'esc1.rpm', 'bat1.current'] },
+    { views: { activeView: 'esc' }, top: ['esc1.rpm'], bottom: ['cmd.pwm1', 'mag.highres_imu.raw_total', 'bat1.current'] },
+    { views: { views: ['cmd', 'cmd'] }, top: ['cmd.pwm1'], bottom: ['cmd.pwm1', 'mag.highres_imu.raw_total', 'esc1.rpm', 'bat1.current'] },
   ]) {
     const migrationContext = await browser.newContext()
     const migrationPage = await migrationContext.newPage()

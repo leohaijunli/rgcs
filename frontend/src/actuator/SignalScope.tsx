@@ -3,7 +3,7 @@
 //
 //   - SITL servo 1–4 (µs) and mapped motor outputs from the serial target
 //   - converted ACTUATOR_TEST output (µs or DShot counts, with configuration metadata)
-//   - total field before / after calibration (nT)
+//   - source-isolated total field before / after calibration (nT)
 //   - total battery current from BATTERY_STATUS (A)
 //   - ESC rpm / current / voltage — listed as soon as ESC_STATUS arrives
 //
@@ -20,6 +20,7 @@ import { cssVar } from '../design-system/theme'
 import { isTauri } from '../inspector/mock'
 import {
   LIST_GROUPS,
+  MAG_RAW_IDS,
   defOf,
   normalizeTraceColor,
   scopeStore,
@@ -115,9 +116,17 @@ function startMock(): () => void {
       batch.push({ id: `esc${m + 1}.rpm`, t, v: 9000 * ramp * (0.9 + 0.03 * m) })
       batch.push({ id: `esc${m + 1}.current`, t, v: 12 * ramp * ramp })
     }
-    const raw = 50_000 + 40 * Math.sin(x * 3) + 600 * ramp
-    batch.push({ id: 'mag.raw_total', t, v: raw })
-    batch.push({ id: 'mag.cal_total', t, v: raw - 2000 - 300 * ramp })
+    const magSources = [
+      ['highres_imu', 50_000 + 40 * Math.sin(x * 3) + 600 * ramp],
+      ['scaled_imu1', 46_000 + 30 * Math.sin(x * 2.1)],
+      ['scaled_imu2', 52_000 + 35 * Math.sin(x * 2.4)],
+      // A deliberately independent offset makes source mixing visible in mock mode.
+      ['scaled_imu3', 64_000 + 45 * Math.sin(x * 2.7)],
+    ] as const
+    for (const [source, raw] of magSources) {
+      batch.push({ id: `mag.${source}.raw_total`, t, v: raw })
+      batch.push({ id: `mag.${source}.cal_total`, t, v: raw - 2_000 })
+    }
     batch.push({ id: 'bat1.current', t, v: 12 * ramp * ramp })
     batch.push({ id: 'session.running', t, v: running ? 1 : 0 })
     scopeStore.ingest(batch)
@@ -144,7 +153,10 @@ function normalizeIds(value: unknown): string[] {
   if (!Array.isArray(value)) return []
   return [...new Set(value
     .filter((id): id is string => typeof id === 'string')
-    .map((id) => id.replace(/^fwd\.cmd([1-4])$/, 'cmd.pwm$1')))]
+    .map((id) => id
+      .replace(/^fwd\.cmd([1-4])$/, 'cmd.pwm$1')
+      .replace(/^mag\.raw_total$/, 'mag.highres_imu.raw_total')
+      .replace(/^mag\.cal_total$/, 'mag.highres_imu.cal_total')))]
 }
 
 function migrateSelections(p: Record<string, unknown>): PaneSelections {
@@ -189,7 +201,7 @@ function loadPersisted(): Persisted {
       }
       const colors = Object.fromEntries(
         Object.entries(isRecord(p.colors) ? p.colors : {})
-          .map(([id, color]) => [id, normalizeTraceColor(color)] as const)
+          .map(([id, color]) => [normalizeIds([id])[0], normalizeTraceColor(color)] as const)
           .filter((entry): entry is [string, `#${string}`] => entry[1] !== null),
       )
       return {
@@ -226,7 +238,7 @@ function savePersisted(p: Persisted): void {
 
 function defaultColorOf(def: SignalDef): string {
   if (def.motor !== null) return cssVar(`--mg-trace-${def.motor + 1}`)
-  return def.id === 'mag.cal_total' ? cssVar('--mg-trace-total-mag') : cssVar('--mg-trace-5')
+  return cssVar(def.defaultColorToken ?? '--mg-trace-5')
 }
 
 function colorOf(def: SignalDef, colors: Record<string, string>): string {
@@ -626,7 +638,7 @@ function SignalList({
         const open = normalizedQuery !== '' || (openOverride[g.key] ?? (hasData || someChecked))
         const note = !hasData
           ? g.key === 'mag'
-            ? magHint(hint, scopeStore.stateOf('mag.raw_total', nowT) !== 'none')
+            ? magHint(hint, MAG_RAW_IDS.some((id) => scopeStore.stateOf(id, nowT) !== 'none'))
             : g.emptyHint(hint)
           : allZero
             ? 'All values are 0 — motors idle, or this ESC reports no telemetry.'
@@ -695,11 +707,11 @@ function SignalList({
   )
 }
 
-/** The magnetometer group's empty-state hint: raw arrives with the link, the
- * calibrated trace additionally needs a loaded calibration. */
+/** The magnetometer group's empty-state hint. Each source appears only when its
+ * own MAVLink stream arrives; calibration never creates a missing source. */
 function magHint(hint: HintContext, rawSeen: boolean): string | null {
   if (!hint.targetConnected && !rawSeen) return 'Connect the PX4 serial link.'
-  if (!rawSeen) return 'Waiting for HIGHRES_IMU…'
+  if (!rawSeen) return 'Waiting for HIGHRES_IMU or SCALED_IMU streams…'
   return null
 }
 

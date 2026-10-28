@@ -148,17 +148,44 @@ impl TimestampMapper {
     }
 }
 
-/// One [`TimestampMapper`] per FC time field, because `time_boot_ms` and
-/// `time_usec` are not the same clock (different magnitude/rate) and each needs
-/// its own rollback baseline.
+/// Identity of one timestamp clock. Message id is included deliberately:
+/// `time_usec` may mean boot-relative time in one MAVLink message and Unix time
+/// in another, even when both come from the same node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct TimestampSource {
+    system_id: u8,
+    component_id: u8,
+    message_id: u32,
+    field: &'static str,
+}
+
+/// One [`TimestampMapper`] per complete MAVLink source and FC time field. A
+/// reboot, wrap or unlike `time_usec` semantic in one stream therefore cannot
+/// move another stream's host-axis baseline.
 #[derive(Debug, Clone, Default)]
 pub struct TimestampMappers {
-    by_field: HashMap<&'static str, TimestampMapper>,
+    by_source: HashMap<TimestampSource, TimestampMapper>,
 }
 
 impl TimestampMappers {
-    pub fn map(&mut self, field: &'static str, fc_ms: f64, rx_ms: f64) -> f64 {
-        self.by_field.entry(field).or_default().map(fc_ms, rx_ms)
+    pub fn map(
+        &mut self,
+        system_id: u8,
+        component_id: u8,
+        message_id: u32,
+        field: &'static str,
+        fc_ms: f64,
+        rx_ms: f64,
+    ) -> f64 {
+        self.by_source
+            .entry(TimestampSource {
+                system_id,
+                component_id,
+                message_id,
+                field,
+            })
+            .or_default()
+            .map(fc_ms, rx_ms)
     }
 }
 
@@ -227,7 +254,16 @@ fn handle_message(
         .as_secs_f64()
         * 1000.0;
     let t_ms = fc_ms(&extraction)
-        .map(|(field, fc)| mapper.map(field, fc, rx_ms))
+        .map(|(field, fc)| {
+            mapper.map(
+                env.system_id(),
+                env.component_id(),
+                message_id,
+                field,
+                fc,
+                rx_ms,
+            )
+        })
         .unwrap_or(rx_ms);
     // The catalog fills for every seen message, subscribed or not, so the
     // signal tree is populated before anything is checked (plan §4).
@@ -506,16 +542,37 @@ mod tests {
         // time_boot_ms and time_usec are different clocks; each re-baselines
         // independently, so a reboot of one must not disturb the other.
         let mut m = TimestampMappers::default();
-        let boot = m.map("time_boot_ms", 10.0, 1000.0);
+        let boot = m.map(1, 1, 30, "time_boot_ms", 10.0, 1000.0);
         assert_eq!(boot, 1000.0);
-        assert!(m.map("time_boot_ms", 20.0, 1010.0) > 1005.0);
+        assert!(m.map(1, 1, 30, "time_boot_ms", 20.0, 1010.0) > 1005.0);
         // time_usec (ms) has a large magnitude; its baseline is independent.
-        let usec = m.map("time_usec", 5_000_000.0, 1010.0);
+        let usec = m.map(1, 1, 30, "time_usec", 5_000_000.0, 1010.0);
         assert!(usec > 1000.0, "usec baseline independent, got {usec}");
         assert!(usec < 1020.0, "usec on host axis, got {usec}");
         // Mapping one field does not disturb the other's baseline.
-        assert!(m.map("time_usec", 5_000_010.0, 1020.0) > 1010.0);
-        assert!(m.map("time_boot_ms", 30.0, 1030.0) >= 1020.0);
+        assert!(m.map(1, 1, 30, "time_usec", 5_000_010.0, 1020.0) > 1010.0);
+        assert!(m.map(1, 1, 30, "time_boot_ms", 30.0, 1030.0) >= 1020.0);
+    }
+
+    #[test]
+    fn timestamp_mappers_isolate_nodes_and_message_clock_semantics() {
+        let mut m = TimestampMappers::default();
+        assert_eq!(m.map(1, 1, 26, "time_boot_ms", 100_000.0, 1_000.0), 1_000.0);
+        assert!(m.map(1, 1, 26, "time_boot_ms", 100_010.0, 1_010.0) > 1_005.0);
+
+        // A second node starts near zero. If the mapper were shared, this would
+        // look like a reboot and destroy node 1's established baseline.
+        assert_eq!(m.map(2, 1, 26, "time_boot_ms", 10.0, 1_015.0), 1_015.0);
+        assert!(m.map(1, 1, 26, "time_boot_ms", 100_020.0, 1_020.0) > 1_015.0);
+
+        // The same node may expose boot-relative and epoch-like `time_usec`
+        // semantics in different messages. Message identity keeps both stable.
+        assert_eq!(m.map(1, 1, 105, "time_usec", 20.0, 2_000.0), 2_000.0);
+        assert_eq!(
+            m.map(1, 1, 24, "time_usec", 1_800_000_000_000.0, 2_005.0),
+            2_005.0
+        );
+        assert!(m.map(1, 1, 105, "time_usec", 30.0, 2_010.0) > 2_005.0);
     }
 
     #[test]

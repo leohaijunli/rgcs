@@ -17,7 +17,8 @@
 //! | `sitl.servo1..4`                | SITL `SERVO_OUTPUT_RAW` main outputs  | µs   |
 //! | `cmd.pwm1..4`                   | converted ACTUATOR_TEST command      | µs / DShot counts |
 //! | `fc.motor1..4`                  | mapped target-FC output per motor    | µs / DShot counts |
-//! | `mag.raw_total`, `mag.cal_total`| `|B|` before / after calibration      | nT   |
+//! | `mag.<source>.raw_total`         | source-specific `|B|` before calibration | nT |
+//! | `mag.<source>.cal_total`         | source-specific `|A·(m−b)|`          | nT   |
 //! | `bat{k}.current`                | `BATTERY_STATUS` current, k = 1-based | A    |
 //! | `esc{k}.rpm/current/voltage`    | `ESC_STATUS`, k = 1-based             | rpm / A / V |
 
@@ -42,8 +43,38 @@ pub const MAX_ESC: usize = 8;
 /// oldest are dropped first so memory stays bounded.
 pub const MAX_PENDING: usize = 20_000;
 
-pub const MAG_RAW_TOTAL_ID: &str = "mag.raw_total";
-pub const MAG_CAL_TOTAL_ID: &str = "mag.cal_total";
+/// A complete MAVLink magnetometer triple shown in the Motor Test scope.
+///
+/// PX4 1.17 maps `SCALED_IMU`, `SCALED_IMU2` and `SCALED_IMU3` to distinct
+/// `sensor_mag` instances. Keeping that identity in every scope id prevents a
+/// value or calibration result from one instance entering another ring.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MagScopeSource {
+    HighresImu,
+    ScaledImu1,
+    ScaledImu2,
+    ScaledImu3,
+}
+
+impl MagScopeSource {
+    /// Stable part of the frontend signal id.
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::HighresImu => "highres_imu",
+            Self::ScaledImu1 => "scaled_imu1",
+            Self::ScaledImu2 => "scaled_imu2",
+            Self::ScaledImu3 => "scaled_imu3",
+        }
+    }
+
+    fn raw_total_id(self) -> String {
+        format!("mag.{}.raw_total", self.id())
+    }
+
+    fn cal_total_id(self) -> String {
+        format!("mag.{}.cal_total", self.id())
+    }
+}
 
 /// Why a plotted series has an intentional break instead of a value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -256,11 +287,12 @@ pub fn mag_totals(raw_nt: [f64; 3], cal: Option<&MagCalibration>) -> MagTotals {
     }
 }
 
-/// `mag.raw_total` always; `mag.cal_total` only while a calibration is loaded.
-pub fn mag_samples(t: f64, totals: MagTotals) -> Vec<ScopeSample> {
-    let mut out = vec![ScopeSample::value(MAG_RAW_TOTAL_ID.into(), t, totals.raw)];
+/// One source's raw total always; its calibrated total only while a
+/// calibration is loaded. Source identity is part of both ids.
+pub fn mag_samples(source: MagScopeSource, t: f64, totals: MagTotals) -> Vec<ScopeSample> {
+    let mut out = vec![ScopeSample::value(source.raw_total_id(), t, totals.raw)];
     if let Some(cal) = totals.cal {
-        out.push(ScopeSample::value(MAG_CAL_TOTAL_ID.into(), t, cal));
+        out.push(ScopeSample::value(source.cal_total_id(), t, cal));
     }
     out
 }
@@ -548,7 +580,10 @@ mod tests {
         assert!((t.raw - 50_000.0).abs() < 1e-9);
         assert_eq!(t.cal, None);
         assert!((t.effective() - 50_000.0).abs() < 1e-9);
-        assert_eq!(ids(&mag_samples(0.0, t)), vec!["mag.raw_total"]);
+        assert_eq!(
+            ids(&mag_samples(MagScopeSource::HighresImu, 0.0, t)),
+            vec!["mag.highres_imu.raw_total"]
+        );
     }
 
     #[test]
@@ -566,8 +601,40 @@ mod tests {
         );
         assert!((t.effective() - c).abs() < 1e-12);
         assert_eq!(
-            ids(&mag_samples(0.0, t)),
-            vec!["mag.raw_total", "mag.cal_total"]
+            ids(&mag_samples(MagScopeSource::HighresImu, 0.0, t)),
+            vec!["mag.highres_imu.raw_total", "mag.highres_imu.cal_total"]
+        );
+    }
+
+    #[test]
+    fn magnetometer_sources_have_disjoint_scope_ids_and_values() {
+        let fixtures = [
+            (MagScopeSource::HighresImu, 50_000.0, "highres_imu"),
+            (MagScopeSource::ScaledImu1, 10_000.0, "scaled_imu1"),
+            (MagScopeSource::ScaledImu2, 20_000.0, "scaled_imu2"),
+            (MagScopeSource::ScaledImu3, 30_000.0, "scaled_imu3"),
+        ];
+        let mut samples = Vec::new();
+        for (source, raw, id) in fixtures {
+            let source_samples = mag_samples(
+                source,
+                1.0,
+                MagTotals {
+                    raw,
+                    cal: Some(raw - 100.0),
+                },
+            );
+            assert_eq!(source_samples[0].id, format!("mag.{id}.raw_total"));
+            assert_eq!(source_samples[0].v, Some(raw));
+            assert_eq!(source_samples[1].id, format!("mag.{id}.cal_total"));
+            assert_eq!(source_samples[1].v, Some(raw - 100.0));
+            samples.extend(source_samples);
+        }
+        let unique: std::collections::HashSet<_> = samples.iter().map(|s| &s.id).collect();
+        assert_eq!(
+            unique.len(),
+            8,
+            "every source and calibration state has its own ring id"
         );
     }
 

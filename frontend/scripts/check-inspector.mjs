@@ -66,6 +66,37 @@ try {
   await page.waitForTimeout(300)
   if (shots) await mkdir(shots, { recursive: true })
 
+  // N9: all four MAVLink magnetometer sources enter the real React/uPlot view
+  // as source-matched triples and produce four separately labelled totals.
+  {
+    const search = page.locator('.signal-list .signal-search')
+    await search.fill('mag')
+    const addShown = page.getByRole('button', { name: '+ Add 12 shown', exact: true })
+    await addShown.click()
+    const totalLabels = [
+      'HIGHRES_IMU 1:1 total (nT)',
+      'SCALED_IMU 1:1 total (nT)',
+      'SCALED_IMU2 1:1 total (nT)',
+      'SCALED_IMU3 1:1 total (nT)',
+    ]
+    for (const label of totalLabels) {
+      await page.locator('.plot .u-label', { hasText: label }).waitFor()
+      assert.equal(
+        await page.locator('.plot .u-label', { hasText: label }).count(),
+        1,
+        `${label} is a distinct mounted uPlot series`,
+      )
+    }
+    assert.equal(await page.locator('.plot .trace-chip').count(), 15, 'attitude plus four complete magnetic triples are selected')
+    await search.fill('')
+    if (shots) {
+      await page.waitForTimeout(500)
+      await page.getByRole('button', { name: 'Fit to data', exact: true }).click()
+      await page.waitForTimeout(100)
+      await page.screenshot({ path: join(shots, 'inspector-mag-sources-1366x768.png') })
+    }
+  }
+
   // --- Insp-3: common header + grouped toolbar + dedicated replay strip ----
   {
     assert.equal(

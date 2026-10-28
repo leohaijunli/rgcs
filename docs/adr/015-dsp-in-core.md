@@ -20,6 +20,14 @@
   can live on a tap task.
 - The signal source is abstracted behind `SampleSource` (plan decision B) so a
   ULog replay can feed the inspector later.
+- Magnetometer component and derived-total state is partitioned by the complete
+  source `(system_id, component_id, message_id)`. Derived calibrated totals use
+  `mag_total_cal:<system>:<component>:<message>`; no fixed global total ring is
+  shared by multiple IMUs or MAVLink nodes.
+- ULog `sensor_mag` instances keep their `multi_id` in distinct stable synthetic
+  message IDs. The UI displays one-based operator labels (`instance 1`,
+  `instance 2`, …); recorded Gauss x/y/z values enter the shared magnetic path
+  as nT `xmag/ymag/zmag`, and each instance exposes its own `mag_total`.
 
 ## Rationale
 
@@ -30,6 +38,8 @@
 - Raw and filtered traces come from the same sample batch, so their time axes
   are aligned by construction.
 - Self-description keeps the frontend free of per-algorithm knowledge.
+- Source-aware accumulation prevents interleaved `SCALED_IMU{,2,3}` or ULog
+  records from completing a mixed x/y/z triple.
 
 ## Consequences
 

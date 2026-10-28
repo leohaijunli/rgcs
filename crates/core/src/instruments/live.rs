@@ -15,7 +15,7 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 
 use crate::mavlink::connection::{ConnectionEvent, ConnectionHandle};
 use crate::mavlink::router::{MessageRoute, RoutedEvents};
-use crate::signals::{HIGHRES_IMU_ID, RAW_IMU_ID};
+use crate::signals::{HIGHRES_IMU_ID, RAW_IMU_ID, SCALED_IMU2_ID, SCALED_IMU3_ID, SCALED_IMU_ID};
 
 use super::monitor::{StreamEvent, StreamMonitor};
 use super::sample::InstrumentSample;
@@ -38,12 +38,16 @@ pub enum InstrumentEvent {
 /// The MAVLink route the instrument runner subscribes to.
 ///
 /// Only the ids a current [`InstrumentSource`] can decode are routed:
-/// `HIGHRES_IMU`/`RAW_IMU` for the magnetometer and `GPS_RAW_INT` for the RTK
-/// GNSS, plus `GLOBAL_POSITION_INT` for a future position fallback.
+/// `HIGHRES_IMU`/`RAW_IMU`/`SCALED_IMU*` for a configured magnetometer source
+/// and `GPS_RAW_INT` for the RTK GNSS, plus `GLOBAL_POSITION_INT` for a future
+/// position fallback.
 pub fn route() -> MessageRoute {
     MessageRoute::messages(&[
         HIGHRES_IMU_ID,
         RAW_IMU_ID,
+        SCALED_IMU_ID,
+        SCALED_IMU2_ID,
+        SCALED_IMU3_ID,
         GPS_RAW_INT_DATA::ID,
         GLOBAL_POSITION_INT_DATA::ID,
     ])

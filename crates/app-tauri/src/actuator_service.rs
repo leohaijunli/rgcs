@@ -34,7 +34,9 @@ use maggcs_core::motor_test::protocol::{
     detect_bank_protocol_checked, OutputProtocol, OutputProtocols,
 };
 use maggcs_core::motor_test::pwm::{PwmModel, PwmRangeSource};
-use maggcs_core::motor_test::scope::{self, OutputScopeError, ScopeBus, ScopeOutputMeta};
+use maggcs_core::motor_test::scope::{
+    self, MagScopeSource, OutputScopeError, ScopeBus, ScopeOutputMeta,
+};
 use maggcs_core::motor_test::service::{MotorTestCommand, MotorTestEvent, MotorTestService};
 use maggcs_core::motor_test::source::{ForwardSlot, ForwardState};
 use maggcs_core::motor_test::{SessionState, DEFAULT_TICK_HZ};
@@ -44,6 +46,9 @@ use maggcs_core::params::{ParamEntry, ParamObservation, ParamService};
 use maggcs_core::runtime::operations::OperationError;
 use maggcs_core::runtime::{Revision, TransportGeneration};
 use maggcs_core::signals::derived::esc_frame_range;
+use maggcs_core::signals::{
+    HIGHRES_IMU_ID, MILLIGAUSS_TO_NANOTESLA, SCALED_IMU2_ID, SCALED_IMU3_ID, SCALED_IMU_ID,
+};
 
 /// Maximum time to observe the release pass before closing an actuator link.
 const MOTOR_TEST_STOP_TIMEOUT: Duration = Duration::from_secs(2);
@@ -3025,9 +3030,9 @@ pub async fn actuator_refresh_mapping(
 }
 
 /// Attach the mag/ESC/battery telemetry tap to a link (A4 wiring): subscribes
-/// to `HIGHRES_IMU` (105, mag triple), `BATTERY_STATUS` (147, total current) and
-/// `ESC_STATUS` (291), applies the loaded calibration, drives the alarm state
-/// machine, and emits `actuator_telemetry` events for the window's curves.
+/// to all four supported mag messages, `BATTERY_STATUS` (147, total current)
+/// and `ESC_STATUS` (291). Every mag source gets independent scope ids;
+/// `HIGHRES_IMU` alone drives the alarm/status readout.
 /// Called from `connect` after the link comes up.
 pub fn attach_motor_telemetry<R: tauri::Runtime>(
     app: &AppHandle<R>,
@@ -3039,7 +3044,17 @@ pub fn attach_motor_telemetry<R: tauri::Runtime>(
     // (Re)attach resets the alarm clock; the loaded calibration survives
     // (it is a file, not link state). The target runtime owns the task.
     let events = handle.subscribe_route(
-        MessageRoute::messages(&[0, 36, 105, 147, 291]).from(target_system_id, TARGET_COMPONENT_ID),
+        MessageRoute::messages(&[
+            0,
+            36,
+            SCALED_IMU_ID,
+            HIGHRES_IMU_ID,
+            SCALED_IMU2_ID,
+            SCALED_IMU3_ID,
+            147,
+            291,
+        ])
+        .from(target_system_id, TARGET_COMPONENT_ID),
     );
     let retained = handle.target_heartbeat().filter(|env| {
         env.header.system_id == target_system_id && env.header.component_id == TARGET_COMPONENT_ID
@@ -3101,7 +3116,36 @@ fn store_esc_status(
     }
 }
 
-/// The telemetry tap: `HIGHRES_IMU` (105) → calibrated `mag_total` → alarm;
+/// Decode one complete Motor Test magnetometer frame and normalize it to nT.
+/// The source enum is carried beside the values all the way to the scope ids.
+fn scope_mag_frame(message: &MavMessage) -> Option<(MagScopeSource, [f64; 3])> {
+    match message {
+        MavMessage::HIGHRES_IMU(imu) => Some((
+            MagScopeSource::HighresImu,
+            [imu.xmag, imu.ymag, imu.zmag]
+                .map(|gauss| f64::from(gauss) * maggcs_core::signals::GAUSS_TO_NANOTESLA),
+        )),
+        MavMessage::SCALED_IMU(imu) => Some((
+            MagScopeSource::ScaledImu1,
+            [imu.xmag, imu.ymag, imu.zmag]
+                .map(|milligauss| f64::from(milligauss) * MILLIGAUSS_TO_NANOTESLA),
+        )),
+        MavMessage::SCALED_IMU2(imu) => Some((
+            MagScopeSource::ScaledImu2,
+            [imu.xmag, imu.ymag, imu.zmag]
+                .map(|milligauss| f64::from(milligauss) * MILLIGAUSS_TO_NANOTESLA),
+        )),
+        MavMessage::SCALED_IMU3(imu) => Some((
+            MagScopeSource::ScaledImu3,
+            [imu.xmag, imu.ymag, imu.zmag]
+                .map(|milligauss| f64::from(milligauss) * MILLIGAUSS_TO_NANOTESLA),
+        )),
+        _ => None,
+    }
+}
+
+/// The telemetry tap: every supported IMU message gets source-specific magnetic
+/// traces; `HIGHRES_IMU` additionally drives the calibrated `mag_total` alarm.
 /// `ESC_STATUS` (291) → the ESC aggregator; `BATTERY_STATUS` (147) → the total
 /// battery current trace; `SERVO_OUTPUT_RAW` (36) → the target-FC servo trace.
 /// Emits `actuator_telemetry` (aggregated snapshot) at ~10 Hz for the
@@ -3151,24 +3195,24 @@ async fn run_motor_telemetry_tap<R: tauri::Runtime>(
                             telemetry.last_heartbeat_at = Some(env.received_at);
                         }
                     }
-                    MavMessage::HIGHRES_IMU(imu) => {
-                        // HIGHRES_IMU mag fields are gauss on the wire; the
-                        // whole MagGCS mag pipeline (calibration `A·(m−b)`,
-                        // `mag_total`, the alarm thresholds) is nanotesla.
-                        let raw_gauss = [imu.xmag as f64, imu.ymag as f64, imu.zmag as f64];
-                        let raw = raw_gauss.map(|g| g * maggcs_core::signals::GAUSS_TO_NANOTESLA);
-                        // Raw total always; the calibrated total (A·(raw−b))
-                        // only while a calibration is loaded.
-                        let t = now_epoch_s();
-                        let totals = scope::mag_totals(raw, telemetry.calib.as_ref());
-                        bus.push_all(scope::mag_samples(t, totals));
-                        // Alarm + readout keep watching the calibrated total
-                        // (raw pass-through when none is loaded).
-                        let total = totals.effective();
-                        telemetry.last_mag_total_nt = Some(total);
-                        if telemetry.alarm.feed(total, now_epoch_s()) {
-                            // Transition into Alarm: fire the audio + flash.
-                            let _ = app.emit("actuator_alarm", total);
+                    MavMessage::HIGHRES_IMU(_)
+                    | MavMessage::SCALED_IMU(_)
+                    | MavMessage::SCALED_IMU2(_)
+                    | MavMessage::SCALED_IMU3(_) => {
+                        if let Some((source, raw_nt)) = scope_mag_frame(&env.message) {
+                            let t = now_epoch_s();
+                            let totals = scope::mag_totals(raw_nt, telemetry.calib.as_ref());
+                            bus.push_all(scope::mag_samples(source, t, totals));
+                            // Scaled-IMU sources are plots only. They must never
+                            // perturb the established HIGHRES alarm/readout.
+                            if source == MagScopeSource::HighresImu {
+                                let total = totals.effective();
+                                telemetry.last_mag_total_nt = Some(total);
+                                if telemetry.alarm.feed(total, t) {
+                                    // Transition into Alarm: fire audio + flash.
+                                    let _ = app.emit("actuator_alarm", total);
+                                }
+                            }
                         }
                     }
                     MavMessage::BATTERY_STATUS(bat) => {
@@ -3260,6 +3304,67 @@ fn now_epoch_s() -> f64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0)
+}
+
+#[cfg(test)]
+mod scope_mag_frame_tests {
+    use super::scope_mag_frame;
+    use maggcs_core::mavlink::MavMessage;
+    use maggcs_core::motor_test::scope::MagScopeSource;
+    use mavlink::common::{HIGHRES_IMU_DATA, SCALED_IMU2_DATA, SCALED_IMU3_DATA, SCALED_IMU_DATA};
+
+    #[test]
+    fn all_imu_mag_messages_keep_their_source_and_wire_units() {
+        let frames = [
+            (
+                MavMessage::HIGHRES_IMU(HIGHRES_IMU_DATA {
+                    xmag: 0.1,
+                    ymag: 0.2,
+                    zmag: 0.3,
+                    ..Default::default()
+                }),
+                MagScopeSource::HighresImu,
+                [10_000.0, 20_000.0, 30_000.0],
+            ),
+            (
+                MavMessage::SCALED_IMU(SCALED_IMU_DATA {
+                    xmag: 100,
+                    ymag: 200,
+                    zmag: 300,
+                    ..Default::default()
+                }),
+                MagScopeSource::ScaledImu1,
+                [10_000.0, 20_000.0, 30_000.0],
+            ),
+            (
+                MavMessage::SCALED_IMU2(SCALED_IMU2_DATA {
+                    xmag: 200,
+                    ymag: 300,
+                    zmag: 400,
+                    ..Default::default()
+                }),
+                MagScopeSource::ScaledImu2,
+                [20_000.0, 30_000.0, 40_000.0],
+            ),
+            (
+                MavMessage::SCALED_IMU3(SCALED_IMU3_DATA {
+                    xmag: 300,
+                    ymag: 400,
+                    zmag: 500,
+                    ..Default::default()
+                }),
+                MagScopeSource::ScaledImu3,
+                [30_000.0, 40_000.0, 50_000.0],
+            ),
+        ];
+        for (message, expected_source, expected_values) in frames {
+            let (source, values) = scope_mag_frame(&message).expect("supported IMU frame");
+            assert_eq!(source, expected_source);
+            for (actual, expected) in values.into_iter().zip(expected_values) {
+                assert!((actual - expected).abs() < 0.01);
+            }
+        }
+    }
 }
 
 /// Update the alarm tunables (threshold/debounce/hysteresis/cooldown/α).

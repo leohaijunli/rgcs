@@ -12,7 +12,7 @@
 //! synthetic **total-field** signal: `mag_total = √(xmag² + ymag² + zmag²)`, so
 //! the operator can watch the field magnitude instead of three rotated axes.
 //! The wire unit differs per message (gauss for `HIGHRES_IMU`, milligauss for
-//! `RAW_IMU`); the tap normalizes mag values to nanotesla via
+//! `RAW_IMU` and `SCALED_IMU{,2,3}`); the tap normalizes mag values to nanotesla via
 //! [`super::normalize_mag_fields`].
 
 use serde::ser::Error as _;

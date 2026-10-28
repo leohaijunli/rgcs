@@ -8,7 +8,8 @@
  */
 export type MagInstance = { 
 /**
- * MAVLink message id: `HIGHRES_IMU` (105) or `RAW_IMU` (27).
+ * MAVLink message id: `HIGHRES_IMU` (105), `RAW_IMU` (27), or one of the
+ * three `SCALED_IMU*` messages (26/116/129).
  */
 message_id: number, 
 /**

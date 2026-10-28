@@ -67,6 +67,11 @@
    follows confirmed release. Cancellation invalidates pending start work, and
    the serialized worker retains the playback fence for already dispatched
    audio. Tone failure is distinct from motor-release failure.
+8. **Magnetic plots retain sensor identity.** `HIGHRES_IMU`, `SCALED_IMU`,
+   `SCALED_IMU2` and `SCALED_IMU3` use independent
+   `mag.<source>.{raw,cal}_total` scope IDs and rings. All values are normalized
+   to nT at the backend boundary. Scaled-IMU streams are plot-only;
+   `HIGHRES_IMU` remains the sole alarm and status-readout source.
 
 ## Safety and failure analysis (AGENTS.md rule 5)
 
@@ -87,6 +92,9 @@
 - **Wrong units** (µs vs DShot counts): a single protocol model drives both
   command and display; versioned sample metadata rejects stale/mismatched data,
   and the regression checks actual plot replacement and independent axes.
+- **Mixed magnetic sensors**: full source identity is carried into each scope
+  ID. Interleaved source tests change only IMU3 and assert that IMU1/2 rings and
+  alarm input remain unchanged.
 - **Residual risk**: this ADR does not authorize loaded/hover testing. RPM is
   not thrust; prop load, thrust stands and flight testing remain out of scope.
 

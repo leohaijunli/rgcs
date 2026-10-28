@@ -42,7 +42,7 @@ check('PWM/DShot/pulse-unit changes isolate history and reject late samples', ()
   store.ingest([
     { id: 'cmd.pwm1', t: 1, v: 1500, output: pwm },
     { id: 'fc.motor1', t: 1.1, v: 1490, output: pwm },
-    { id: 'mag.raw_total', t: 1, v: 50000 },
+    { id: 'mag.highres_imu.raw_total', t: 1, v: 50000 },
   ])
   const dshot = output(17, 2, 'd_shot_throttle')
   assert.deepEqual(store.configureOutputs([dshot]), { ok: true })
@@ -50,7 +50,7 @@ check('PWM/DShot/pulse-unit changes isolate history and reject late samples', ()
   assert.equal(store.definitionOf('fc.motor1').unit, 'thr')
   assert.equal(store.rings.has('cmd.pwm1'), false)
   assert.equal(store.rings.has('fc.motor1'), false)
-  assert.equal(store.rings.get('mag.raw_total').length, 1)
+  assert.equal(store.rings.get('mag.highres_imu.raw_total').length, 1)
   store.ingest([
     { id: 'cmd.pwm1', t: 2, v: 1500, output: pwm },
     { id: 'cmd.pwm1', t: 2.1, v: 650 },
@@ -245,8 +245,32 @@ check('elapsed time starts at the first plotted value and Clear resets it', () =
   store.clear()
   assert.equal(store.originT, null)
   assert.equal(store.elapsedAt(500), 0)
-  store.ingest([{ id: 'mag.raw_total', t: 500, v: 50_000 }])
+  store.ingest([{ id: 'mag.highres_imu.raw_total', t: 500, v: 50_000 }])
   assert.equal(store.elapsedAt(503), 3)
+})
+
+check('IMU1/2/3 magnetic rings stay numerically isolated', () => {
+  const store = new ScopeStore()
+  const imu1 = 'mag.scaled_imu1.raw_total'
+  const imu2 = 'mag.scaled_imu2.raw_total'
+  const imu3 = 'mag.scaled_imu3.raw_total'
+  store.ingest([
+    { id: imu1, t: 1, v: 10_000 },
+    { id: imu2, t: 1, v: 20_000 },
+    { id: imu3, t: 1, v: 30_000 },
+  ])
+  store.ingest([{ id: imu3, t: 2, v: 80_000 }])
+
+  assert.equal(store.rings.get(imu1).length, 1)
+  assert.equal(store.rings.get(imu1).valueAt(0), 10_000)
+  assert.equal(store.stats.get(imu1).last, 10_000)
+  assert.equal(store.rings.get(imu2).length, 1)
+  assert.equal(store.rings.get(imu2).valueAt(0), 20_000)
+  assert.equal(store.stats.get(imu2).last, 20_000)
+  assert.equal(store.rings.get(imu3).length, 2)
+  assert.equal(store.rings.get(imu3).valueAt(1), 80_000)
+  assert.notEqual(store.rings.get(imu1), store.rings.get(imu2))
+  assert.notEqual(store.rings.get(imu2), store.rings.get(imu3))
 })
 
 check('trace colors accept only canonical six-digit hex values', () => {

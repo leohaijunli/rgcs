@@ -10,14 +10,23 @@ use thiserror::Error;
 
 use crate::mavlink::{MavMessage, MessageEnvelope};
 use crate::signals::extract::{extract, ExtractError, Extraction};
-use crate::signals::{normalize_mag_fields, HIGHRES_IMU_ID, RAW_IMU_ID};
+use crate::signals::{
+    normalize_mag_fields, HIGHRES_IMU_ID, RAW_IMU_ID, SCALED_IMU2_ID, SCALED_IMU3_ID, SCALED_IMU_ID,
+};
 use crate::telemetry::GpsRawInt;
 
 use super::sample::{GnssSample, InstrumentKind, MagInstance, MagSample};
 
 /// MAVLink message ids carrying a magnetometer triple whose wire unit MagGCS
-/// knows how to convert (`HIGHRES_IMU` gauss, `RAW_IMU` milligauss).
-pub const MAG_MESSAGE_IDS: [u32; 2] = [HIGHRES_IMU_ID, RAW_IMU_ID];
+/// knows how to convert (`HIGHRES_IMU` gauss, all raw/scaled variants
+/// milligauss).
+pub const MAG_MESSAGE_IDS: [u32; 5] = [
+    HIGHRES_IMU_ID,
+    RAW_IMU_ID,
+    SCALED_IMU_ID,
+    SCALED_IMU2_ID,
+    SCALED_IMU3_ID,
+];
 
 /// Whether a message id carries a magnetometer triple with a known unit.
 pub fn is_mag_message(message_id: u32) -> bool {
@@ -128,6 +137,7 @@ mod tests {
     use crate::telemetry::GpsFixType;
     use mavlink::common::{
         GpsFixType as MavGpsFixType, GPS_RAW_INT_DATA, HIGHRES_IMU_DATA, RAW_IMU_DATA,
+        SCALED_IMU2_DATA, SCALED_IMU3_DATA, SCALED_IMU_DATA,
     };
     use std::time::Instant;
 
@@ -178,7 +188,47 @@ mod tests {
         }));
         let instance = MagInstance::new(RAW_IMU_ID, 1);
         let sample = decode_mag(&env, instance).expect("decode").expect("is mag");
-        assert!((sample.x_nt - 2_500_000.0).abs() < 1e-3);
+        assert!((sample.x_nt - 25_000.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn scaled_imu_instances_decode_with_distinct_message_identity() {
+        let fixtures = [
+            (
+                MavMessage::SCALED_IMU(SCALED_IMU_DATA {
+                    xmag: 100,
+                    ..Default::default()
+                }),
+                SCALED_IMU_ID,
+                1,
+                10_000.0,
+            ),
+            (
+                MavMessage::SCALED_IMU2(SCALED_IMU2_DATA {
+                    xmag: 200,
+                    ..Default::default()
+                }),
+                SCALED_IMU2_ID,
+                2,
+                20_000.0,
+            ),
+            (
+                MavMessage::SCALED_IMU3(SCALED_IMU3_DATA {
+                    xmag: 300,
+                    ..Default::default()
+                }),
+                SCALED_IMU3_ID,
+                3,
+                30_000.0,
+            ),
+        ];
+        for (message, message_id, sensor, expected_x) in fixtures {
+            let env = envelope(message);
+            let instance = MagInstance::new(message_id, sensor);
+            let sample = decode_mag(&env, instance).expect("decode").expect("is mag");
+            assert_eq!(sample.instance, instance);
+            assert!((sample.x_nt - expected_x).abs() < 1e-3);
+        }
     }
 
     #[test]

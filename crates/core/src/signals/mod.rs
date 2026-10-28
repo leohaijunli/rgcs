@@ -29,18 +29,24 @@ use ts_rs::TS;
 /// are in gauss; every MagGCS mag value (components, total, calibration,
 /// alarm) is nanotesla.
 pub const GAUSS_TO_NANOTESLA: f64 = 1e5;
+/// Milligauss → nanotesla: `1 mG = 1e-3 G = 100 nT`.
+pub const MILLIGAUSS_TO_NANOTESLA: f64 = 100.0;
 
 /// MAVLink message ids carrying a magnetometer triple.
 pub const HIGHRES_IMU_ID: u32 = 105;
 pub const RAW_IMU_ID: u32 = 27;
+pub const SCALED_IMU_ID: u32 = 26;
+pub const SCALED_IMU2_ID: u32 = 116;
+pub const SCALED_IMU3_ID: u32 = 129;
 
 /// Normalize one magnetometer field value to nanotesla, keyed by the
-/// message id it came from: `HIGHRES_IMU` mag is gauss, `RAW_IMU` mag is
-/// milligauss. Other messages/fields pass through unchanged.
+/// message id it came from: `HIGHRES_IMU` mag is gauss; `RAW_IMU` and the
+/// three `SCALED_IMU*` messages are milligauss. Other messages/fields pass
+/// through unchanged.
 pub fn normalize_mag_fields(message_id: u32, field: &str, value: f64) -> f64 {
     let factor = match message_id {
         HIGHRES_IMU_ID => GAUSS_TO_NANOTESLA,
-        RAW_IMU_ID => GAUSS_TO_NANOTESLA / 1e1, // milligauss → nT = ×1e4
+        RAW_IMU_ID | SCALED_IMU_ID | SCALED_IMU2_ID | SCALED_IMU3_ID => MILLIGAUSS_TO_NANOTESLA,
         _ => return value,
     };
     match field {
@@ -66,7 +72,19 @@ mod tests {
 
     #[test]
     fn raw_imu_milligauss_is_converted_to_nanotesla() {
-        assert_eq!(normalize_mag_fields(RAW_IMU_ID, "xmag", 250.0), 2_500_000.0);
+        assert_eq!(normalize_mag_fields(RAW_IMU_ID, "xmag", 250.0), 25_000.0);
+    }
+
+    #[test]
+    fn every_scaled_imu_milligauss_source_is_converted_independently() {
+        for (message_id, value, expected) in [
+            (SCALED_IMU_ID, 100.0, 10_000.0),
+            (SCALED_IMU2_ID, 200.0, 20_000.0),
+            (SCALED_IMU3_ID, 300.0, 30_000.0),
+        ] {
+            assert_eq!(normalize_mag_fields(message_id, "xmag", value), expected);
+            assert_eq!(normalize_mag_fields(message_id, "xacc", value), value);
+        }
     }
 
     #[test]

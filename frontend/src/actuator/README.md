@@ -49,6 +49,45 @@ at 0 s and, after the selected window fills, shows cumulative ranges such as
 70–100 s. Clear, target disconnect or reopening resets the origin; protocol,
 view and color changes do not.
 
+### Magnetometer source identity
+
+Magnetic curves are isolated by their complete MAVLink source. Motor Test uses
+the following independent scope IDs (raw is always available; calibrated is
+available while a calibration is loaded):
+
+- `mag.highres_imu.{raw,cal}_total`
+- `mag.scaled_imu1.{raw,cal}_total`
+- `mag.scaled_imu2.{raw,cal}_total`
+- `mag.scaled_imu3.{raw,cal}_total`
+
+`HIGHRES_IMU` remains the sole source for the alarm and status readout. The
+three `SCALED_IMU*` sources are plot-only and cannot change that state. MAVLink
+`HIGHRES_IMU` magnetic fields are converted from Gauss to nT; `RAW_IMU` and
+`SCALED_IMU{,2,3}` are converted from milligauss to nT.
+
+Signal Inspector uses `(system ID, component ID, message ID)` for component
+accumulators, timestamp mapping and calibrated-total ring IDs. A complete
+x/y/z triple is formed only within that identity. For ULog replay, every
+`sensor_mag` `multi_id` gets a separate synthetic message ID and a visible
+one-based label (`instance 1`, `instance 2`, …). Its recorded Gauss x/y/z fields
+are exposed as nT `xmag/ymag/zmag`, with an independent `mag_total` in the same
+instance group. Plot legends and trace chips retain that instance label.
+
+Automated acceptance:
+
+```bash
+cargo test -p maggcs-core inspector::session::mag_cal_tests --lib
+cargo test -p maggcs-core ulog::replay --lib
+npm run check:motor-scope
+npm run check:inspector-mag
+```
+
+The regressions interleave all three scaled-IMU triples, then change only IMU3;
+IMU1/2 values and derived rings must remain byte-for-byte/numerically unchanged.
+For manual ULog review, open a log containing at least three `sensor_mag`
+instances, expand each instance group, add each `mag_total`, and verify that the
+three instance names remain visible in both the legend and trace chips.
+
 The header distinguishes `LOCKED`, `UNLOCKED`, `STARTING`, `RUNNING`,
 `RELEASING`, and `EMERGENCY`. Unlocking is a local confirmation state; the
 target, heartbeat and armed-state checks determine whether START is available.
@@ -442,6 +481,7 @@ All captures use the simulated IPC fixture identified in the header.
 | 1024 × 640 | [Stacked controls](../../screenshots/motor-test/motor-controls-1024x640.png) |
 | 1366 × 768 | [Desktop workspace](../../screenshots/motor-test/motor-controls-1366x768.png) |
 | Dual independent plots | [Top Output, bottom Magnetic field](../../screenshots/motor-test/motor-controls-independent-plots-1366x768.png) |
+| Four isolated magnetic sources | [HIGHRES_IMU and SCALED_IMU 1/2/3](../../screenshots/n9/motor-controls-mag-sources-1366x768.png) |
 | 1920 × 1080 | [Wide workspace](../../screenshots/motor-test/motor-controls-1920x1080.png) |
 | DShot, display-only ESC RPM | [RPM readout](../../screenshots/motor-test/motor-controls-dshot-rpm-1366x768.png) |
 | One motor, eight ESC indices | [Independent bank states](../../screenshots/motor-test/motor-controls-esc-banks-1366x768.png) |
@@ -468,36 +508,40 @@ All captures use the simulated IPC fixture identified in the header.
 3. Use the IPC fixture to exercise unlock/start/stop and alarm acknowledgement.
    A short click must not start; a 3 s hold starts once, and releasing the pointer
    must not trigger STOP. Check the header's test-state label and local errors.
-4. Expand Logger configuration and Log retrieval. Confirm that capture actions
+4. In **Total field by IMU source**, enable the four raw traces. Apply an
+   offset/change only to `SCALED_IMU3`; its curve must move while HIGHRES_IMU,
+   IMU1 and IMU2 retain their previous numeric values. The alarm/status value
+   must continue to follow HIGHRES_IMU only.
+5. Expand Logger configuration and Log retrieval. Confirm that capture actions
    are available without expanding either section.
-5. Resize through the three screenshot sizes. Scroll each wide pane and the
+6. Resize through the three screenshot sizes. Scroll each wide pane and the
    stacked workspace; verify the last plot and log controls remain reachable
    while Stop/Emergency Stop stay visible.
-6. Change theme and Field mode in the main window, then reopen Motor Test.
+7. Change theme and Field mode in the main window, then reopen Motor Test.
    Check current and restored preferences, canvas colors, and labelled targets.
-7. Check the ESC RPM card and scope: values are indexed by ESC, missing values
+8. Check the ESC RPM card and scope: values are indexed by ESC, missing values
    show `—`, stale values are labelled, and the RPM card has no input, select,
    verification or hold button.
-8. In the eight-ESC fixture, verify ESC5–8 readouts and scope signals. ESC7's
+9. In the eight-ESC fixture, verify ESC5–8 readouts and scope signals. ESC7's
    reported `0 RPM` is valid data; the first bank's missing/stale values retain
    their own states when the second bank is live.
-9. Exercise PWM → DShot → mixed MAIN/AUX → PWM → OneShot. Verify one legend
+10. Exercise PWM → DShot → mixed MAIN/AUX → PWM → OneShot. Verify one legend
    entry per selected ID, mapped channel labels, separate µs/count axes, retained
    checkbox selection and no old-unit values after each change.
-10. Exercise release, stale telemetry and two runs. Verify the command, mapped
+11. Exercise release, stale telemetry and two runs. Verify the command, mapped
     feedback and RPM lines visibly break and resume rather than connecting the
     invalid interval.
-11. Verify M1/M2 and M3/M4 form two compact rows at desktop width. Open the
+12. Verify M1/M2 and M3/M4 form two compact rows at desktop width. Open the
     bottom logging drawer; Capture Start/Stop stays in its bar, the drawer spans
     center/right, and the healthy right target card remains concise.
-12. Search the signal list, switch between Top and Bottom and give each plot a
+13. Search the signal list, switch between Top and Bottom and give each plot a
     different signal; then select one signal in both plots. Choose a custom
     trace color for each and confirm selections/colors survive reload and
     protocol changes without issuing a motor command. Drag the separator and
     use Arrow keys/Home/End/double-click; the width persists after reload. Clear
     the plots and verify elapsed time restarts at 0 s; a filled rolling window
     shows cumulative seconds.
-13. In the isolated IPC fixture, set
+14. In the isolated IPC fixture, set
     `window.__bench.holdCapture = 'actuator_capture_start'`, start the motor
     session, then click Start capture. While its reply is pending, use header
     STOP and check that the motor session stops. Call
@@ -505,18 +549,18 @@ All captures use the simulated IPC fixture identified in the header.
     E-STOP, then with `actuator_capture_stop` and `actuator_capture_verify`;
     late capture completion must retain Emergency until RESET. Check Escape
     while focus is in a motor slider as well as the header button.
-14. Choose different Start tone and Stop tone values, including Off, and reopen
+15. Choose different Start tone and Stop tone values, including Off, and reopen
     the window. Verify both selections survive independently and changing them
     sends no motor or sound command. In a DShot IPC fixture, set
     `window.__bench.holdMotorStart = true`, unlock and hold START. Check STARTING,
     frozen input/source/tone controls, and available STOP/CANCEL START/Escape.
     Cancel, then call `window.__bench.completeMotorStart()`; the delayed reply
     must not start motors or clear Emergency.
-15. For physical acoustic acceptance, record the installed PX4 and AM32 versions
+16. For physical acoustic acceptance, record the installed PX4 and AM32 versions
     and motor/output mapping. Check each of the four selected tones and Off,
     start-tone-before-output and release-before-stop-tone ordering, then record
     the observed timing. These hardware observations are still pending.
-16. Open Streams… and search BATTERY_STATUS/147, SCALED_IMU/26 and
+17. Open Streams… and search BATTERY_STATUS/147, SCALED_IMU/26 and
     HIGHRES_IMU/105. Choose a result, inspect fields/units, then Add or edit its
     rate. Search/invalid rate drafts must send no command. Disable and compare
     the requested state to actual arrivals; check Stale when telemetry pauses.

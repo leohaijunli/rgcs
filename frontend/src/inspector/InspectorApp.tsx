@@ -26,6 +26,12 @@ import {
   Ruler,
 } from 'lucide-react'
 import { replaySeekWindow } from './replaySeek'
+import {
+  calibratedMagRings,
+  magComponentGroups,
+  magSourceLabel,
+  magTotalTraceId,
+} from './mag'
 import type { AlgorithmInfo } from '../generated-types/AlgorithmInfo'
 import { isTauri, mockCatalog, mockSamples, msgName, signalKey } from './mock'
 import type { AlgoConfig } from '../generated-types/AlgoConfig'
@@ -291,10 +297,21 @@ function filteredColor(base: string): string {
   return hslToHex(nh, Math.min(1, s + 0.05), nl)
 }
 
-/** Short display name for a signal: field only. The `sys:comp:msgid` prefix in
- * `signalKey` is an internal routing key and is not user-facing. */
-function signalLabel(signal: SignalId): string {
-  return signal.field
+interface SourceIdentity {
+  system_id: number
+  component_id: number
+  message_id: number
+}
+
+function sourceIdentityKey(source: SourceIdentity): string {
+  return `${source.system_id}:${source.component_id}:${source.message_id}`
+}
+
+/** Operator-facing source + field label. In ULog mode the catalog source name
+ * includes the topic instance, so equal `xmag` fields remain distinguishable. */
+function signalLabel(signal: SignalId, sourceNames?: ReadonlyMap<string, string>): string {
+  const source = sourceNames?.get(sourceIdentityKey(signal)) ?? msgName(signal.message_id)
+  return `${source} · ${signal.field}`
 }
 
 /** Value-axis unit heuristics by field name (`null` = no unit shown). This is a
@@ -338,22 +355,8 @@ function commonUnit(traces: Trace[]): string | null {
   return units.size === 1 ? [...units][0] : null
 }
 
-/** Trace indices (into `traces`) of the three mag components, or `null` when
- * the plot does not carry all of them (the total-intensity curve needs all). */
-function magComponents(traces: Trace[]): { x: number; y: number; z: number } | null {
-  const x = traces.findIndex((t) => t.signal.field === 'xmag')
-  const y = traces.findIndex((t) => t.signal.field === 'ymag')
-  const z = traces.findIndex((t) => t.signal.field === 'zmag')
-  return x >= 0 && y >= 0 && z >= 0 ? { x, y, z } : null
-}
-
 /** Total magnetic-field intensity curve colour: the dedicated trace token. */
 const TOTAL_MAG_COLOR = () => cssVarToken('--mg-trace-total-mag')
-
-/** Rust-side derived trace id for the calibrated total field
- * (core::inspector::session::MAG_TOTAL_ID): the A·(m−b) math runs in the
- * Rust session, the frontend only plots the column. */
-const MAG_TOTAL_ID = 'mag_total_cal'
 
 let idSeq = 0
 /** A stable id for a plot/trace within this window (persisted in the workspace). */
@@ -450,6 +453,22 @@ function PaneRail({ side, title, onOpen }: { side: 'left' | 'right'; title: stri
 export function InspectorApp() {
   const tauri = isTauri()
   const [catalog, setCatalog] = useState<CatalogEntry[]>([])
+  const sourceNames = useMemo(() => {
+    const names = new Map<string, string>()
+    for (const entry of catalog) {
+      names.set(
+        sourceIdentityKey(entry.signal),
+        entry.message_name || msgName(entry.signal.message_id),
+      )
+    }
+    return names
+  }, [catalog])
+  // Catalog values/rates refresh every second, but chart construction depends
+  // only on stable source labels. This avoids rebuilding uPlot on every poll.
+  const sourceNameSignature = [...sourceNames.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, name]) => `${key}=${name}`)
+    .join('|')
   const [algorithms, setAlgorithms] = useState<AlgorithmInfo[]>([])
   const [plots, setPlots] = useState<Plot[]>([])
   const [colors, setColors] = useState<Record<string, string>>({})
@@ -934,6 +953,11 @@ export function InspectorApp() {
   // Drop buffers/spectra for traces that no longer exist.
   useEffect(() => {
     const live = new Set(plots.flatMap((p) => p.traces.map((t) => t.id)))
+    for (const plot of plots) {
+      for (const mag of magComponentGroups(plot.traces)) {
+        live.add(magTotalTraceId(mag.source))
+      }
+    }
     for (const id of [...buffers.current.keys()]) if (!live.has(id)) buffers.current.delete(id)
     for (const id of [...spectra.current.keys()]) if (!live.has(id)) spectra.current.delete(id)
   }, [plots])
@@ -1039,14 +1063,14 @@ export function InspectorApp() {
       const sig = `${axisLink}|${p.traces
         .map(
           (t) =>
-            `${t.id}:${colorOf(signalKey(t.signal), colors)}:${t.pipeline.length > 0 ? 1 : 0}`,
+            `${t.id}:${signalLabel(t.signal, sourceNames)}:${colorOf(signalKey(t.signal), colors)}:${t.pipeline.length > 0 ? 1 : 0}`,
         )
         .join(',')}|cal:${calLoaded ? 1 : 0}`
       if (charts.current.has(p.id) && chartSigs.current.get(p.id) === sig) continue
       charts.current.get(p.id)?.destroy()
       chartResizers.current.get(p.id)?.disconnect()
       const cursor = axisLink ? { show: true, sync: { key: SYNC_KEY } } : { show: true }
-      const mag = magComponents(p.traces)
+      const mags = magComponentGroups(p.traces)
       const series: uPlot.Series[] = [{ label: 't', stroke: 'transparent' }]
       for (const t of p.traces) {
         const color = colorOf(signalKey(t.signal), colors)
@@ -1055,27 +1079,31 @@ export function InspectorApp() {
         if (t.pipeline.length === 0) {
           // Without a filter there is only one curve; no phantom "filtered"
           // series (its all-NaN data used to read back as "NaN" in the legend).
-          series.push({ label: `${t.signal.field}${suffix}`, stroke: color, width: 2 })
+          series.push({ label: `${signalLabel(t.signal, sourceNames)}${suffix}`, stroke: color, width: 2 })
         } else {
           // The filtered curve gets its own hue so it never hides behind raw.
-          series.push({ label: `${t.signal.field} raw${suffix}`, stroke: color, width: 1, dash: [4, 3] })
-          series.push({ label: `${t.signal.field} filtered${suffix}`, stroke: filteredColor(color), width: 2 })
+          const label = signalLabel(t.signal, sourceNames)
+          series.push({ label: `${label} raw${suffix}`, stroke: color, width: 1, dash: [4, 3] })
+          series.push({ label: `${label} filtered${suffix}`, stroke: filteredColor(color), width: 2 })
         }
       }
-      // When a plot carries all three mag components, append the total
-      // intensity as a derived series: the calibrated total streams from the
-      // Rust session (MAG_TOTAL_ID); without a calibration mergedData computes
-      // the plain √(x²+y²+z²).
-      if (mag)
+      // Append one total per complete, fully source-matched mag triple. With a
+      // calibration each comes from its own Rust-derived ring; otherwise the
+      // frontend computes the plain √(x²+y²+z²) per source.
+      for (const [index, mag] of mags.entries()) {
         series.push({
-          label: calLoaded ? 'total cal (nT)' : 'total (nT)',
-          stroke: TOTAL_MAG_COLOR(),
+          label: `${magSourceLabel(
+            mag.source,
+            sourceNames.get(sourceIdentityKey(mag.source)),
+          )} total${calLoaded ? ' cal' : ''} (nT)`,
+          stroke: index === 0 ? TOTAL_MAG_COLOR() : colorOf(`mag-total:${mag.sourceKey}`, colors),
           width: 2,
         })
+      }
       const empty = [
         [],
         ...p.traces.flatMap((t) => (t.pipeline.length > 0 ? [[], []] : [[]])),
-        ...(mag ? [[]] : []),
+        ...mags.map(() => []),
       ] as unknown as uPlot.AlignedData
       const chart = new uPlot(
         {
@@ -1122,7 +1150,7 @@ export function InspectorApp() {
               grid: { stroke: MUTED(), width: 1, dash: [2, 4] },
             },
             {
-              label: mag ? 'nT' : (commonUnit(p.traces) ?? ''),
+              label: mags.length > 0 ? 'nT' : (commonUnit(p.traces) ?? ''),
               font: AXIS_FONT,
               labelFont: AXIS_FONT,
               labelSize: 16,
@@ -1156,7 +1184,7 @@ export function InspectorApp() {
       }
     }
     markDirty()
-  }, [plots, axisLink, colors, markDirty, fitPlot, calLoaded])
+  }, [plots, axisLink, colors, markDirty, fitPlot, calLoaded, sourceNameSignature])
 
   // Redraw on a requestAnimationFrame loop instead of a React render per frame
   // (S4). Reads refs only; React state is structure, not data.
@@ -1255,8 +1283,8 @@ export function InspectorApp() {
     URL.revokeObjectURL(url)
   }
 
-  /** Load a mag calibration JSON into the Rust session; the derived
-   * calibrated total field (A·(m−b)) then streams as the MAG_TOTAL_ID
+  /** Load a mag calibration JSON into the Rust session; each source's derived
+   * calibrated total field (A·(m−b)) then streams into its own source-aware
    * trace. Persisted so a reopened window re-applies it. */
   const loadCal = async () => {
     try {
@@ -1715,7 +1743,7 @@ export function InspectorApp() {
                     title="Select trace"
                     onClick={() => setSelected(t.id)}
                   >
-                    {signalLabel(t.signal)}
+                    {signalLabel(t.signal, sourceNames)}
                   </button>
                   {hasAnalyzer && (
                     <button className={t.analyzer ? 'active' : ''} onClick={() => toggleFft(t.id)}>
@@ -1742,7 +1770,7 @@ export function InspectorApp() {
               ))}
             </div>
             {selected && p.traces.some((t) => t.id === selected) && selectedTrace?.analyzer && (
-              <SpectrumView frame={spectrum(selectedTrace)} label={signalLabel(selectedTrace.signal)} unit={signalUnit(selectedTrace.signal.field)} />
+              <SpectrumView frame={spectrum(selectedTrace)} label={signalLabel(selectedTrace.signal, sourceNames)} unit={signalUnit(selectedTrace.signal.field)} />
             )}
           </div>
         ))}
@@ -2017,12 +2045,13 @@ function mergedData(
   const traces = plot.traces
   const k = traces.length
   const rings = traces.map((tr) => buffers.get(tr.id))
-  // With a loaded calibration the total series is the Rust-derived
-  // MAG_TOTAL_ID column (computed in core::inspector, ADR-015) and joins the
-  // merge as one more participant; the TS sqrt below is the no-cal fallback.
-  const mag = magComponents(traces)
-  const calRing = calActive && mag ? buffers.get(MAG_TOTAL_ID) : undefined
-  const parts = calRing ? [...rings, calRing] : rings
+  const mags = magComponentGroups(traces)
+  // With a loaded calibration, append one Rust-derived participant per full
+  // MAVLink source identity. Undefined entries are retained deliberately: the
+  // participant index remains stable while that source waits for its first
+  // complete triple, and can never alias another source's ring.
+  const calRings = calActive ? calibratedMagRings(mags, buffers) : []
+  const parts = [...rings, ...calRings]
   const kk = parts.length
 
   // k-way merge over the (already sorted) per-trace rings.
@@ -2080,21 +2109,22 @@ function mergedData(
     // Only filtered traces carry a second column, matching the series list.
     if (traces[i].pipeline.length > 0) series.push(outFilt[i].map((v) => gap(v * scale)))
   }
-  // Derived total magnetic intensity: the calibrated curve from Rust when a
-  // calibration is loaded (MAG_TOTAL_ID, the k-th merge participant), else the
-  // plain √(x²+y²+z²) computed from the component columns; a gap in any
-  // component is a gap in the total.
-  if (mag) {
+  // Derived total magnetic intensity: one calibrated Rust curve per source
+  // when calibration is loaded, otherwise one plain √(x²+y²+z²) curve per
+  // source. A gap in any component is a gap in that source's total.
+  for (let magIndex = 0; magIndex < mags.length; magIndex++) {
+    const mag = mags[magIndex]
     if (calActive) {
-      series.push(
-        calRing ? outRaw[k].map((v) => gap(v)) : new Array(outX.length).fill(null),
-      )
+      const calRing = calRings[magIndex]
+      series.push(calRing
+        ? outRaw[k + magIndex].map((v) => gap(v))
+        : new Array(outX.length).fill(null))
     } else {
       const total = outRaw[mag.x].map((_, i) => {
         const a = outRaw[mag.x][i]
         const b = outRaw[mag.y][i]
         const c = outRaw[mag.z][i]
-        return a == null || b == null || c == null
+        return !Number.isFinite(a) || !Number.isFinite(b) || !Number.isFinite(c)
           ? null
           : gap(Math.sqrt(a * a + b * b + c * c))
       })
@@ -2370,11 +2400,11 @@ function PropertiesPanel({
       <dl>
         <dt>Signal</dt>
         <dd className="mono">
-          {signalLabel(trace.signal)}
+          {entry?.message_name ?? msgName(messageId)} · {trace.signal.field}
           {unit ? ` (${unit})` : ''}
         </dd>
         <dt>Message</dt>
-        <dd>{entry ? `msg ${messageId}` : `msg ${messageId} (not seen yet)`}</dd>
+        <dd>{entry ? `${entry.message_name} · msg ${messageId}` : `msg ${messageId} (not seen yet)`}</dd>
         <dt>Value</dt>
         <dd>{entry ? fmt(entry.last_value * signalScale(trace.signal.field), 3) : '—'}</dd>
         <dt>Rate</dt>

@@ -184,21 +184,34 @@ pub struct Session {
     traces: HashMap<TraceId, RunningTrace>,
     /// `signal → trace ids`, for routing one live sample to every trace on it.
     by_signal: HashMap<SignalId, Vec<TraceId>>,
-    /// Loaded mag calibration + the latest mag triple; when set, `ingest`
-    /// also emits the calibrated total field as the synthetic trace
-    /// [`MAG_TOTAL_ID`] (Rust-side derived curve, plan §9).
-    mag: Option<CalibratedMag>,
+    /// One loaded calibration is applied to each complete magnetometer source,
+    /// but no source shares component or dirty state with another.
+    mag_calibration: Option<crate::calib::MagCalibration>,
+    mag_by_source: HashMap<SignalId, MagAccumulator>,
 }
 
-/// The derived trace id for the calibrated total field. Never collides with
-/// a UI trace id (those are `t…`/`p…` prefixed).
-pub const MAG_TOTAL_ID: &str = "mag_total_cal";
+/// Prefix of every Rust-derived calibrated total-field trace id. The complete
+/// source follows it, so multiple nodes/messages cannot share a frontend ring.
+pub const MAG_TOTAL_TRACE_PREFIX: &str = "mag_total_cal";
+
+/// Stable trace id for one source's calibrated total field. `field` is ignored:
+/// x/y/z from one `(system, component, message)` must resolve to the same id.
+pub fn mag_total_trace_id(source: &SignalId) -> TraceId {
+    format!(
+        "{MAG_TOTAL_TRACE_PREFIX}:{}:{}:{}",
+        source.system_id, source.component_id, source.message_id
+    )
+}
+
+fn mag_source(signal: &SignalId) -> SignalId {
+    SignalId::new(signal.system_id, signal.component_id, signal.message_id, "")
+}
 
 /// Latest-triple state for the calibrated total-field curve. Emits exactly
-/// one derived sample per complete triple (dirty flags), so a RAW_IMU cycle
-/// (xmag, ymag, zmag at one timestamp) yields one total, not three.
-struct CalibratedMag {
-    cal: crate::calib::MagCalibration,
+/// one derived sample per complete triple (dirty flags). There is one instance
+/// of this struct per full MAVLink source identity.
+#[derive(Default)]
+struct MagAccumulator {
     x: Option<f64>,
     y: Option<f64>,
     z: Option<f64>,
@@ -225,26 +238,28 @@ impl Session {
     /// total needs them even if no trace plots the axes themselves).
     pub fn subscribe_ids(&self) -> HashSet<SignalId> {
         let mut ids: HashSet<SignalId> = self.by_signal.keys().cloned().collect();
-        if self.mag.is_some() {
-            // Adopt the ids of an existing mag trace when present (live link),
-            // so the tap forwards the real samples the calibration needs;
-            // otherwise fall back to the zero wildcard (ULog replay).
-            let base = self
+        if self.mag_calibration.is_some() {
+            // Subscribe a complete triple for every represented source. This
+            // must not choose only the first source: one plot can contain all
+            // three SCALED_IMU instances (or multiple MAVLink nodes).
+            let mut sources: HashSet<SignalId> = self
                 .by_signal
                 .keys()
-                .find(|s| matches!(s.field.as_str(), "xmag" | "ymag" | "zmag" | "mag_total"))
-                .cloned()
-                .unwrap_or_else(|| SignalId {
-                    system_id: 0,
-                    component_id: 0,
-                    message_id: 0,
-                    field: String::new(),
-                });
-            for field in ["xmag", "ymag", "zmag"] {
-                ids.insert(SignalId {
-                    field: field.to_string(),
-                    ..base
-                });
+                .filter(|s| matches!(s.field.as_str(), "xmag" | "ymag" | "zmag" | "mag_total"))
+                .map(mag_source)
+                .collect();
+            if sources.is_empty() {
+                // Preserve the inert fallback used before a live/ULog trace is
+                // selected; the real source replaces it on `set_traces`.
+                sources.insert(SignalId::new(0, 0, 0, ""));
+            }
+            for source in sources {
+                for field in ["xmag", "ymag", "zmag"] {
+                    ids.insert(SignalId {
+                        field: field.to_string(),
+                        ..source.clone()
+                    });
+                }
             }
         }
         ids
@@ -252,32 +267,18 @@ impl Session {
 
     /// Load (or clear with `None`) the magnetometer calibration. When set and
     /// the trace set carries the xmag/ymag/zmag fields, `ingest` derives the
-    /// calibrated total √(x²+y²+z²) − m_cal = A·(m_raw − b) − as the
-    /// [`MAG_TOTAL_ID`] trace. Clearing drops the derived curve.
+    /// calibrated total `|A·(m_raw − b)|` under a source-aware trace id from
+    /// [`mag_total_trace_id`]. Clearing drops the derived curves.
     pub fn set_mag_calibration(&mut self, cal: Option<crate::calib::MagCalibration>) {
-        match cal {
-            Some(cal) => {
-                if let Some(mag) = self.mag.as_mut() {
-                    mag.cal = cal;
-                } else {
-                    self.mag = Some(CalibratedMag {
-                        cal,
-                        x: None,
-                        y: None,
-                        z: None,
-                        dx: false,
-                        dy: false,
-                        dz: false,
-                    });
-                }
-            }
-            None => self.mag = None,
-        }
+        self.mag_calibration = cal;
+        // Never complete a triple with components received across a calibration
+        // change or after calibration was cleared and later reloaded.
+        self.mag_by_source.clear();
     }
 
     /// Whether a mag calibration is loaded.
     pub fn mag_calibration_loaded(&self) -> bool {
-        self.mag.is_some()
+        self.mag_calibration.is_some()
     }
 
     /// Replace the trace set: adds new traces, rebuilds changed ones (keeping
@@ -378,8 +379,11 @@ impl Session {
         // calibrated once the full triple is in (A·(m−b) mixes the axes), so
         // the raw values never reach a trace; without a calibration the raw
         // (nT-normalized) samples flow to their traces below.
-        let defer_mag =
-            self.mag.is_some() && matches!(sample.id.field.as_str(), "xmag" | "ymag" | "zmag");
+        let defer_mag = self.mag_calibration.is_some()
+            && matches!(
+                sample.id.field.as_str(),
+                "xmag" | "ymag" | "zmag" | "mag_total"
+            );
         if !defer_mag {
             if let Some(ids) = self.by_signal.get(&sample.id).cloned() {
                 out.reserve(ids.len() * 2);
@@ -395,8 +399,13 @@ impl Session {
         // in Rust, not in the frontend):
         //  - the calibrated components to the traces on xmag/ymag/zmag,
         //  - the calibrated total to traces on the raw `mag_total` signal, and
-        //  - the derived [`MAG_TOTAL_ID`] total series.
-        if let Some(mag) = self.mag.as_mut() {
+        //  - one source-aware derived total series.
+        let complete = if matches!(sample.id.field.as_str(), "xmag" | "ymag" | "zmag") {
+            let Some(cal) = self.mag_calibration.as_ref() else {
+                return out;
+            };
+            let source = mag_source(&sample.id);
+            let mag = self.mag_by_source.entry(source.clone()).or_default();
             match sample.id.field.as_str() {
                 "xmag" => {
                     mag.x = Some(sample.value);
@@ -415,56 +424,57 @@ impl Session {
             if let (true, true, true, Some(x), Some(y), Some(z)) =
                 (mag.dx, mag.dy, mag.dz, mag.x, mag.y, mag.z)
             {
-                let c = mag.cal.apply([x, y, z], None);
-                let total = (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt();
-                let node = SignalId::new(
-                    sample.id.system_id,
-                    sample.id.component_id,
-                    sample.id.message_id,
-                    "",
-                );
-                for (axis, value) in [("xmag", c[0]), ("ymag", c[1]), ("zmag", c[2])] {
-                    let cal_samp = SignalSample {
-                        id: SignalId {
-                            field: axis.to_string(),
-                            ..node
-                        },
-                        t_ms: sample.t_ms,
-                        value,
-                    };
-                    if let Some(ids) = self.by_signal.get(&cal_samp.id).cloned() {
-                        for id in ids {
-                            if let Some(trace) = self.traces.get_mut(&id) {
-                                process(trace, id, &cal_samp, &mut out);
-                            }
-                        }
-                    }
-                }
-                let tot_samp = SignalSample {
-                    id: SignalId {
-                        field: "mag_total".to_string(),
-                        ..node
-                    },
-                    t_ms: sample.t_ms,
-                    value: total,
-                };
-                if let Some(ids) = self.by_signal.get(&tot_samp.id).cloned() {
-                    for id in ids {
-                        if let Some(trace) = self.traces.get_mut(&id) {
-                            process(trace, id, &tot_samp, &mut out);
-                        }
-                    }
-                }
-                out.push(TraceSample {
-                    trace_id: MAG_TOTAL_ID.to_string(),
-                    t_ms: sample.t_ms,
-                    raw: total,
-                    filtered: f64::NAN,
-                });
+                let c = cal.apply([x, y, z], None);
                 mag.dx = false;
                 mag.dy = false;
                 mag.dz = false;
+                Some((source, c))
+            } else {
+                None
             }
+        } else {
+            None
+        };
+        if let Some((node, c)) = complete {
+            let total = (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt();
+            for (axis, value) in [("xmag", c[0]), ("ymag", c[1]), ("zmag", c[2])] {
+                let cal_samp = SignalSample {
+                    id: SignalId {
+                        field: axis.to_string(),
+                        ..node.clone()
+                    },
+                    t_ms: sample.t_ms,
+                    value,
+                };
+                if let Some(ids) = self.by_signal.get(&cal_samp.id).cloned() {
+                    for id in ids {
+                        if let Some(trace) = self.traces.get_mut(&id) {
+                            process(trace, id, &cal_samp, &mut out);
+                        }
+                    }
+                }
+            }
+            let tot_samp = SignalSample {
+                id: SignalId {
+                    field: "mag_total".to_string(),
+                    ..node.clone()
+                },
+                t_ms: sample.t_ms,
+                value: total,
+            };
+            if let Some(ids) = self.by_signal.get(&tot_samp.id).cloned() {
+                for id in ids {
+                    if let Some(trace) = self.traces.get_mut(&id) {
+                        process(trace, id, &tot_samp, &mut out);
+                    }
+                }
+            }
+            out.push(TraceSample {
+                trace_id: mag_total_trace_id(&node),
+                t_ms: sample.t_ms,
+                raw: total,
+                filtered: f64::NAN,
+            });
         }
         out
     }
@@ -487,6 +497,7 @@ impl Session {
     pub fn clear(&mut self) {
         self.traces.clear();
         self.by_signal.clear();
+        self.mag_by_source.clear();
     }
 
     /// Keep the configurations but drop all filter/analyzer state (reconnect).
@@ -496,14 +507,7 @@ impl Session {
             trace.fs.reset();
             trace.fs_built = 0.0;
         }
-        if let Some(mag) = self.mag.as_mut() {
-            mag.x = None;
-            mag.y = None;
-            mag.z = None;
-            mag.dx = false;
-            mag.dy = false;
-            mag.dz = false;
-        }
+        self.mag_by_source.clear();
     }
 }
 
@@ -613,17 +617,32 @@ mod mag_cal_tests {
         }
     }
 
-    fn mag_sample(field: &str, value: f64, t_ms: f64) -> crate::signals::SignalSample {
+    fn mag_sample_from(
+        system_id: u8,
+        component_id: u8,
+        message_id: u32,
+        field: &str,
+        value: f64,
+        t_ms: f64,
+    ) -> crate::signals::SignalSample {
         crate::signals::SignalSample {
             id: SignalId {
-                system_id: 1,
-                component_id: 1,
-                message_id: 105,
+                system_id,
+                component_id,
+                message_id,
                 field: field.to_string(),
             },
             t_ms,
             value,
         }
+    }
+
+    fn mag_sample(field: &str, value: f64, t_ms: f64) -> crate::signals::SignalSample {
+        mag_sample_from(1, 1, 105, field, value, t_ms)
+    }
+
+    fn total_id(system_id: u8, component_id: u8, message_id: u32) -> String {
+        mag_total_trace_id(&SignalId::new(system_id, component_id, message_id, ""))
     }
 
     #[test]
@@ -634,16 +653,16 @@ mod mag_cal_tests {
         assert!(s
             .ingest(&mag_sample("xmag", 3.0, 10.0))
             .iter()
-            .all(|o| { o.trace_id != MAG_TOTAL_ID }));
+            .all(|o| o.trace_id != total_id(1, 1, 105)));
         assert!(s
             .ingest(&mag_sample("ymag", 4.0, 10.0))
             .iter()
-            .all(|o| o.trace_id != MAG_TOTAL_ID));
+            .all(|o| o.trace_id != total_id(1, 1, 105)));
         // Third axis: total = sqrt(9+16+25) = sqrt(50) with identity cal.
         let out = s.ingest(&mag_sample("zmag", 5.0, 10.0));
         let total = out
             .iter()
-            .find(|o| o.trace_id == MAG_TOTAL_ID)
+            .find(|o| o.trace_id == total_id(1, 1, 105))
             .expect("derived total emitted");
         assert!((total.raw - (3f64 * 3.0 + 4.0 * 4.0 + 5.0 * 5.0).sqrt()).abs() < 1e-9);
         assert!(total.raw.is_finite());
@@ -661,7 +680,7 @@ mod mag_cal_tests {
         let out = s.ingest(&mag_sample("zmag", 3.0, 0.0)); // -> 4
         let total = out
             .iter()
-            .find(|o| o.trace_id == MAG_TOTAL_ID)
+            .find(|o| o.trace_id == total_id(1, 1, 105))
             .expect("total");
         assert!((total.raw - (0f64 + 4.0 + 16.0).sqrt()).abs() < 1e-9);
     }
@@ -673,13 +692,13 @@ mod mag_cal_tests {
         s.ingest(&mag_sample("xmag", 1.0, 0.0));
         s.ingest(&mag_sample("ymag", 1.0, 0.0));
         s.ingest(&mag_sample("zmag", 1.0, 0.0));
-        assert!(!s.mag_calibration_loaded() || true);
+        assert!(s.mag_calibration_loaded());
         s.set_mag_calibration(None);
         assert!(!s.mag_calibration_loaded());
         assert!(s
             .ingest(&mag_sample("xmag", 2.0, 1.0))
             .iter()
-            .all(|o| o.trace_id != MAG_TOTAL_ID));
+            .all(|o| o.trace_id != total_id(1, 1, 105)));
     }
 
     #[test]
@@ -691,11 +710,16 @@ mod mag_cal_tests {
         }
         // Same-axis repeat before the other axes refresh: no extra emit.
         let out = s.ingest(&mag_sample("xmag", 2.0, 20.0));
-        assert!(out.iter().all(|o| o.trace_id != MAG_TOTAL_ID));
+        assert!(out.iter().all(|o| o.trace_id != total_id(1, 1, 105)));
         // Completing the triple again emits exactly one derived sample.
         s.ingest(&mag_sample("ymag", 1.0, 20.0));
         let out = s.ingest(&mag_sample("zmag", 1.0, 20.0));
-        assert_eq!(out.iter().filter(|o| o.trace_id == MAG_TOTAL_ID).count(), 1);
+        assert_eq!(
+            out.iter()
+                .filter(|o| o.trace_id == total_id(1, 1, 105))
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -776,9 +800,13 @@ mod mag_cal_tests {
         );
         let derived = out
             .iter()
-            .find(|o| o.trace_id == MAG_TOTAL_ID)
+            .find(|o| o.trace_id == total_id(1, 1, 105))
             .expect("derived total");
         assert!((derived.raw - total).abs() < 1e-9);
+        assert!(
+            s.ingest(&mag_sample("mag_total", 999.0, 0.0)).is_empty(),
+            "the source's uncalibrated synthetic total must not follow the calibrated total"
+        );
     }
 
     #[test]
@@ -803,6 +831,81 @@ mod mag_cal_tests {
         );
         assert!(ids.contains(&SignalId::new(250, 1, 105, "zmag")));
         assert!(!ids.contains(&SignalId::new(0, 0, 0, "xmag")));
+    }
+
+    #[test]
+    fn calibration_subscribes_every_represented_magnetometer_source() {
+        let mut s = session();
+        let trace = |id: &str, message_id: u32| Trace {
+            id: id.into(),
+            signal: SignalId::new(7, 1, message_id, "xmag"),
+            pipeline: Vec::new(),
+            analyzer: None,
+            analyzer_source: AnalyzerSource::Raw,
+        };
+        s.set_traces([
+            trace("imu1", crate::signals::SCALED_IMU_ID),
+            trace("imu2", crate::signals::SCALED_IMU2_ID),
+            trace("imu3", crate::signals::SCALED_IMU3_ID),
+        ])
+        .expect("traces");
+        s.set_mag_calibration(Some(identity()));
+        let ids = s.subscribe_ids();
+        for message_id in [
+            crate::signals::SCALED_IMU_ID,
+            crate::signals::SCALED_IMU2_ID,
+            crate::signals::SCALED_IMU3_ID,
+        ] {
+            for field in ["xmag", "ymag", "zmag"] {
+                assert!(ids.contains(&SignalId::new(7, 1, message_id, field)));
+            }
+        }
+    }
+
+    #[test]
+    fn scaled_imu_triples_and_imu3_offset_are_source_isolated() {
+        let mut s = session();
+        s.set_mag_calibration(Some(identity()));
+        let imu1 = crate::signals::SCALED_IMU_ID;
+        let imu2 = crate::signals::SCALED_IMU2_ID;
+        let imu3 = crate::signals::SCALED_IMU3_ID;
+
+        // Interleave all components. A shared accumulator would form mixed
+        // triples here; source-keyed accumulators emit only on their own zmag.
+        for (message_id, value) in [(imu1, 3.0), (imu2, 6.0), (imu3, 5.0)] {
+            assert!(s
+                .ingest(&mag_sample_from(1, 1, message_id, "xmag", value, 10.0))
+                .is_empty());
+        }
+        for (message_id, value) in [(imu1, 4.0), (imu2, 8.0), (imu3, 12.0)] {
+            assert!(s
+                .ingest(&mag_sample_from(1, 1, message_id, "ymag", value, 10.0))
+                .is_empty());
+        }
+        let imu3_out = s.ingest(&mag_sample_from(1, 1, imu3, "zmag", 0.0, 10.0));
+        assert_eq!(imu3_out.len(), 1);
+        assert_eq!(imu3_out[0].trace_id, total_id(1, 1, imu3));
+        assert!((imu3_out[0].raw - 13.0).abs() < 1e-9);
+        let imu1_out = s.ingest(&mag_sample_from(1, 1, imu1, "zmag", 0.0, 10.0));
+        let imu2_out = s.ingest(&mag_sample_from(1, 1, imu2, "zmag", 0.0, 10.0));
+        assert_eq!(imu1_out[0].trace_id, total_id(1, 1, imu1));
+        assert_eq!(imu1_out[0].raw, 5.0);
+        assert_eq!(imu2_out[0].trace_id, total_id(1, 1, imu2));
+        assert_eq!(imu2_out[0].raw, 10.0);
+
+        // Change only IMU3. It emits only IMU3's ring; IMU1/2 emit nothing and
+        // retain no component values from this cycle.
+        let mut changed = Vec::new();
+        for (field, value) in [("xmag", 105.0), ("ymag", 12.0), ("zmag", 0.0)] {
+            changed.extend(s.ingest(&mag_sample_from(1, 1, imu3, field, value, 20.0)));
+        }
+        assert_eq!(changed.len(), 1);
+        assert_eq!(changed[0].trace_id, total_id(1, 1, imu3));
+        assert!((changed[0].raw - (105.0f64.powi(2) + 12.0f64.powi(2)).sqrt()).abs() < 1e-9);
+        assert!(changed
+            .iter()
+            .all(|sample| sample.trace_id != total_id(1, 1, imu1)
+                && sample.trace_id != total_id(1, 1, imu2)));
     }
 }
 

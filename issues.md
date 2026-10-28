@@ -312,11 +312,15 @@ React 把原来那两个 `<span>` 摘了下来，`e.target` 于是成了**已脱
 heartbeat 而 panic；单独跑（或重跑）稳定通过。属既有计时/负载敏感用例，
 非本次改动引入。
 
-### N9 [P1][motor-test/signals] `SCALED_IMU{,2,3}` 磁场曲线疑似未隔离
-Motor Test 新增三个 scaled-IMU stream 后，在 IMU3 地磁数据施加 offset，IMU1／2
-曲线也呈现近似变化。排查 MAVLink message ID、动态 signal key、校准／offset
-应用位置以及 ring-buffer／series 引用；增加回归测试，证明只改变 IMU3 输入不会
-改变 IMU1／2 样本。
+### N9 [P1][motor-test/signals] `SCALED_IMU{,2,3}` 磁场曲线隔离 — 已完成（2026-10-28）
+全链路以 `(system_id, component_id, message_id)` 区分磁传感器来源：修正 26／116／129
+消息常量、mG→nT 换算和逐来源时间戳 mapper；Motor Test 使用
+`mag.<highres_imu|scaled_imu1|scaled_imu2|scaled_imu3>.{raw,cal}_total` 独立 ring，且只有
+`HIGHRES_IMU` 驱动报警／状态读数；Inspector 的三轴累加器、订阅和派生 trace ID
+同样按完整来源隔离。ULog `sensor_mag` 多实例现在显示为 **instance 1／2／3…**，每个
+实例有独立合成 message ID、nT 规格化的 `xmag/ymag/zmag` 与各自 `mag_total`，图例／
+trace chip 保留实例名称。Rust 与纯 TS 回归均交错输入三组轴并只改变 IMU3，验证
+IMU1／2 样本和派生 ring 不变。
 
 ### N10 [P1][inspector] ULog 选择信号后仍固定为 30 s，且缺少双轴缩放
 载入 ULog 并选择信号后，应立即绘制该信号的完整记录范围，而不是沿用 live

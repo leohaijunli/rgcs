@@ -25,7 +25,8 @@ pub enum InstrumentKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct MagInstance {
-    /// MAVLink message id: `HIGHRES_IMU` (105) or `RAW_IMU` (27).
+    /// MAVLink message id: `HIGHRES_IMU` (105), `RAW_IMU` (27), or one of the
+    /// three `SCALED_IMU*` messages (26/116/129).
     pub message_id: u32,
     /// 1-based magnetometer instance as published by PX4.
     pub sensor: u8,

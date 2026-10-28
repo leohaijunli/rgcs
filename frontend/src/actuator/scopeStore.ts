@@ -49,6 +49,8 @@ export interface SignalDef {
   staleAfterS: number | null
   /** Output configuration identity; included in the mounted plot's identity. */
   contextKey?: string
+  /** Optional design-token override for a non-motor source. */
+  defaultColorToken?: string
 }
 
 /** One list section (a collapsible group of related signals). */
@@ -81,6 +83,21 @@ const DASH_VOLT = [2, 3]
 const DEFAULT_STALE_S = 2
 const ESC_STALE_S = 0.5
 
+/** Stable backend/source identities from `core::motor_test::scope::MagScopeSource`. */
+export const MAG_SCOPE_SOURCES = [
+  { id: 'highres_imu', label: 'HIGHRES_IMU', color: '--mg-trace-total-mag' },
+  { id: 'scaled_imu1', label: 'SCALED_IMU (IMU1)', color: '--mg-trace-1' },
+  { id: 'scaled_imu2', label: 'SCALED_IMU2 (IMU2)', color: '--mg-trace-2' },
+  { id: 'scaled_imu3', label: 'SCALED_IMU3 (IMU3)', color: '--mg-trace-3' },
+] as const
+
+export const MAG_RAW_IDS = MAG_SCOPE_SOURCES.map((source) => `mag.${source.id}.raw_total`)
+export const MAG_CAL_IDS = MAG_SCOPE_SOURCES.map((source) => `mag.${source.id}.cal_total`)
+export const MAG_SCOPE_IDS = MAG_SCOPE_SOURCES.flatMap((source) => [
+  `mag.${source.id}.raw_total`,
+  `mag.${source.id}.cal_total`,
+])
+
 function perMotor(
   prefix: string,
   field: string,
@@ -107,26 +124,30 @@ const DEFS: SignalDef[] = [
   ...perMotor('sitl.servo', '', 'cmd', 'µs', 'SITL servo', null, true, DEFAULT_STALE_S),
   ...perMotor('cmd.pwm', '', 'cmd', 'raw', 'Command output M', DASH_CMD, true, null),
   ...perMotor('fc.motor', '', 'cmd', 'raw', 'FC output M', DASH_FC, true, DEFAULT_STALE_S),
-  {
-    id: 'mag.raw_total',
-    group: 'mag',
-    label: '|B| raw',
-    unit: 'nT',
-    motor: null,
-    dash: DASH_FC,
-    defaultOn: true,
-    staleAfterS: DEFAULT_STALE_S,
-  },
-  {
-    id: 'mag.cal_total',
-    group: 'mag',
-    label: '|B|',
-    unit: 'nT',
-    motor: null,
-    dash: null,
-    defaultOn: true,
-    staleAfterS: DEFAULT_STALE_S,
-  },
+  ...MAG_SCOPE_SOURCES.flatMap((source): SignalDef[] => [
+    {
+      id: `mag.${source.id}.raw_total`,
+      group: 'mag',
+      label: `${source.label} |B| raw`,
+      unit: 'nT',
+      motor: null,
+      dash: DASH_FC,
+      defaultOn: true,
+      staleAfterS: DEFAULT_STALE_S,
+      defaultColorToken: source.color,
+    },
+    {
+      id: `mag.${source.id}.cal_total`,
+      group: 'mag',
+      label: `${source.label} |B| calibrated`,
+      unit: 'nT',
+      motor: null,
+      dash: null,
+      defaultOn: true,
+      staleAfterS: DEFAULT_STALE_S,
+      defaultColorToken: source.color,
+    },
+  ]),
   {
     id: 'bat1.current',
     group: 'bat',
@@ -213,10 +234,10 @@ export const LIST_GROUPS: ListGroup[] = [
   },
   {
     key: 'mag',
-    title: 'Total field |B| (nT)',
-    ids: ['mag.raw_total', 'mag.cal_total'],
+    title: 'Total field by IMU source (nT)',
+    ids: MAG_SCOPE_IDS,
     emptyHint: (c) =>
-      c.targetConnected ? 'Waiting for HIGHRES_IMU…' : 'Connect the PX4 serial link.',
+      c.targetConnected ? 'Waiting for HIGHRES_IMU or SCALED_IMU streams…' : 'Connect the PX4 serial link.',
   },
   {
     key: 'bat',

@@ -30,3 +30,34 @@ disconnected. The operator confirmed Inspector operation after testing.
 Native review: connect the FC, open Inspector, unplug USB and confirm that
 data stops and the header changes. Reconnect and confirm recovery. Open a ULog
 to verify the independent replay source label.
+
+## Magnetometer source isolation — 2026-10-28
+
+Magnetometer axes and totals are partitioned by the complete source identity
+`(system_id, component_id, message_id)`. `SCALED_IMU`, `SCALED_IMU2`, and
+`SCALED_IMU3` cannot complete one another's x/y/z triples or share a derived
+calibrated-total ring.
+
+ULog `sensor_mag` instances retain separate synthetic message IDs and appear as
+`sensor_mag · instance 1`, `instance 2`, and so on. Each group exposes its own
+nT `xmag`, `ymag`, `zmag`, and `mag_total`; plot legends and trace chips keep
+the instance label.
+
+Automated review:
+
+```bash
+cargo test -p maggcs-core inspector::session::mag_cal_tests --lib
+cargo test -p maggcs-core ulog::replay --lib
+cd frontend
+npm run check:inspector-mag
+node scripts/check-inspector.mjs \
+  http://127.0.0.1:5199/inspector.html /tmp/opencode/n9-inspector
+```
+
+The browser fixture mounts four complete MAVLink triples in real React/uPlot
+and asserts four separately labelled totals. [Four-source capture](../../screenshots/n9/inspector-mag-sources-1366x768.png).
+
+Manual ULog review: open a recording with at least three `sensor_mag`
+instances, expand each one, add each `mag_total`, and verify that changing or
+hiding instance 3 does not change instances 1/2. Confirm each instance name is
+still visible in the tree, legend, and trace chip.

@@ -20,7 +20,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::signals::catalog::SignalCatalog;
 use crate::signals::tap::{Subscriptions, TapStats};
-use crate::signals::{SignalId, SignalSample};
+use crate::signals::{SignalId, SignalSample, GAUSS_TO_NANOTESLA};
 
 use super::{UlogError, UlogReader, UlogRecord};
 
@@ -48,12 +48,13 @@ const SCRUB_MAX_STEPS: usize = 120_000;
 /// the batch loop (which drains the sample channel).
 const SCRUB_YIELD_EVERY: usize = 512;
 
-/// One topic's identity for the catalog: a stable synthetic `message_id` plus
-/// the uORB name.
+/// One topic instance's identity for the catalog. `message_name` is a
+/// user-facing name which disambiguates repeated ULog instances.
 #[derive(Debug, Clone, PartialEq)]
 struct TopicMeta {
     message_id: u32,
-    name: String,
+    base_name: String,
+    message_name: String,
 }
 
 /// A topic summary returned by [`UlogSource::topics`], for the open dialog's
@@ -133,15 +134,27 @@ impl UlogSource {
         let data_start =
             data_start.ok_or_else(|| UlogError::BadFormat("no data records".into()))?;
 
+        let mut topic_counts: HashMap<&str, usize> = HashMap::new();
+        for topic in reader.topics.values() {
+            *topic_counts.entry(&topic.name).or_default() += 1;
+        }
         let meta = reader
             .topics
             .iter()
             .map(|(id, topic)| {
+                let show_instance = topic.name == "sensor_mag"
+                    || topic.multi_id > 0
+                    || topic_counts.get(topic.name.as_str()).copied().unwrap_or(0) > 1;
                 (
                     *id,
                     TopicMeta {
                         message_id: topic_message_id(&topic.name, topic.multi_id),
-                        name: topic.name.clone(),
+                        base_name: topic.name.clone(),
+                        message_name: topic_display_name(
+                            &topic.name,
+                            topic.multi_id,
+                            show_instance,
+                        ),
                     },
                 )
             })
@@ -173,8 +186,19 @@ impl UlogSource {
             };
             for field in &topic.fields {
                 out.push((
-                    SignalId::new(SYSTEM_ID, COMPONENT_ID, meta.message_id, field.name.clone()),
-                    meta.name.clone(),
+                    SignalId::new(
+                        SYSTEM_ID,
+                        COMPONENT_ID,
+                        meta.message_id,
+                        replay_field_name(&meta.base_name, &field.name),
+                    ),
+                    meta.message_name.clone(),
+                ));
+            }
+            if has_sensor_mag_triple(&meta.base_name, topic) {
+                out.push((
+                    SignalId::new(SYSTEM_ID, COMPONENT_ID, meta.message_id, "mag_total"),
+                    meta.message_name.clone(),
                 ));
             }
         }
@@ -199,9 +223,10 @@ impl UlogSource {
             .filter_map(|(id, topic)| {
                 let meta = self.meta.get(id)?;
                 Some(UlogTopicSummary {
-                    name: topic.name.clone(),
+                    name: meta.message_name.clone(),
                     message_id: meta.message_id,
-                    signals: topic.fields.len(),
+                    signals: topic.fields.len()
+                        + usize::from(has_sensor_mag_triple(&meta.base_name, topic)),
                 })
             })
             .collect();
@@ -252,13 +277,12 @@ impl UlogSource {
                 None => return Ok(None),
                 Some(UlogRecord::Skipped(_)) => continue,
                 Some(UlogRecord::Data { topic_id }) => {
-                    let Some((message_id, message_name)) = self
-                        .meta
-                        .get(&topic_id)
-                        .map(|m| (m.message_id, m.name.clone()))
-                    else {
+                    let Some(meta) = self.meta.get(&topic_id) else {
                         continue;
                     };
+                    let message_id = meta.message_id;
+                    let message_name = meta.message_name.clone();
+                    let base_name = meta.base_name.clone();
                     let (t_us, t_ms, samples) = {
                         let body = self.reader.data_body();
                         let Some(topic) = self.reader.topics.get(&topic_id) else {
@@ -268,7 +292,7 @@ impl UlogSource {
                         let t_ms = t_us.saturating_sub(self.start_us) as f64 / 1000.0;
                         let mut values = Vec::new();
                         topic.decode(body, &mut values);
-                        let samples = topic
+                        let mut samples: Vec<SignalSample> = topic
                             .fields
                             .iter()
                             .zip(values)
@@ -277,12 +301,34 @@ impl UlogSource {
                                     SYSTEM_ID,
                                     COMPONENT_ID,
                                     message_id,
-                                    field.name.clone(),
+                                    replay_field_name(&base_name, &field.name),
                                 ),
                                 t_ms,
-                                value,
+                                value: replay_field_value(&base_name, &field.name, value),
                             })
                             .collect();
+                        if has_sensor_mag_triple(&base_name, topic) {
+                            let component = |field: &str| {
+                                samples
+                                    .iter()
+                                    .find(|sample| sample.id.field == field)
+                                    .map(|sample| sample.value)
+                            };
+                            if let (Some(x), Some(y), Some(z)) =
+                                (component("xmag"), component("ymag"), component("zmag"))
+                            {
+                                samples.push(SignalSample {
+                                    id: SignalId::new(
+                                        SYSTEM_ID,
+                                        COMPONENT_ID,
+                                        message_id,
+                                        "mag_total",
+                                    ),
+                                    t_ms,
+                                    value: (x * x + y * y + z * z).sqrt(),
+                                });
+                            }
+                        }
                         (t_us, t_ms, samples)
                     };
                     self.last_us = t_us.max(self.last_us);
@@ -296,6 +342,46 @@ impl UlogSource {
             }
         }
     }
+}
+
+/// Human-facing ULog topic label. ULog `multi_id` is zero-based; operators use
+/// one-based sensor instance numbers, so `multi_id = 0` is shown as instance 1.
+fn topic_display_name(name: &str, multi_id: u8, show_instance: bool) -> String {
+    if show_instance {
+        format!("{name} · instance {}", u16::from(multi_id) + 1)
+    } else {
+        name.to_string()
+    }
+}
+
+/// `sensor_mag.{x,y,z}` is Gauss in PX4 ULog. Expose the same canonical field
+/// names and nT values as live MAVLink, so calibration and total-field logic can
+/// share one path without confusing axes from different topic instances.
+fn replay_field_name(topic: &str, field: &str) -> String {
+    if topic == "sensor_mag" {
+        match field {
+            "x" => return "xmag".to_string(),
+            "y" => return "ymag".to_string(),
+            "z" => return "zmag".to_string(),
+            _ => {}
+        }
+    }
+    field.to_string()
+}
+
+fn replay_field_value(topic: &str, field: &str, value: f64) -> f64 {
+    if topic == "sensor_mag" && matches!(field, "x" | "y" | "z") {
+        value * GAUSS_TO_NANOTESLA
+    } else {
+        value
+    }
+}
+
+fn has_sensor_mag_triple(topic_name: &str, topic: &super::UlogTopic) -> bool {
+    topic_name == "sensor_mag"
+        && ["x", "y", "z"]
+            .iter()
+            .all(|axis| topic.fields.iter().any(|field| field.name == *axis))
 }
 
 /// Stable synthetic MAVLink message id for a ULog topic, so the inspector's
@@ -534,9 +620,9 @@ async fn wait_or_stop(stop: &mut oneshot::Receiver<()>, dur: Duration) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::tests_util::replay_log;
+    use super::tests_util::{replay_log, sensor_mag_log};
     use super::*;
-    use std::collections::HashSet;
+    use std::collections::{BTreeMap, HashSet};
     use std::io::Cursor;
 
     fn source(bytes: Vec<u8>) -> UlogSource {
@@ -573,6 +659,61 @@ mod tests {
         assert_eq!(fields, ["timestamp", "x"]);
         assert_eq!(names, ["sensor", "sensor"]);
         assert_eq!(entries[0].0, src.signals()[0]);
+    }
+
+    #[test]
+    fn sensor_mag_instances_have_labels_canonical_axes_and_separate_totals() {
+        let mut src = source(sensor_mag_log());
+        let topics = src.topics();
+        assert_eq!(
+            topics
+                .iter()
+                .map(|topic| topic.name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "sensor_mag · instance 1",
+                "sensor_mag · instance 2",
+                "sensor_mag · instance 3",
+            ]
+        );
+        assert!(topics.iter().all(|topic| topic.signals == 5));
+        assert_eq!(
+            topics
+                .iter()
+                .map(|topic| topic.message_id)
+                .collect::<HashSet<_>>()
+                .len(),
+            3,
+            "each ULog instance has a distinct synthetic message id"
+        );
+
+        let mut fields_by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (id, name) in src.signal_entries() {
+            fields_by_name.entry(name).or_default().push(id.field);
+        }
+        for fields in fields_by_name.values_mut() {
+            fields.sort();
+            assert_eq!(fields, &["mag_total", "timestamp", "xmag", "ymag", "zmag"]);
+        }
+
+        let expected_totals = [50_000.0, 100_000.0, 130_000.0];
+        for (index, expected_total) in expected_totals.into_iter().enumerate() {
+            let step = src.next_step().expect("read").expect("sensor_mag record");
+            assert_eq!(
+                step.message_name,
+                format!("sensor_mag · instance {}", index + 1)
+            );
+            let value = |field: &str| {
+                step.samples
+                    .iter()
+                    .find(|sample| sample.id.field == field)
+                    .map(|sample| sample.value)
+                    .expect("canonical magnetic field")
+            };
+            assert!((value("mag_total") - expected_total).abs() < 0.1);
+            assert!(value("xmag").abs() >= 30_000.0);
+        }
+        assert!(src.next_step().expect("read").is_none());
     }
 
     #[test]
@@ -773,6 +914,28 @@ mod tests_util {
             let mut body = (start_us + i * 2000).to_le_bytes().to_vec();
             body.extend_from_slice(&(i as f32).to_le_bytes());
             v.extend(data_record(7, &body));
+        }
+        v
+    }
+
+    /// Three `sensor_mag` ULog instances with distinct Gauss vectors.
+    pub(super) fn sensor_mag_log() -> Vec<u8> {
+        let mut v = header(1_000_000);
+        v.extend(format_record(
+            "sensor_mag:uint64_t timestamp;float x;float y;float z;",
+        ));
+        for instance in 0..3u8 {
+            v.extend(add_record(instance, 7 + u16::from(instance), "sensor_mag"));
+        }
+        for (index, [x, y, z]) in [[0.3f32, 0.4, 0.0], [0.6f32, 0.8, 0.0], [0.5f32, 1.2, 0.0]]
+            .into_iter()
+            .enumerate()
+        {
+            let mut body = (1_000_000 + index as u64 * 1000).to_le_bytes().to_vec();
+            for value in [x, y, z] {
+                body.extend_from_slice(&value.to_le_bytes());
+            }
+            v.extend(data_record(7 + index as u16, &body));
         }
         v
     }
