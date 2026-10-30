@@ -244,6 +244,21 @@ pub(crate) fn revoke_owned(state: &AppState, permission: &MotorPermissionRef) {
     }
 }
 
+/// Retire a closed window's grant only. A late callback from an old Motor
+/// window cannot revoke the grant issued to its replacement.
+pub(crate) fn revoke_client(state: &AppState, client_id: &maggcs_core::runtime::ClientId) {
+    let mut inner = state.motor_test.control.inner.lock();
+    if inner
+        .owned
+        .as_ref()
+        .is_some_and(|permission| &permission.owner.client_id == client_id)
+    {
+        inner.binding = None;
+        inner.owned = None;
+        inner.revision = inner.revision.saturating_add(1);
+    }
+}
+
 pub(crate) async fn set_owned<R: Runtime>(
     app: &AppHandle<R>,
     window: &str,

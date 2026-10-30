@@ -11,7 +11,7 @@ use maggcs_core::runtime::operations::{
     CleanupOutcome, OperationError, OperationLease, OperationOutcome, OperationRef,
     OperationRequest, OperationResource, OperationStatus, RuntimeClientSession,
 };
-use maggcs_core::runtime::{OperationId, RequestId, Revision};
+use maggcs_core::runtime::{ClientId, OperationId, RequestId, Revision};
 use parking_lot::Mutex;
 use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewWindow};
 use tokio::sync::{mpsc, oneshot};
@@ -776,6 +776,27 @@ pub(crate) async fn stop_all<R: Runtime>(
     app: &AppHandle<R>,
     budget: Duration,
 ) -> Result<(), String> {
+    stop_all_matching(app, budget, |_| true).await
+}
+
+/// Native close/lifecycle cleanup for exactly one Motor window. Entries from a
+/// replacement window remain untouched, including their later STOP receipts.
+pub(crate) async fn stop_all_for_client<R: Runtime>(
+    app: &AppHandle<R>,
+    client_id: &ClientId,
+    budget: Duration,
+) -> Result<(), String> {
+    stop_all_matching(app, budget, |scope| {
+        &scope.session.owner.client_id == client_id
+    })
+    .await
+}
+
+async fn stop_all_matching<R: Runtime>(
+    app: &AppHandle<R>,
+    budget: Duration,
+    matches: impl Fn(&MotorScope) -> bool,
+) -> Result<(), String> {
     let state = app.state::<AppState>();
     let scopes = state
         .motor_test
@@ -783,6 +804,7 @@ pub(crate) async fn stop_all<R: Runtime>(
         .entries
         .lock()
         .values()
+        .filter(|scope| matches(scope))
         .cloned()
         .collect::<Vec<_>>();
     for scope in &scopes {

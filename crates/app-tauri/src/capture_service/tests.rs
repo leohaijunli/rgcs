@@ -89,6 +89,9 @@ struct Harness {
     hold_shell: Arc<AtomicBool>,
     tones: Arc<ToneFixture>,
     streams: Arc<StreamFixture>,
+    /// Log path reported by the simulated PX4. A reopened capture must see a
+    /// distinct file, exactly like a real logger restart.
+    log_path: Arc<Mutex<String>>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
@@ -105,6 +108,7 @@ impl Harness {
         let hold_shell = Arc::new(AtomicBool::new(false));
         let tones = Arc::new(ToneFixture::default());
         let streams = Arc::new(StreamFixture::default());
+        let log_path = Arc::new(Mutex::new(LOG_PATH.to_string()));
         let peer = tokio::spawn(fake_px4(
             socket,
             app.handle().clone(),
@@ -112,6 +116,7 @@ impl Harness {
             hold_shell.clone(),
             tones.clone(),
             streams.clone(),
+            log_path.clone(),
         ));
         let (handle, _, first) =
             maggcs_core::mavlink::connection::spawn_connection(ConnectionConfig {
@@ -244,6 +249,7 @@ impl Harness {
             hold_shell,
             tones,
             streams,
+            log_path,
             tasks: vec![peer, param_task],
         }
     }
@@ -502,6 +508,82 @@ async fn capture_owner_close_stops_its_file_without_a_renderer_callback() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn late_cleanup_from_a_closed_window_cannot_stop_the_reopened_capture() {
+    let harness = Harness::new().await;
+    let old = owned_session(&harness, "actuator");
+    let old_capture = crate::motor_capture_operations::start(
+        harness.app.handle(),
+        "actuator",
+        MotorCaptureStartRequest {
+            context: capture_context(&old),
+            test_id: "old-window".into(),
+        },
+    )
+    .await
+    .expect("old capture");
+    harness
+        .state()
+        .runtime_clients
+        .expire_window(&old.owner.client_id)
+        .expect("native close");
+    wait_until(|| {
+        harness
+            .state()
+            .runtime_clients
+            .operations
+            .status(&old.owner, &old_capture.operation)
+            .is_ok_and(|status| status.phase == OperationPhase::Finished)
+    })
+    .await;
+
+    let fresh = owned_session(&harness, "actuator");
+    assert_ne!(fresh.owner.client_id, old.owner.client_id);
+    *harness.log_path.lock() = "/fs/microsd/log/2026-10-24/mr17.ulg".into();
+    let fresh_capture = crate::motor_capture_operations::start(
+        harness.app.handle(),
+        "actuator",
+        MotorCaptureStartRequest {
+            context: capture_context(&fresh),
+            test_id: "reopened-window".into(),
+        },
+    )
+    .await
+    .expect("reopened capture");
+    let off = shell_count(&harness.trace.lock(), "logger off");
+    crate::motor_capture_operations::stop_all_for_client(
+        harness.app.handle(),
+        &old.owner.client_id,
+        Duration::from_secs(2),
+    )
+    .await
+    .expect("old cleanup is scoped");
+    assert_eq!(
+        harness
+            .state()
+            .runtime_clients
+            .operations
+            .status(&fresh.owner, &fresh_capture.operation)
+            .expect("reopened status")
+            .phase,
+        OperationPhase::Running,
+        "a delayed old-window cleanup cannot stop the replacement recording"
+    );
+    assert_eq!(
+        shell_count(&harness.trace.lock(), "logger off"),
+        off,
+        "old cleanup sends no logger off for the replacement file"
+    );
+    crate::motor_capture_operations::stop_all_for_client(
+        harness.app.handle(),
+        &fresh.owner.client_id,
+        Duration::from_secs(2),
+    )
+    .await
+    .expect("replacement stops exactly");
+    harness.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn changed_capture_file_is_never_stopped_as_if_it_were_owned() {
     let harness = Harness::new().await;
     let session = owned_session(&harness, "owner");
@@ -593,6 +675,7 @@ async fn fake_px4(
     hold_shell: Arc<AtomicBool>,
     tones: Arc<ToneFixture>,
     streams: Arc<StreamFixture>,
+    log_path: Arc<Mutex<String>>,
 ) {
     let mut address = None;
     let mut bytes = [0; DATAGRAM_BYTES];
@@ -652,7 +735,7 @@ async fn fake_px4(
                                 "logger status" => {
                                     shell_replies.push_str("INFO [logger] Running in mode: file\n");
                                     if recording {
-                                        shell_replies.push_str(&format!("INFO [logger] Full File Logging Running:\nINFO [logger] Log file: {LOG_PATH}\n"));
+                                        shell_replies.push_str(&format!("INFO [logger] Full File Logging Running:\nINFO [logger] Log file: {}\n", log_path.lock()));
                                     } else { shell_replies.push_str("INFO [logger] Not logging\n"); }
                                 }
                                 "logger on" => recording = true,

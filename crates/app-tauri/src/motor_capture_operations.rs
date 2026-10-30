@@ -10,7 +10,7 @@ use maggcs_core::runtime::operations::{
     CleanupOutcome, OperationError, OperationLease, OperationOutcome, OperationRef,
     OperationRequest, OperationResource, OperationStatus, RuntimeClientSession,
 };
-use maggcs_core::runtime::OperationId;
+use maggcs_core::runtime::{ClientId, OperationId};
 use parking_lot::Mutex;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio::sync::{mpsc, oneshot};
@@ -427,6 +427,27 @@ pub(crate) async fn stop_all<R: Runtime>(
     app: &AppHandle<R>,
     budget: Duration,
 ) -> Result<(), String> {
+    stop_all_matching(app, budget, |_| true).await
+}
+
+/// Finalize only the capture owned by the closing Motor window. A replacement
+/// window's recording must keep its own file/stop authority.
+pub(crate) async fn stop_all_for_client<R: Runtime>(
+    app: &AppHandle<R>,
+    client_id: &ClientId,
+    budget: Duration,
+) -> Result<(), String> {
+    stop_all_matching(app, budget, |scope| {
+        &scope.session.owner.client_id == client_id
+    })
+    .await
+}
+
+async fn stop_all_matching<R: Runtime>(
+    app: &AppHandle<R>,
+    budget: Duration,
+    matches: impl Fn(&CaptureScope) -> bool,
+) -> Result<(), String> {
     let scopes = app
         .state::<AppState>()
         .motor_test
@@ -434,6 +455,7 @@ pub(crate) async fn stop_all<R: Runtime>(
         .entries
         .lock()
         .values()
+        .filter(|scope| matches(scope))
         .cloned()
         .collect::<Vec<_>>();
     for scope in &scopes {

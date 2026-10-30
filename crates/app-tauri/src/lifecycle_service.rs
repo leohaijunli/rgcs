@@ -471,9 +471,13 @@ pub fn policy() -> LifecyclePolicy {
 fn build<R: Runtime>(app: &AppHandle<R>, reason: StopReason) -> Lifecycle {
     let lifecycle = Lifecycle::new(policy());
     let state = app.state::<AppState>();
-    // Only registered while a session exists: an idle motor-test window owns
-    // no link state, and its scope flusher belongs to the window, not to us.
-    if state.motor_test.running.lock().is_some() {
+    // Registered while any owned Motor effect exists: an idle motor-test window
+    // owns no link state, and its scope flusher belongs to the window, not to us.
+    // Capture/log can be active without an actuation session.
+    if state.motor_test.running.lock().is_some()
+        || state.motor_test.capture_operations.is_active()
+        || state.motor_test.log_operations.is_active()
+    {
         lifecycle.register(
             Stage::MotorTest,
             Arc::new(MotorTestStage { app: app.clone() }),

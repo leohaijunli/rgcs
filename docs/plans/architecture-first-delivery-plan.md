@@ -150,6 +150,17 @@ ignores), 323 generated contracts, 12 browser groups/24 screenshots and all 26
 production/release gates. Motor is complete in software scope. Physical bench
 qualification remains separate; G1 now awaits only the final cross-adapter matrix.
 
+**Motor window-lifecycle ownership checkpoint — 2026-10-29:** Native destruction
+now retires only the closed Motor window's own `ClientId`: actuation, SD capture
+and log cleanup are client-scoped, a window lifetime token rejects delayed
+callbacks from a previous window instance, and shared target/SITL/telemetry
+teardown waits until no `motor-test` module is attached. Capture/log-only work is
+also registered with the lifecycle. Regression tests prove a reopened owner keeps
+its running operation, grant and file after the old window's cleanup replays;
+1529 workspace tests (12 opt-in ignores), clippy `-D warnings` and `cargo fmt
+--check` pass ([evidence](../verification/af-02b-motor-window-lifecycle-20261029.md)).
+The final cross-adapter/client/fault matrix is still pending, so G1 stays open.
+
 ## 1. Outcome and ordering decision
 
 The first deliverable is a reliable, efficient application platform that can host

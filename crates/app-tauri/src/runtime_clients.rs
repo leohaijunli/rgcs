@@ -35,6 +35,18 @@ impl RuntimeClients {
             window.id == owner.client_id && window.modules.contains_key(&owner.instance_id)
         })
     }
+
+    /// A reopened window may own the same module while an old destruction
+    /// callback is still pending. Global resource teardown must wait until no
+    /// live attachment for that module remains.
+    pub(crate) fn module_attached(&self, module_id: &str) -> bool {
+        self.windows.lock().values().any(|window| {
+            window
+                .modules
+                .values()
+                .any(|session| session.module_id == module_id)
+        })
+    }
     pub(crate) fn attach(
         &self,
         window: &str,
@@ -179,6 +191,9 @@ pub fn runtime_client_attach(
         state
             .runtime_clients
             .attach(window.label(), module_id, target)?;
+    if window.label() == "actuator" && session.module_id == "motor-test" {
+        *state.motor_test.window_session.lock() = Some(session.clone());
+    }
     if first_window {
         let client_id = session.owner.client_id.clone();
         let cleanup_app = app.clone();
@@ -294,6 +309,21 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn shared_teardown_waits_for_a_reopened_module_attachment() {
+        let clients = RuntimeClients::default();
+        let (old, _) = clients
+            .attach("actuator", "motor-test".into(), target())
+            .expect("old");
+        clients.expire_window(&old.owner.client_id).expect("close");
+        assert!(!clients.module_attached("motor-test"));
+        let (fresh, _) = clients
+            .attach("actuator", "motor-test".into(), target())
+            .expect("fresh");
+        assert_ne!(old.owner, fresh.owner);
+        assert!(clients.module_attached("motor-test"));
     }
 
     #[test]

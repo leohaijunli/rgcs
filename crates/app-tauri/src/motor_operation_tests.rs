@@ -301,6 +301,91 @@ async fn target_generation_replacement_never_redirects_release_and_retains_uncer
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn late_cleanup_from_a_closed_motor_window_cannot_stop_or_revoke_a_reopened_owner() {
+    let h = deadline(setup()).await;
+    let old = attach(&h, "actuator");
+    let old_permission = deadline(grant(&h, "actuator", &old)).await;
+    let old_start = deadline(start(
+        h.app.handle(),
+        "actuator",
+        request(&h, &old, &old_permission),
+    ))
+    .await
+    .expect("old owner starts");
+    wait_until(|| frames(&h).iter().any(|frame| frame.param2 > 0.0)).await;
+    h.state()
+        .runtime_clients
+        .expire_window(&old.owner.client_id)
+        .expect("native close");
+    wait_until(|| {
+        retained(h.app.handle(), &old_start.operation).is_ok_and(|status| {
+            status.phase == maggcs_core::runtime::operations::OperationPhase::Finished
+        })
+    })
+    .await;
+
+    let fresh = attach(&h, "actuator");
+    assert_ne!(fresh.owner.client_id, old.owner.client_id);
+    let fresh_permission = deadline(grant(&h, "actuator", &fresh)).await;
+    let fresh_start = deadline(start(
+        h.app.handle(),
+        "actuator",
+        request(&h, &fresh, &fresh_permission),
+    ))
+    .await
+    .expect("reopened owner starts");
+    wait_until(|| {
+        retained(h.app.handle(), &fresh_start.operation).is_ok_and(|status| {
+            status.phase == maggcs_core::runtime::operations::OperationPhase::Running
+        })
+    })
+    .await;
+    let releases = frames(&h)
+        .iter()
+        .filter(|frame| frame.param2 == 0.0)
+        .count();
+
+    deadline(crate::motor_operations::stop_all_for_client(
+        h.app.handle(),
+        &old.owner.client_id,
+        Duration::from_secs(2),
+    ))
+    .await
+    .expect("old cleanup stays scoped");
+    crate::motor_control_service::revoke_client(&h.state(), &old.owner.client_id);
+
+    assert_eq!(
+        retained(h.app.handle(), &fresh_start.operation)
+            .expect("reopened status")
+            .phase,
+        maggcs_core::runtime::operations::OperationPhase::Running,
+        "a delayed old-window cleanup cannot finish the replacement operation"
+    );
+    assert!(
+        crate::motor_control_service::status(&h.state()).enabled,
+        "the reopened owner keeps its own grant"
+    );
+    assert_eq!(
+        frames(&h)
+            .iter()
+            .filter(|frame| frame.param2 == 0.0)
+            .count(),
+        releases,
+        "old cleanup sends no release for the replacement output"
+    );
+    assert!(h.state().runtime_clients.module_attached("motor-test"));
+
+    deadline(crate::motor_operations::stop_all_for_client(
+        h.app.handle(),
+        &fresh.owner.client_id,
+        Duration::from_secs(2),
+    ))
+    .await
+    .expect("replacement can be released exactly");
+    h.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn prepared_owner_loss_is_passive_and_native_close_releases_its_running_operation() {
     let h = deadline(setup()).await;
     let a = attach(&h, "a");

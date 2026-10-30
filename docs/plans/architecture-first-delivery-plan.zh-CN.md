@@ -55,6 +55,14 @@
   323 generated contracts, 12 browser groups/24 screenshots and 26 delivery gates.
   Physical bench qualification stays separate; G1 now waits only for the final
   cross-adapter matrix.
+  Motor 窗口生命周期所有权加固已完成（2026-10-29）：原生销毁回调现在只按被关闭窗口
+  自身的 `ClientId` 清理 actuation、SD capture 和 log 操作，并用窗口生命周期 token
+  拒绝旧窗口实例的迟到回调；只有不再有任何 `motor-test` 模块附着时才拆除共享 target/
+  SITL/遥测，capture/log 单独进行时也注册生命周期阶段。回归测试证明旧窗口清理重放后，
+  重新打开的所有者仍保持运行中的操作、授权和文件；1529 个工作区测试（12 个可选忽略）、
+  clippy `-D warnings` 与 `cargo fmt --check` 通过
+  （[证据](../verification/af-02b-motor-window-lifecycle-20261029.md)）。最终跨适配器/
+  客户端/故障矩阵仍待完成，G1 保持打开。
 - **优先级决定：** 先做架构、按需加载、现有工具、执行与监控；**Flight Plan 和 Drape 放到最后的功能阶段。**
 - **近期范围：** 单个作业飞行器，保留既有专用台架、SITL 来源和独立基站角色。未来多机兼容仅作为接口设计考虑，不列入近期功能开发包。
 - **顺序依据：** 本文替代此前 Survey／工具方案中的实施排序；原功能设计和 BL／SW／TM 编号继续作为参考。

@@ -43,7 +43,7 @@ use maggcs_core::motor_test::{SessionState, DEFAULT_TICK_HZ};
 use maggcs_core::params::model::ParamValue;
 use maggcs_core::params::operation_types::{ParameterCommandError, ParameterRequestContext};
 use maggcs_core::params::{ParamEntry, ParamObservation, ParamService};
-use maggcs_core::runtime::operations::OperationError;
+use maggcs_core::runtime::operations::{OperationError, RuntimeClientSession};
 use maggcs_core::runtime::{Revision, TransportGeneration};
 use maggcs_core::signals::derived::esc_frame_range;
 use maggcs_core::signals::{
@@ -210,52 +210,125 @@ pub async fn actuator_open(app: AppHandle) -> Result<(), String> {
     }
     // runtime_client_attach installs an exact ClientId destruction hook. The
     // owned service observes that cancellation directly and retains its receipts.
+    // This token makes a delayed callback from an old window a no-op even when
+    // the replacement reused the "actuator" label.
+    let window_token = std::sync::Arc::new(());
+    *state.motor_test.window_token.lock() = Some(window_token.clone());
     let app_for_cleanup = app.clone();
     win.on_window_event(move |event| {
         if !matches!(event, tauri::WindowEvent::Destroyed) {
             return;
         }
         let cleanup_app = app_for_cleanup.clone();
-        tauri::async_runtime::spawn(async move {
-            if let Err(error) =
-                crate::motor_operations::stop_all(&cleanup_app, MOTOR_TEST_STOP_TIMEOUT).await
-            {
-                let _ = cleanup_app.emit("actuator_stop_warning", error);
-                return;
-            }
-            if let Err(error) =
-                crate::motor_capture_operations::stop_all(&cleanup_app, Duration::from_secs(15))
-                    .await
-            {
-                let _ = cleanup_app.emit("actuator_stop_warning", error);
-                return;
-            }
-            if let Err(error) =
-                crate::motor_log_operations::stop_all(&cleanup_app, Duration::from_secs(2)).await
-            {
-                let _ = cleanup_app.emit("actuator_stop_warning", error);
-                return;
-            }
+        // Capture the destroyed window's identity synchronously: a reopen may
+        // attach while the asynchronous release below is still running.
+        let session = {
             let state = cleanup_app.state::<AppState>();
-            crate::motor_control_service::revoke(&state);
-            let _ops = state.ops().lock().await;
-            state.motor_test.running.lock().take();
-            crate::stream_service::stop(&state);
-            let sitl = state.motor_test.sitl.lock().take();
-            if let Some(sitl) = sitl {
-                sitl.stop().await;
+            let mut current = state.motor_test.window_token.lock();
+            if !current
+                .as_ref()
+                .is_some_and(|token| std::sync::Arc::ptr_eq(token, &window_token))
+            {
+                return;
             }
-            detach_motor_telemetry(&state).await;
-            let target = state.motor_test.target.lock().take();
-            if let Some(target) = target {
-                target.stop().await;
-            }
-            if let Some(task) = state.motor_test.scope_flusher.lock().take() {
-                task.abort();
-            };
+            current.take();
+            let session = state.motor_test.window_session.lock().take();
+            session
+        };
+        tauri::async_runtime::spawn(async move {
+            cleanup_closed_motor_window(&cleanup_app, session).await;
         });
     });
     Ok(())
+}
+
+/// Retire only resources owned by the window that was actually destroyed.
+/// A replacement client/target stays live and is not redirected by this
+/// delayed native callback.
+async fn cleanup_closed_motor_window<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    session: Option<RuntimeClientSession>,
+) {
+    let state = app.state::<AppState>();
+    if let Some(session) = session {
+        let client_id = session.owner.client_id.clone();
+        if let Err(error) =
+            crate::motor_operations::stop_all_for_client(app, &client_id, MOTOR_TEST_STOP_TIMEOUT)
+                .await
+        {
+            let _ = app.emit("actuator_stop_warning", error);
+            return;
+        }
+        if let Err(error) = crate::motor_capture_operations::stop_all_for_client(
+            app,
+            &client_id,
+            Duration::from_secs(15),
+        )
+        .await
+        {
+            let _ = app.emit("actuator_stop_warning", error);
+            return;
+        }
+        if let Err(error) = crate::motor_log_operations::stop_all_for_client(
+            app,
+            &client_id,
+            Duration::from_secs(2),
+        )
+        .await
+        {
+            let _ = app.emit("actuator_stop_warning", error);
+            return;
+        }
+        crate::motor_control_service::revoke_client(&state, &client_id);
+        let mut running = state.motor_test.running.lock();
+        if running.as_ref().is_some_and(|running| {
+            running
+                .operation
+                .as_ref()
+                .is_some_and(|operation| operation.owner.client_id == client_id)
+        }) {
+            running.take();
+        }
+    } else if !state.runtime_clients.module_attached("motor-test") {
+        // The window closed before its renderer attached. No operation identity
+        // exists, so only a fully unattached Motor role may run global cleanup.
+        if let Err(error) = crate::motor_operations::stop_all(app, MOTOR_TEST_STOP_TIMEOUT).await {
+            let _ = app.emit("actuator_stop_warning", error);
+            return;
+        }
+        if let Err(error) =
+            crate::motor_capture_operations::stop_all(app, Duration::from_secs(15)).await
+        {
+            let _ = app.emit("actuator_stop_warning", error);
+            return;
+        }
+        if let Err(error) = crate::motor_log_operations::stop_all(app, Duration::from_secs(2)).await
+        {
+            let _ = app.emit("actuator_stop_warning", error);
+            return;
+        }
+        crate::motor_control_service::revoke(&state);
+        state.motor_test.running.lock().take();
+    }
+    // A reopen may attach while operations finish. Only the last attached Motor
+    // role may own the shared target/sitl/telemetry teardown.
+    if state.runtime_clients.module_attached("motor-test") {
+        return;
+    }
+    let _ops = state.ops().lock().await;
+    crate::stream_service::stop(&state);
+    let sitl = state.motor_test.sitl.lock().take();
+    if let Some(sitl) = sitl {
+        sitl.stop().await;
+    }
+    detach_motor_telemetry(&state).await;
+    let target = state.motor_test.target.lock().take();
+    if let Some(target) = target {
+        target.stop().await;
+    }
+    if let Some(task) = state.motor_test.scope_flusher.lock().take() {
+        task.abort();
+    };
 }
 
 /// Close the motor-test window and run the stop path.

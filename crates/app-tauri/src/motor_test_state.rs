@@ -453,6 +453,13 @@ pub struct MotorTelemetry {
 /// newest event so the status poll stays cheap (no service round-trip).
 #[derive(Default)]
 pub struct MotorTestState {
+    /// Native client attached by the current Motor window. The destruction
+    /// callback uses this captured identity instead of whichever owner is
+    /// current after a reopen.
+    pub window_session: PLMutex<Option<maggcs_core::runtime::operations::RuntimeClientSession>>,
+    /// Lifetime token for the window instance. A delayed callback from an old
+    /// window cannot clean up a newer window that reused the same label.
+    pub window_token: PLMutex<Option<std::sync::Arc<()>>>,
     pub operations: crate::motor_operations::MotorOperations,
     pub control: crate::motor_control_service::MotorControlGate,
     pub running: PLMutex<Option<RunningMotorTest>>,
