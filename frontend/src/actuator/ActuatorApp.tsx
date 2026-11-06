@@ -398,7 +398,10 @@ export function ActuatorApp() {
   const [sitlConnectError, setSitlConnectError] = useState<string | null>(null)
   const [mappingError, setMappingError] = useState<string | null>(null)
   // The selected FC: a dedicated serial PX4 or the borrowed main serial link.
-  const [targetEndpoint, setTargetEndpoint] = useState('serial:/dev/ttyACM0:115200')
+  // Empty until the operator picks from the live inventory — never default to
+  // a hardcoded path (a stale default re-resolves against a fresh scan and
+  // fails with "device unavailable" when that port is absent).
+  const [targetEndpoint, setTargetEndpoint] = useState('')
   const targetSerialSelection = useSerialSelection(targetEndpoint)
   // Live serial inventory for the target picker; the hook above already starts
   // the hotplug watcher, this only reads the store.
@@ -1146,11 +1149,20 @@ export function ActuatorApp() {
     if (!tauri) return
     resetConfirmation()
     setTargetConnectError(null)
+    if (!targetEndpoint) {
+      setTargetConnectError('Select the serial device to connect to.')
+      return
+    }
     if (targetSerialSelection.changed) { setTargetConnectError('The serial attachment changed. Re-enter its endpoint.'); return }
-    void (targetSerialSelection.port ? Promise.resolve(targetSerialSelection.port) : serialPortForEndpoint(targetEndpoint)).then((expectedSerial) => invoke('actuator_connect_target', {
-      expectedSerial,
-      endpoint: targetEndpoint,
-    })).catch((error: unknown) => {
+    // The selection observed in the inventory is authoritative; only fall back
+    // to a re-resolve when the watcher has not hydrated it yet.
+    void (targetSerialSelection.port ? Promise.resolve(targetSerialSelection.port) : serialPortForEndpoint(targetEndpoint)).then((expectedSerial) => {
+      if (!expectedSerial) throw new Error('Select the serial device to connect to.')
+      return invoke('actuator_connect_target', {
+        expectedSerial,
+        endpoint: targetEndpoint,
+      })
+    }).catch((error: unknown) => {
       setTargetConnectError(String(error))
     })
   }
@@ -1807,7 +1819,7 @@ export function ActuatorApp() {
               className={`mode-btn target-link-action${guide.action === 'connect' ? ' guide-target' : ''}`}
               onClick={connectTarget}
               title="Connect the selected target link for telemetry. Motor control starts OFF."
-              disabled={running || pendingStart}
+              disabled={running || pendingStart || !targetEndpoint}
             >
               Connect PX4
             </button>

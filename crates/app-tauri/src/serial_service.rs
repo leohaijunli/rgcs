@@ -1026,34 +1026,7 @@ pub async fn serial_resolve_endpoint(
         .ok_or("The serial device is unavailable. Select it again.")?;
     if matches.next().is_some() {
         return Err("serial endpoint is ambiguous".into());
-    }pub async fn serial_resolve_endpoint(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    endpoint: String,
-) -> Result<SerialPortRef, String> {
-    let service = ensure(&app, &state).await?;
-    let Endpoint::Serial { port, .. } =
-        Endpoint::try_from(endpoint.as_str()).map_err(|e| e.to_string())?
-    else {
-        return Err("select a serial endpoint".into());
-    };
-    let inventory = service
-        .discovery
-        .refresh()
-        .await
-        .map_err(|e| e.to_string())?;
-    let canonical = canonical_serial_path(&port);
-    let mut matches = inventory
-        .ports
-        .into_iter()
-        .filter(|p| canonical_serial_path(Path::new(&p.port.device.port_name)) == canonical);
-    let selected = matches
-        .next()
-        .ok_or("The serial device is unavailable. Select it again.")?;
-    if matches.next().is_some() {
-        return Err("serial endpoint is ambiguous".into());
     }
-    Ok(selected.port)
     Ok(selected.port)
 }
 
