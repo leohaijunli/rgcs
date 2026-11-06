@@ -12,8 +12,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { serialPortForEndpoint } from '../stores/devices'
+import { serialPortForEndpoint, useDevicesStore } from '../stores/devices'
 import { useSerialSelection } from '../hooks/useSerialSelection'
+import { BAUD_RATES } from '../desktop/endpoint'
 import { listen } from '@tauri-apps/api/event'
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { readTextFile } from '@tauri-apps/plugin-fs'
@@ -108,6 +109,18 @@ export function loggingNeedsAttention(input: LoggingAttentionInput): boolean {
     || input.captureFailed
     || input.captureError
     || input.logsError
+}
+
+/** Split `serial:<port>:<baud>` into its port path (`""` when not serial). */
+export function targetHost(endpoint: string): string {
+  const parts = endpoint.split(':')
+  return parts.length === 3 && parts[0] === 'serial' ? parts[1] : ''
+}
+
+/** Baud of `serial:<port>:<baud>` (`"115200"` when unparseable). */
+export function targetBaudOf(endpoint: string): string {
+  const parts = endpoint.split(':')
+  return parts.length === 3 && parts[0] === 'serial' ? parts[2] : '115200'
 }
 
 /** Command sources. Manual = live sliders; Preset = bounded waveform
@@ -387,6 +400,20 @@ export function ActuatorApp() {
   // The selected FC: a dedicated serial PX4 or the borrowed main serial link.
   const [targetEndpoint, setTargetEndpoint] = useState('serial:/dev/ttyACM0:115200')
   const targetSerialSelection = useSerialSelection(targetEndpoint)
+  // Live serial inventory for the target picker; the hook above already starts
+  // the hotplug watcher, this only reads the store.
+  const serialDevices = useDevicesStore((s) => s.devices)
+  const serialInventoryLoaded = useDevicesStore((s) => s.loaded)
+  const targetBaud = targetBaudOf(targetEndpoint)
+  const targetHostPath = targetHost(targetEndpoint)
+  // A stale selection stays selectable (labelled with its last known name)
+  // until the operator re-picks; the shell rejects a genuinely absent device.
+  const savedDeviceStillPresent = targetHostPath !== ''
+    && serialDevices.some((d) => d.port_name === targetHostPath)
+  const savedDeviceLabel = (() => {
+    const d = serialDevices.find((d) => d.port_name === targetHostPath)
+    return d ? `${d.port_name}${d.product ? ` · ${d.product}` : ''}` : targetHostPath
+  })()
   const sitlSerialSelection = useSerialSelection(sitlEndpoint)
   const [targetConnectError, setTargetConnectError] = useState<string | null>(null)
   // Why the last session stopped (armed / heartbeat_stale / acks_denied / …).
@@ -1717,15 +1744,43 @@ export function ActuatorApp() {
                   Use main serial link
                 </button>
               </div>}
-              <input
-                className="phrase-input"
-                value={targetEndpoint}
-                onChange={(e) => changeTargetEndpoint(e.target.value)}
-                placeholder="serial:/dev/ttyACM0:115200"
-                aria-label="Target PX4 serial endpoint"
-                spellCheck={false}
-                disabled={running || pendingStart}
-              />
+              <div className="target-endpoint-picker">
+                <select
+                  className="phrase-input"
+                  value={targetSerialSelection.changed ? '' : targetEndpoint}
+                  onChange={(e) => changeTargetEndpoint(e.target.value)}
+                  aria-label="Target PX4 serial device"
+                  disabled={running || pendingStart}
+                >
+                  <option value="" disabled>
+                    {serialInventoryLoaded && serialDevices.length === 0
+                      ? 'No serial devices found'
+                      : targetSerialSelection.changed
+                        ? 'The selected device changed — pick it again'
+                        : 'Select serial device…'}
+                  </option>
+                  {targetSerialSelection.changed && savedDeviceStillPresent && (
+                    <option value={targetEndpoint}>{savedDeviceLabel}</option>
+                  )}
+                  {serialDevices.map((d) => (
+                    <option
+                      key={d.port_name}
+                      value={`serial:${d.port_name}:${targetBaud}`}
+                    >
+                      {d.port_name}{d.product ? ` · ${d.product}` : ''}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className="phrase-input"
+                  value={targetBaud}
+                  onChange={(e) => changeTargetEndpoint(`serial:${targetHost(targetEndpoint)}:${e.target.value}`)}
+                  aria-label="Target PX4 serial baud"
+                  disabled={running || pendingStart}
+                >
+                  {BAUD_RATES.map((b) => <option key={b} value={b}>{b}</option>)}
+                </select>
+              </div>
               <div className="estop-note">
                 MagGCS identifies the PX4 on this port automatically and keeps its
                 own MAVLink ID separate.

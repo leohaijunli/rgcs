@@ -90,6 +90,8 @@ pub enum SerialDiscoveryError {
     PermissionDenied { port: String },
     #[error("no autopilot heartbeat was verified at the selected baud rates")]
     NoAutopilot,
+    #[error("{bytes} bytes arrived but none parsed as MAVLink at any tried baud rate — likely a baud rate mismatch")]
+    UnrecognizedStream { bytes: u64 },
     #[error("serial probe timed out during {stage}")]
     ProbeTimeout { stage: String },
     #[error("automatic serial linking requires MAVLink 2")]

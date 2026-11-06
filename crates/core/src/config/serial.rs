@@ -255,6 +255,7 @@ impl SerialFailure {
                 ("unsupported_autopilot", RetryDisposition::UserAction)
             }
             E::LocalSystemIdConflict { .. } => ("local_id_conflict", RetryDisposition::UserAction),
+            E::UnrecognizedStream { .. } => ("unrecognized_stream", RetryDisposition::UserAction),
             E::Enumeration(_)
             | E::EnumerationTimeout
             | E::NoAutopilot

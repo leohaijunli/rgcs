@@ -132,14 +132,52 @@ pub async fn connect(
     manual.check()?;
     crate::rtk_service::ensure_port_not_base(&state, &config.endpoint)?;
 
-    let spawned = match lease {
-        Some(lease) => {
-            maggcs_core::mavlink::connection::spawn_leased_serial_connection(config.clone(), lease)
+    // Serial: identify the FC passively before committing the link. The probe
+    // tries the configured baud first and falls back across the ladder, then
+    // hands the same open transport over, so the verified rate is what stays
+    // connected. UDP/TCP keep the direct spawn.
+    let (spawned, config) = match (lease, &config.endpoint) {
+        (Some(lease), Endpoint::Serial { baudrate, .. }) => {
+            let probed = maggcs_core::mavlink::serial::probe_fc_serial(
+                lease,
+                maggcs_core::mavlink::serial::FcProbeConfig {
+                    baud: maggcs_core::devices::BaudSelection::Fixed(*baudrate),
+                    local_system_id: Some(ConnectionConfig::default().system_id),
+                    expected_target: None,
+                },
+                manual.cancel.clone(),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+            let target = probed.target().clone();
+            let probed_config = ConnectionConfig {
+                endpoint: probed.endpoint(),
+                target_system_id: target.system_id,
+                target_component_id: target.component_id,
+                auto_discover_target: false,
+                ..config.clone()
+            };
+            let spawned = probed
+                .connect(probed_config.clone())
                 .await
+                .map_err(|e| e.to_string())?;
+            (spawned, probed_config)
         }
-        None => spawn_connection(config.clone()).await,
+        (lease, _) => {
+            let spawned = match lease {
+                Some(lease) => {
+                    maggcs_core::mavlink::connection::spawn_leased_serial_connection(
+                        config.clone(),
+                        lease,
+                    )
+                    .await
+                }
+                None => spawn_connection(config.clone()).await,
+            };
+            (spawned.map_err(|e| e.to_string())?, config.clone())
+        }
     };
-    let (handle, events_rx, first_result) = spawned.map_err(|e| e.to_string())?;
+    let (handle, events_rx, first_result) = spawned;
 
     // Wait for the first connect/bind attempt so failures surface here instead
     // of "ok: true" followed by a background error (issue #4).
@@ -185,12 +223,18 @@ pub async fn connect(
 
     // The FC ids are settled either by auto-discovery (first autopilot
     // heartbeat on the link, e.g. a non-default PX4 sysid) or by the
-    // configured expectation when the link stays quiet.
+    // configured expectation when the link stays quiet. The serial probe
+    // path already verified them from live heartbeats.
     let (target_system_id, target_component_id, target_discovered) = if config.auto_discover_target
     {
         resolve_target(&handle, &config).await
     } else {
-        (config.target_system_id, config.target_component_id, false)
+        let probed = handle.target_identity().is_some();
+        (
+            config.target_system_id,
+            config.target_component_id,
+            probed,
+        )
     };
 
     let baud = match &config.endpoint {

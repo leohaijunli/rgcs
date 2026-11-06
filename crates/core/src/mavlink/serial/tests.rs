@@ -167,6 +167,37 @@ async fn corrupt_frames_and_duplicate_sequences_cannot_establish_an_autopilot() 
     ));
 }
 
+/// Valid MAVLink traffic that is not an FC heartbeat must yield the
+/// specific "stream present but unrecognised" failure, not a bare
+/// "no autopilot" — the operator needs the wiring/baud hint.
+#[tokio::test]
+async fn foreign_valid_frames_report_an_unrecognized_stream() {
+    let (conn, peer, address) = transport().await;
+    // GCS heartbeats are CRC-valid but never classify as an autopilot.
+    for sequence in [1, 2] {
+        send(
+            &peer,
+            address,
+            &heartbeat(
+                255,
+                0,
+                sequence,
+                ::mavlink::common::MavAutopilot::MAV_AUTOPILOT_INVALID,
+                ::mavlink::common::MavType::MAV_TYPE_GCS,
+            ),
+            false,
+            false,
+        )
+        .await;
+    }
+    match observe_fc(&conn, &config(), WINDOW).await {
+        Err(SerialDiscoveryError::UnrecognizedStream { bytes }) => {
+            assert!(bytes > 0, "the foreign frames must be counted");
+        }
+        other => panic!("expected UnrecognizedStream, got {other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn v1_local_id_conflict_and_unsupported_firmware_are_explicit() {
     let (conn, peer, address) = transport().await;
@@ -375,4 +406,79 @@ async fn cancelled_passive_probe_closes_before_another_owner_can_reserve() {
         .await
         .expect("stop inventory");
     task.await.expect("join");
+}
+
+/// A rate the OS refuses (e.g. unsupported by the driver) must be skipped, not
+/// fail the walk: a later rate still finds the autopilot.
+#[tokio::test]
+async fn open_failure_on_one_rate_falls_through_to_the_next() {
+    let (discovery, task) =
+        spawn_serial_discovery(Arc::new(Inventory), SerialDiscoveryConfig::default())
+            .expect("inventory");
+    let port = discovery.refresh().await.expect("scan").ports[0]
+        .port
+        .clone();
+    let lease = discovery
+        .reserve(LeaseRequest {
+            expected: port,
+            owner: SerialOwner::PrimaryFc,
+        })
+        .await
+        .expect("lease");
+    let (conn, peer, address) = transport().await;
+    send(&peer, address, &px4(42, 1), false, false).await;
+    send(&peer, address, &px4(42, 2), false, false).await;
+    let mut transport = Some(conn);
+    let mut first_open = true;
+    let probed = probe_with_opener(
+        lease,
+        config(),
+        SerialCancellation::new(),
+        WINDOW,
+        TEST_BUDGET,
+        move |endpoint| {
+            let first = first_open;
+            first_open = false;
+            let conn = if first { None } else { transport.take() };
+            async move {
+                match conn {
+                    // The first rate (the configured one) simulates an
+                    // EINVAL-style driver refusal; the next rate hands over
+                    // the fixture.
+                    None if first => Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "unsupported rate",
+                    )),
+                    Some(conn) => Ok(conn),
+                    None => panic!("probe reopened after the fixture was consumed"),
+                }
+                .map(|conn| {
+                    assert_ne!(
+                        endpoint_baud(&endpoint),
+                        115_200,
+                        "the failed open must be retried at another rate"
+                    );
+                    conn
+                })
+            }
+        },
+    )
+    .await
+    .expect("probe must fall through the failed open");
+    assert_eq!(probed.target().system_id, 42);
+    // Release the lease and transport before stopping discovery; a held lease
+    // keeps the worker alive past the shutdown budget.
+    drop(probed);
+    discovery
+        .shutdown(TEST_BUDGET)
+        .await
+        .expect("stop inventory");
+    task.await.expect("join inventory");
+}
+
+fn endpoint_baud(endpoint: &Endpoint) -> u32 {
+    match endpoint {
+        Endpoint::Serial { baudrate, .. } => *baudrate,
+        _ => panic!("serial endpoint expected"),
+    }
 }

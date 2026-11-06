@@ -13,7 +13,9 @@ use crate::devices::{
 };
 use crate::telemetry::{Autopilot, VehicleType};
 
+/// How long one baud rate is observed before moving to the next.
 pub const FC_PROBE_WINDOW: Duration = Duration::from_secs(3);
+/// Overall budget for one passive probe run.
 pub const FC_PROBE_TIMEOUT: Duration = Duration::from_secs(25);
 pub const FC_BAUD_RATES: [u32; 7] = [115_200, 57_600, 38_400, 9_600, 230_400, 460_800, 921_600];
 const AUTOPILOT_COMPONENT: u8 = 1;
@@ -159,9 +161,16 @@ where
         });
     }
     lease.set_phase(LeasePhase::Probing)?;
+    // A fixed selection is tried first, then the remaining ladder: the user's
+    // guess may name a rate the FC is not using (e.g. a saved TELEM port), and
+    // refusing would make every manual serial connect baud-fragile.
     let rates = match config.baud {
         BaudSelection::Auto => FC_BAUD_RATES.to_vec(),
-        BaudSelection::Fixed(rate) => vec![rate],
+        BaudSelection::Fixed(rate) => {
+            let mut rates = vec![rate];
+            rates.extend(FC_BAUD_RATES.iter().copied().filter(|&r| r != rate));
+            rates
+        }
     };
     let mut bootstrap = SerialBootstrap {
         transport: None,
@@ -171,6 +180,7 @@ where
         single_transport: true,
     };
     let result = tokio::time::timeout(timeout, async {
+        let mut unrecognized_bytes: u64 = 0;
         for rate in rates {
             bootstrap.cancel.check()?;
             drop(bootstrap.transport.take());
@@ -183,17 +193,19 @@ where
                 port: bootstrap.lease.port().device.port_name.clone().into(),
                 baudrate: rate,
             };
-            let mut conn = open(endpoint.clone()).await.map_err(|error| {
-                let port = bootstrap.lease.port().device.port_name.clone();
-                if error.kind() == std::io::ErrorKind::PermissionDenied {
-                    SerialDiscoveryError::PermissionDenied { port }
-                } else {
-                    SerialDiscoveryError::OpenFailed {
-                        port,
-                        message: error.to_string(),
-                    }
+            let mut conn = match open(endpoint.clone()).await {
+                Ok(conn) => conn,
+                // Transient conditions that apply to every rate: stop the walk.
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                    return Err(SerialDiscoveryError::PermissionDenied {
+                        port: bootstrap.lease.port().device.port_name.clone(),
+                    });
                 }
-            })?;
+                // A rate the OS/driver refuses (EINVAL, unsupported): try the
+                // next one instead of failing the whole probe.
+                Err(_) if !cancelled_now(&bootstrap) => continue,
+                Err(_) => return Err(SerialDiscoveryError::Cancelled),
+            };
             conn.set_allow_recv_any_version(true);
             bootstrap.transport = Some(conn);
             let Some(conn) = bootstrap.transport.as_ref() else {
@@ -211,8 +223,25 @@ where
                     return Ok((target, endpoint));
                 }
                 Err(SerialDiscoveryError::NoAutopilot) => {}
+                // The rate was right for framing but no acceptable FC showed
+                // up: further rates cannot improve on a decoded stream.
+                Err(error @ (SerialDiscoveryError::UnsupportedMavlinkVersion
+                | SerialDiscoveryError::LocalSystemIdConflict { .. }
+                | SerialDiscoveryError::UnsupportedAutopilot { .. }
+                | SerialDiscoveryError::AmbiguousTargets { .. }
+                | SerialDiscoveryError::UnexpectedTarget { .. })) => {
+                    return Err(error);
+                }
+                Err(SerialDiscoveryError::UnrecognizedStream { bytes }) => {
+                    unrecognized_bytes += bytes;
+                }
                 Err(error) => return Err(error),
             }
+        }
+        if unrecognized_bytes > 0 {
+            return Err(SerialDiscoveryError::UnrecognizedStream {
+                bytes: unrecognized_bytes,
+            });
         }
         Err(SerialDiscoveryError::NoAutopilot)
     })
@@ -240,6 +269,11 @@ async fn observe_fc(
 ) -> Result<(FcIdentity, MessageEnvelope), SerialDiscoveryError> {
     let deadline = tokio::time::Instant::now() + window;
     let mut seen: BTreeMap<(u8, u8), Evidence> = BTreeMap::new();
+    // Bytes that arrived without decoding into an acceptable autopilot
+    // heartbeat: CRC-valid frames of other messages, frames of unknown
+    // message ids, and raw garbage. Reported so the caller can tell a
+    // silent/wrong-baud link from one carrying traffic we did not recognise.
+    let mut unrecognized_bytes: u64 = 0;
     loop {
         let raw = match tokio::time::timeout_at(deadline, conn.recv_raw()).await {
             Err(_) => break,
@@ -257,6 +291,7 @@ async fn observe_fc(
             raw.message_id(),
             raw.payload(),
         ) else {
+            unrecognized_bytes += raw_frame_len(&raw);
             continue;
         };
         let env = MessageEnvelope {
@@ -269,6 +304,7 @@ async fn observe_fc(
             received_at: Instant::now(),
         };
         let Some(identity) = classify_autopilot_heartbeat(&env) else {
+            unrecognized_bytes += raw_frame_len(&raw);
             continue;
         };
         if !matches!(raw.version(), ::mavlink::MavlinkVersion::V2) {
@@ -302,6 +338,27 @@ async fn observe_fc(
         evidence.last = env;
     }
     choose_evidence(seen, config.expected_target.as_ref())
+        .map_err(|error| {
+            // Surface the observed traffic volume with the quiet-stream
+            // failure: "nothing decoded" alone hides a live but foreign
+            // link, which is a wiring/baud hint, not a dead port.
+            if matches!(error, SerialDiscoveryError::NoAutopilot) && unrecognized_bytes > 0 {
+                SerialDiscoveryError::UnrecognizedStream {
+                    bytes: unrecognized_bytes,
+                }
+            } else {
+                error
+            }
+        })
+}
+
+/// Encoded frame size of a raw MAVLink message (header + payload + checksum
+/// [+ signature]).
+fn raw_frame_len(raw: &::mavlink::MAVLinkMessageRaw) -> u64 {
+    match raw {
+        ::mavlink::MAVLinkMessageRaw::V1(msg) => msg.raw_bytes().len() as u64,
+        ::mavlink::MAVLinkMessageRaw::V2(msg) => msg.raw_bytes().len() as u64,
+    }
 }
 
 fn choose_evidence(
@@ -348,6 +405,11 @@ fn verified(evidence: Evidence) -> Result<(FcIdentity, MessageEnvelope), SerialD
         return Err(SerialDiscoveryError::NoAutopilot);
     }
     Ok((evidence.identity, evidence.last))
+}
+
+/// Whether the probe's cancellation fired (used to stop the baud ladder).
+fn cancelled_now(bootstrap: &SerialBootstrap) -> bool {
+    bootstrap.cancel.is_cancelled()
 }
 
 #[cfg(test)]

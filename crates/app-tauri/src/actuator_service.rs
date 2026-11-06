@@ -1228,6 +1228,8 @@ pub(crate) async fn connect_motor_serial_target(
     let maggcs_core::mavlink::Endpoint::Serial { baudrate, .. } = &config.endpoint else {
         return Err("Motor Test's PX4 target must use a serial connection".into());
     };
+    // The probe tries the configured baud first and falls back across the
+    // ladder, then hands the same open transport over with the verified rate.
     let probed = maggcs_core::mavlink::serial::probe_fc_serial(
         lease,
         maggcs_core::mavlink::serial::FcProbeConfig {
