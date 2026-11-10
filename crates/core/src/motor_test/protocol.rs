@@ -65,6 +65,9 @@ pub enum OutputProtocol {
     DShot { rate: DShotRate },
     #[serde(rename = "bdshot")]
     BDShot { rate: DShotRate },
+    /// DroneCAN ESC bank (`UAVCAN_EC`); no PWM timer parameter.
+    #[serde(rename = "dronecan")]
+    DroneCan,
     /// No readable `TIMn` parameter, or conflicting groups on one bank.
     #[default]
     #[serde(rename = "unknown")]
@@ -87,6 +90,8 @@ pub enum OutputUnits {
     Microseconds,
     /// DShot/BDShot: mixer units, 0…1999 (`DSHOT_MAX_THROTTLE`).
     DShotThrottle,
+    /// DroneCAN `RawCommand` counts, `UAVCAN_EC_MINn`…`UAVCAN_EC_MAXn`.
+    DroneCanCommand,
 }
 
 impl OutputProtocol {
@@ -124,6 +129,7 @@ impl OutputProtocol {
     pub const fn units(self) -> OutputUnits {
         match self {
             Self::DShot { .. } | Self::BDShot { .. } => OutputUnits::DShotThrottle,
+            Self::DroneCan => OutputUnits::DroneCanCommand,
             Self::Pwm { .. } | Self::OneShot | Self::Unknown => OutputUnits::Microseconds,
         }
     }
@@ -142,6 +148,7 @@ impl OutputProtocol {
             Self::OneShot => "OneShot".to_owned(),
             Self::DShot { rate } => rate.label().to_owned(),
             Self::BDShot { rate } => format!("B{}", rate.label()),
+            Self::DroneCan => "DroneCAN".to_owned(),
             Self::Unknown => "unknown".to_owned(),
         }
     }
@@ -410,6 +417,10 @@ mod tests {
             serde_json::json!({ "kind": "oneshot" })
         );
         assert_eq!(
+            serde_json::to_value(OutputProtocol::DroneCan).expect("dronecan JSON"),
+            serde_json::json!({ "kind": "dronecan" })
+        );
+        assert_eq!(
             serde_json::to_value(OutputProtocol::Unknown).expect("unknown JSON"),
             serde_json::json!({ "kind": "unknown" })
         );
@@ -428,6 +439,10 @@ mod tests {
         assert_eq!(
             OutputProtocol::Pwm { rate_hz: Some(50) }.units(),
             OutputUnits::Microseconds
+        );
+        assert_eq!(
+            OutputProtocol::DroneCan.units(),
+            OutputUnits::DroneCanCommand
         );
         assert_eq!(OutputProtocol::Unknown.units(), OutputUnits::Microseconds);
     }

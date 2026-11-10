@@ -53,6 +53,11 @@ function toleranceFor(model: PwmModel | undefined): number {
   return isDShot(model?.protocol) ? TRACKING_TOLERANCE_DSHOT : TRACKING_TOLERANCE_US
 }
 
+/** DroneCAN reports no `SERVO_OUTPUT_RAW`, so there is nothing to diff. */
+function hasFeedbackComparison(model: PwmModel | undefined): boolean {
+  return model?.protocol.kind !== 'dronecan'
+}
+
 function formatOutput(value: number | null, model: PwmModel | undefined): string {
   if (value == null) return '—'
   return `${value.toFixed(0)} ${outputUnits(model)}`
@@ -81,6 +86,7 @@ function stateFor(
   if (model.range_source !== 'fc') return { text: 'range unread', tone: 'text-warn' }
   if (!running) return { text: 'idle', tone: 'text-muted' }
   if (expected == null) return { text: 'released', tone: 'text-muted' }
+  if (!hasFeedbackComparison(model)) return { text: 'ESC telemetry', tone: 'text-muted' }
   if (reported == null) return { text: 'no feedback', tone: 'text-warn' }
   if (delta != null && Math.abs(delta) <= toleranceFor(model)) {
     return { text: 'tracking', tone: 'text-ok' }
@@ -158,8 +164,9 @@ export default function MotorTrackingTable(props: MotorTrackingTableProps) {
               {motors === 0 ? (
                 <tr>
                   <td colSpan={10} className="empty-row">
-                    No configured motor outputs — assign a motor function and
-                    refresh the mapping.
+                    No configured motor outputs — assign a motor function to
+                    PWM_MAIN/AUX_FUNCx or UAVCAN_EC_FUNCx and refresh the
+                    mapping.
                   </td>
                 </tr>
               ) : (
@@ -175,7 +182,12 @@ export default function MotorTrackingTable(props: MotorTrackingTableProps) {
                   const rawReported = status.fc_output_pwm[index]
                   const reported = statusFresh && rawReported != null ? rawReported : null
                   const delta =
-                    unit !== 'raw' && expected != null && reported != null ? reported - expected : null
+                    unit !== 'raw'
+                      && hasFeedbackComparison(model)
+                      && expected != null
+                      && reported != null
+                      ? reported - expected
+                      : null
                   const state = stateFor(
                     status,
                     statusFresh,
@@ -206,9 +218,8 @@ export default function MotorTrackingTable(props: MotorTrackingTableProps) {
                           {channel && model?.range_source === 'fc'
                             ? unit === 'raw'
                               ? 'Unit unknown'
-                              : `${model.min_us}–${model.max_us} ${unit}`
-                            : 'Not read'}
-                        </td>
+                              : `${model.min_us}–${model.max_us} ${unit === 'cmd' ? 'raw' : unit}`
+                            : 'Not read'}                        </td>
                         <td className="mono">{sourceValue(status, source, values, index)}</td>
                         <td
                           className="mono"
@@ -247,8 +258,7 @@ export default function MotorTrackingTable(props: MotorTrackingTableProps) {
                                 ? unit === 'raw'
                                   ? 'unit unknown'
                                   : `${model.min_us}–${model.max_us} ${outputUnitLabel(model)}`
-                                : 'unknown'}{' '}
-                              {model ? (
+                                : 'unknown'}{' '}                              {model ? (
                                 <em
                                   className={
                                     model.range_source === 'fallback'
@@ -305,15 +315,15 @@ export default function MotorTrackingTable(props: MotorTrackingTableProps) {
         {gap ? (
           <div className="estop-note text-error">
             Mapping has a gap after M{motors} — a motor function is assigned
-            beyond the contiguous M1..MN prefix. Fix PWM_MAIN/AUX_FUNCx and
-            refresh.
+            beyond the contiguous M1..MN prefix. Fix PWM_MAIN/AUX_FUNCx or
+            UAVCAN_EC_FUNCx and refresh.
           </div>
         ) : null}
         {status.output_map.state === 'invalid' || status.output_map.issues.length > 0 ? (
           <div className="estop-note text-error">
             Mapping has {status.output_map.issues.length} issue
             {status.output_map.issues.length === 1 ? '' : 's'} — refresh after
-            checking PWM_MAIN/AUX_FUNCx.
+            checking PWM_MAIN/AUX_FUNCx or UAVCAN_EC_FUNCx.
           </div>
         ) : null}
       </div>

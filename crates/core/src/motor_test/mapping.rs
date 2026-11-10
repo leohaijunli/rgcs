@@ -2,14 +2,21 @@
 //!
 //! `ACTUATOR_TEST` addresses a logical **motor function** (Motor 1..4). PX4
 //! maps that function to a physical output through `PWM_MAIN_FUNCx` /
-//! `PWM_AUX_FUNCx`; feedback must be read from that same port/channel. Treating
-//! `SERVO_OUTPUT_RAW` servo1..4 as motors 1..4 is only correct for the default
-//! wiring and is wrong as soon as MAIN/AUX or the channel assignment differs.
+//! `PWM_AUX_FUNCx` (PWM banks) or `UAVCAN_EC_FUNCx` (DroneCAN ESCs); feedback
+//! must be read from that same bank/channel — `SERVO_OUTPUT_RAW` for PWM,
+//! `ESC_STATUS` for DroneCAN. Treating `SERVO_OUTPUT_RAW` servo1..4 as motors
+//! 1..4 is only correct for the default wiring and is wrong as soon as
+//! MAIN/AUX, the channel assignment or the output protocol differs.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-/// Physical PWM bank carrying a `SERVO_OUTPUT_RAW` message.
+/// Physical output bank.
+///
+/// `Main` / `Aux` carry `SERVO_OUTPUT_RAW` and are configured through
+/// `PWM_MAIN_FUNCx` / `PWM_AUX_FUNCx`. `DroneCan` is a logical ESC bank
+/// configured through `UAVCAN_EC_FUNCx`; it has no `SERVO_OUTPUT_RAW` frame,
+/// so its feedback comes from `ESC_STATUS`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
@@ -18,13 +25,20 @@ pub enum ServoPort {
     Main,
     /// `SERVO_OUTPUT_RAW.port == 1`; PX4 `PWM_AUX_FUNCx`.
     Aux,
+    /// PX4 `UAVCAN_EC_FUNCx` (DroneCAN ESC bank, no PWM feedback).
+    #[serde(rename = "dronecan")]
+    DroneCan,
 }
 
 impl ServoPort {
-    pub const fn wire(self) -> u8 {
+    pub const ALL: [Self; 3] = [Self::Main, Self::Aux, Self::DroneCan];
+
+    /// MAVLink `SERVO_OUTPUT_RAW.port`, or `None` for a non-PWM bank.
+    pub const fn wire(self) -> Option<u8> {
         match self {
-            Self::Main => 0,
-            Self::Aux => 1,
+            Self::Main => Some(0),
+            Self::Aux => Some(1),
+            Self::DroneCan => None,
         }
     }
 
@@ -40,6 +54,15 @@ impl ServoPort {
         match self {
             Self::Main => "PWM_MAIN",
             Self::Aux => "PWM_AUX",
+            Self::DroneCan => "UAVCAN_EC",
+        }
+    }
+
+    /// Number of output functions this bank can expose.
+    pub const fn channels(self) -> u8 {
+        match self {
+            Self::Main | Self::Aux => SERVO_CHANNELS_PER_PORT,
+            Self::DroneCan => DRONECAN_CHANNELS_PER_BANK,
         }
     }
 }
@@ -54,7 +77,7 @@ pub struct ServoChannel {
 
 impl ServoChannel {
     pub const fn new(port: ServoPort, channel: u8) -> Option<Self> {
-        if channel != 0 && channel <= SERVO_CHANNELS_PER_PORT {
+        if channel != 0 && channel <= port.channels() {
             Some(Self { port, channel })
         } else {
             None
@@ -63,6 +86,9 @@ impl ServoChannel {
 }
 
 pub const SERVO_CHANNELS_PER_PORT: u8 = 8;
+/// PX4 current `UAVCAN_EC` banks expose 12 ESCs; PX4 1.16/1.17 expose 8.
+/// The type capacity is 12 and the channel inventory decides what exists.
+pub const DRONECAN_CHANNELS_PER_BANK: u8 = 12;
 /// PX4 `output_functions.yaml`: Motor1 = 101, Motor2 = 102, ...
 pub const MOTOR_FUNCTION_BASE: i64 = 101;
 
@@ -182,17 +208,44 @@ impl From<Option<i64>> for FunctionRead {
     }
 }
 
-/// Build the mapping from raw `PWM_MAIN_FUNC1..8` / `PWM_AUX_FUNC1..8`
-/// values. `None` marks a parameter that could not be read; `Some(0)` is a
-/// valid "output disabled" value, not a read failure.
+/// Build the mapping from raw `PWM_MAIN_FUNC1..8`, `PWM_AUX_FUNC1..8` and
+/// `UAVCAN_EC_FUNC1..12` values. `None` marks a parameter that could not be
+/// read; `Some(0)` is a valid "output disabled" value, not a read failure.
 pub fn build_output_map(
     motors: u8,
-    main_functions: &[Option<i64>; SERVO_CHANNELS_PER_PORT as usize],
-    aux_functions: &[Option<i64>; SERVO_CHANNELS_PER_PORT as usize],
+    main_functions: &[Option<i64>],
+    aux_functions: &[Option<i64>],
+    dronecan_functions: &[Option<i64>],
 ) -> OutputMap {
-    let main = std::array::from_fn(|index| FunctionRead::from(main_functions[index]));
-    let aux = std::array::from_fn(|index| FunctionRead::from(aux_functions[index]));
-    build_output_map_checked(motors, &main, &aux)
+    let main: Vec<FunctionRead> = main_functions
+        .iter()
+        .copied()
+        .map(FunctionRead::from)
+        .collect();
+    let aux: Vec<FunctionRead> = aux_functions
+        .iter()
+        .copied()
+        .map(FunctionRead::from)
+        .collect();
+    let dronecan: Vec<FunctionRead> = dronecan_functions
+        .iter()
+        .copied()
+        .map(FunctionRead::from)
+        .collect();
+    build_output_map_checked(motors, &main, &aux, &dronecan)
+}
+
+/// Every bank, in the order the mapping scans them.
+fn banks<'a>(
+    main_functions: &'a [FunctionRead],
+    aux_functions: &'a [FunctionRead],
+    dronecan_functions: &'a [FunctionRead],
+) -> [(ServoPort, &'a [FunctionRead]); 3] {
+    [
+        (ServoPort::Main, main_functions),
+        (ServoPort::Aux, aux_functions),
+        (ServoPort::DroneCan, dronecan_functions),
+    ]
 }
 
 /// Build the mapping with explicit `Absent` channels. A failed read anywhere
@@ -200,8 +253,9 @@ pub fn build_output_map(
 /// be ruled out until every existing channel is known.
 pub fn build_output_map_checked(
     motors: u8,
-    main_functions: &[FunctionRead; SERVO_CHANNELS_PER_PORT as usize],
-    aux_functions: &[FunctionRead; SERVO_CHANNELS_PER_PORT as usize],
+    main_functions: &[FunctionRead],
+    aux_functions: &[FunctionRead],
+    dronecan_functions: &[FunctionRead],
 ) -> OutputMap {
     let mut issues = Vec::new();
     let mut readable = 0usize;
@@ -209,10 +263,7 @@ pub fn build_output_map_checked(
     let mut assignments = Vec::with_capacity(motors as usize);
     let mut invalid = false;
 
-    for (port, values) in [
-        (ServoPort::Main, main_functions),
-        (ServoPort::Aux, aux_functions),
-    ] {
+    for (port, values) in banks(main_functions, aux_functions, dronecan_functions) {
         for (index, value) in values.iter().enumerate() {
             match value {
                 FunctionRead::Value(_) => readable += 1,
@@ -231,10 +282,7 @@ pub fn build_output_map_checked(
     for motor in 1..=motors {
         let function = MOTOR_FUNCTION_BASE + i64::from(motor) - 1;
         let mut channels = Vec::new();
-        for (port, values) in [
-            (ServoPort::Main, main_functions),
-            (ServoPort::Aux, aux_functions),
-        ] {
+        for (port, values) in banks(main_functions, aux_functions, dronecan_functions) {
             for (index, value) in values.iter().enumerate() {
                 if *value == FunctionRead::Value(function) {
                     if let Some(channel) = ServoChannel::new(port, index as u8 + 1) {
@@ -298,6 +346,8 @@ pub fn mapped_feedback_pwm(
     let pwm = match channel.port {
         ServoPort::Main => main?,
         ServoPort::Aux => aux?,
+        // DroneCAN has no SERVO_OUTPUT_RAW frame; ESC_STATUS carries RPM.
+        ServoPort::DroneCan => return None,
     };
     pwm.get(usize::from(channel.channel.checked_sub(1)?))
         .copied()
@@ -320,7 +370,7 @@ mod tests {
         aux[1] = Some(103); // AUX2 = Motor3
         aux[2] = Some(104); // AUX3 = Motor4
 
-        let map = build_output_map(4, &main, &aux);
+        let map = build_output_map(4, &main, &aux, &[]);
         assert_eq!(map.state, OutputMapState::Complete);
         assert_eq!(
             map.channel_for(1),
@@ -356,7 +406,7 @@ mod tests {
     fn feedback_comes_from_the_mapped_bank_and_channel() {
         let mut main = [Some(0); 8];
         main[4] = Some(102); // MAIN5 = Motor2
-        let map = build_output_map(2, &main, &[Some(0); 8]);
+        let map = build_output_map(2, &main, &[Some(0); 8], &[]);
         let main_pwm = [1000, 1010, 1020, 1030, 1450, 1050, 1060, 1070];
         let aux_pwm = [9000; 8];
 
@@ -372,7 +422,7 @@ mod tests {
         let mut main = [Some(0); 8];
         main[0] = Some(102);
         main[1] = Some(102);
-        let map = build_output_map(2, &main, &[Some(0); 8]);
+        let map = build_output_map(2, &main, &[Some(0); 8], &[]);
 
         assert_eq!(map.state, OutputMapState::Invalid);
         assert_eq!(map.channel_for(2), None);
@@ -386,7 +436,7 @@ mod tests {
     fn unreadable_and_disabled_outputs_are_distinguished() {
         let mut main = empty();
         main[0] = Some(0); // readable, output disabled
-        let map = build_output_map(1, &main, &empty());
+        let map = build_output_map(1, &main, &empty(), &[]);
         assert_eq!(map.state, OutputMapState::Partial);
         assert_eq!(map.channel_for(1), None);
         assert!(map.issues.iter().any(|issue| matches!(
@@ -397,7 +447,7 @@ mod tests {
             }
         )));
 
-        let unknown = build_output_map(1, &empty(), &empty());
+        let unknown = build_output_map(1, &empty(), &empty(), &[]);
         assert_eq!(unknown.state, OutputMapState::Unknown);
     }
 
@@ -408,7 +458,7 @@ mod tests {
         let mut main = [Some(0); 8];
         main[0] = Some(101);
         main[1] = None;
-        let map = build_output_map(4, &main, &[Some(0); 8]);
+        let map = build_output_map(4, &main, &[Some(0); 8], &[]);
         assert_eq!(map.state, OutputMapState::Partial);
         assert_eq!(map.active_count(), 1);
         assert!(map.issues.iter().any(|issue| matches!(
@@ -433,7 +483,7 @@ mod tests {
             FunctionRead::Absent,
         ];
         let aux = [FunctionRead::Absent; 8];
-        let map = build_output_map_checked(4, &main, &aux);
+        let map = build_output_map_checked(4, &main, &aux, &[]);
         assert_eq!(map.state, OutputMapState::Complete);
         assert_eq!(map.active_count(), 1);
         assert!(map.issues.is_empty(), "absence is not a read failure");
@@ -443,7 +493,7 @@ mod tests {
     fn a_single_configured_motor_is_complete() {
         let mut main = [Some(0); 8];
         main[0] = Some(101);
-        let map = build_output_map(4, &main, &[Some(0); 8]);
+        let map = build_output_map(4, &main, &[Some(0); 8], &[]);
         assert_eq!(map.state, OutputMapState::Complete);
         assert_eq!(map.active_count(), 1);
         assert_eq!(map.active_motors().len(), 1);
@@ -455,7 +505,7 @@ mod tests {
         let mut main = [Some(0); 8];
         main[0] = Some(101);
         main[1] = Some(102);
-        let map = build_output_map(4, &main, &[Some(0); 8]);
+        let map = build_output_map(4, &main, &[Some(0); 8], &[]);
         assert_eq!(map.state, OutputMapState::Complete);
         assert_eq!(map.active_count(), 2);
         assert_eq!(map.active_motors().len(), 2);
@@ -467,7 +517,7 @@ mod tests {
         let mut main = [Some(0); 8];
         main[0] = Some(101);
         main[2] = Some(103);
-        let map = build_output_map(4, &main, &[Some(0); 8]);
+        let map = build_output_map(4, &main, &[Some(0); 8], &[]);
         assert_eq!(map.state, OutputMapState::Partial);
         assert_eq!(map.active_count(), 1);
         assert!(map.has_gap());
@@ -477,10 +527,58 @@ mod tests {
     fn a_motor_two_without_motor_one_has_no_active_set() {
         let mut main = [Some(0); 8];
         main[1] = Some(102);
-        let map = build_output_map(4, &main, &[Some(0); 8]);
+        let map = build_output_map(4, &main, &[Some(0); 8], &[]);
         assert_eq!(map.state, OutputMapState::Partial);
         assert_eq!(map.active_count(), 0);
         assert!(map.has_gap());
+    }
+
+    #[test]
+    fn dronecan_bank_maps_motor_functions_without_pwm_feedback() {
+        let mut dronecan = [Some(0); 12];
+        for (index, function) in [101, 102, 103, 104].into_iter().enumerate() {
+            dronecan[index] = Some(function);
+        }
+
+        let map = build_output_map(4, &[Some(0); 8], &[Some(0); 8], &dronecan);
+        assert_eq!(map.state, OutputMapState::Complete);
+        assert_eq!(
+            map.channel_for(1),
+            Some(ServoChannel {
+                port: ServoPort::DroneCan,
+                channel: 1
+            })
+        );
+        assert_eq!(
+            map.channel_for(4),
+            Some(ServoChannel {
+                port: ServoPort::DroneCan,
+                channel: 4
+            })
+        );
+        assert_eq!(
+            mapped_feedback_pwm(&map, Some(&[1500; 8]), Some(&[1500; 8]), 1),
+            None,
+            "DroneCAN has no SERVO_OUTPUT_RAW feedback"
+        );
+    }
+
+    #[test]
+    fn a_duplicate_across_pwm_and_dronecan_is_invalid() {
+        let mut dronecan = [Some(0); 12];
+        dronecan[0] = Some(101);
+        let mut main = [Some(0); 8];
+        main[0] = Some(101);
+
+        let map = build_output_map(1, &main, &[Some(0); 8], &dronecan);
+        assert_eq!(map.state, OutputMapState::Invalid);
+        assert_eq!(map.channel_for(1), None);
+    }
+
+    #[test]
+    fn dronecan_channel_range_is_twelve() {
+        assert!(ServoChannel::new(ServoPort::DroneCan, 12).is_some());
+        assert!(ServoChannel::new(ServoPort::DroneCan, 13).is_none());
     }
 
     #[test]

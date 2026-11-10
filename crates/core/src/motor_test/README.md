@@ -64,6 +64,25 @@ Runtime session; physical configuration writes reuse the existing owned Paramete
 worker and require the exact permission. The main preflight repair opens Motor
 Test rather than invoking a global STOP.
 
+## Output banks and DroneCAN ESCs
+
+The Motor-function → physical-output map reads three PX4 banks:
+
+| bank | function parameters | feedback |
+| --- | --- | --- |
+| `Main` | `PWM_MAIN_FUNC1..8` | `SERVO_OUTPUT_RAW` port 0 |
+| `Aux` | `PWM_AUX_FUNC1..8` | `SERVO_OUTPUT_RAW` port 1 |
+| `DroneCan` | `UAVCAN_EC_FUNC1..12` | `ESC_STATUS` RPM (no `SERVO_OUTPUT_RAW`) |
+
+DroneCAN channels are commanded in raw `RawCommand` counts
+(`UAVCAN_EC_MINn`…`MAXn`, defaults 1…8191, `UAVCAN_EC_REV` is one bitmask for
+the whole bank); the model carries those endpoints instead of PWM µs and the
+tracking table shows the command without a PWM delta. Without the parameter
+inventory only channels 1…8 are probed (PX4 1.16/1.17 declare 8); a partial map
+triggers a full pull and then re-reads all 12 with absent-channel inference.
+ESC tones stay DShot-only: a DroneCAN motor is never addressed with a beep
+command. `COM_MOT_TEST_EN` must be 1 (`UAVCAN_ENABLE > 2` for the bank itself).
+
 See `docs/verification/af-02b-motor-actuation-20261027.md`. Dedicated capture/log
 ownership remains the next slice; this checkpoint does not close G1.
 

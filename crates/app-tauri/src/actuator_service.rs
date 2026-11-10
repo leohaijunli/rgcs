@@ -23,7 +23,7 @@ use maggcs_core::mavlink::router::MessageRoute;
 use maggcs_core::mavlink::{MavMessage, MessageEnvelope};
 use maggcs_core::motor_test::mapping::{
     build_output_map_checked, mapped_feedback_pwm, FunctionRead, MappingIssue, OutputMap,
-    ServoPort, SERVO_CHANNELS_PER_PORT,
+    ServoPort, DRONECAN_CHANNELS_PER_BANK, SERVO_CHANNELS_PER_PORT,
 };
 use maggcs_core::motor_test::operation_types::{
     MotorForwardSourceRef, MotorOperationError, MotorParameterReadRequest,
@@ -33,7 +33,7 @@ use maggcs_core::motor_test::operation_types::{
 use maggcs_core::motor_test::protocol::{
     detect_bank_protocol_checked, OutputProtocol, OutputProtocols,
 };
-use maggcs_core::motor_test::pwm::{PwmModel, PwmRangeSource};
+use maggcs_core::motor_test::pwm::{PwmModel, PwmRangeSource, DRONECAN_CMD_MAX};
 use maggcs_core::motor_test::scope::{
     self, MagScopeSource, OutputScopeError, ScopeBus, ScopeOutputMeta,
 };
@@ -507,12 +507,12 @@ fn refuse_unread_pwm_ranges(
 ) -> Result<(), String> {
     if map.has_gap() {
         return Err(
-            "output mapping has a gap (for example M1 and M3 without M2) —              fix PWM_*_FUNCn and refresh the mapping first"
+            "output mapping has a gap (for example M1 and M3 without M2) —              fix PWM_*_FUNCn / UAVCAN_EC_FUNCn and refresh the mapping first"
                 .into(),
         );
     }
     if map.state == maggcs_core::motor_test::mapping::OutputMapState::Invalid {
-        return Err("output mapping is invalid (a motor function is assigned twice) —              fix PWM_*_FUNCn and refresh the mapping first"
+        return Err("output mapping is invalid (a motor function is assigned twice) —              fix PWM_*_FUNCn / UAVCAN_EC_FUNCn and refresh the mapping first"
             .into());
     }
     if map.state != maggcs_core::motor_test::mapping::OutputMapState::Complete {
@@ -530,7 +530,7 @@ fn refuse_unread_pwm_ranges(
     let active = map.active_count();
     if active == 0 {
         return Err(
-            "no configured motor outputs found — assign a motor function to              PWM_MAIN/AUX_FUNCn and refresh the mapping first"
+            "no configured motor outputs found — assign a motor function to              PWM_MAIN/AUX_FUNCn or UAVCAN_EC_FUNCn and refresh the mapping first"
                 .into(),
         );
     }
@@ -545,11 +545,13 @@ fn refuse_unread_pwm_ranges(
         let model = models[usize::from(motor - 1)];
         if model.range_source == PwmRangeSource::Fallback {
             problems.push(format!(
-                "M{motor}: output range not read (check the link and PWM_*_MINn/MAXn{})",
-                if model.protocol.is_dshot() {
-                    " / DSHOT_MIN"
+                "M{motor}: output range not read (check the link and {})",
+                if model.protocol == OutputProtocol::DroneCan {
+                    "UAVCAN_EC_MINn/MAXn"
+                } else if model.protocol.is_dshot() {
+                    "PWM_*_MINn/MAXn / DSHOT_MIN"
                 } else {
-                    ""
+                    "PWM_*_MINn/MAXn"
                 }
             ));
         }
@@ -1425,14 +1427,11 @@ pub(crate) fn install_target<R: tauri::Runtime>(
     // Discovery is read-only. Permission changes use an explicit verified set.
     let task = tauri::async_runtime::spawn(async move {
         let _ = initial_params.request_fc_version().await;
-        for name in [
-            "COM_MOT_TEST_EN",
-            "SDLOG_MODE",
-            "SDLOG_BACKEND",
-            "THR_MDL_FAC",
-        ] {
-            let _ = initial_params.read(name).await;
-        }
+        // The standalone reads finish before the snapshot is published, so the
+        // config appearing never coincides with a parameter transaction still
+        // in flight. `read_standalone_params` retries briefly when a borrowed
+        // main link is busy with its own inventory pull.
+        read_standalone_params(&initial_params).await;
         let read = read_output_config(&initial_params, &param_names_slot).await;
         let snapshot = OutputConfigSnapshot {
             revision: 1,
@@ -2486,14 +2485,17 @@ impl AppState {
         let (main_pwm, aux_pwm) = {
             let telemetry = self.motor_test.telemetry.lock();
             match telemetry.as_ref() {
-                Some(t) => (
-                    t.fc_outputs[ServoPort::Main.wire() as usize]
-                        .filter(|o| o.at.elapsed() <= FC_OUTPUT_STALE)
-                        .map(|o| o.pwm),
-                    t.fc_outputs[ServoPort::Aux.wire() as usize]
-                        .filter(|o| o.at.elapsed() <= FC_OUTPUT_STALE)
-                        .map(|o| o.pwm),
-                ),
+                Some(t) => {
+                    let bank = |port: ServoPort| {
+                        port.wire()
+                            .and_then(|index| t.fc_outputs.get(usize::from(index)))
+                            .copied()
+                            .flatten()
+                            .filter(|o| o.at.elapsed() <= FC_OUTPUT_STALE)
+                            .map(|o| o.pwm)
+                    };
+                    (bank(ServoPort::Main), bank(ServoPort::Aux))
+                }
                 None => (None, None),
             }
         };
@@ -2697,9 +2699,9 @@ fn cached_int(service: &ParamService, name: &str) -> Option<i32> {
     }
 }
 
-/// Read `PWM_MAIN_FUNC1..8` and `PWM_AUX_FUNC1..8` from the serial target and
-/// build the Motor-function → physical-output map. Missing parameters are
-/// reported as unreadable, not mistaken for "disabled".
+/// Read `PWM_MAIN_FUNC1..8`, `PWM_AUX_FUNC1..8` and `UAVCAN_EC_FUNC1..12`
+/// from the serial target and build the Motor-function → physical-output map.
+/// Missing parameters are reported as unreadable, not mistaken for "disabled".
 #[cfg(test)]
 async fn read_output_map(params: &ParamService) -> OutputMap {
     read_output_map_with_names(params, None).await
@@ -2709,21 +2711,32 @@ async fn read_output_map_with_names(
     params: &ParamService,
     names: Option<&std::collections::HashSet<String>>,
 ) -> OutputMap {
-    let mut main = [FunctionRead::Absent; SERVO_CHANNELS_PER_PORT as usize];
-    let mut aux = [FunctionRead::Absent; SERVO_CHANNELS_PER_PORT as usize];
-    if names.is_none() {
-        main = [FunctionRead::Unreadable; SERVO_CHANNELS_PER_PORT as usize];
-        aux = [FunctionRead::Unreadable; SERVO_CHANNELS_PER_PORT as usize];
-    }
-    for port in [ServoPort::Main, ServoPort::Aux] {
-        let values = match port {
-            ServoPort::Main => &mut main,
-            ServoPort::Aux => &mut aux,
-        };
-        for channel in 1..=SERVO_CHANNELS_PER_PORT {
+    // Without the inventory, probe the 8 channels PX4 1.16/1.17 exposes.
+    // A partial map triggers a full pull and then re-reads all 12 possible
+    // DroneCAN channels with absent-channel inference.
+    let mut banks: Vec<(ServoPort, Vec<FunctionRead>)> = ServoPort::ALL
+        .into_iter()
+        .map(|port| {
+            let count = if names.is_none() && port == ServoPort::DroneCan {
+                SERVO_CHANNELS_PER_PORT.min(DRONECAN_CHANNELS_PER_BANK)
+            } else {
+                port.channels()
+            };
+            let initial = if names.is_none() {
+                FunctionRead::Unreadable
+            } else {
+                FunctionRead::Absent
+            };
+            (port, vec![initial; usize::from(count)])
+        })
+        .collect();
+
+    for (port, values) in banks.iter_mut() {
+        for (index, slot) in values.iter_mut().enumerate() {
+            let channel = index as u8 + 1;
             let name = format!("{}_FUNC{channel}", port.param_prefix());
             if names.is_some_and(|known| !known.contains(&name)) {
-                values[usize::from(channel - 1)] = FunctionRead::Absent;
+                *slot = FunctionRead::Absent;
                 continue;
             }
             let result = if names.is_some() {
@@ -2731,7 +2744,7 @@ async fn read_output_map_with_names(
             } else {
                 params.read_with_timeout(&name, MAPPING_PROBE_TIMEOUT).await
             };
-            values[usize::from(channel - 1)] = match result {
+            *slot = match result {
                 Ok(entry) => match entry.value {
                     ParamValue::Int(value) => FunctionRead::Value(value),
                     _ => FunctionRead::Unreadable,
@@ -2740,7 +2753,11 @@ async fn read_output_map_with_names(
             };
         }
     }
-    build_output_map_checked(MOTOR_TEST_MOTOR_COUNT, &main, &aux)
+
+    let main = &banks[0].1;
+    let aux = &banks[1].1;
+    let dronecan = &banks[2].1;
+    build_output_map_checked(MOTOR_TEST_MOTOR_COUNT, main, aux, dronecan)
 }
 
 /// One reader pass over the target's output configuration. The caller adds
@@ -2803,6 +2820,14 @@ async fn read_output_config(
         }
     }
     let models = read_pwm_models(params, &map, protocols).await;
+    // DroneCAN outputs have no TIM parameter: the PWM timer inventory only
+    // has to be complete when at least one active motor uses a PWM bank.
+    let pwm_mapped = map.active_motors().iter().any(|assignment| {
+        assignment
+            .channel
+            .is_some_and(|channel| channel.port != ServoPort::DroneCan)
+    });
+    let protocols_known = protocols_known || !pwm_mapped;
     OutputConfigRead {
         map,
         models,
@@ -2843,6 +2868,29 @@ fn map_has_unreadable(map: &OutputMap) -> bool {
 /// Read one integer parameter, if it is currently readable.
 async fn read_int_param(params: &ParamService, name: &str) -> Option<i32> {
     read_int_param_bounded(params, name, Duration::from_secs(5)).await
+}
+
+/// Read the standalone status parameters after the output configuration.
+/// A `Busy` result means another parameter transaction (usually the initial
+/// full pull on a borrowed main link) is running; retry briefly instead of
+/// leaving the status permanently "unknown" for this session.
+async fn read_standalone_params(params: &ParamService) {
+    for name in [
+        "COM_MOT_TEST_EN",
+        "SDLOG_MODE",
+        "SDLOG_BACKEND",
+        "THR_MDL_FAC",
+    ] {
+        for attempt in 0..5 {
+            match params.read(name).await {
+                Ok(_) => break,
+                Err(maggcs_core::params::ParamError::Busy) if attempt < 4 => {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+                Err(_) => break,
+            }
+        }
+    }
 }
 
 async fn read_int_param_bounded(
@@ -2915,6 +2963,40 @@ fn dshot_fallback_model(
     model.with_disabled(disabled)
 }
 
+/// Build a DroneCAN model from the raw `UAVCAN_EC_MINn`/`MAXn` reads. An
+/// unread/invalid pair keeps the explicit fallback marker, so the start gate
+/// refuses it rather than assuming PX4's 1…8191 defaults.
+fn dronecan_model_from_raw(
+    min: Option<i32>,
+    max: Option<i32>,
+    reversed: bool,
+    disabled: bool,
+    thrust_factor: f32,
+    mapped: bool,
+) -> PwmModel {
+    if !mapped {
+        return PwmModel::default();
+    }
+    match min.zip(max).and_then(|(min, max)| {
+        PwmModel::dronecan(
+            u16::try_from(min).ok()?,
+            u16::try_from(max).ok()?,
+            reversed,
+            thrust_factor,
+        )
+        .ok()
+    }) {
+        Some(model) => model.with_disabled(disabled),
+        None => {
+            let mut model = PwmModel::dronecan(1, DRONECAN_CMD_MAX, reversed, thrust_factor)
+                .unwrap_or_default()
+                .with_protocol(OutputProtocol::DroneCan);
+            model.range_source = PwmRangeSource::Fallback;
+            model.with_disabled(disabled)
+        }
+    }
+}
+
 /// Read `PWM_MAIN_TIMn` / `PWM_AUX_TIMn` and fold each bank into one
 /// protocol. MAJOR (MAIN) exposes TIM0..2; AUX exposes TIM0..3 on Pixhawk 6X.
 ///
@@ -2933,6 +3015,9 @@ async fn read_output_protocols_checked(
         let count = match port {
             ServoPort::Main => 3,
             ServoPort::Aux => 4,
+            // DroneCAN has no PWM timer parameter; the caller only asks for
+            // MAIN/AUX here.
+            ServoPort::DroneCan => 0,
         };
         let mut values = Vec::with_capacity(count);
         for index in 0..count {
@@ -2980,6 +3065,8 @@ async fn read_pwm_models(
         0.0
     };
     let dshot_min = read_real_param(params, "DSHOT_MIN").await;
+    // `UAVCAN_EC_REV` is one bitmask for the whole DroneCAN bank.
+    let dronecan_rev = read_int_param(params, "UAVCAN_EC_REV").await;
     let mut models = Vec::with_capacity(usize::from(MOTOR_TEST_MOTOR_COUNT));
     for motor in 1..=MOTOR_TEST_MOTOR_COUNT {
         let Some(channel) = map.channel_for(motor) else {
@@ -2991,10 +3078,16 @@ async fn read_pwm_models(
         let protocol = match channel.port {
             ServoPort::Main => protocols.main,
             ServoPort::Aux => protocols.aux,
+            ServoPort::DroneCan => OutputProtocol::DroneCan,
         };
-        let reversed = read_int_param(params, &format!("{prefix}_REV{n}"))
-            .await
-            .is_some_and(|value| value != 0);
+        let reversed = match channel.port {
+            ServoPort::DroneCan => {
+                dronecan_rev.is_some_and(|mask| mask & (1i32 << (u32::from(n) - 1)) != 0)
+            }
+            ServoPort::Main | ServoPort::Aux => read_int_param(params, &format!("{prefix}_REV{n}"))
+                .await
+                .is_some_and(|value| value != 0),
+        };
         let disabled = read_int_param(params, &format!("{prefix}_DIS{n}"))
             .await
             .is_some_and(|value| value != 0);
@@ -3007,9 +3100,15 @@ async fn read_pwm_models(
         let min = read_int_param(params, &format!("{prefix}_MIN{n}")).await;
         let max = read_int_param(params, &format!("{prefix}_MAX{n}")).await;
         let mapped = map.channel_for(motor).is_some();
-        models.push(pwm_model_from_raw(
-            min, max, reversed, disabled, factor, mapped, protocol,
-        ));
+        if channel.port == ServoPort::DroneCan {
+            models.push(dronecan_model_from_raw(
+                min, max, reversed, disabled, factor, mapped,
+            ));
+        } else {
+            models.push(pwm_model_from_raw(
+                min, max, reversed, disabled, factor, mapped, protocol,
+            ));
+        }
     }
     models
 }
@@ -3046,6 +3145,7 @@ pub async fn actuator_refresh_mapping(
         )
     };
     let read = read_output_config(&params, &param_names_slot).await;
+    read_standalone_params(&params).await;
     // The read can take seconds (a first pull). Only the validation and the
     // publish are serialized with start/stop, so E-STOP never waits on I/O.
     let _ops = state.ops().lock().await;
@@ -3173,7 +3273,9 @@ fn store_fc_output(
     pwm: [u16; SERVO_CHANNELS_PER_PORT as usize],
     at: std::time::Instant,
 ) {
-    outputs[port.wire() as usize] = Some(FcPortOutputs { pwm, at });
+    if let Some(index) = port.wire() {
+        outputs[usize::from(index)] = Some(FcPortOutputs { pwm, at });
+    }
 }
 
 /// Update only the ESC slots covered by this standard MAVLink frame.
@@ -3993,7 +4095,7 @@ mod start_readiness_tests {
             None => FunctionRead::Absent,
         });
         let aux = [FunctionRead::Absent; 8];
-        maggcs_core::motor_test::mapping::build_output_map_checked(4, &main, &aux)
+        maggcs_core::motor_test::mapping::build_output_map_checked(4, &main, &aux, &[])
     }
 
     fn fc_map() -> OutputMap {
@@ -4731,7 +4833,7 @@ mod status_deadlock_tests {
             None => FunctionRead::Absent,
         });
         let aux = [FunctionRead::Absent; 8];
-        maggcs_core::motor_test::mapping::build_output_map_checked(4, &main, &aux)
+        maggcs_core::motor_test::mapping::build_output_map_checked(4, &main, &aux, &[])
     }
 
     /// Regression (user report 2026-10-22: the motor-test window froze on
@@ -4806,6 +4908,32 @@ mod status_deadlock_tests {
         assert_eq!(model.max_us, 1900);
     }
 
+    #[test]
+    fn dronecan_model_from_raw_reads_raw_command_endpoints() {
+        let model = super::dronecan_model_from_raw(Some(1), Some(8191), true, false, 0.0, true);
+        assert_eq!(model.min_us, 1);
+        assert_eq!(model.max_us, 8191);
+        assert!(model.reversed);
+        assert_eq!(model.protocol, OutputProtocol::DroneCan);
+        assert_eq!(
+            model.range_source,
+            maggcs_core::motor_test::pwm::PwmRangeSource::Fc
+        );
+    }
+
+    #[test]
+    fn dronecan_model_from_raw_marks_unread_endpoints_as_fallback() {
+        let model = super::dronecan_model_from_raw(None, Some(8191), false, true, 0.0, true);
+        assert_eq!(model.protocol, OutputProtocol::DroneCan);
+        assert_eq!(
+            model.range_source,
+            maggcs_core::motor_test::pwm::PwmRangeSource::Fallback
+        );
+        assert!(model.disabled);
+        // The fallback still targets the raw command space, not PWM µs.
+        assert_eq!(model.max_us, maggcs_core::motor_test::pwm::DRONECAN_CMD_MAX);
+    }
+
     /// A failed read must keep the previous snapshot; a mapping the FC really
     /// reports as gapped is a new (partial) configuration, not a transient
     /// failure.
@@ -4834,6 +4962,7 @@ mod status_deadlock_tests {
                 4,
                 &main,
                 &[FunctionRead::Absent; 8],
+                &[],
             ),
             models: vec![model; 4],
             protocols: OutputProtocols::default(),
@@ -5243,6 +5372,26 @@ mod main_sitl_feed_tests {
         assert!(status.sitl_feed_age_s.is_some());
         assert!(status.main_sitl_source.is_some());
         assert!(forward_slot(&state).is_ok());
+
+        // The SITL tap must also feed the scope bus that the window's flusher
+        // drains into `actuator_samples` (regression: SERVO_OUTPUT_RAW frames
+        // filled the forward slot but left the SITL servo pane empty).
+        let scope = state.motor_test.scope.drain();
+        let sitl_servo_ids: Vec<_> = (1..=4)
+            .map(|motor| format!("sitl.servo{motor}"))
+            .collect();
+        for id in &sitl_servo_ids {
+            assert!(
+                scope.iter().any(|sample| &sample.id == id),
+                "SITL SERVO_OUTPUT_RAW must reach the scope bus as {id}"
+            );
+        }
+        let t = scope
+            .iter()
+            .filter(|s| s.id == "sitl.servo1")
+            .map(|s| s.v)
+            .next();
+        assert_eq!(t, Some(Some(1100.0)), "SITL servo scope sample carries the raw µs");
 
         // Detaching the borrowed feed only stops the tap: the main transport
         // (and its main-window subscribers) stay connected.

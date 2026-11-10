@@ -1003,6 +1003,7 @@ export default {
       invalidPort: 'Enter a port between 1 and 65535',
       invalidBaud: 'Enter a baud rate',
       autoConnect: 'Launch saved network endpoint when serial auto-link is off',
+      selectSerial: 'Select serial device…',
       noSerial: 'No serial devices found',
     },
     about: {

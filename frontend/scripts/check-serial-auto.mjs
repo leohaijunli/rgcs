@@ -258,8 +258,51 @@ try {
   await fcAuto.scrollIntoViewIfNeeded()
   await page.waitForTimeout(3500)
   await shot('fc-manual-field-light-1366x768.png')
+
+  // Replacing a saved direct-USB FC with a radio must not make the native
+  // select display the radio while Connect still submits the missing path.
+  await page.keyboard.press('Escape')
+  await page.setViewportSize({ width: 1920, height: 1080 })
+  await page.evaluate(async () => {
+    const { usePrefsStore } = await import('/src/desktop/prefs.ts')
+    const f = window.__serial
+    const radio = structuredClone(f.inventory.ports[0])
+    radio.port.instance_id = '9000'
+    radio.port.device = { ...radio.port.device, port_name: '/dev/ttyUSB0', device_id: { vendor_id: 0x0403, product_id: 0x6015 }, serial_number: 'P900', product: 'FT231X USB UART' }
+    radio.stable_id = { device_id: radio.port.device.device_id, serial_number: 'P900' }
+    radio.suggested_role = 'other'
+    radio.lease = null
+    f.inventory.ports = [radio]
+    f.calls = []
+    f.changedInventory()
+    usePrefsStore.getState().setEndpoint('serial:/dev/ttyACM0:230400')
+  })
+  await page.getByTestId('settings-open').click()
+  await settings.getByRole('tab', { name: 'Connection', exact: true }).click()
+  const serialPort = settings.getByTestId('manual-link-port')
+  await until(async () => await serialPort.inputValue() === '', 'missing saved port shows an explicit empty selection')
+  assert.ok(await connect.isDisabled(), 'missing saved port cannot connect')
+  await connect.evaluate((button) => button.click())
+  assert.equal(await page.evaluate(() => window.__serial.calls.filter((c) => c.command === 'connect' || c.command === 'serial_resolve_endpoint').length), 0, 'empty selection sends no connection request')
+  await connect.scrollIntoViewIfNeeded()
+  await shot('fc-missing-saved-port-1920x1080.png')
+  await serialPort.selectOption('/dev/ttyUSB0')
+  await until(() => connect.isEnabled(), 'explicit radio selection enables Connect')
+  await connect.click()
+  await until(() => page.evaluate(() => window.__serial.calls.some((c) => c.command === 'connect')), 'radio connection submitted')
+  const radioStart = await page.evaluate(() => window.__serial.calls.find((c) => c.command === 'connect').args)
+  assert.equal(radioStart.endpoint, 'serial:/dev/ttyUSB0:230400')
+  assert.equal(radioStart.expectedSerial.instance_id, '9000')
+  assert.equal(radioStart.expectedSerial.device.port_name, '/dev/ttyUSB0')
+  await until(() => page.evaluate(() => window.__serial.calls.some((c) => c.command === 'config_save' && c.args.config.endpoint === 'serial:/dev/ttyUSB0:230400')), 'selected radio endpoint is persisted')
+  await page.keyboard.press('Escape')
+  await page.getByTestId('settings-open').click()
+  await settings.getByRole('tab', { name: 'Connection', exact: true }).click()
+  assert.equal(await serialPort.inputValue(), '/dev/ttyUSB0', 'reopening shows the saved radio selection')
+  await connect.scrollIntoViewIfNeeded()
+  await shot('fc-radio-selected-1920x1080.png')
   assert.deepEqual(errors, [])
-  console.log('PASS serial auto: native startup owner, default-on policy, legacy import, manual override, attachment identity, pause/reload/resume, stale snapshots and screenshots')
+  console.log('PASS serial auto: native startup owner, default-on policy, legacy import, manual override, attachment identity, pause/reload/resume, stale snapshots, missing saved port, radio endpoint persistence and screenshots')
 } catch (error) {
   console.error('Page errors:', errors)
   console.error(await page.locator('body').innerText())

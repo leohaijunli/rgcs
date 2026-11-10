@@ -113,7 +113,7 @@ pub fn tone_outputs(
         let model = models
             .get(usize::from(motor - 1))
             .ok_or(MotorToneError::InvalidMapping { motor })?;
-        if channel.channel == 0 || channel.channel > super::SERVO_CHANNELS_PER_PORT {
+        if channel.channel == 0 || channel.channel > channel.port.channels() {
             return Err(MotorToneError::InvalidMapping { motor });
         }
         if model.protocol.is_dshot() {
@@ -310,7 +310,7 @@ mod tests {
         main[0] = FunctionRead::Value(101);
         let mut aux = [FunctionRead::Absent; 8];
         aux[2] = FunctionRead::Value(102);
-        let map = build_output_map_checked(4, &main, &aux);
+        let map = build_output_map_checked(4, &main, &aux, &[]);
         let pulse = PwmModel::new(1000, 2000, false, 0.0).expect("model");
         let dshot = pulse.with_protocol(OutputProtocol::DShot {
             rate: DShotRate::R600,

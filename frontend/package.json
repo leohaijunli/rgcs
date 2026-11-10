@@ -23,6 +23,7 @@
     "check:rtk": "node scripts/check-rtk.mjs",
     "check:serial-auto": "node scripts/check-serial-auto.mjs",
     "check:motor-scope": "node scripts/check-motor-scope.mjs",
+    "check:motor-errors": "node scripts/check-motor-errors.mjs",
     "check:params": "node scripts/check-params.mjs",
     "check:params-connection": "node scripts/check-params-connection.mjs",
     "check:params-ownership": "node scripts/check-params-ownership.mjs",

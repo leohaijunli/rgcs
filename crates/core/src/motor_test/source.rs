@@ -286,6 +286,11 @@ impl ForwardSource {
             OutputUnits::DShotThrottle => {
                 state.values.get(motor).copied().map(|v| v.clamp(0.0, 1.0))
             }
+            // DroneCAN has no cross-protocol pulse conversion; forward the
+            // normalized demand as the fraction of UAVCAN_EC_MINn…MAXn.
+            OutputUnits::DroneCanCommand => {
+                state.values.get(motor).copied().map(|v| v.clamp(0.0, 1.0))
+            }
             // PWM/OneShot targets keep the source's physical pulse: the
             // fraction is expressed in the *target* channel's range, so PX4
             // reproduces the same pulse after applying its own model.

@@ -66,3 +66,24 @@ manual steps are in the [flight acceptance record](../../../docs/verification/af
 mirror, including `emergency_command`, and runs in CI.
 Mission screenshots/manual steps are in the
 [owned Mission acceptance](../../../docs/verification/af-02b-mission-20261026.md).
+
+## Manual serial selection
+
+Settings → Connection shows an empty selection and disables Connect when the
+saved serial port is absent from the live inventory. Choosing an available port
+updates the same draft used for both the connection request and config save.
+An attachment replacement still requires explicit reselection.
+
+`npm run check:serial-auto -- http://localhost:5199/` (with Vite running at that
+address) covers a saved `/dev/ttyACM0` replaced by a radio on `/dev/ttyUSB0`,
+including the empty selection, submitted attachment, persisted endpoint and
+reopened dialog. Browser-fixture screenshots: [missing saved port](../../screenshots/serial-auto/fc-missing-saved-port-1920x1080.png)
+and [radio selected](../../screenshots/serial-auto/fc-radio-selected-1920x1080.png).
+
+Manual verification:
+
+1. Save a direct-USB serial endpoint, then replace that device with a radio on a
+   different port. Open Settings → Connection.
+2. Confirm **Select serial device…** is shown and Connect is disabled.
+3. Select the radio and its baud, then click Connect. Reopen Settings and restart
+   the app; confirm the radio endpoint is retained in both cases.

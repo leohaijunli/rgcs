@@ -101,6 +101,7 @@ impl DeviceDatabase {
             known(0x10C4, 0xEA60, "Silicon Labs CP210x", DeviceRole::Other),
             known(0x1A86, 0x7523, "WCH CH340", DeviceRole::Other),
             known(0x0483, 0x5740, "STMicroelectronics VCP", DeviceRole::Other),
+            known(0x0403, 0x6015,"P900",DeviceRole::Other),
             // Holybro radio modules.
             known(0x12A8, 0x0001, "Holybro Telemetry Radio", DeviceRole::Other),
         ]);

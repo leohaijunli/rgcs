@@ -8,6 +8,7 @@ import {
 } from './benchTypes'
 import type { MotorPermissionRef } from '../generated-types/MotorPermissionRef'
 import { motorContext } from './runtime'
+import { describeOperationFailure } from './errors'
 
 const STORAGE_KEY = 'maggcs.actuator.tones'
 const CHOICES: { value: MotorTone; label: string }[] = [
@@ -54,7 +55,7 @@ export default function MotorToneControls(props: {
     void sync.then(() => {
       if (!disposed) { setSettings(saved); onReady(true) }
     }).catch((error: unknown) => {
-      if (!disposed) setError(String(error))
+      if (!disposed) setError(describeOperationFailure(error))
     }).finally(() => { if (!disposed) setSaving(false) })
     return () => { disposed = true }
   }, [tauri, onReady, permission?.revision, configRevision])
@@ -76,7 +77,7 @@ export default function MotorToneControls(props: {
       onReady(true)
       localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
     } catch (error) {
-      setError(String(error))
+      setError(describeOperationFailure(error))
     } finally {
       setSaving(false)
     }

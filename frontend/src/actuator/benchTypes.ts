@@ -36,6 +36,7 @@ export type OutputProtocol =
   | { kind: 'oneshot' }
   | { kind: 'dshot'; rate: DShotRate }
   | { kind: 'bdshot'; rate: DShotRate }
+  | { kind: 'dronecan' }
   | { kind: 'unknown' }
 
 export interface OutputProtocols {
@@ -58,6 +59,8 @@ export function protocolLabel(protocol: OutputProtocol | undefined): string {
       return `DShot${protocol.rate.slice(1)}`
     case 'bdshot':
       return `BDShot${protocol.rate.slice(1)}`
+    case 'dronecan':
+      return 'DroneCAN'
     case 'unknown':
       return 'unknown'
   }
@@ -83,14 +86,17 @@ export function mappingHasGap(map: OutputMap | undefined): boolean {
   )
 }
 
-export function outputUnits(model: PwmModel | undefined): 'µs' | 'thr' | 'raw' {
+export type OutputUnits = 'µs' | 'thr' | 'cmd' | 'raw'
+
+export function outputUnits(model: PwmModel | undefined): OutputUnits {
   if (!model || model.protocol.kind === 'unknown') return 'raw'
+  if (model.protocol.kind === 'dronecan') return 'cmd'
   return isDShot(model?.protocol) ? 'thr' : 'µs'
 }
 
 export function outputUnitLabel(model: PwmModel | undefined): string {
   const unit = outputUnits(model)
-  return unit === 'thr' ? 'throttle' : unit
+  return unit === 'thr' ? 'throttle' : unit === 'cmd' ? 'raw command' : unit
 }
 
 export function activeProtocolSummary(status: ActuatorStatus): string {
@@ -398,7 +404,7 @@ export interface SdCaptureStatus {
 export type PwmRangeSource = 'fc' | 'fallback'
 
 export interface PwmModel {
-  /** PWM/OneShot: µs. DShot/BDShot: mixer units 0..1999. */
+  /** PWM/OneShot: µs. DShot/BDShot: mixer units 0..1999. DroneCAN: raw counts. */
   min_us: number
   max_us: number
   reversed: boolean
@@ -411,7 +417,7 @@ export interface PwmModel {
   dshot_min: number
 }
 
-export type ServoPort = 'main' | 'aux'
+export type ServoPort = 'main' | 'aux' | 'dronecan'
 
 export interface ServoChannel {
   port: ServoPort
@@ -446,7 +452,8 @@ export interface SitlSourceConfig {
 }
 
 export function channelLabel(channel: ServoChannel): string {
-  return `${channel.port === 'main' ? 'MAIN' : 'AUX'}${channel.channel}`
+  const prefix = channel.port === 'main' ? 'MAIN' : channel.port === 'aux' ? 'AUX' : 'UAVCAN'
+  return `${prefix}${channel.channel}`
 }
 
 export function assignmentFor(map: OutputMap, motor: number): OutputAssignment | undefined {

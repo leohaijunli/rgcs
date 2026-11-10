@@ -499,6 +499,19 @@ All captures use the simulated IPC fixture identified in the header.
 | Streams, live-rate fixture | [Measured arrival rate](../../screenshots/motor-test/motor-stream-manager-live-1366x768.png) |
 | Field mode, light | [Touch layout](../../screenshots/motor-test/motor-controls-field-light.png) |
 
+### Operator-visible operation failures
+
+`actuator_*` IPC commands reject with a serialized Rust enum, so
+`String(error)` renders `[object Object]` in the header. `errors.ts` maps each
+`code`/`kind` variant back to its native `thiserror` wording. START refusals
+(motor control OFF, another operation holding the output, stale permission,
+deadline, target change) and capture/log refusals all render a readable reason.
+Plain string rejections pass through unchanged.
+
+`npm run check:motor-errors` covers the motor, operation, capture and log
+variants plus nested details, plain pass-through and unknown-code fallbacks
+without a browser or hardware.
+
 ### Manual review
 
 1. Open Tools → Motor test. Check that SITL source, Test controls, ESC tones

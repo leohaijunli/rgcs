@@ -392,6 +392,7 @@ mod tests {
     use super::*;
     use crate::motor_test::mapping::OutputAssignment;
     use crate::motor_test::protocol::DShotRate;
+    use crate::motor_test::pwm::DRONECAN_CMD_MAX;
 
     fn ids(s: &[ScopeSample]) -> Vec<&str> {
         s.iter().map(|x| x.id.as_str()).collect()
@@ -495,6 +496,44 @@ mod tests {
                 OutputUnits::DShotThrottle,
             ]
         );
+    }
+
+    #[test]
+    fn output_metadata_carries_dronecan_channels_and_units() {
+        let channels = [
+            ServoChannel::new(ServoPort::DroneCan, 1).expect("UAVCAN1"),
+            ServoChannel::new(ServoPort::DroneCan, 12).expect("UAVCAN12"),
+        ];
+        let map = OutputMap {
+            motors: channels
+                .into_iter()
+                .enumerate()
+                .map(|(index, channel)| OutputAssignment {
+                    motor: index as u8 + 1,
+                    channel: Some(channel),
+                })
+                .collect(),
+            state: OutputMapState::Complete,
+            issues: Vec::new(),
+        };
+        let models = vec![
+            PwmModel::dronecan(1, DRONECAN_CMD_MAX, false, 0.0).expect("dronecan model M1"),
+            PwmModel::dronecan(1, DRONECAN_CMD_MAX, true, 0.0).expect("dronecan model M2"),
+        ];
+        let outputs = output_metadata(7, 1, &map, &models).expect("metadata");
+        assert_eq!(outputs.len(), 2);
+        assert_eq!(outputs[0].channel.channel, 1);
+        assert_eq!(outputs[1].channel.channel, 12);
+        assert_eq!(
+            outputs.iter().map(|output| output.unit).collect::<Vec<_>>(),
+            vec![OutputUnits::DroneCanCommand; 2]
+        );
+        let json = serde_json::to_value(&outputs).expect("scope JSON");
+        assert_eq!(json[0]["channel"]["port"], "dronecan");
+        assert_eq!(json[0]["unit"], "drone_can_command");
+        // DroneCAN never appears in SERVO_OUTPUT_RAW feedback samples.
+        assert!(mapped_feedback_samples(1.0, ServoPort::Main, &[1500; 8], &outputs).is_empty());
+        assert!(mapped_feedback_samples(1.0, ServoPort::Aux, &[1500; 8], &outputs).is_empty());
     }
 
     #[test]

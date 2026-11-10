@@ -25,8 +25,8 @@ export interface ScopeOutputMeta {
   connection_id: number
   revision: number
   motor: number
-  channel: { port: 'main' | 'aux'; channel: number }
-  unit: 'microseconds' | 'd_shot_throttle'
+  channel: { port: 'main' | 'aux' | 'dronecan'; channel: number }
+  unit: 'microseconds' | 'd_shot_throttle' | 'drone_can_command'
 }
 
 export type ScopeConfigResult =
@@ -69,7 +69,9 @@ export interface HintContext {
 }
 
 const MOTORS = [0, 1, 2, 3]
-const OUTPUT_CHANNEL_COUNT = 8
+/** PWM banks expose 8 channels; the DroneCAN ESC bank up to 12. */
+const PWM_CHANNEL_COUNT = 8
+const DRONECAN_CHANNEL_COUNT = 12
 const OUTPUT_MOTOR_BY_ID = new Map<string, number>(
   MOTORS.flatMap((motor) => [
     [`cmd.pwm${motor + 1}`, motor + 1] as const,
@@ -374,10 +376,11 @@ function validOutputMeta(value: unknown): value is ScopeOutputMeta {
     && typeof output.motor === 'number'
     && Number.isInteger(output.motor) && output.motor >= 1 && output.motor <= MOTORS.length
     && typeof output.channel === 'object' && output.channel !== null
-    && (output.channel.port === 'main' || output.channel.port === 'aux')
+    && (output.channel.port === 'main' || output.channel.port === 'aux' || output.channel.port === 'dronecan')
     && Number.isInteger(output.channel.channel)
-    && output.channel.channel >= 1 && output.channel.channel <= OUTPUT_CHANNEL_COUNT
-    && (output.unit === 'microseconds' || output.unit === 'd_shot_throttle')
+    && output.channel.channel >= 1
+    && output.channel.channel <= (output.channel.port === 'dronecan' ? DRONECAN_CHANNEL_COUNT : PWM_CHANNEL_COUNT)
+    && (output.unit === 'microseconds' || output.unit === 'd_shot_throttle' || output.unit === 'drone_can_command')
 }
 
 function sameOutputMeta(a: ScopeOutputMeta, b: ScopeOutputMeta): boolean {
@@ -463,11 +466,18 @@ export class ScopeStore {
       const base = DEF_BY_ID.get(id)
       if (!base) continue
       const output = byMotor.get(motor)
-      const unit: ScopeUnit = output ? (output.unit === 'microseconds' ? 'µs' : 'thr') : 'raw'
+      const unit: ScopeUnit = output
+        ? (output.unit === 'microseconds' ? 'µs' : output.unit === 'd_shot_throttle' ? 'thr' : 'raw')
+        : 'raw'
       const contextKey = output ? JSON.stringify(output) : ''
+      const portLabel = output
+        ? (output.channel.port === 'dronecan'
+            ? `UAVCAN${output.channel.channel}`
+            : `${output.channel.port.toUpperCase()}${output.channel.channel}`)
+        : ''
       const label = id.startsWith('cmd.pwm')
         ? `${unit === 'thr' ? 'Command throttle' : unit === 'µs' ? 'Command PWM' : 'Command output'} M ${motor}`
-        : `FC output M ${motor}${output ? ` (${output.channel.port.toUpperCase()}${output.channel.channel})` : ''}`
+        : `FC output M ${motor}${output ? ` (${portLabel})` : ''}`
       const current = this.definitions.get(id)
       if (current?.contextKey === contextKey && current.unit === unit && current.label === label) continue
       this.definitions.set(id, { ...base, label, unit, contextKey })

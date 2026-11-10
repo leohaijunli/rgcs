@@ -18,6 +18,9 @@ pub const PWM_US_MAX: u16 = 3000;
 /// (`SERVO_OUTPUT_RAW`), not microseconds.
 pub const DSHOT_MAX_THROTTLE: u16 = 1999;
 
+/// PX4 `UAVCAN_EC_MAXn` upper bound for a DroneCAN `RawCommand`.
+pub const DRONECAN_CMD_MAX: u16 = 8191;
+
 /// Fallback PWM range used when the mapped channel's `PWM_*_MINn`/`MAXn`
 /// could not be read (or the motor is unmapped). This must never be applied
 /// silently: the model carries [`PwmRangeSource::Fallback`] and the start
@@ -51,6 +54,8 @@ pub enum PwmModelError {
     UnreachablePulse,
     #[error("requested throttle is outside the mapped output range")]
     UnreachableThrottle,
+    #[error("requested DroneCAN command is outside the mapped output range")]
+    UnreachableCommand,
 }
 
 /// What one mapped output's numbers mean. `Pulse` is microseconds (PWM /
@@ -58,14 +63,26 @@ pub enum PwmModelError {
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum OutputRange {
-    Pulse { min_us: u16, max_us: u16 },
-    Throttle { min: f32, max: f32 },
+    Pulse {
+        min_us: u16,
+        max_us: u16,
+    },
+    Throttle {
+        min: f32,
+        max: f32,
+    },
+    /// Raw DroneCAN `RawCommand` counts (`UAVCAN_EC_MINn`…`MAXn`).
+    RawCommand {
+        min: u16,
+        max: u16,
+    },
 }
 
 /// One mapped physical output's configuration.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PwmModel {
     /// PWM/OneShot: microseconds. DShot/BDShot: mixer units, 0…1999.
+    /// DroneCAN: raw `RawCommand` counts (`UAVCAN_EC_MINn`…`MAXn`).
     pub min_us: u16,
     pub max_us: u16,
     pub reversed: bool,
@@ -160,6 +177,33 @@ impl PwmModel {
         self
     }
 
+    /// DroneCAN ESC channel. PX4 maps the normalized value through
+    /// `UAVCAN_EC_MINn`…`UAVCAN_EC_MAXn` (`RawCommand` counts), so the model
+    /// carries those endpoints directly instead of PWM microseconds.
+    pub fn dronecan(
+        min: u16,
+        max: u16,
+        reversed: bool,
+        thrust_factor: f32,
+    ) -> Result<Self, PwmModelError> {
+        if min >= max || max > DRONECAN_CMD_MAX {
+            return Err(PwmModelError::InvalidRange);
+        }
+        if !thrust_factor.is_finite() || !(0.0..=1.0).contains(&thrust_factor) {
+            return Err(PwmModelError::InvalidThrustFactor);
+        }
+        Ok(Self {
+            min_us: min,
+            max_us: max,
+            reversed,
+            thrust_factor,
+            disabled: false,
+            range_source: PwmRangeSource::Fc,
+            protocol: OutputProtocol::DroneCan,
+            dshot_min: 0.0,
+        })
+    }
+
     pub fn with_protocol(mut self, protocol: OutputProtocol) -> Self {
         self.protocol = protocol;
         self
@@ -182,11 +226,16 @@ impl PwmModel {
                 min: f32::from(self.min_us) / f32::from(DSHOT_MAX_THROTTLE),
                 max: f32::from(self.max_us) / f32::from(DSHOT_MAX_THROTTLE),
             },
+            OutputUnits::DroneCanCommand => OutputRange::RawCommand {
+                min: self.min_us,
+                max: self.max_us,
+            },
         }
     }
 
     /// Width of the output range in `min_us`/`max_us` units (µs for
-    /// PWM/OneShot, 0…1999 mixer units for DShot/BDShot).
+    /// PWM/OneShot, 0…1999 mixer units for DShot/BDShot, raw counts for
+    /// DroneCAN).
     pub fn span_us(self) -> f32 {
         f32::from(self.max_us) - f32::from(self.min_us)
     }
@@ -207,8 +256,8 @@ impl PwmModel {
     /// Fraction of this channel's output range for a requested output.
     ///
     /// PWM/OneShot take microseconds; DShot/BDShot take the throttle in
-    /// 0…1 (`SERVO_OUTPUT_RAW` divided by [`DSHOT_MAX_THROTTLE`]), which PX4
-    /// clamps to `DSHOT_MIN … 1.0`.
+    /// 0…1 (`SERVO_OUTPUT_RAW` divided by [`DSHOT_MAX_THROTTLE`]); DroneCAN
+    /// takes the raw `RawCommand` count in `UAVCAN_EC_MINn`…`MAXn`.
     pub fn fraction_for_output(self, value: f32) -> Result<f32, PwmModelError> {
         match self.units() {
             OutputUnits::Microseconds => self.fraction_for_pulse(value),
@@ -217,6 +266,14 @@ impl PwmModel {
                 let max = f32::from(self.max_us) / f32::from(DSHOT_MAX_THROTTLE);
                 if !value.is_finite() || value < min || value > max {
                     return Err(PwmModelError::UnreachableThrottle);
+                }
+                Ok((value - min) / (max - min))
+            }
+            OutputUnits::DroneCanCommand => {
+                let min = f32::from(self.min_us);
+                let max = f32::from(self.max_us);
+                if !value.is_finite() || value < min || value > max {
+                    return Err(PwmModelError::UnreachableCommand);
                 }
                 Ok((value - min) / (max - min))
             }
@@ -276,6 +333,7 @@ impl PwmModel {
         match self.units() {
             OutputUnits::Microseconds => Ok(output),
             OutputUnits::DShotThrottle => Ok(output / f32::from(DSHOT_MAX_THROTTLE)),
+            OutputUnits::DroneCanCommand => Ok(output),
         }
     }
 }
@@ -551,6 +609,48 @@ mod tests {
         assert_eq!(
             PwmModel::dshot(f32::NAN, false, 0.0, protocol),
             Err(PwmModelError::InvalidDShotMin)
+        );
+    }
+
+    #[test]
+    fn dronecan_range_and_round_trip_use_raw_command_counts() {
+        let model = PwmModel::dronecan(1, DRONECAN_CMD_MAX, false, 0.0).expect("dronecan model");
+        assert_eq!(model.units(), OutputUnits::DroneCanCommand);
+        assert_eq!(
+            model.output_range(),
+            OutputRange::RawCommand {
+                min: 1,
+                max: DRONECAN_CMD_MAX
+            }
+        );
+        for fraction in [0.0, 0.25, 0.5, 1.0] {
+            let command = model.command_for_fraction(fraction);
+            let recovered = model.output_for_command(command).expect("inverse");
+            let expected = 1.0 + fraction * f32::from(DRONECAN_CMD_MAX - 1);
+            assert!(
+                (recovered - expected).abs() <= 1.0,
+                "{fraction} -> {command} -> {recovered}, expected {expected}"
+            );
+        }
+        assert_eq!(
+            model.fraction_for_output(0.5),
+            Err(PwmModelError::UnreachableCommand)
+        );
+        assert_eq!(
+            model.fraction_for_output(f32::NAN),
+            Err(PwmModelError::UnreachableCommand)
+        );
+    }
+
+    #[test]
+    fn dronecan_rejects_ranges_above_the_raw_command_limit() {
+        assert_eq!(
+            PwmModel::dronecan(1, DRONECAN_CMD_MAX + 1, false, 0.0),
+            Err(PwmModelError::InvalidRange)
+        );
+        assert_eq!(
+            PwmModel::dronecan(8191, 1, false, 0.0),
+            Err(PwmModelError::InvalidRange)
         );
     }
 }

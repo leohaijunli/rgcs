@@ -18,7 +18,9 @@ use maggcs_core::mavlink::stream_control::{
 };
 use maggcs_core::mavlink::{ConnectionConfig, Endpoint};
 use maggcs_core::motor_test::mag_alarm::{MagAlarm, MagAlarmConfig};
-use maggcs_core::motor_test::mapping::{build_output_map_checked, FunctionRead};
+use maggcs_core::motor_test::mapping::{
+    build_output_map_checked, FunctionRead, SERVO_CHANNELS_PER_PORT,
+};
 use maggcs_core::motor_test::protocol::{DShotRate, OutputProtocol, OutputProtocols};
 use maggcs_core::motor_test::pwm::PwmModel;
 use maggcs_core::motor_test::run::{
@@ -153,18 +155,19 @@ impl Harness {
         {
             let target = state.motor_test.target.lock();
             let target = &target.as_ref().expect("target").target;
-            let main = std::array::from_fn(|index| {
-                if index < usize::from(MOTORS) {
-                    FunctionRead::Value(101 + index as i64)
-                } else {
-                    FunctionRead::Absent
-                }
-            });
+            let main: [FunctionRead; SERVO_CHANNELS_PER_PORT as usize] =
+                std::array::from_fn(|index| {
+                    if index < usize::from(MOTORS) {
+                        FunctionRead::Value(101 + index as i64)
+                    } else {
+                        FunctionRead::Absent
+                    }
+                });
             let protocol = OutputProtocol::Pwm { rate_hz: Some(400) };
             *target.config.lock() = Some(OutputConfigSnapshot {
                 revision: 1,
                 target: target.target_ref(),
-                map: build_output_map_checked(MOTORS, &main, &[FunctionRead::Absent; 8]),
+                map: build_output_map_checked(MOTORS, &main, &[FunctionRead::Absent; 8], &[]),
                 models: vec![
                     PwmModel::new(1100, 1900, false, 0.0)
                         .expect("model")
@@ -286,7 +289,7 @@ impl Harness {
         let mut config = target.as_ref().expect("target").target.config.lock();
         let config = config.as_mut().expect("config");
         let aux = [102, 104, 101, 103, 0, 0, 0, 0].map(FunctionRead::Value);
-        config.map = build_output_map_checked(MOTORS, &[FunctionRead::Absent; 8], &aux);
+        config.map = build_output_map_checked(MOTORS, &[FunctionRead::Absent; 8], &aux, &[]);
         let protocol = OutputProtocol::DShot {
             rate: DShotRate::R600,
         };

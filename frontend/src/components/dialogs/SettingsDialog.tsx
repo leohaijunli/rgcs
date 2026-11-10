@@ -150,6 +150,9 @@ function ConnectionTab() {
   const serialSelection = useSerialSelection(formatEndpoint(draft))
 
   const fieldError = endpointError(draft)
+  // A missing select value otherwise displays the first port without updating the draft.
+  const serialPortPresent = devices.some((d) => d.port_name === draft.host)
+  const serialSelectionRequired = draft.kind === 'serial' && (!serialPortPresent || serialSelection.changed)
   const update = (patch: Partial<EndpointDraft>) => setDraft((d) => ({ ...d, ...patch }))
 
   const level = linkLevel(link, hasInboundPackets(fieldAges))
@@ -158,7 +161,7 @@ function ConnectionTab() {
   const lastPacket = age === null ? t('settings.never') : `${(age / 1000).toFixed(1)} s`
 
   const connect = async () => {
-    if (fieldError) return
+    if (fieldError || serialSelectionRequired) return
     setBusy(true)
     try {
       const endpoint = formatEndpoint(draft)
@@ -238,11 +241,13 @@ function ConnectionTab() {
             <>
             <select
               data-testid="manual-link-port"
-              value={draft.host}
+              value={serialPortPresent ? draft.host : ''}
               onChange={(e) => update({ host: e.target.value })}
               className={inputClass(fieldError === 'host')}
             >
-              {devices.length === 0 && <option value="">{t('settings.endpoint.noSerial')}</option>}
+              <option value="" disabled>
+                {t(devices.length === 0 ? 'settings.endpoint.noSerial' : 'settings.endpoint.selectSerial')}
+              </option>
               {devices.map((d) => (
                 <option key={d.port_name} value={d.port_name}>
                   {d.port_name}{d.product ? ` · ${d.product}` : ''}
@@ -287,7 +292,7 @@ function ConnectionTab() {
         <button
           data-testid="manual-link-connect"
           onClick={connect}
-          disabled={busy || fieldError !== null || (draft.kind === 'serial' && serialSelection.changed)}
+          disabled={busy || fieldError !== null || serialSelectionRequired}
           className="touch-target h-11 rounded bg-accent px-4 text-accent-ink disabled:opacity-50"
         >
           {busy ? '…' : t('map.connect')}

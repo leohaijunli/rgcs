@@ -32,6 +32,7 @@ import type { MotorStopRequest } from '../generated-types/MotorStopRequest'
 import type { MotorValuesRequest } from '../generated-types/MotorValuesRequest'
 import type { OperationStatus } from '../generated-types/OperationStatus'
 import { currentMotorSession, motorContext, resetMotorRuntime } from './runtime'
+import { describeOperationFailure } from './errors'
 import { operationMatchesSession } from '../desktop/flightRuntime'
 import { isTauri } from '../inspector/mock'
 import BenchHeader, { type BenchFailure } from './BenchHeader'
@@ -374,7 +375,7 @@ export function ActuatorApp() {
       setStatus((current) => ({ ...current, motor_control: { enabled: control.permission !== null, permission: control.permission } }))
       if (!enabled) resetMotorRuntime()
     } catch (error) {
-      setControlError(String(error))
+      setControlError(describeOperationFailure(error))
     } finally { setControlBusy(false) }
   }, [tauri])
   useEffect(() => {
@@ -481,7 +482,7 @@ export function ActuatorApp() {
     if (!operation || !session) return
     const request: MotorStopRequest = { session, operation, request_id: crypto.randomUUID(), emergency: true }
     void invoke('actuator_estop', { request }).catch((error: unknown) => {
-      setFailure({ operation: 'emergency_stop', message: String(error) })
+      setFailure({ operation: 'emergency_stop', message: describeOperationFailure(error) })
     })
   }, [tauri])
 
@@ -840,7 +841,7 @@ export function ActuatorApp() {
         setStatus((s) => ({ ...s, capture_operation: null, sd_capture: reply.status }))
       }
     } catch (e) {
-      setCaptureError(String(e))
+      setCaptureError(describeOperationFailure(e))
     } finally {
       setCaptureBusy(false)
     }
@@ -867,7 +868,7 @@ export function ActuatorApp() {
       setLogEntries(reply.result.entries)
       setLogsListed(true)
     } catch (e) {
-      setLogsError(String(e))
+      setLogsError(describeOperationFailure(e))
     } finally {
       logOwner.current = null
       setLogsBusy(false)
@@ -893,7 +894,7 @@ export function ActuatorApp() {
         return next
       })
     } catch (e) {
-      setLogsError(String(e))
+      setLogsError(describeOperationFailure(e))
     } finally {
       logOwner.current = null
       setLogsBusy(false)
@@ -925,7 +926,7 @@ export function ActuatorApp() {
       setLogDownloads(new Map())
       setLogsListed(true)
     } catch (e) {
-      setLogsError(String(e))
+      setLogsError(describeOperationFailure(e))
     } finally {
       logOwner.current = null
       setLogsBusy(false)
@@ -958,7 +959,7 @@ export function ActuatorApp() {
       setLogEntries([])
       setLogDownloads(new Map())
       setLogsListed(false)
-      setLogsError(String(e))
+      setLogsError(describeOperationFailure(e))
     } finally {
       logOwner.current = null
       setLogsBusy(false)
@@ -1053,7 +1054,7 @@ export function ActuatorApp() {
       await invoke('actuator_stop', { request })
       setFailure(null)
     } catch (error) {
-      setFailure({ operation: 'stop', message: String(error) })
+      setFailure({ operation: 'stop', message: describeOperationFailure(error) })
     }
   }
 
@@ -1099,11 +1100,9 @@ export function ActuatorApp() {
       valueRevision.current = 0
       setStatus((current) => ({ ...current, operation: reply.operation, config_revision: reply.config_revision }))
     } catch (error) {
-      if (String(error).includes('motor start/tone cancelled')) return
-      setFailure({
-        operation: 'start',
-        message: typeof error === 'string' ? error : String(error),
-      })
+      const message = describeOperationFailure(error)
+      if (message.includes('motor start/tone cancelled')) return
+      setFailure({ operation: 'start', message })
     } finally {
       setStarting(false)
     }
@@ -1186,7 +1185,7 @@ export function ActuatorApp() {
     resetConfirmation()
     setMappingError(null)
     void motorContext().then((request) => invoke('actuator_refresh_mapping', { request })).catch((error: unknown) => {
-      setMappingError(String(error))
+      setMappingError(describeOperationFailure(error))
     })
   }
 
@@ -1933,7 +1932,7 @@ export function ActuatorApp() {
                 <div className="estop-note">
                   {activeModels.map((model, i) => {
                     const units = outputUnits(model)
-                    const range = units === 'raw' ? 'unit unknown' : `${model.min_us}–${model.max_us} ${units}`
+                    const range = units === 'raw' ? 'unit unknown' : `${model.min_us}–${model.max_us} ${units === 'cmd' ? 'raw' : units}`
                     return `M${i + 1} ${range}${model.reversed ? ' rev' : ''}`
                   }).join(' · ')}
                 </div>
