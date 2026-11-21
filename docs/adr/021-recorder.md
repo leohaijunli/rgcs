@@ -18,14 +18,13 @@
    decoded messages: the tlog is byte-exact by construction and can carry frames
    the current dialect cannot represent (e.g. PX4 v1.17 out-of-range enums),
    which are skipped only for *decoding*, never for *recording*.
-2. **tlog format (QGC-aligned).** Each record is a **8-byte little-endian
+2. **tlog format (QGC-aligned).** Each record is a **8-byte big-endian
    `u64` timestamp in microseconds since the Unix epoch**, immediately followed
    by the **raw MAVLink packet including its start sign** (`0xFE`/`0xFD`). This
-   matches QGC's documented `.tlog` layout: QGC writes the timestamp via
-   `memcpy` of a `uint64_t` (host byte order — little-endian on every target
-   platform) followed by the packet. The reader re-frames by scanning the
-   self-delimiting MAVLink packets rather than trusting a fixed stride, so QGC
-   files and MagGCS files read identically.
+   matches QGC (`qToBigEndian`), Mission Planner and pymavlink (`>Q`). Reading
+   and writing go through the `mavlink-tlog` crate, which checks every frame's
+   CRC and resynchronizes past damaged bytes, so QGC files and MagGCS files
+   read identically.
 3. **Non-blocking, crash-safe writes.** A dedicated writer thread consumes a
    **bounded** queue (`Mutex<VecDeque>` + `Condvar`). The producer enqueues and
    returns immediately; when the queue is full it **drops the oldest record and

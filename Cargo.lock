@@ -2029,6 +2029,7 @@ dependencies = [
  "futures",
  "getrandom 0.3.4",
  "mavlink",
+ "mavlink-tlog",
  "num-traits",
  "serde",
  "serde_json",
@@ -2107,6 +2108,12 @@ dependencies = [
  "tokio",
  "tokio-serial",
 ]
+
+[[package]]
+name = "mavlink-tlog"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c46169136e460779b8c0532a0dfa898b2175888b49aa4ffe96fca3b0abcf683"
 
 [[package]]
 name = "memchr"
